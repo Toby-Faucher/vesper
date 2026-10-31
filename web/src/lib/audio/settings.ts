@@ -10,6 +10,7 @@ export type AudioSettings = {
   echoCancellation: true;
   noiseSuppression: boolean;
   autoGain: boolean;
+  // shortcut: threshold is display-only, gating not implemented; belongs in the capture pipeline
   vad: { thresholdDb: number };
   pushToTalk: { enabled: boolean; key: string };
   micId: string | null;
@@ -63,15 +64,19 @@ export function clampSettings(s: Partial<AudioSettings>): AudioSettings {
 
 export const SETTINGS_KEY = 'vesper.audio';
 
-export function loadSettings(store: Storage): AudioSettings {
+export function loadSettings(store: Storage | null): AudioSettings {
   try {
-    const o = JSON.parse(store.getItem(SETTINGS_KEY) ?? 'null');
+    const o = JSON.parse(store!.getItem(SETTINGS_KEY) ?? 'null');
     return clampSettings(o && typeof o === 'object' ? o : {});
   } catch {
     return clampSettings({}); // corrupt storage: defaults
   }
 }
 
-export function saveSettings(store: Storage, s: AudioSettings): void {
-  store.setItem(SETTINGS_KEY, JSON.stringify(s));
+export function saveSettings(store: Storage | null, s: AudioSettings): void {
+  try {
+    store?.setItem(SETTINGS_KEY, JSON.stringify(s));
+  } catch {
+    /* blocked or full storage: settings just won't persist */
+  }
 }

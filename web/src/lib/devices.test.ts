@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  applyBitrate, classifyMediaError, isBluetoothLabel, levelHint, missingDevice, newInputs, watchDevices,
+  applyBitrate, classifyMediaError, isBluetoothLabel, levelHint, missingDevice, newInputs, trackLive, watchDevices,
 } from './devices';
 import { loadSettings, saveSettings, SETTINGS_KEY } from './audio/settings';
 import { DEFAULT_AUDIO_SETTINGS } from './audio/settings';
@@ -25,9 +25,9 @@ describe('classifyMediaError', () => {
 });
 
 describe('isBluetoothLabel', () => {
-  it.each(['AirPods Pro', 'Bluetooth Headset', 'WH-1000XM4 Hands-Free AG Audio', 'Momentum 4', 'Galaxy Buds'])(
+  it.each(['AirPods Pro', 'Bluetooth Headset', 'WH-1000XM4 Hands-Free AG Audio', 'Galaxy Buds', 'Buds2 Pro', 'Phone HFP'])(
     'flags %s', (l) => expect(isBluetoothLabel(l)).toBe(true));
-  it.each(['Blue Yeti', 'Built-in Audio Analog Stereo', ''])('ignores %s', (l) => expect(isBluetoothLabel(l)).toBe(false));
+  it.each(['Headset Microphone', 'Sennheiser Momentum 4 Wired', 'Blue Yeti', 'Built-in Audio Analog Stereo', ''])('ignores %s', (l) => expect(isBluetoothLabel(l)).toBe(false));
 });
 
 describe('levelHint', () => {
@@ -48,6 +48,10 @@ describe('device lists', () => {
   it('finds newly appeared inputs only', () => {
     expect(newInputs([dev('a')], [dev('a'), dev('b'), dev('s', 'audiooutput')]).map((d) => d.deviceId)).toEqual(['b']);
   });
+  it('does not offer anything from a pre-permission (unlabelled) enumeration', () => {
+    expect(newInputs([dev('', 'audioinput', '')], [dev('a'), dev('b')])).toEqual([]);
+    expect(newInputs([dev('a')], [dev('a'), dev('', 'audioinput', '')])).toEqual([]);
+  });
   it('watchDevices re-enumerates on devicechange and unsubscribes', async () => {
     const t = new EventTarget();
     const list = [dev('a')];
@@ -61,6 +65,18 @@ describe('device lists', () => {
     t.dispatchEvent(new Event('devicechange'));
     await new Promise((r) => setTimeout(r, 0));
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('trackLive', () => {
+  it('mute always wins', () => {
+    expect(trackLive(true, false, false)).toBe(false);
+    expect(trackLive(true, true, true)).toBe(false);
+  });
+  it('without PTT live iff not muted', () => expect(trackLive(false, false, false)).toBe(true));
+  it('with PTT live only while held', () => {
+    expect(trackLive(false, true, false)).toBe(false);
+    expect(trackLive(false, true, true)).toBe(true);
   });
 });
 

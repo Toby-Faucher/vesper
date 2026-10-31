@@ -6,7 +6,7 @@
   import { restoreVolumes, saveVolumes } from '../lib/volume';
   import { createCapture, type Capture } from '../lib/audio/capture';
   import { loadSettings, saveSettings, type AudioSettings } from '../lib/audio/settings';
-  import { DEVICE_MESSAGES, applyBitrate, classifyMediaError, missingDevice, newInputs, watchDevices } from '../lib/devices';
+  import { DEVICE_MESSAGES, applyBitrate, classifyMediaError, missingDevice, newInputs, trackLive, watchDevices } from '../lib/devices';
   import Settings from './Settings.svelte';
   import type { DenoiseMode } from '../lib/audio/mode';
   import type { Peer } from '../lib/gen/Peer';
@@ -25,7 +25,10 @@
   let playback: Playback | undefined;
   let mic = $state<MediaStream>();
   let capture: Capture | undefined;
-  let settings = $state<AudioSettings>(loadSettings(localStorage));
+  // Accessing localStorage itself throws when storage is blocked.
+  const storage = (() => { try { return localStorage; } catch { return null; } })();
+  let settings = $state<AudioSettings>(loadSettings(storage));
+  let joinedBitrate = $state(64); // set at join
   let showSettings = $state(false);
   let deviceError = $state('');
   let offered = $state<MediaDeviceInfo | null>(null);
@@ -40,7 +43,7 @@
 
   // Push to talk is mute-gated: the track is live only when not muted and (PTT off or key held).
   function applyTrack() {
-    mic?.getAudioTracks().forEach((t) => (t.enabled = !muted && (!settings.pushToTalk.enabled || pttDown)));
+    mic?.getAudioTracks().forEach((t) => (t.enabled = trackLive(muted, settings.pushToTalk.enabled, pttDown)));
   }
   function toggleMute() {
     muted = !muted;
@@ -50,8 +53,11 @@
   function onSettings(next: AudioSettings) {
     const prev = settings;
     settings = next;
-    saveSettings(localStorage, next);
-    deviceError = '';
+    saveSettings(storage, next);
+    // Only a mic/capture-affecting change can fix a device error.
+    if (next.micId !== prev.micId || next.mode !== prev.mode || next.noiseSuppression !== prev.noiseSuppression || next.autoGain !== prev.autoGain)
+      deviceError = '';
+    if (!next.pushToTalk.enabled || next.pushToTalk.key !== prev.pushToTalk.key) pttDown = false;
     capture?.setSettings(next);
     applyTrack();
     if (sender && next.bitrateKbps !== prev.bitrateKbps)
@@ -62,7 +68,8 @@
   function onKey(down: boolean) {
     return (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (!settings.pushToTalk.enabled || e.code !== settings.pushToTalk.key || t?.matches('input,select,textarea')) return;
+      if (!settings.pushToTalk.enabled || e.code !== settings.pushToTalk.key || t?.matches('input,textarea,select')) return;
+      e.preventDefault(); // Space would otherwise click a focused button
       pttDown = down;
       applyTrack();
     };
@@ -71,17 +78,24 @@
     const [kd, ku] = [onKey(true), onKey(false)];
     window.addEventListener('keydown', kd);
     window.addEventListener('keyup', ku);
+    // keyup never arrives if focus leaves while the key is held, which would leave the mic hot.
+    const release = () => { pttDown = false; applyTrack(); };
+    window.addEventListener('blur', release);
+    document.addEventListener('visibilitychange', release);
     const stop = watchDevices((list) => {
+      // Unplug detection only covers an explicitly selected mic (null = system default is not tracked).
       if (joined && missingDevice(list, settings.micId)) deviceError = DEVICE_MESSAGES.unplugged;
       const fresh = newInputs(known, list);
       if (joined && fresh.length) offered = fresh[0];
-      known = list;
+      if (list.some((d) => d.kind === 'audioinput' && d.deviceId && d.label)) known = list;
     });
     void navigator.mediaDevices.enumerateDevices().then((l) => (known = l), () => {});
     return () => {
       stop();
       window.removeEventListener('keydown', kd);
       window.removeEventListener('keyup', ku);
+      window.removeEventListener('blur', release);
+      document.removeEventListener('visibilitychange', release);
     };
   });
   function toggleDeafen() {
@@ -153,6 +167,7 @@
         onRemoteStreamEnd: (id) => playback?.remove(id),
       });
       userId = r.userId;
+      joinedBitrate = settings.bitrateKbps;
       playback?.addLocal(r.userId, stream);
       const audioSender = r.pc.getSenders().find((s) => s.track?.kind === 'audio');
       sender = audioSender;
@@ -202,7 +217,7 @@
     {showSettings ? 'Hide settings' : 'Audio settings'}
   </button>
   {#if showSettings}
-    <Settings {settings} onchange={onSettings} liveStream={mic} sinkSupported={'setSinkId' in AudioContext.prototype} />
+    <Settings {settings} {joinedBitrate} {joined} onchange={onSettings} liveStream={mic} sinkSupported={'setSinkId' in AudioContext.prototype} />
   {/if}
   {#if joined}
     <div class="flex gap-2">

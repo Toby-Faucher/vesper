@@ -19,7 +19,7 @@ export const DEVICE_MESSAGES: Record<DeviceError, string> = {
 };
 
 /** Headset profiles (HFP) drop to 8 to 16 kHz mono, which wrecks the denoiser input. */
-export const isBluetoothLabel = (label: string) => /bluetooth|hands-free|headset|airpods|buds|momentum/i.test(label);
+export const isBluetoothLabel = (label: string) => /bluetooth|hands-free|\bhfp\b|airpods|\bbuds/i.test(label);
 
 /** Peak levels in dBFS over a recent window. */
 export function levelHint(peaksDb: number[]): 'clipping' | 'too-quiet' | 'ok' {
@@ -31,8 +31,15 @@ export function levelHint(peaksDb: number[]): 'clipping' | 'too-quiet' | 'ok' {
 export const missingDevice = (list: MediaDeviceInfo[], id: string | null) =>
   id !== null && !list.some((d) => d.kind === 'audioinput' && d.deviceId === id);
 
-export const newInputs = (prev: MediaDeviceInfo[], next: MediaDeviceInfo[]) =>
-  next.filter((d) => d.kind === 'audioinput' && !prev.some((p) => p.deviceId === d.deviceId));
+// Before mic permission the browser reports empty ids/labels; those lists must not make every mic look new.
+const named = (l: MediaDeviceInfo[]) => l.filter((d) => d.kind === 'audioinput' && d.deviceId && d.label);
+export const newInputs = (prev: MediaDeviceInfo[], next: MediaDeviceInfo[]) => {
+  const before = named(prev);
+  return before.length ? named(next).filter((d) => !before.some((p) => p.deviceId === d.deviceId)) : [];
+};
+
+/** Mute always wins; with push to talk the track is live only while the key is held. */
+export const trackLive = (muted: boolean, pttEnabled: boolean, held: boolean) => !muted && (!pttEnabled || held);
 
 export function watchDevices(
   cb: (list: MediaDeviceInfo[]) => void,

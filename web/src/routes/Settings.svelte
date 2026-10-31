@@ -4,16 +4,20 @@
   import { clampSettings, type AudioSettings } from '../lib/audio/settings';
   import { DEVICE_MESSAGES, classifyMediaError, isBluetoothLabel, levelHint, watchDevices } from '../lib/devices';
 
-  let { settings, onchange, liveStream, sinkSupported = true }: {
+  let { settings, onchange, liveStream, joinedBitrate, joined = false, sinkSupported = true }: {
     settings: AudioSettings;
     onchange: (s: AudioSettings) => void;
     /** The call's capture stream, metered when no mic test runs. */
     liveStream?: MediaStream;
+    joinedBitrate?: number;
+    joined?: boolean;
     sinkSupported?: boolean;
   } = $props();
 
   const set = (patch: Partial<AudioSettings>) => onchange(clampSettings({ ...settings, ...patch }));
 
+  let bitrateDraft = $state(64); // applied on release, not on every drag step
+  $effect(() => void (bitrateDraft = settings.bitrateKbps));
   let devices = $state<MediaDeviceInfo[]>([]);
   const mics = $derived(devices.filter((d) => d.kind === 'audioinput'));
   const speakers = $derived(devices.filter((d) => d.kind === 'audiooutput'));
@@ -124,10 +128,14 @@
     </label>
   {/if}
 
-  <label class={label}>Bitrate: {settings.bitrateKbps} kbps
+  <label class={label}>Bitrate: {bitrateDraft} kbps
     <input class="w-full" type="range" min="32" max="510" value={settings.bitrateKbps}
-      oninput={(e) => set({ bitrateKbps: +e.currentTarget.value })} />
+      oninput={(e) => (bitrateDraft = +e.currentTarget.value)}
+      onchange={(e) => set({ bitrateKbps: +e.currentTarget.value })} />
   </label>
+  {#if joined && joinedBitrate !== undefined && bitrateDraft > joinedBitrate}
+    <p class="text-neutral-500">Lowering applies now; raising above the value you joined with ({joinedBitrate} kbps) applies on rejoin.</p>
+  {/if}
   <label class="flex items-center gap-2"><input type="checkbox" checked={settings.dtx}
     onchange={(e) => set({ dtx: e.currentTarget.checked })} /> DTX (silence suppression; applies at next join)</label>
 
@@ -146,6 +154,7 @@
       {#each mics as d (d.deviceId)}<option value={d.deviceId}>{d.label || d.deviceId}</option>{/each}
     </select>
   </label>
+  <p class="text-neutral-500">Pick a specific microphone to get disconnect alerts; the system default is not watched.</p>
   {#if isBluetoothLabel(micLabel)}
     <p class="text-amber-400" role="alert">
       Bluetooth headset microphones switch to a low-quality call profile. Use a wired or USB mic for the best sound.
@@ -165,13 +174,13 @@
   {/if}
 
   <div class="space-y-1">
-    <div class={label}>Input level and voice threshold ({settings.vad.thresholdDb} dB)</div>
+    <div class={label}>Input level; marker at {settings.vad.thresholdDb} dB (voice-activity gating is not implemented yet, display only)</div>
     <div class="relative h-3 rounded bg-neutral-800" role="meter" aria-label="Input level" aria-valuemin="-100"
       aria-valuemax="0" aria-valuenow={Math.round(levelDb)}>
       <div class="h-3 rounded bg-green-600" style="width:{pct}%"></div>
       <div class="absolute top-0 h-3 w-0.5 bg-white" style="left:{settings.vad.thresholdDb + 100}%"></div>
     </div>
-    <input class="w-full" type="range" min="-100" max="0" aria-label="Voice threshold" value={settings.vad.thresholdDb}
+    <input class="w-full" type="range" min="-100" max="0" aria-label="Level marker" value={settings.vad.thresholdDb}
       oninput={(e) => set({ vad: { thresholdDb: +e.currentTarget.value } })} />
     {#if hint === 'clipping'}<p class="text-amber-400">Too loud: the signal is clipping. Lower input gain.</p>{/if}
     {#if hint === 'too-quiet'}<p class="text-amber-400">Very quiet or silent. Speak, raise the input boost, or check the mic.</p>{/if}
@@ -190,7 +199,8 @@
       onchange={(e) => set({ pushToTalk: { ...settings.pushToTalk, enabled: e.currentTarget.checked } })} /> Push to talk</label>
     {#if settings.pushToTalk.enabled}
       <button class="rounded bg-neutral-700 px-3 py-1" onclick={() => (capturingKey = true)}
-        onkeydown={capturingKey ? captureKey : undefined}>
+        onkeydown={(e) => { e.stopPropagation(); if (capturingKey) captureKey(e); }}
+        onkeyup={(e) => e.stopPropagation()}>
         {capturingKey ? 'Press a key...' : `Key: ${settings.pushToTalk.key}`}
       </button>
       <p class="text-neutral-500">
