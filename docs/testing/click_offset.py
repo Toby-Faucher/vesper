@@ -29,6 +29,9 @@ def onsets(path, thr):
             quiet_until = i + rate // 10  # ignore the rest of this click and its ringing
     return out
 
+if len(sys.argv) < 2 or (sys.argv[1] == "--make-click" and len(sys.argv) < 3):
+    print(__doc__ + "\nerror: missing arguments", file=sys.stderr)
+    sys.exit(2)
 if sys.argv[1] == "--make-click":
     make_click(sys.argv[2])
 else:

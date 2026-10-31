@@ -20,6 +20,10 @@ echo "exit=$?"
 kill $SERVER
 ```
 
+Options: `--speakers` and `--seconds` must be at least 1; one speaker is a trivial pass (no peers). Pass requires every speaker to get 95% of its peers' packets in aggregate AND from each individual peer (a dead peer fails at any room size). Each speaker sends about 48 packets/s in practice (not exactly 50), and the tool warns if one sent over 5% fewer than seconds*50. `--pid` is checked at start.
+
+Recorded result (debug build, 12 speakers x 30 s on loopback): loss 0.00% for every speaker, server CPU 54.9% of one core. A debug build is pessimistic; use `--release` as above for real numbers.
+
 The server's `no advertised addresses` warning is expected on loopback; the fake clients use host candidates. Run the load test on the same machine as the server: client and server CPU are then both on that box, so read the CPU figure as an upper bound.
 
 ## 2. Mouth-to-ear latency: acoustic loopback
@@ -40,7 +44,7 @@ When you only need network behaviour (RTT, jitter, packet loss) and not the full
 
 ## 4. Simulating loss and jitter with `tc netem`
 
-**These commands need root (shown with `sudo`). Do not run them on a machine reached over the network except on `lo`, and even that affects everything using loopback, including SSH tunnels to localhost.** Prefer a dummy interface so nothing else is touched; but media must then be routed over it, which is awkward. The simplest safe recipe is `lo`, with server and load test both on 127.0.0.1 as in section 1.
+**These commands need root (shown with `sudo`). Do not run this on a machine you reach over the network: `lo` is shared by everything on the box, and it affects everything using loopback, including SSH tunnels to localhost. The recipe is unverified (never run by the author).** The recipe below uses `lo`, with server and load test both on 127.0.0.1 as in section 1.
 
 Add 5% loss and 20 ms delay with 10 ms jitter on loopback:
 
@@ -59,4 +63,6 @@ sudo tc qdisc del dev lo root
 tc qdisc show dev lo          # should show no netem
 ```
 
-Note netem on `lo` applies to both directions of every loopback packet (including the WebSocket signaling), so expect roughly double the configured delay end to end and loss on both legs. With 5% loss each way, the load test is expected to FAIL its 95% bar; that is the point of the exercise (it proves the harness detects loss). For a dummy interface instead: `sudo ip link add dum0 type dummy && sudo ip addr add 10.99.0.1/24 dev dum0 && sudo ip link set dum0 up`, bind the server to `10.99.0.1`, apply netem to `dum0`, and remove with `sudo ip link del dum0`.
+Note netem on `lo` applies to both directions of every loopback packet (including the WebSocket signaling), so expect roughly double the configured delay end to end and loss on both legs. With 5% loss each way, the load test is expected to FAIL its 95% bar; that is the point of the exercise (it proves the harness detects loss).
+
+A dummy interface does NOT work as a substitute: traffic between two local addresses is routed over `lo`, so netem on the dummy device does nothing. Shaping a non-loopback path needs two network namespaces joined by a veth pair (unverified, not described here; not run).

@@ -25,19 +25,33 @@ struct SpeakerReport {
     /// Packets the other speakers sent to this one.
     expected: u64,
     loss_percent: f64,
+    /// Worst peer under the bar: (sender index, percent received from it).
+    bad_pair: Option<(usize, f64)>,
     ok: bool,
 }
 
 /// `sent[j]` = packets speaker j sent; `received[i][j]` = packets speaker i got from speaker j
 /// (`received[i][i]` is ignored). A speaker passes if it got at least 95% of its peers' packets;
-/// with no peers it passes trivially. Counts above what a peer sent are clamped.
+/// with no peers (a single speaker, kept as a documented trivial pass) it passes trivially.
+/// It must ALSO get 95% from every individual peer, so one dead peer fails at any room size.
+/// Counts above what a peer sent are clamped.
 fn summarize(sent: &[u64], received: &[Vec<u64>]) -> Vec<SpeakerReport> {
     (0..sent.len())
         .map(|i| {
             let (mut got, mut expected) = (0, 0);
+            let mut bad_pair: Option<(usize, f64)> = None;
             for (j, &s) in sent.iter().enumerate().filter(|&(j, _)| j != i) {
-                got += received[i].get(j).copied().unwrap_or(0).min(s);
+                let g = received[i].get(j).copied().unwrap_or(0).min(s);
+                got += g;
                 expected += s;
+                let p = if s == 0 {
+                    0.0
+                } else {
+                    g as f64 * 100.0 / s as f64
+                };
+                if p < PASS_PERCENT && bad_pair.is_none_or(|(_, w)| p < w) {
+                    bad_pair = Some((j, p));
+                }
             }
             let has_peers = sent.len() > 1;
             let pct = if expected == 0 {
@@ -49,8 +63,9 @@ fn summarize(sent: &[u64], received: &[Vec<u64>]) -> Vec<SpeakerReport> {
                 received: got,
                 expected,
                 loss_percent: if has_peers { 100.0 - pct } else { 0.0 },
+                bad_pair,
                 // Peers that sent nothing means the test itself is broken: fail.
-                ok: !has_peers || pct >= PASS_PERCENT,
+                ok: !has_peers || (pct >= PASS_PERCENT && bad_pair.is_none()),
             }
         })
         .collect()
@@ -74,12 +89,19 @@ fn parse_args() -> Result<Args, String> {
     }
     let get = |k: &str| m.get(k).cloned().ok_or(format!("missing {k}"));
     let num = |k: &str| get(k)?.parse::<u64>().map_err(|e| format!("{k}: {e}"));
+    let (speakers, seconds) = (num("--speakers")? as usize, num("--seconds")?);
+    if speakers < 1 {
+        return Err("--speakers must be at least 1 (1 is a trivial pass: no peers)".into());
+    }
+    if seconds < 1 {
+        return Err("--seconds must be at least 1".into());
+    }
     Ok(Args {
         url: get("--url")?,
         key: get("--key")?,
         room: get("--room")?,
-        speakers: num("--speakers")? as usize,
-        seconds: num("--seconds")?,
+        speakers,
+        seconds,
         pid: match m.get("--pid") {
             Some(p) => Some(p.parse().map_err(|e| format!("--pid: {e}"))?),
             None => None,
@@ -163,6 +185,13 @@ async fn join(a: &Args, n: usize) -> Result<Speaker, String> {
 }
 
 async fn run(a: Args) -> Result<bool, String> {
+    if let Some(pid) = a.pid
+        && cpu_ticks(pid).is_none()
+    {
+        return Err(format!(
+            "--pid {pid}: cannot read /proc/{pid}/stat (process gone, or not Linux)"
+        ));
+    }
     let mut speakers = vec![];
     for n in 0..a.speakers {
         speakers.push(join(&a, n).await?);
@@ -231,6 +260,18 @@ async fn run(a: Args) -> Result<bool, String> {
             if r.ok { "ok" } else { "FAIL" },
             per_peer.join(" ")
         );
+        if let Some((j, p)) = r.bad_pair {
+            println!(
+                "    pair under {PASS_PERCENT}%: speaker {i} got {p:.1}% of speaker {j}'s packets"
+            );
+        }
+        let target = a.seconds * PACKETS_PER_SECOND;
+        if (sent[i] as f64) < target as f64 * 0.95 {
+            println!(
+                "    warning: speaker {i} sent only {} of {target} queued packets",
+                sent[i]
+            );
+        }
     }
     if let (Some((t0, at)), Some(t1)) = (cpu_start, cpu_end) {
         let secs = at.elapsed().as_secs_f64() - 2.0;
@@ -239,7 +280,7 @@ async fn run(a: Args) -> Result<bool, String> {
             (t1.saturating_sub(t0)) as f64 / CLK_TCK / secs * 100.0
         );
     } else if a.pid.is_some() {
-        println!("server CPU: unavailable (cannot read /proc/<pid>/stat; Linux only)");
+        println!("server CPU: unavailable (server exited during the run?)");
     }
     for s in &speakers {
         s.task.abort();
@@ -283,6 +324,38 @@ mod tests {
         assert!(!r[0].ok);
         assert!(r[1].ok);
         assert!((r[0].loss_percent - 6.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn one_dead_peer_among_30_speakers_fails() {
+        let n = 30;
+        let sent = vec![100; n];
+        let mut rx = vec![vec![100; n]; n];
+        for row in rx.iter_mut() {
+            row[7] = 0; // speaker 7 never delivers to anyone
+        }
+        let r = summarize(&sent, &rx);
+        // Aggregate is ~96.6% for receiver 0, yet it must fail on the pair.
+        assert!(r[0].loss_percent < 5.0);
+        assert!(!r[0].ok);
+        assert_eq!(r[0].bad_pair, Some((7, 0.0)));
+    }
+
+    #[test]
+    fn one_pair_at_94_percent_fails_despite_good_aggregate() {
+        let mut rx = vec![vec![100; 12]; 12];
+        rx[0][1] = 94;
+        let r = summarize(&[100; 12], &rx);
+        assert!(r[0].loss_percent < 1.0);
+        assert!(!r[0].ok);
+    }
+
+    #[test]
+    fn every_pair_at_exactly_95_passes() {
+        let mut rx = vec![vec![95; 12]; 12];
+        assert!(summarize(&[100; 12], &rx).iter().all(|r| r.ok));
+        rx[3][4] = 94;
+        assert!(!summarize(&[100; 12], &rx)[3].ok);
     }
 
     #[test]
