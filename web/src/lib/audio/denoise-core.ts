@@ -4,6 +4,14 @@ import { ModeController } from './mode';
 
 const MAX_INFLIGHT = 2; // frames at the worker; beyond this the input ring drops the oldest
 const MAX_OUT = 3; // denoised frames queued for output (30 ms); beyond this drop the oldest
+// Fallback rule. A frame is late past 30 ms, where the 3-frame output queue would run dry.
+const LATE_MS = 30;
+// Judge the last second (100 frames of 10 ms) so one GC pause or CPU burst cannot trip it.
+const WINDOW_FRAMES = 100;
+// 20 late frames means at least 200 ms of slow audio in that second, not a blip.
+const MAX_LATE = 20;
+// Skip the first 3 s of replies: the WASM engine runs on its slow baseline tier right after load.
+const WARMUP_FRAMES = 300;
 const PRIME = 2 * HOP; // start output with one spare frame to absorb worker spikes
 
 /**
@@ -20,7 +28,12 @@ export class DenoiseCore {
   private count = 0;
   private playing = false;
   private idle = 0;
-  private mode = new ModeController({ budgetMs: 10, windowFrames: 100, maxLate: 10 });
+  private mode = new ModeController({
+    budgetMs: LATE_MS,
+    windowFrames: WINDOW_FRAMES,
+    maxLate: MAX_LATE,
+    warmupFrames: WARMUP_FRAMES,
+  });
   private onFail: (reason: string) => void;
   private stallSamples: number;
 

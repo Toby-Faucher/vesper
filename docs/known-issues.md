@@ -47,7 +47,7 @@ Last updated 2026-10-30. Nothing here was run in a real browser or a real deploy
 - **No panic hook in the wasm**, so a Rust panic shows as an opaque error.
 - **Added delay is not measured.** The algorithm's lookahead plus the 30 ms output queue may exceed 30 ms. The [checkpoint](testing/checkpoint.md) must measure it.
 - **`ndarray` and the `tract-core` pin in `vesper-dsp` are not optional**, although only the `tract` feature needs them. A featureless build pulls them in for nothing.
-- **Thresholds are untuned:** the fallback trips at 10 late frames out of 100, with a 10 ms budget. The numbers are a first guess.
+- **Thresholds are untuned:** the fallback trips at 20 late frames out of 100, with a 30 ms budget, after a 3 s warm-up. The numbers come from one laptop (2.1 ms average per frame there). The fallback is one-way for the rest of the call.
 
 ## Build and deploy
 

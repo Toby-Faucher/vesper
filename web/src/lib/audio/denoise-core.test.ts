@@ -53,13 +53,22 @@ describe('DenoiseCore', () => {
     expect(t.onFail).toHaveBeenCalledWith('denoiser stalled');
   });
 
-  it('slow frames trip the mode controller', () => {
+  it('a startup burst of slow frames is ignored during warm-up', () => {
     const t = make();
     t.connect();
-    for (let i = 0; i < 9; i++) t.core.reply({ ...frame(0), ms: 15 });
+    for (let i = 0; i < 100; i++) t.core.reply({ ...frame(0), ms: 80 });
     expect(t.core.failure).toBeNull();
-    t.core.reply({ ...frame(0), ms: 15 });
-    expect(t.core.failure).toBe('denoiser too slow for real time');
+    expect(t.onFail).not.toHaveBeenCalled();
+  });
+
+  it('400 consecutive slow frames (300 warm-up + 100) trip the mode controller', () => {
+    const t = make();
+    t.connect();
+    for (let i = 0; i < 319; i++) t.core.reply({ ...frame(0), ms: 80 }); // 300 warm-up + 19 late
+    expect(t.core.failure).toBeNull();
+    for (let i = 319; i < 400; i++) t.core.reply({ ...frame(0), ms: 80 });
+    expect(t.onFail).toHaveBeenCalledTimes(1);
+    expect(t.onFail).toHaveBeenCalledWith('denoiser too slow for real time');
   });
 
   it('worker error replies fail the core', () => {

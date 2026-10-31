@@ -92,7 +92,7 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), Dee
 ## Fallback logic
 
 - Modes: `deepfilter`, `browser`, `off` (`web/src/lib/audio/mode.ts`).
-- `ModeController` trips from `deepfilter` to `browser` when 10 of the last 100 frames each took longer than 10 ms. It stays tripped until `reset()`.
+- `ModeController` trips from `deepfilter` to `browser` when 20 of the last 100 frames each took longer than 30 ms. The first 300 frames (about 3 s) are ignored. It stays tripped until `reset()`.
   The numbers are set in `denoise-core.ts`.
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
