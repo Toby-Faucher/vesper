@@ -1,0 +1,162 @@
+{
+  "base_eval": "research/results/gate/base-abdec9074bf4-34b896b88391-20fa5fed-utmos.json",
+  "base_sha": "abdec9074bf4d0f0f043b2558fb1da90ba5f5b10",
+  "branch": "exp/E-null-v2",
+  "cand_eval": "research/results/gate/cand-E-null-v2-abdec9074bf4.json",
+  "cand_sha": "abdec9074bf4d0f0f043b2558fb1da90ba5f5b10",
+  "config_hash": "cf01c739e8fa",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "hb_err_db": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "lsd": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "lsd_wb": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "mcd": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "ovrl": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "second_mos": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "si_sdr_i": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "sig": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    }
+  },
+  "guards": {
+    "bak_mean": {
+      "limit": -0.05,
+      "pass": true,
+      "value": 0.0
+    },
+    "clipped_items": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "lsd_wb_mean": {
+      "limit": 0.05,
+      "pass": true,
+      "value": 0.0
+    },
+    "rtf": {
+      "limit": 0.3,
+      "pass": true,
+      "value": 0.0397588775
+    },
+    "rtf_ratio": {
+      "limit": 1.25,
+      "pass": true,
+      "value": 1.0132802286897362
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": true,
+      "value": 0.0
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": true,
+      "value": 0.0
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": true,
+      "value": 0.0
+    }
+  },
+  "id": "E-null-v2",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "n_total": 400,
+  "n_used": 20,
+  "ovrl_delta_sd_full": 0.0,
+  "pipeline": "pipeline.toml",
+  "reason": "SPRT accepted H0 (no gain of delta1)",
+  "rtf": {
+    "base": 0.03923779066666667,
+    "cand": 0.0397588775
+  },
+  "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": -4000000000.0,
+    "lower": -2.9444389791664403,
+    "n": 20,
+    "upper": 2.9444389791664403,
+    "verdict": "H0"
+  },
+  "stack": "",
+  "status": "rejected"
+}

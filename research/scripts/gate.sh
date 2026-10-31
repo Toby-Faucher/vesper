@@ -62,7 +62,8 @@ build_bin() {
 # UTMOS is scored when its model is there (reported, not gated). Part of the baseline cache key.
 utmos="$REPO_ROOT/$(python3 "$SCRIPTS/cfg.py" opt paths.second_mos)"
 utmos_args=()
-if [[ -f $utmos ]]; then utmos_args=(--second-mos "$utmos"); fi
+# VESPER_GATE_NO_UTMOS=1 skips the (slow, report-only) second judge for quick experiment runs.
+if [[ -f $utmos && -z ${VESPER_GATE_NO_UTMOS:-} ]]; then utmos_args=(--second-mos "$utmos"); fi
 # run_eval BIN OUT ARGS...: score on the gate split; ARGS holds one or more --config FILE.
 run_eval() {
   local bin=$1 out=$2
