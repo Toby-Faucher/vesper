@@ -11,8 +11,8 @@ export class FrameRing {
     this.buf = new Float32Array(capacityFrames * HOP);
   }
 
-  // Index loops, not subarray/set: no garbage on the audio thread.
-  push(block: Float32Array): void {
+  /** Returns how many samples were dropped. Index loops, not subarray/set: no garbage on the audio thread. */
+  push(block: Float32Array): number {
     const cap = this.buf.length;
     const skip = Math.max(0, block.length - cap);
     const len = block.length - skip;
@@ -27,6 +27,7 @@ export class FrameRing {
       if (++w === cap) w = 0;
     }
     this.n += len;
+    return skip + Math.max(0, over);
   }
 
   /** A fresh array each time, so the caller may transfer its buffer. */

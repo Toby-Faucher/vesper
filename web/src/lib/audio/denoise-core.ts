@@ -17,6 +17,30 @@ const MAX_LATE = 20;
 // Skip the first 3 s of replies: the WASM engine runs on its slow baseline tier right after load.
 const WARMUP_FRAMES = 300;
 
+const REPLY_WINDOW = 100; // replies kept for the average and max denoiser time
+
+export type PipelineState = 'passthrough' | 'connecting' | 'priming' | 'playing' | 'failed';
+/** Plain numbers, so the worklet can post them as they are. Levels are linear RMS, 0..1. */
+export interface PipelineStats {
+  state: PipelineState;
+  failure: string | null;
+  inputBlocks: number;
+  emptyInputBlocks: number;
+  framesSent: number;
+  replies: number;
+  underruns: number;
+  reprimes: number;
+  droppedInput: number;
+  droppedOut: number;
+  queuedMs: number;
+  inflight: number;
+  lastReplyMs: number;
+  avgReplyMs: number;
+  maxReplyMs: number;
+  inputRms: number;
+  outputRms: number;
+}
+
 /**
  * The denoise worklet's logic, free of AudioWorkletGlobalScope so it can be unit-tested.
  * Until connected, and after a failure, the raw input is passed through so the user stays audible.
@@ -39,10 +63,55 @@ export class DenoiseCore {
   });
   private onFail: (reason: string) => void;
   private stallSamples: number;
+  private rate: number;
+  private n = { inputBlocks: 0, emptyInputBlocks: 0, framesSent: 0, replies: 0, underruns: 0, reprimes: 0, droppedOut: 0 };
+  private droppedSamples = 0;
+  private played = false;
+  private replyMs = new Float64Array(REPLY_WINDOW);
+  // Level meters: sums over the current half second; the last full half second is what stats() reports.
+  private sq = { in: 0, out: 0, n: 0 };
+  private rms = { in: 0, out: 0 };
 
   constructor(onFail: (reason: string) => void, sampleRate: number) {
     this.onFail = onFail;
+    this.rate = sampleRate;
     this.stallSamples = sampleRate / 2; // a killed worker sends no error; half a second of silence means stalled
+  }
+
+  stats(): PipelineStats {
+    const k = Math.min(this.n.replies, REPLY_WINDOW);
+    let sum = 0;
+    let max = 0;
+    for (let i = 0; i < k; i++) {
+      sum += this.replyMs[i];
+      max = Math.max(max, this.replyMs[i]);
+    }
+    const state: PipelineState = this.failure ? 'failed' : !this.send ? 'passthrough' : this.playing ? 'playing'
+      : this.n.replies ? 'priming' : 'connecting';
+    return {
+      state,
+      failure: this.failure,
+      ...this.n,
+      droppedInput: Math.ceil(this.droppedSamples / HOP),
+      queuedMs: (this.queued / this.rate) * 1000,
+      inflight: this.inflight,
+      lastReplyMs: this.n.replies ? this.replyMs[(this.n.replies - 1) % REPLY_WINDOW] : 0,
+      avgReplyMs: k ? sum / k : 0,
+      maxReplyMs: max,
+      inputRms: this.rms.in,
+      outputRms: this.rms.out,
+    };
+  }
+
+  private meter(input: Float32Array | undefined, o: Float32Array) {
+    for (let i = 0; i < o.length; i++) {
+      if (input) this.sq.in += input[i] * input[i];
+      this.sq.out += o[i] * o[i];
+    }
+    if ((this.sq.n += o.length) < this.rate / 2) return;
+    this.rms.in = Math.sqrt(this.sq.in / this.sq.n);
+    this.rms.out = Math.sqrt(this.sq.out / this.sq.n);
+    this.sq.in = this.sq.out = this.sq.n = 0;
   }
 
   connect(send: (f: Float32Array) => void) {
@@ -63,27 +132,41 @@ export class DenoiseCore {
     if (m.type !== 'frame') return this.fail(m.type === 'error' ? `denoiser error: ${m.message}` : 'denoiser protocol');
     this.inflight = Math.max(0, this.inflight - 1);
     this.idle = 0;
+    this.replyMs[this.n.replies++ % REPLY_WINDOW] = m.ms;
     this.out.push(m.data);
     this.count += m.data.length;
     if (this.out.length > MAX_OUT) {
       this.count -= this.out.shift()!.length;
       this.pos = 0;
+      this.n.droppedOut++;
     }
     if (this.mode.report(m.ms) === 'browser') this.fail('denoiser too slow for real time');
   }
 
   render(input: Float32Array | undefined, o: Float32Array): void {
+    if (input) this.n.inputBlocks++;
+    else this.n.emptyInputBlocks++;
+    this.process(input, o);
+    this.meter(input, o);
+  }
+
+  private process(input: Float32Array | undefined, o: Float32Array): void {
     if (!this.send || this.failure) {
       for (let i = 0; i < o.length; i++) o[i] = input ? input[i] : 0;
       return;
     }
-    if (input) this.input.push(input);
-    for (let f; this.inflight < MAX_INFLIGHT && (f = this.input.pop()); this.inflight++) this.send(f);
+    if (input) this.droppedSamples += this.input.push(input);
+    for (let f; this.inflight < MAX_INFLIGHT && (f = this.input.pop()); this.inflight++, this.n.framesSent++) this.send(f);
     if (this.inflight > 0 && (this.idle += o.length) > this.stallSamples) {
       this.fail('denoiser stalled');
-      return this.render(input, o);
+      return this.process(input, o);
     }
-    if (!this.playing) this.playing = this.queued >= PRIME;
+    if (!this.playing && this.queued >= PRIME) {
+      this.playing = true;
+      if (this.played) this.n.reprimes++;
+      this.played = true;
+    }
+    const wasPlaying = this.playing;
     let i = 0;
     while (this.playing && i < o.length && this.out.length) {
       const f = this.out[0];
@@ -94,7 +177,10 @@ export class DenoiseCore {
         this.pos = 0;
       }
     }
-    if (i < o.length) this.playing = false; // underrun: re-prime
+    if (i < o.length) {
+      if (wasPlaying) this.n.underruns++;
+      this.playing = false; // underrun: re-prime
+    }
     for (; i < o.length; i++) o[i] = 0;
   }
 }
