@@ -1,0 +1,9 @@
+atten_db = 100.0
+post_filter_beta = 0.02
+max_db_erb_thresh = 1000.0
+max_db_df_thresh = 1000.0
+input_gain_db = 0.0
+atten_db = 40.0
+[pre]
+
+[post]
