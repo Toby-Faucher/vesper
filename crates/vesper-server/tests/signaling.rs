@@ -29,6 +29,7 @@ fn config() -> Config {
         join_deadline: Duration::from_secs(30),
         ping_interval: Duration::from_secs(30),
         max_sockets: 256,
+        web_dir: "does-not-exist".into(),
     }
 }
 

@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -19,12 +20,14 @@ pub struct Config {
     pub ping_interval: Duration,
     /// Concurrent WebSockets; upgrades beyond this get 503.
     pub max_sockets: usize,
+    /// Built web app served at `/` (with SPA fallback to `index.html`).
+    pub web_dir: PathBuf,
 }
 
 impl Config {
     /// `VESPER_HTTP_BIND` (default `0.0.0.0:8080`), `VESPER_UDP_BIND` (default `0.0.0.0:40000`),
     /// `VESPER_PUBLIC_HOST` (optional), `VESPER_UDP_PORT_PUBLIC` (default: the `VESPER_UDP_BIND`
-    /// port), `VESPER_JOIN_DEADLINE_SECS` (default 10), `VESPER_MAX_SOCKETS` (default 256) and
+    /// port), `VESPER_JOIN_DEADLINE_SECS` (default 10), `VESPER_MAX_SOCKETS` (default 256), `VESPER_WEB_DIR` (default `web/dist`) and
     /// `VESPER_DEV_KEY` (required, non-empty).
     pub fn from_env() -> Result<Config, String> {
         Config::from_lookup(|k| std::env::var(k).ok())
@@ -55,6 +58,9 @@ impl Config {
             join_deadline: Duration::from_secs(num("VESPER_JOIN_DEADLINE_SECS", 10)?),
             ping_interval: Duration::from_secs(25),
             max_sockets: num("VESPER_MAX_SOCKETS", 256)? as usize,
+            web_dir: get("VESPER_WEB_DIR")
+                .filter(|d| !d.is_empty())
+                .map_or_else(|| "web/dist".into(), PathBuf::from),
         })
     }
 }
@@ -82,6 +88,7 @@ mod tests {
         assert!(c.public_host.is_none());
         assert_eq!(c.join_deadline, Duration::from_secs(10));
         assert_eq!(c.max_sockets, 256);
+        assert_eq!(c.web_dir, PathBuf::from("web/dist"));
         let c = lookup(&[("VESPER_DEV_KEY", "k"), ("VESPER_JOIN_DEADLINE_SECS", "3")]).unwrap();
         assert_eq!(c.join_deadline, Duration::from_secs(3));
     }

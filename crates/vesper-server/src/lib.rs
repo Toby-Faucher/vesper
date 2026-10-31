@@ -10,9 +10,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::Request;
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 use vesper_sfu::{Sfu, SfuConfig};
 
@@ -43,6 +48,11 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(ws::upgrade))
+        .fallback_service(
+            // SPA: unknown paths get index.html. ServeDir refuses `..` and never lists directories.
+            ServeDir::new(&cfg.web_dir).fallback(ServeFile::new(cfg.web_dir.join("index.html"))),
+        )
+        .layer(middleware::from_fn(guard))
         .with_state(ws::WsState {
             rooms,
             sockets: Arc::new(Semaphore::new(cfg.max_sockets)),
@@ -56,4 +66,18 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
         addr,
         tokio::spawn(async move { axum::serve(listener, app).await }),
     ))
+}
+
+/// Hide dotfiles (a served dir may hold `.env` and friends) and add `nosniff` to every response.
+async fn guard(req: Request, next: Next) -> Response {
+    let p = req.uri().path().to_ascii_lowercase();
+    if p.contains("/.") || p.contains("%2e") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let mut res = next.run(req).await;
+    res.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    res
 }
