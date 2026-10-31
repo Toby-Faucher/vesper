@@ -1,4 +1,6 @@
 [toolchain]
-channel = "stable"
+# Exact pin: a new stable can add clippy lints (CI runs -D warnings) or break the tract build.
+# Bump deliberately and run the full check.
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]
 targets = ["wasm32-unknown-unknown"]
