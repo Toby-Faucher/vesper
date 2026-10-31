@@ -140,7 +140,7 @@ impl Rooms {
         let session = self.0.next_session.fetch_add(1, Ordering::Relaxed);
         let (closed_tx, closed_rx) = oneshot::channel();
         {
-            let mut members = self.0.members.lock().unwrap();
+            let mut members = self.0.members.lock().expect("members lock poisoned");
             let member = Member {
                 room: room.clone(),
                 name,
@@ -209,13 +209,13 @@ impl Rooms {
     }
 
     fn is_current(&self, user_id: &str, session: u64) -> bool {
-        let members = self.0.members.lock().unwrap();
+        let members = self.0.members.lock().expect("members lock poisoned");
         members.get(user_id).is_some_and(|m| m.session == session)
     }
 
     /// Set the session's mute state and tell the room (ignored if the session was replaced).
     pub fn set_muted(&self, user_id: &str, session: u64, muted: bool) {
-        let mut members = self.0.members.lock().unwrap();
+        let mut members = self.0.members.lock().expect("members lock poisoned");
         let Some(m) = members.get_mut(user_id) else {
             return;
         };
@@ -246,7 +246,7 @@ impl Rooms {
     /// SFU session. The SFU leave is sent under the members lock: a rejoin's `remove` takes the
     /// same lock before its SFU join, so this Leave can never land after (and kill) that Join.
     fn remove(&self, user_id: &str, session: Option<u64>) -> Option<Member> {
-        let mut members = self.0.members.lock().unwrap();
+        let mut members = self.0.members.lock().expect("members lock poisoned");
         if session.is_some_and(|s| members.get(user_id).is_none_or(|m| m.session != s)) {
             return None;
         }
@@ -263,7 +263,7 @@ impl Rooms {
     }
 
     fn room_size(&self, room: &str) -> usize {
-        let members = self.0.members.lock().unwrap();
+        let members = self.0.members.lock().expect("members lock poisoned");
         members.values().filter(|m| m.room == room).count()
     }
 
