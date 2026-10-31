@@ -16,6 +16,9 @@ export interface CaptureDeps {
   now(): number;
 }
 
+/** The unfiltered mic passes through while the model loads, and a slow first download can take longer than 5 s. */
+export const READY_TIMEOUT_MS = 20_000;
+
 const modules = new WeakMap<BaseAudioContext, Promise<void>>();
 const browserDeps: CaptureDeps = {
   getUserMedia: (c) => navigator.mediaDevices.getUserMedia(c),
@@ -28,7 +31,7 @@ const browserDeps: CaptureDeps = {
     });
   },
   createWorker: () => new Worker(new URL('./dsp.worker.ts', import.meta.url), { type: 'module' }),
-  readyTimeoutMs: 5000,
+  readyTimeoutMs: READY_TIMEOUT_MS,
   startLive: true,
   now: () => performance.now(),
 };

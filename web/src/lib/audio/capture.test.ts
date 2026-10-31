@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCapture, type CaptureDeps } from './capture';
+import { createCapture, READY_TIMEOUT_MS, type CaptureDeps } from './capture';
 import { DEFAULT_AUDIO_SETTINGS, clampSettings } from './settings';
 
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
@@ -56,7 +56,7 @@ function setup(over: Partial<CaptureDeps> = {}) {
       workers.push(w);
       return w as unknown as Worker;
     },
-    readyTimeoutMs: 5000,
+    readyTimeoutMs: READY_TIMEOUT_MS,
     startLive: true,
     now: () => clock.t,
     ...over,
@@ -130,17 +130,19 @@ describe('createCapture', () => {
     cap.close();
   });
 
-  it('not ready within 5 s: falls back', async () => {
+  it('ready timeout is 20 s', () => expect(READY_TIMEOUT_MS).toBe(20_000));
+
+  it('not ready within the ready timeout: falls back', async () => {
     vi.useFakeTimers();
     const t = setup();
     const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
     const cb = vi.fn();
     cap.onModeChange(cb);
-    await vi.advanceTimersByTimeAsync(4999);
+    await vi.advanceTimersByTimeAsync(READY_TIMEOUT_MS - 1);
     expect(cb).not.toHaveBeenCalledWith('browser', expect.anything());
     await vi.advanceTimersByTimeAsync(1);
     await flush();
-    expect(cb).toHaveBeenCalledWith('browser', expect.stringMatching(/5 s/));
+    expect(cb).toHaveBeenCalledWith('browser', expect.stringMatching(/20 s/));
     cap.close();
   });
 

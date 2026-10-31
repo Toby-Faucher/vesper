@@ -98,6 +98,8 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), Dee
   The numbers are set in `denoise-core.ts`.
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
+- The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). The raw mic passes through, and the status line says `loading, unfiltered`, until then.
+- The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. Skipped when the browser asks to save data. Not verified in a real browser.
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.
 
 ## Static serving

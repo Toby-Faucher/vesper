@@ -27,6 +27,7 @@ Last updated 2026-10-30. Nothing here was run in a real browser or a real deploy
 
 ## Web client
 
+- **A very slow first visit can still fall back.** The denoiser files (about 23 MB) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
 - **Not tried in real Chrome or Firefox.** Firefox may refuse a mic and AudioContext rate mismatch, which forces the browser fallback every time.
 - **The VAD threshold in Settings is display-only.** Nothing gates on it. DTX still drops silence. The UI says so. See [decision 0006](decisions/0006-quality-checkpoint-gate.md).
 - **DTX applies at the next join.** The client cannot renegotiate it mid-call.
