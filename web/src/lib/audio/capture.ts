@@ -177,9 +177,12 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
 
   const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
   const lost = (e: unknown) => notify('off', `microphone lost: ${(e as Error)?.name ?? 'Error'}: ${msg(e)}`);
+  // The boost gain node exists only in the deepfilter graph.
+  const note = (m: DenoiseMode, r: string) =>
+    m !== 'deepfilter' && s.inputBoostDb > 0 ? (r ? `${r}; ` : '') + 'input boost applies only in deepfilter mode' : r;
   const notify = (m: DenoiseMode, reason: string) => {
     last = [m, reason];
-    cbs.forEach((cb) => cb(m, reason));
+    cbs.forEach((cb) => cb(m, note(m, reason)));
   };
 
   /** Rejects only when there is no current pipeline (initial start); later failures are surfaced via notify. */
@@ -244,13 +247,15 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     setSettings(n: AudioSettings) {
       const rebuild =
         !pipe || n.mode !== s.mode || n.micId !== s.micId || n.noiseSuppression !== s.noiseSuppression || n.autoGain !== s.autoGain;
+      const boostChanged = n.inputBoostDb !== s.inputBoostDb;
       s = n;
       if (rebuild) void switchTo(n.mode, '').catch(lost);
       else pipe?.set?.(n);
+      if (!rebuild && boostChanged && last) notify(...last);
     },
     onModeChange(cb: (m: DenoiseMode, reason: string) => void) {
       cbs.push(cb);
-      if (last) cb(...last);
+      if (last) cb(last[0], note(...last));
     },
     close() {
       closed = true;

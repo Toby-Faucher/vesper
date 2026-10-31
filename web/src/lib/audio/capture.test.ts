@@ -291,4 +291,19 @@ describe('createCapture', () => {
     expect(m.stop).not.toHaveBeenCalled();
     cap.close();
   });
+
+  it('notes that input boost is ignored outside deepfilter mode', async () => {
+    const t = setup();
+    const browser = clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'browser' });
+    const cap = await createCapture(browser, t.deps);
+    const seen: [string, string][] = [];
+    cap.onModeChange((m, r) => seen.push([m, r]));
+    expect(seen.at(-1)).toEqual(['browser', '']);
+    cap.setSettings({ ...browser, inputBoostDb: 6 });
+    expect(seen.at(-1)).toEqual(['browser', 'input boost applies only in deepfilter mode']);
+    cap.setSettings({ ...browser, inputBoostDb: 6, mode: 'deepfilter' });
+    await flush();
+    expect(seen.at(-1)).toEqual(['deepfilter', 'loading, unfiltered']);
+    cap.close();
+  });
 });

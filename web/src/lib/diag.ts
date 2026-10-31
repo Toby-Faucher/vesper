@@ -87,6 +87,7 @@ export async function connectivityCheck(
   const t0 = Date.now();
   const done = (ok: boolean, reason: string) => ({ ok, reason, ms: Date.now() - t0 });
   const timers: ReturnType<typeof setTimeout>[] = [];
+  const rnd = () => Math.random().toString(36).slice(2);
   const after = <T>(ms: number, v: T) => new Promise<T>((res) => timers.push(setTimeout(() => res(v), ms)));
   let ctx: AudioContext | undefined;
   let sig: Pick<Signaling, 'close' | 'onClose'> | undefined;
@@ -99,7 +100,7 @@ export async function connectivityCheck(
     sig = deps.newSignaling(signalingUrl);
     const wsClosed = new Promise<'closed'>((res) => sig!.onClose(() => res('closed')));
     const joined = await Promise.race([
-      deps.joinRoom(sig, { room: `check-${Math.random().toString(36).slice(2)}`, name: 'check', key, stream, bitrateKbps: 32 }),
+      deps.joinRoom(sig, { room: `check-${rnd()}`, name: `check-${rnd()}`, key, stream, bitrateKbps: 32 }),
       after(JOIN_TIMEOUT_MS, 'timeout' as const),
     ]);
     if (joined === 'timeout')

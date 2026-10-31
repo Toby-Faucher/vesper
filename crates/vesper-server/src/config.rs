@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub http_bind: SocketAddr,
     pub udp_bind: SocketAddr,
@@ -22,6 +22,24 @@ pub struct Config {
     pub max_sockets: usize,
     /// Built web app served at `/` (with SPA fallback to `index.html`).
     pub web_dir: PathBuf,
+}
+
+/// Like a derived Debug, but `dev_key` prints as `***` so logs never carry the secret.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("http_bind", &self.http_bind)
+            .field("udp_bind", &self.udp_bind)
+            .field("public_host", &self.public_host)
+            .field("udp_port_public", &self.udp_port_public)
+            .field("dev_key", &"***")
+            .field("max_room_size", &self.max_room_size)
+            .field("join_deadline", &self.join_deadline)
+            .field("ping_interval", &self.ping_interval)
+            .field("max_sockets", &self.max_sockets)
+            .field("web_dir", &self.web_dir)
+            .finish()
+    }
 }
 
 impl Config {
@@ -91,6 +109,14 @@ mod tests {
         assert_eq!(c.web_dir, PathBuf::from("web/dist"));
         let c = lookup(&[("VESPER_DEV_KEY", "k"), ("VESPER_JOIN_DEADLINE_SECS", "3")]).unwrap();
         assert_eq!(c.join_deadline, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn debug_hides_the_dev_key() {
+        let c = lookup(&[("VESPER_DEV_KEY", "s3cret-key")]).unwrap();
+        let d = format!("{c:?}");
+        assert!(!d.contains("s3cret-key"), "{d}");
+        assert!(d.contains("dev_key: \"***\""), "{d}");
     }
 
     #[test]

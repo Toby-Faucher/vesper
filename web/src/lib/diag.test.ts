@@ -120,6 +120,17 @@ describe('connectivityCheck', () => {
     expect(r.reason).toMatch(/UDP/);
     cleaned(s.log);
   });
+  it('uses a fresh check-<random> user name per run so parallel checks do not replace each other', async () => {
+    const names: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const s = setup({ joinErr: new Error('x') });
+      const join = s.deps.joinRoom;
+      s.deps.joinRoom = (async (_sig: unknown, o: { name: string }) => (names.push(o.name), join())) as any;
+      await connectivityCheck('ws://x/ws', 'k', s.deps);
+    }
+    names.forEach((n) => expect(n).toMatch(/^check-[0-9a-z]+$/));
+    expect(names[0]).not.toBe(names[1]);
+  });
   it('succeeds when ICE connects', async () => {
     const s = setup();
     const p = connectivityCheck('ws://x/ws', 'k', s.deps);
