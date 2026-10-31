@@ -4,7 +4,7 @@
   "branch": "exp/E14-atten40",
   "cand_eval": "research/results/gate/cand-E14-atten40-a23fde74b356.json",
   "cand_sha": "a23fde74b356ef2967c4acdc6ea3d9e9eb853de8",
-  "config_hash": "cf01c739e8fa",
+  "config_hash": "6103032d9629",
   "deltas": {
     "bak": {
       "ci95": [
@@ -70,6 +70,7 @@
       "mean": 0.12660091492052475
     }
   },
+  "eval": "",
   "guards": {
     "bak_mean": {
       "limit": -0.05,
@@ -91,20 +92,25 @@
       "pass": true,
       "value": 0
     },
+    "lead_in_mean": {
+      "limit": -3.0,
+      "pass": false,
+      "value": -19.36684473825792
+    },
     "lsd_wb_mean": {
       "limit": 0.05,
       "pass": true,
       "value": -0.6491852635531943
     },
     "rtf": {
-      "limit": 0.3,
+      "limit": 0.06,
       "pass": true,
-      "value": 0.2043932406
+      "value": 0.039851117133333336
     },
     "rtf_ratio": {
       "limit": 1.25,
-      "pass": false,
-      "value": 4.285411161621983
+      "pass": true,
+      "value": 0.835538502471846
     },
     "si_sdr_i_mean": {
       "limit": -0.3,
@@ -130,12 +136,13 @@
   },
   "n_total": 400,
   "n_used": 20,
+  "opus": "",
   "ovrl_delta_sd_full": 0.1324630426596045,
   "pipeline": "pipeline.toml",
-  "reason": "SPRT accepted H1 but guards failed: rtf_ratio",
+  "reason": "SPRT accepted H1 but guards failed: lead_in_mean",
   "rtf": {
     "base": 0.04769512956666667,
-    "cand": 0.2043932406
+    "cand": 0.039851117133333336
   },
   "split": "gate",
   "sprt": {
