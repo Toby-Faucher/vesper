@@ -21,6 +21,14 @@ impl Denoiser {
         Ok(Self { df })
     }
 
+    pub fn set_atten_limit(&mut self, db: f32) {
+        self.df.set_atten_lim(db);
+    }
+
+    pub fn set_post_filter(&mut self, beta: f32) {
+        self.df.set_pf_beta(beta);
+    }
+
     pub fn process(&mut self, input: &[f32]) -> Result<Vec<f32>, DspError> {
         if input.len() != HOP {
             return Err(DspError::BadFrameLength { got: input.len() });

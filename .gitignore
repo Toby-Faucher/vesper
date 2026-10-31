@@ -3,3 +3,4 @@ target/
 node_modules/
 crates/vesper-dsp/model/
 web/public/dsp/
+web/dist/
