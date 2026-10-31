@@ -1,17 +1,23 @@
-import { dbfs } from './level';
+import type { CaptureStats } from './capture';
 
-const SILENT_DBFS = -60;
+const SILENT_RMS = 1e-5; // about -100 dBFS: digital silence (no input, or a hardware mute). A real mic's own noise is far above it.
+const STALE_MS = 2000; // the worklet reports every 500 ms
 const SILENT_MS = 5000;
 
-export type Silence = { since: number | null; show: boolean };
-export const MIC_QUIET: Silence = { since: null, show: false };
+/** 'mic': the mic sends digital silence. 'pipeline': the worklet stopped reporting, or its context is not running. */
+export type MicWarning = 'mic' | 'pipeline' | null;
+export type Silence = { since: number | null; show: MicWarning };
+export const MIC_QUIET: Silence = { since: null, show: null };
 
 /**
- * One poll of the "no sound from your microphone" check. inputRms is the pipeline's input level; a worklet with no
- * input at all reports it as 0, so it counts as silence too. null (no pipeline data) never counts. gated is mute or PTT.
+ * One poll of the "no sound" check. Judged on the raw input level only. No pipeline data (browser or off mode) never
+ * counts. gated is mute or PTT. A hidden tab shows nothing: timers and messages are throttled there.
  */
-export function micSilence(prev: Silence, now: number, inputRms: number | null, gated: boolean): Silence {
-  const quiet = !gated && inputRms !== null && dbfs(inputRms) < SILENT_DBFS;
-  const since = quiet ? (prev.since ?? now) : null;
-  return { since, show: since !== null && now - since >= SILENT_MS };
+export function micSilence(prev: Silence, now: number, s: CaptureStats | null, o: { gated: boolean; visible: boolean }): Silence {
+  const p = s?.pipeline;
+  const kind: MicWarning = o.gated || !o.visible || !p ? null
+    : s!.context.state !== 'running' || (s!.ageMs ?? 0) > STALE_MS ? 'pipeline'
+    : p.inputRms < SILENT_RMS ? 'mic' : null;
+  const since = kind ? (prev.since ?? now) : null;
+  return { since, show: since !== null && now - since >= SILENT_MS ? kind : null };
 }

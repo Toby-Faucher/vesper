@@ -8,7 +8,7 @@
   import { loadSettings, saveSettings, type AudioSettings } from '../lib/audio/settings';
   import { DEVICE_MESSAGES, applyBitrate, classifyMediaError, missingDevice, newInputs, trackLive, watchDevices } from '../lib/devices';
   import { pttKeyEvent } from '../lib/audio/ptt';
-  import { MIC_QUIET, micSilence } from '../lib/audio/mic-silence';
+  import { MIC_QUIET, micSilence, type MicWarning } from '../lib/audio/mic-silence';
   import Settings from './Settings.svelte';
   import Diagnostics from './Diagnostics.svelte';
   import type { DenoiseMode } from '../lib/audio/mode';
@@ -46,7 +46,7 @@
   let poll: ReturnType<typeof setInterval> | undefined;
   let releaseLock: (() => void) | undefined;
   let silence = MIC_QUIET;
-  let micSilent = $state(false);
+  let micWarning = $state<MicWarning>(null);
 
   // Push to talk is mute-gated: the track is live only when not muted and (PTT off or key held).
   function applyTrack() {
@@ -143,7 +143,7 @@
     mic = undefined;
     modeReason = '';
     silence = MIC_QUIET;
-    micSilent = false;
+    micWarning = null;
     muted = false;
     deafened = false;
     speaking = new Set();
@@ -216,8 +216,9 @@
         const next = playback?.speaking() ?? new Set<string>();
         if (next.size !== speaking.size || [...next].some((i) => !speaking.has(i))) speaking = next;
         const gated = !trackLive(muted, settings.pushToTalk.enabled, pttDown);
-        silence = micSilence(silence, performance.now(), capture?.getStats()?.pipeline?.inputRms ?? null, gated);
-        micSilent = silence.show;
+        const visible = document.visibilityState === 'visible';
+        silence = micSilence(silence, performance.now(), capture?.getStats() ?? null, { gated, visible });
+        micWarning = silence.show;
       }, 100);
       peers = early.reduce(applyPeerMsg, r.peers);
       joined = true;
@@ -267,7 +268,8 @@
     <p class="rounded p-1 {speaking.has(userId) ? 'ring-2 ring-green-500' : ''}">You{muted ? ' (muted)' : ''}</p>
     <p class="text-sm text-neutral-400" role="status">Noise suppression: {mode}{modeReason ? ` (${modeReason})` : ''}</p>
     <p class="text-sm text-amber-400" role="status">
-      {micSilent ? 'No sound from your microphone. Check the input device, its volume, and the mute switch.' : ''}
+      {micWarning === 'mic' ? 'No sound from your microphone. Check the input device, its volume, and the mute switch.'
+        : micWarning === 'pipeline' ? 'The audio pipeline stopped. Leave and join again.' : ''}
     </p>
   {/if}
   <ul class="space-y-1">

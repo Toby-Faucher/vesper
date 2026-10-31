@@ -1,49 +1,78 @@
 import { describe, expect, it } from 'vitest';
-import { MIC_QUIET, micSilence, type Silence } from './mic-silence';
+import { MIC_QUIET, micSilence, type MicWarning, type Silence } from './mic-silence';
+import type { CaptureStats } from './capture';
+import type { PipelineStats } from './denoise-core';
 
-const QUIET = 0.0001; // -80 dBFS
+const QUIET_ROOM = 0.0001; // -80 dBFS: a working mic in a quiet room, not silence
 const LOUD = 0.05; // about -26 dBFS
-type Step = [ms: number, rms: number | null, gated?: boolean];
-/** Polls every 100 ms through the steps; returns show at each poll. */
+type Step = {
+  ms: number; rms?: number; gated?: boolean; hidden?: boolean; ageMs?: number; context?: AudioContextState; noPipeline?: boolean;
+};
+const stats = (s: Step): CaptureStats => ({
+  pipeline: s.noPipeline ? null : ({ inputRms: s.rms ?? LOUD } as PipelineStats),
+  ageMs: s.noPipeline ? null : (s.ageMs ?? 100),
+  mic: { readyState: 'live', muted: false, enabled: true },
+  context: { state: s.context ?? 'running', sampleRate: 48000 },
+});
+/** Polls every 100 ms through the steps; returns the warning at each poll. */
 function run(steps: Step[]) {
   let s: Silence = MIC_QUIET;
   let t = 0;
-  const shown: boolean[] = [];
-  for (const [ms, rms, gated = false] of steps)
-    for (let end = t + ms; t < end; t += 100) {
-      s = micSilence(s, t, rms, gated);
+  const shown: MicWarning[] = [];
+  for (const step of steps)
+    for (let end = t + step.ms; t < end; t += 100) {
+      s = micSilence(s, t, stats(step), { gated: !!step.gated, visible: !step.hidden });
       shown.push(s.show);
     }
   return shown;
 }
+const never = (shown: MicWarning[]) => shown.every((w) => w === null);
 
 describe('micSilence', () => {
-  it('never shows before 5 s of silence', () => {
-    expect(run([[5000, QUIET]]).some(Boolean)).toBe(false);
+  it('a quiet room (-80 dBFS) for 60 s never shows', () => {
+    expect(never(run([{ ms: 60000, rms: QUIET_ROOM }]))).toBe(true);
   });
 
-  it('shows after 5 s of silence', () => {
-    expect(run([[5100, QUIET]]).at(-1)).toBe(true);
-    expect(run([[5100, 0]]).at(-1)).toBe(true); // no input at all reads as 0
+  it('digital silence: nothing before 5 s, the mic message after', () => {
+    expect(never(run([{ ms: 5000, rms: 0 }]))).toBe(true);
+    expect(run([{ ms: 5100, rms: 0 }]).at(-1)).toBe('mic');
+    expect(run([{ ms: 5100, rms: 1e-6 }]).at(-1)).toBe('mic');
   });
 
-  it('does not show while muted or held off by push to talk', () => {
-    expect(run([[10000, QUIET, true]]).some(Boolean)).toBe(false);
-    expect(run([[4000, QUIET], [200, QUIET, true], [4000, QUIET]]).some(Boolean)).toBe(false); // the gate restarts the clock
+  it('a brief burst of sound clears it', () => {
+    const shown = run([{ ms: 6000, rms: 0 }, { ms: 100, rms: LOUD }]);
+    expect(shown.at(-2)).toBe('mic');
+    expect(shown.at(-1)).toBeNull();
   });
 
-  it('clears when sound returns', () => {
-    const shown = run([[6000, QUIET], [100, LOUD]]);
-    expect(shown.at(-2)).toBe(true);
-    expect(shown.at(-1)).toBe(false);
+  it('never shows while muted or held off by push to talk', () => {
+    expect(never(run([{ ms: 10000, rms: 0, gated: true }]))).toBe(true);
+    expect(never(run([{ ms: 4000, rms: 0 }, { ms: 200, rms: 0, gated: true }, { ms: 4000, rms: 0 }]))).toBe(true); // the gate restarts the clock
   });
 
-  it('ignores one brief quiet moment', () => {
-    expect(run([[3000, LOUD], [1000, QUIET], [3000, LOUD]]).some(Boolean)).toBe(false);
-    expect(run([[4000, QUIET], [100, LOUD], [4000, QUIET]]).some(Boolean)).toBe(false);
+  it('one silent moment under 5 s never shows', () => {
+    expect(never(run([{ ms: 3000 }, { ms: 4900, rms: 0 }, { ms: 3000 }]))).toBe(true);
   });
 
-  it('no pipeline data never counts as silence', () => {
-    expect(run([[10000, null]]).some(Boolean)).toBe(false);
+  it('no pipeline data never counts', () => {
+    expect(never(run([{ ms: 10000, noPipeline: true, context: 'suspended' }]))).toBe(true);
+  });
+
+  it('a stale snapshot while visible shows the pipeline message', () => {
+    expect(run([{ ms: 5100, ageMs: 2500 }]).at(-1)).toBe('pipeline');
+    expect(never(run([{ ms: 10000, ageMs: 2000 }]))).toBe(true); // 2 s is still fresh
+  });
+
+  it('nothing shows while the tab is hidden', () => {
+    expect(never(run([{ ms: 10000, ageMs: 9000, hidden: true }]))).toBe(true);
+    expect(never(run([{ ms: 10000, rms: 0, hidden: true }]))).toBe(true);
+  });
+
+  it('a suspended context shows the pipeline message', () => {
+    expect(run([{ ms: 5100, context: 'suspended' }]).at(-1)).toBe('pipeline');
+  });
+
+  it('a fresh snapshot with real input shows nothing', () => {
+    expect(never(run([{ ms: 10000 }]))).toBe(true);
   });
 });
