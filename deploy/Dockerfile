@@ -3,9 +3,10 @@
 
 # --- 1. denoiser wasm (scripts/build-dsp.sh) ---------------------------------------------------
 FROM rust:1-bookworm AS dsp
-RUN rustup target add wasm32-unknown-unknown
 WORKDIR /src
 COPY . .
+# rust-toolchain.toml (channel stable + the wasm32 target) governs inside /src; trigger its install here.
+RUN rustup toolchain install
 # The wasm-bindgen CLI must equal the crate version in Cargo.lock exactly (build-dsp.sh checks too).
 RUN cargo install wasm-bindgen-cli --locked \
       --version "$(awk '/^name = "wasm-bindgen"$/ {getline; gsub(/[^0-9.]/, "", $3); print $3; exit}' Cargo.lock)"

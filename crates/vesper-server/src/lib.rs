@@ -10,14 +10,16 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::Request;
+use std::path::PathBuf;
+
+use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 use tracing::{info, warn};
 use vesper_sfu::{Sfu, SfuConfig};
 
@@ -44,15 +46,22 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
             sfu.set_advertised(vec![local]);
         }
     }
+    if !cfg.web_dir.join("index.html").is_file() {
+        warn!(
+            "{}/index.html not found: the web app will 404 (set VESPER_WEB_DIR to the built web/dist)",
+            cfg.web_dir.display()
+        );
+    }
     let rooms = Rooms::new(sfu, &cfg.dev_key, cfg.max_room_size);
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(ws::upgrade))
-        .fallback_service(
-            // SPA: unknown paths get index.html. ServeDir refuses `..` and never lists directories.
-            ServeDir::new(&cfg.web_dir).fallback(ServeFile::new(cfg.web_dir.join("index.html"))),
-        )
-        .layer(middleware::from_fn(guard))
+        // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`.
+        .fallback_service(ServeDir::new(&cfg.web_dir))
+        .layer(middleware::from_fn_with_state(
+            Arc::new(cfg.web_dir.clone()),
+            guard,
+        ))
         .with_state(ws::WsState {
             rooms,
             sockets: Arc::new(Semaphore::new(cfg.max_sockets)),
@@ -68,16 +77,36 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
     ))
 }
 
-/// Hide dotfiles (a served dir may hold `.env` and friends) and add `nosniff` to every response.
-async fn guard(req: Request, next: Next) -> Response {
-    let p = req.uri().path().to_ascii_lowercase();
-    if p.contains("/.") || p.contains("%2e") {
+/// Static-serving policy around ServeDir:
+/// - dotfiles are hidden (a served dir may hold `.env`);
+/// - a 404 on an extensionless path gets `index.html` (SPA routes); a 404 on a path with an
+///   extension (`/assets/old.js`) stays a 404 so a stale page fails loudly, not as HTML;
+/// - `/assets/*` (content-hashed by Vite) is immutable, everything else is `no-cache`;
+/// - `nosniff` on every response.
+async fn guard(State(dir): State<Arc<PathBuf>>, req: Request, next: Next) -> Response {
+    let path = req.uri().path().to_ascii_lowercase();
+    if path.contains("/.") || path.contains("%2e") {
         return StatusCode::NOT_FOUND.into_response();
     }
     let mut res = next.run(req).await;
-    res.headers_mut().insert(
+    let spa = res.status() == StatusCode::NOT_FOUND
+        && !path.rsplit('/').next().unwrap_or("").contains('.');
+    if spa && let Ok(html) = tokio::fs::read(dir.join("index.html")).await {
+        res = ([(header::CONTENT_TYPE, "text/html")], html).into_response();
+    }
+    let immutable = path.starts_with("/assets/") && res.status() == StatusCode::OK;
+    let h = res.headers_mut();
+    h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if immutable {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        }),
     );
     res
 }

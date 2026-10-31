@@ -60,7 +60,7 @@ fn header_has(resp: &str, h: &str) -> bool {
 #[tokio::test]
 async fn serves_index_and_falls_back_for_spa_paths() {
     let addr = start(site()).await;
-    for p in ["/", "/index.html", "/room/abc", "/nope.txt"] {
+    for p in ["/", "/index.html", "/room/abc"] {
         let r = get(addr, p).await;
         assert!(r.starts_with("HTTP/1.1 200"), "{p}: {r}");
         assert!(r.ends_with("INDEX"), "{p}: {r}");
@@ -124,4 +124,36 @@ async fn cannot_read_outside_dir_or_dotfiles() {
     // Directories are never listed.
     let r = get(addr, "/assets/").await;
     assert!(!r.contains("a.wasm"), "{r}");
+}
+
+#[tokio::test]
+async fn cache_control_and_extension_paths_do_not_fall_back() {
+    let web = site();
+    std::fs::create_dir_all(web.join("dsp")).unwrap();
+    std::fs::write(web.join("dsp/g.js"), "x").unwrap();
+    let addr = start(web).await;
+    let cc = |r: &str| r.to_ascii_lowercase().contains("cache-control: no-cache");
+    for p in ["/", "/index.html", "/room/abc"] {
+        assert!(cc(&get(addr, p).await), "{p}");
+    }
+    let r = get(addr, "/assets/w.js").await;
+    assert!(
+        header_has(&r, "cache-control: public, max-age=31536000, immutable"),
+        "{r}"
+    );
+    let r = get(addr, "/assets/a.wasm").await;
+    assert!(header_has(&r, "immutable"), "{r}");
+    let r = get(addr, "/assets/old-hash.js").await;
+    assert!(
+        r.starts_with("HTTP/1.1 404") && !r.contains("INDEX") && !header_has(&r, "immutable"),
+        "{r}"
+    );
+    for p in ["/dsp/missing.wasm", "/dsp/model.tar.gz"] {
+        let r = get(addr, p).await;
+        assert!(
+            r.starts_with("HTTP/1.1 404") && !r.contains("INDEX"),
+            "{p}: {r}"
+        );
+    }
+    assert!(cc(&get(addr, "/dsp/g.js").await));
 }

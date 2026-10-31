@@ -1,5 +1,5 @@
 # Plain-binary install. Assumes: binary at /opt/vesper/vesper-server, web app (web/dist) at
-# /opt/vesper/web, and /etc/vesper/vesper.env containing (mode 600, owned by root):
+# /opt/vesper/web (world-readable: DynamicUser has no group/owner access), and /etc/vesper/vesper.env containing (mode 600, owned by root):
 #   VESPER_DEV_KEY=<the join passphrase>
 #   VESPER_PUBLIC_HOST=vesper.tfaucher.com
 [Unit]
@@ -24,11 +24,12 @@ PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-RestrictAddressFamilies=AF_INET AF_INET6
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 UMask=0077
 

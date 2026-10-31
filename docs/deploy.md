@@ -11,7 +11,7 @@ Vesper is one server binary (`vesper-server`): HTTP (the web app, `/health`, the
 | `VESPER_UDP_BIND` | `0.0.0.0:40000` | Media UDP listen address. |
 | `VESPER_PUBLIC_HOST` | unset | Hostname or IP clients are told to send media to. Resolved at start and re-resolved periodically. Unset: the server advertises its bound address, which is useless to other machines when bound to 0.0.0.0 or 127.0.0.1. |
 | `VESPER_UDP_PORT_PUBLIC` | the `VESPER_UDP_BIND` port | The UDP port clients reach from outside (set only if the router maps a different external port). |
-| `VESPER_WEB_DIR` | `web/dist` | Directory with the built web app, served at `/` (unknown non-API paths fall back to `index.html`; dotfiles and anything outside the dir are not served). |
+| `VESPER_WEB_DIR` | `web/dist` | Directory with the built web app, served at `/` (extensionless unknown paths fall back to `index.html`, a missing file with an extension is a 404; `/assets/*` is `Cache-Control: immutable`, everything else `no-cache`; dotfiles and anything outside the dir are not served). |
 | `VESPER_JOIN_DEADLINE_SECS` | `10` | A socket that has not joined in this time is closed. |
 | `VESPER_MAX_SOCKETS` | `256` | Concurrent WebSockets. |
 | `RUST_LOG` | `info` | Log filter. |
@@ -43,9 +43,11 @@ Browsers only allow the mic on `localhost` or HTTPS. For another machine on the 
 
 Files: `deploy/Dockerfile` (build from the repo root), `deploy/compose.yaml`.
 
-1. Put `VESPER_DEV_KEY=<passphrase>` (and optionally `VESPER_PUBLIC_HOST=vesper.tfaucher.com`) in a `.env` next to `compose.yaml`. Compose refuses to start without the key; the image never contains it.
+1. Put `VESPER_DEV_KEY=<passphrase>` and `VESPER_PUBLIC_HOST` (see Network: it must resolve to the public IP from this host) in a `.env` next to `compose.yaml`. Compose refuses to start without the key; the image never contains it.
 2. `docker compose -f deploy/compose.yaml up -d --build` (in Dockge: create the stack from this repo and add the `.env`). The first build is slow: it compiles the denoiser to wasm and downloads the DeepFilterNet model (sha256-checked by `scripts/fetch-model.sh`).
 3. `curl http://127.0.0.1:8080/health` returns `ok`; `docker compose ps` shows `healthy`.
+
+If Docker's UDP NAT misbehaves, `network_mode: host` is the alternative (see the comment in `compose.yaml`): drop `ports:`, the server binds the host directly, and the `VESPER_HTTP_BIND`/`VESPER_UDP_BIND` values are the real host listeners.
 
 Publishing: TCP 8080 is bound to `127.0.0.1` by default, which suits Caddy on the same host. If Caddy runs elsewhere, change the mapping to `"8080:8080"` and firewall it to the proxy, or attach both containers to one docker network and point Caddy at `vesper:8080` (then drop the 8080 mapping). UDP `40000:40000/udp` must stay published on all interfaces. The container runs as a non-root user with a read-only root filesystem and no capabilities.
 
@@ -55,8 +57,9 @@ Plain binary instead: `deploy/vesper.service` (systemd, hardened, `DynamicUser`)
 
 - **Router:** forward **UDP 40000** to the machine running the container (the Docker host). Not TCP 3000, and no TCP forward to Vesper at all: HTTPS goes through Caddy on 443.
 - **HTTPS:** `deploy/Caddyfile.example` proxies `vesper.tfaucher.com` to the HTTP port; Caddy gets the certificate and handles the WebSocket upgrade by itself.
-- **Split DNS:** a client on the same LAN resolves `vesper.tfaucher.com` to your public IP, and many routers do not loop UDP back (no hairpin NAT), so media fails. Make your LAN resolver answer `vesper.tfaucher.com` with the Docker host's LAN address (and have Caddy listen there). Then the LAN client talks to the server directly.
-- **`VESPER_PUBLIC_HOST`** is the name or IP put into the server's ICE candidates. Set it to `vesper.tfaucher.com` for external users. Known limit: the name is re-resolved periodically but only sessions started afterwards pick up a changed IP; people already in a call keep the old address and must rejoin after your public IP changes. With split DNS, the LAN client and the internet client are served the same advertised address, so the LAN client's path depends on your router handling it; if it does not, test from LAN and cellular separately.
+- **`VESPER_PUBLIC_HOST`** is the name or IP the server puts into its ICE candidates, for everyone. The server resolves it with the Docker host's own resolver, so it must resolve to the **public** IP *from the server's point of view*. Use the literal public IP, or a public-only name (for example `media.tfaucher.com`) that your LAN DNS does not override. Do not point it at `vesper.tfaucher.com` if you use split DNS for that name: the server would resolve it to the LAN address and advertise that to internet clients, whose media would then fail.
+- **Split DNS (HTTPS name only):** make your LAN resolver answer `vesper.tfaucher.com` with the Caddy host's LAN address so LAN browsers reach HTTPS directly. This does not affect media: LAN clients still send media to the advertised public IP, so they rely on the router's hairpin NAT (loopback of UDP 40000 to the Docker host). If the router has no hairpin NAT, LAN clients cannot get media through that path; test from outside instead (phone on cellular) and treat LAN-to-LAN calls as unsupported until that is solved.
+- Known limit: the name is re-resolved every 60 s, but only sessions started afterwards pick up a changed IP; people already in a call keep the old address and must rejoin after your public IP changes.
 - **`VESPER_UDP_PORT_PUBLIC`** only matters when the external UDP port differs from the one the container listens on.
 
 ## Verify
@@ -66,7 +69,7 @@ Plain binary instead: `deploy/vesper.service` (systemd, hardened, `DynamicUser`)
 
 ## Upgrade and rollback
 
-Upgrade: `git pull`, then `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins; there is no state to migrate (presence is in memory). Before upgrading, tag the current image: `docker tag vesper:latest vesper:previous`. Rollback: set `image: vesper:previous` and `up -d` without `--build`, or `git checkout <old>` and rebuild. For the binary install keep the previous binary next to the new one and swap the file, then `systemctl restart vesper`.
+Upgrade: first tag the current image, `docker tag vesper:latest vesper:previous`; then `git pull` and `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins; there is no state to migrate (presence is in memory). Rollback: set `image: vesper:previous` and `up -d` without `--build`, or `git checkout <old>` and rebuild. For the binary install keep the previous binary next to the new one and swap the file, then `systemctl restart vesper`.
 
 ## Security headers
 

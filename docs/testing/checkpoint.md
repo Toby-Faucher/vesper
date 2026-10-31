@@ -24,7 +24,7 @@ Pick one mic and write its model in 11.1. Windows/Mac/Linux system "mic enhancem
 
 ### Running Vesper
 
-Full server and deployment instructions: docs/deploy.md. Until then, run locally from the repo root, in two terminals:
+Full server and deployment instructions: docs/deploy.md. To run locally from the repo root, in two terminals:
 
 ```bash
 # terminal 1: server. The join key is whatever you set as VESPER_DEV_KEY (required, no default).
@@ -38,7 +38,7 @@ npm --prefix web install && npm --prefix web run dev   # prints a localhost URL;
 
 Open the printed URL, enter the join key. Browsers only allow mic access on `localhost` or HTTPS.
 
-Friends or a second machine: the server must be reachable and must advertise a reachable address. Set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000` and `VESPER_PUBLIC_HOST=<hostname or IP the other machine can reach>` (without it the server advertises its bound address, which with 127.0.0.1 or 0.0.0.0 is useless to others), forward UDP 40000, and serve the web app over HTTPS: for anything beyond your own machine use the deployed instance (see docs/deploy.md).
+Friends or a second machine: the server must be reachable and must advertise a reachable address. Set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000` and `VESPER_PUBLIC_HOST=<hostname or IP the other machine can reach; from the server's own DNS view it must be the address clients use for media, see docs/deploy.md>` (without it the server advertises its bound address, which with 127.0.0.1 or 0.0.0.0 is useless to others), forward UDP 40000, and serve the web app over HTTPS: for anything beyond your own machine use the deployed instance (see docs/deploy.md).
 
 Record the git commit and URL in 11.1: `git rev-parse --short HEAD`.
 
