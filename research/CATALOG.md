@@ -8,5 +8,11 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 
 | id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| E-neg | Self-test: a deliberately bad config (the gate must reject it) | rejected | -0.077 [-0.153, -0.002] | +0.261 [+0.174, +0.348] | -0.942 [-1.048, -0.836] | +1.30 [+0.36, +2.24] | 0.043 | 240 | exp/E-neg | 308df0b41800 | SPRT had no verdict but guards failed: sig_p10 |
-| E-null | Self-test: no change at all (the gate must not accept a no-op) | rejected | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.00 [+0.00, +0.00] | 0.043 | 20 | exp/E-null | 308df0b41800 | SPRT accepted H0 (no gain of delta1) |
+| E-neg | Self-test: a deliberately bad config (the gate must reject it) | rejected | -0.077 [-0.153, -0.002] | +0.261 [+0.174, +0.348] | -0.942 [-1.048, -0.836] | +1.30 [+0.36, +2.24] | 0.043 | 240 | exp/E-neg | 308df0b41800 | SPRT had no verdict but guards failed: sig_p10; Self-test written by the framework author: a bad config (atten_db 3, post_filter_beta 0.3), no code. |
+| E-null | Self-test: no change at all (the gate must not accept a no-op) | rejected | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.00 [+0.00, +0.00] | 0.043 | 20 | exp/E-null | 308df0b41800 | SPRT accepted H0 (no gain of delta1); Self-test written by the framework author: no code change and the default config. |
+
+## Pending (1)
+
+| id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| E0-skip-thresholds | <one-line hypothesis> | pending |  |  |  |  |  |  | exp/E0-skip-thresholds |  |  |
