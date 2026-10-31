@@ -70,7 +70,7 @@ def ci95(xs):
     return {"mean": m, "ci95": [m - h, m + h]}
 
 
-def guards(sig_d, sdr_d, base, cand, declared_latency, g):
+def guards(sig_d, sdr_d, base, cand, declared_latency, g, bak_d=None):
     """Each guard: value, limit, pass. base and cand are the eval JSON objects."""
     out = {}
 
@@ -80,6 +80,9 @@ def guards(sig_d, sdr_d, base, cand, declared_latency, g):
     add("sig_mean", mean(sig_d), g["sig_mean_min"], mean(sig_d) >= g["sig_mean_min"])
     p10 = percentile(sig_d, 0.10)
     add("sig_p10", p10, g["sig_p10_min"], p10 >= g["sig_p10_min"])
+    # DNSMOS SIG rises when less noise is removed, so BAK must not fall (found with E2-atten24).
+    if bak_d is not None:
+        add("bak_mean", mean(bak_d), g["bak_mean_min"], mean(bak_d) >= g["bak_mean_min"])
     add("si_sdr_i_mean", mean(sdr_d), g["si_sdr_i_mean_min"], mean(sdr_d) >= g["si_sdr_i_mean_min"])
     rb, rc = base.get("rtf"), cand.get("rtf")
     add("rtf", rc, g["rtf_max"], rc is not None and rc <= g["rtf_max"])
@@ -126,7 +129,7 @@ def decide(manifest_ids, base, cand, det, latency_decl, cfg):
     seq = sequential(ovrl, s["delta0"], s["delta1"], s["alpha"], s["beta"], s["batch"])
     used = pairs[: seq["n"]]
     d = {m: [c[m] - b[m] for b, c in used] for m in METRICS}
-    gd = guards(d["sig"], d["si_sdr_i"], base, cand, latency_decl, g)
+    gd = guards(d["sig"], d["si_sdr_i"], base, cand, latency_decl, g, d["bak"])
     det_ok = deterministic(cand["items"], det["items"])
     gd["deterministic"] = {"value": det_ok, "limit": True, "pass": det_ok}
     failed = [k for k, v in gd.items() if not v["pass"]]

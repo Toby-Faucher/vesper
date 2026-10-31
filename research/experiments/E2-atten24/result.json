@@ -4,7 +4,7 @@
   "branch": "exp/E2-atten24",
   "cand_eval": "research/results/gate/cand-E2-atten24-6de7b42ee5ca.json",
   "cand_sha": "6de7b42ee5ca8bb63c4b1c99491c56dc807a5fc4",
-  "config_hash": "ea933b1b26dc",
+  "config_hash": "d285138ce546",
   "deltas": {
     "bak": {
       "ci95": [
@@ -50,6 +50,11 @@
     }
   },
   "guards": {
+    "bak_mean": {
+      "limit": -0.05,
+      "pass": false,
+      "value": -0.16550735537615102
+    },
     "clipped_items": {
       "limit": 0,
       "pass": true,
@@ -68,12 +73,12 @@
     "rtf": {
       "limit": 0.3,
       "pass": true,
-      "value": 0.04601040493333333
+      "value": 0.04589731733333333
     },
     "rtf_ratio": {
       "limit": 1.25,
       "pass": true,
-      "value": 0.981313589825556
+      "value": 0.9789016484639977
     },
     "si_sdr_i_mean": {
       "limit": -0.3,
@@ -100,10 +105,10 @@
   "n_total": 240,
   "n_used": 120,
   "pipeline": "pipeline.toml",
-  "reason": "SPRT accepted H1 and every guard holds",
+  "reason": "SPRT accepted H1 but guards failed: bak_mean",
   "rtf": {
     "base": 0.04688654616666667,
-    "cand": 0.04601040493333333
+    "cand": 0.04589731733333333
   },
   "split": "gate",
   "sprt": {
@@ -118,5 +123,5 @@
     "upper": 2.9444389791664403,
     "verdict": "H1"
   },
-  "status": "accepted"
+  "status": "rejected"
 }
