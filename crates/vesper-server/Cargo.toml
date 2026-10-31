@@ -7,7 +7,7 @@ publish.workspace = true
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tower-http = { version = "0.7", default-features = false, features = ["fs"] }
 tracing.workspace = true
