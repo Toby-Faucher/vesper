@@ -1,71 +1,123 @@
 //! One WebSocket per client: JSON `ClientMsg` in, `ServerMsg` out.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::Response;
-use tokio::sync::mpsc;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::time::Instant;
 use vesper_protocol::{ClientMsg, ErrorCode, MAX_MSG_BYTES, ServerMsg};
 
 use crate::rooms::{JoinReq, JoinResult, Out, Rooms};
 
-pub async fn upgrade(ws: WebSocketUpgrade, State(rooms): State<Rooms>) -> Response {
+/// Failed messages (bad key, bad JSON, ...) a socket may send before joining, then it is closed.
+const MAX_PREJOIN_ERRORS: u32 = 5;
+
+#[derive(Clone)]
+pub struct WsState {
+    pub rooms: Rooms,
+    pub sockets: Arc<Semaphore>,
+    pub join_deadline: Duration,
+    pub ping_interval: Duration,
+}
+
+pub async fn upgrade(ws: WebSocketUpgrade, State(st): State<WsState>) -> Response {
+    let Ok(permit) = st.sockets.clone().try_acquire_owned() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "too many connections").into_response();
+    };
     // Bigger messages make recv() fail, which ends (and closes) this socket only.
     ws.max_message_size(MAX_MSG_BYTES)
         .max_frame_size(MAX_MSG_BYTES)
-        .on_upgrade(move |socket| handle(socket, rooms))
+        .on_upgrade(move |socket| handle(socket, st, permit))
 }
 
-async fn handle(mut socket: WebSocket, rooms: Rooms) {
+async fn handle(mut socket: WebSocket, st: WsState, _permit: OwnedSemaphorePermit) {
+    let rooms = st.rooms;
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut joined: Option<JoinResult> = None;
+    let mut join_by = Instant::now() + st.join_deadline;
+    let mut errors = 0;
+    let mut ping = tokio::time::interval(st.ping_interval);
+    let mut last_seen = Instant::now();
     loop {
         tokio::select! {
             out = rx.recv() => match out {
                 Some(Out::Msg(m)) => {
-                    let text = serde_json::to_string(&m).expect("ServerMsg serialises");
+                    let Ok(text) = serde_json::to_string(&m) else { continue };
                     if socket.send(Message::text(text)).await.is_err() {
                         break;
                     }
                 }
-                // Replaced by a newer session or closed by the SFU: already out of the room.
+                // Replaced, closed by the SFU, or too many errors: already out of the room.
                 Some(Out::Close) | None => {
                     let _ = socket.send(Message::Close(None)).await;
                     return;
                 }
             },
+            _ = tokio::time::sleep_until(join_by), if joined.is_none() => {
+                let _ = socket.send(Message::Close(None)).await;
+                return;
+            }
+            _ = ping.tick() => {
+                // Catches clients that vanished without a FIN (NAT drop, power loss).
+                if last_seen.elapsed() > st.ping_interval * 2
+                    || socket.send(Message::Ping(Default::default())).await.is_err()
+                {
+                    break;
+                }
+            }
             msg = socket.recv() => {
                 let text = match msg {
                     Some(Ok(Message::Text(t))) => t,
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                    Some(Ok(_)) => continue,
-                };
-                let msg = match serde_json::from_str::<ClientMsg>(&text) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        send_error(&tx, ErrorCode::BadMessage, &format!("bad message: {e}"));
+                    Some(Ok(_)) => {
+                        last_seen = Instant::now();
                         continue;
                     }
                 };
-                match (msg, &joined) {
-                    (ClientMsg::Join { room, name, key, offer }, None) => {
+                last_seen = Instant::now();
+                let error = match (serde_json::from_str::<ClientMsg>(&text), &joined) {
+                    (Err(e), _) => Some((ErrorCode::BadMessage, format!("bad message: {e}"))),
+                    (Ok(ClientMsg::Join { room, name, key, offer }), None) => {
                         let req = JoinReq { room, name, key, offer, tx: tx.clone() };
                         match rooms.join(req).await {
-                            Ok(j) => joined = Some(j),
-                            Err(code) => send_error(&tx, code, describe(code)),
+                            Ok(j) => {
+                                joined = Some(j);
+                                None
+                            }
+                            Err(code) => Some((code, describe(code).into())),
                         }
                     }
-                    (ClientMsg::Join { .. }, Some(_)) => {
-                        send_error(&tx, ErrorCode::BadMessage, "already joined: leave first");
+                    (Ok(ClientMsg::Join { .. }), Some(_)) => {
+                        Some((ErrorCode::BadMessage, "already joined: leave first".into()))
                     }
-                    (ClientMsg::Answer { sdp }, Some(j)) => rooms.answer(&j.user_id, j.session, sdp),
-                    (ClientMsg::SetMuted { muted }, Some(j)) => {
+                    (Ok(ClientMsg::Answer { sdp }), Some(j)) => {
+                        rooms.answer(&j.user_id, j.session, sdp);
+                        None
+                    }
+                    (Ok(ClientMsg::SetMuted { muted }), Some(j)) => {
                         rooms.set_muted(&j.user_id, j.session, muted);
+                        None
                     }
-                    (ClientMsg::Leave, Some(j)) => {
+                    (Ok(ClientMsg::Leave), Some(j)) => {
                         rooms.leave(&j.user_id, j.session);
                         joined = None;
+                        join_by = Instant::now() + st.join_deadline;
+                        None
                     }
-                    (_, None) => send_error(&tx, ErrorCode::BadMessage, "join first"),
+                    (Ok(_), None) => Some((ErrorCode::BadMessage, "join first".into())),
+                };
+                if let Some((code, message)) = error {
+                    let _ = tx.send(Out::Msg(ServerMsg::Error { code, message }));
+                    if joined.is_none() {
+                        errors += 1;
+                        if errors >= MAX_PREJOIN_ERRORS {
+                            let _ = tx.send(Out::Close);
+                        }
+                    }
                 }
             }
         }
@@ -73,13 +125,6 @@ async fn handle(mut socket: WebSocket, rooms: Rooms) {
     if let Some(j) = joined {
         rooms.leave(&j.user_id, j.session);
     }
-}
-
-fn send_error(tx: &mpsc::UnboundedSender<Out>, code: ErrorCode, message: &str) {
-    let _ = tx.send(Out::Msg(ServerMsg::Error {
-        code,
-        message: message.into(),
-    }));
 }
 
 fn describe(code: ErrorCode) -> &'static str {

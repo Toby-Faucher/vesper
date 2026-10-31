@@ -104,7 +104,6 @@ impl Rooms {
         let old = self.remove(&user_id, None);
         if let Some(mut old) = old {
             let _ = old.tx.send(Out::Close);
-            self.0.sfu.leave(&user_id);
             if let Some(closed) = old.sfu_closed.take()
                 && tokio::time::timeout(REPLACE_TIMEOUT, closed).await.is_err()
             {
@@ -165,28 +164,47 @@ impl Rooms {
             members.insert(user_id.clone(), member);
         }
 
-        let (rooms, mut events, uid) = (self.clone(), ok.events, user_id.clone());
-        tokio::spawn(async move {
-            while let Some(SfuEvent::Offer(sdp)) = events.recv().await {
-                let _ = req.tx.send(Out::Msg(ServerMsg::Offer { sdp }));
-            }
-            // SfuEvent::Closed (or the SFU went away). Close the socket if this session was
-            // still current, i.e. the SFU ended it rather than a leave or rejoin.
-            let _ = closed_tx.send(());
-            if rooms.leave(&uid, session) {
-                let _ = req.tx.send(Out::Close);
-            }
-        });
+        tokio::spawn(self.clone().forward_events(
+            user_id.clone(),
+            session,
+            ok.events,
+            req.tx,
+            closed_tx,
+        ));
         Ok(JoinResult { user_id, session })
+    }
+
+    /// Pump one session's SFU events to its socket until the SFU closes the session.
+    async fn forward_events(
+        self,
+        user_id: String,
+        session: u64,
+        mut events: mpsc::UnboundedReceiver<SfuEvent>,
+        tx: mpsc::UnboundedSender<Out>,
+        closed_tx: oneshot::Sender<()>,
+    ) {
+        while let Some(SfuEvent::Offer(sdp)) = events.recv().await {
+            // A replaced or left session's offers must not reach a socket that rejoined.
+            if self.is_current(&user_id, session) {
+                let _ = tx.send(Out::Msg(ServerMsg::Offer { sdp }));
+            }
+        }
+        // SfuEvent::Closed (or the SFU went away). Close the socket if this session was
+        // still current, i.e. the SFU ended it rather than a leave or rejoin.
+        let _ = closed_tx.send(());
+        if self.leave(&user_id, session) {
+            let _ = tx.send(Out::Close);
+        }
     }
 
     /// Leave if `session` is still `user_id`'s current one; true if it was.
     pub fn leave(&self, user_id: &str, session: u64) -> bool {
-        let left = self.remove(user_id, Some(session)).is_some();
-        if left {
-            self.0.sfu.leave(user_id);
-        }
-        left
+        self.remove(user_id, Some(session)).is_some()
+    }
+
+    fn is_current(&self, user_id: &str, session: u64) -> bool {
+        let members = self.0.members.lock().unwrap();
+        members.get(user_id).is_some_and(|m| m.session == session)
     }
 
     /// Set the session's mute state and tell the room (ignored if the session was replaced).
@@ -213,24 +231,21 @@ impl Rooms {
     /// Pass an SDP answer to the SFU, unless `session` has been replaced: the SFU cannot tell
     /// which offer an answer belongs to.
     pub fn answer(&self, user_id: &str, session: u64, sdp: String) {
-        let current = self
-            .0
-            .members
-            .lock()
-            .unwrap()
-            .get(user_id)
-            .is_some_and(|m| m.session == session);
-        if current {
+        if self.is_current(user_id, session) {
             self.0.sfu.answer(user_id, sdp);
         }
     }
 
+    /// Remove `user_id` (only if `session` is current, when given), tell the room and end the
+    /// SFU session. The SFU leave is sent under the members lock: a rejoin's `remove` takes the
+    /// same lock before its SFU join, so this Leave can never land after (and kill) that Join.
     fn remove(&self, user_id: &str, session: Option<u64>) -> Option<Member> {
         let mut members = self.0.members.lock().unwrap();
         if session.is_some_and(|s| members.get(user_id).is_none_or(|m| m.session != s)) {
             return None;
         }
         let m = members.remove(user_id)?;
+        self.0.sfu.leave(user_id);
         broadcast(
             &members,
             &m.room,
@@ -276,4 +291,30 @@ fn user_id(name: &str) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vesper_sfu::{Sfu, SfuConfig};
+
+    #[tokio::test]
+    async fn stale_session_offers_are_not_forwarded() {
+        let sfu = Sfu::spawn(SfuConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .unwrap();
+        let rooms = Rooms::new(sfu, "k", 12);
+        let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (closed_tx, closed_rx) = oneshot::channel();
+        // Session 7 of "u" is not current (nobody is in any room).
+        let pump = tokio::spawn(rooms.forward_events("u".into(), 7, ev_rx, tx, closed_tx));
+        ev_tx.send(SfuEvent::Offer("v=0".into())).unwrap();
+        ev_tx.send(SfuEvent::Closed).unwrap();
+        pump.await.unwrap();
+        closed_rx.await.expect("closed signal fires");
+        assert!(rx.try_recv().is_err(), "nothing forwarded, no Close");
+    }
 }

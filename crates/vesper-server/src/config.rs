@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -12,12 +13,19 @@ pub struct Config {
     // shortcut: one shared secret stands in for accounts; remove it with the accounts plan.
     pub dev_key: String,
     pub max_room_size: usize,
+    /// A socket that has not joined within this long is closed.
+    pub join_deadline: Duration,
+    /// Server ping period; a socket silent for two periods is dropped.
+    pub ping_interval: Duration,
+    /// Concurrent WebSockets; upgrades beyond this get 503.
+    pub max_sockets: usize,
 }
 
 impl Config {
     /// `VESPER_HTTP_BIND` (default `0.0.0.0:8080`), `VESPER_UDP_BIND` (default `0.0.0.0:40000`),
     /// `VESPER_PUBLIC_HOST` (optional), `VESPER_UDP_PORT_PUBLIC` (default: the `VESPER_UDP_BIND`
-    /// port) and `VESPER_DEV_KEY` (required, non-empty).
+    /// port), `VESPER_JOIN_DEADLINE_SECS` (default 10), `VESPER_MAX_SOCKETS` (default 256) and
+    /// `VESPER_DEV_KEY` (required, non-empty).
     pub fn from_env() -> Result<Config, String> {
         Config::from_lookup(|k| std::env::var(k).ok())
     }
@@ -28,12 +36,12 @@ impl Config {
             v.parse::<SocketAddr>().map_err(|e| format!("{k}={v}: {e}"))
         };
         let udp_bind = addr("VESPER_UDP_BIND", "0.0.0.0:40000")?;
-        let udp_port_public = match get("VESPER_UDP_PORT_PUBLIC") {
-            Some(v) => v
-                .parse()
-                .map_err(|e| format!("VESPER_UDP_PORT_PUBLIC={v}: {e}"))?,
-            None => udp_bind.port(),
+        let num = |k: &str, default: u64| match get(k) {
+            Some(v) => v.parse::<u64>().map_err(|e| format!("{k}={v}: {e}")),
+            None => Ok(default),
         };
+        let udp_port_public = u16::try_from(num("VESPER_UDP_PORT_PUBLIC", udp_bind.port().into())?)
+            .map_err(|e| format!("VESPER_UDP_PORT_PUBLIC: {e}"))?;
         let dev_key = get("VESPER_DEV_KEY")
             .filter(|k| !k.is_empty())
             .ok_or("VESPER_DEV_KEY must be set to a non-empty shared key")?;
@@ -44,6 +52,9 @@ impl Config {
             udp_port_public,
             dev_key,
             max_room_size: 12,
+            join_deadline: Duration::from_secs(num("VESPER_JOIN_DEADLINE_SECS", 10)?),
+            ping_interval: Duration::from_secs(25),
+            max_sockets: num("VESPER_MAX_SOCKETS", 256)? as usize,
         })
     }
 }
@@ -69,6 +80,10 @@ mod tests {
         assert_eq!(c.udp_port_public, 40000);
         assert_eq!(c.max_room_size, 12);
         assert!(c.public_host.is_none());
+        assert_eq!(c.join_deadline, Duration::from_secs(10));
+        assert_eq!(c.max_sockets, 256);
+        let c = lookup(&[("VESPER_DEV_KEY", "k"), ("VESPER_JOIN_DEADLINE_SECS", "3")]).unwrap();
+        assert_eq!(c.join_deadline, Duration::from_secs(3));
     }
 
     #[test]

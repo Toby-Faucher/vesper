@@ -7,9 +7,11 @@ pub mod rooms;
 pub mod ws;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::get;
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use vesper_sfu::{Sfu, SfuConfig};
@@ -41,7 +43,12 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/ws", get(ws::upgrade))
-        .with_state(rooms);
+        .with_state(ws::WsState {
+            rooms,
+            sockets: Arc::new(Semaphore::new(cfg.max_sockets)),
+            join_deadline: cfg.join_deadline,
+            ping_interval: cfg.ping_interval,
+        });
     let listener = tokio::net::TcpListener::bind(cfg.http_bind).await?;
     let addr = listener.local_addr()?;
     info!("listening on {addr}");

@@ -12,6 +12,14 @@ async fn main() {
         eprintln!("vesper-server: {e}");
         std::process::exit(1);
     });
-    let (_, serving) = vesper_server::start(cfg).await.expect("server starts");
-    serving.await.expect("server task").expect("server runs");
+    let result = match vesper_server::start(cfg).await {
+        Ok((_, serving)) => serving
+            .await
+            .unwrap_or_else(|e| Err(std::io::Error::other(e))),
+        Err(e) => Err(e),
+    };
+    if let Err(e) = result {
+        eprintln!("vesper-server: {e}");
+        std::process::exit(1);
+    }
 }

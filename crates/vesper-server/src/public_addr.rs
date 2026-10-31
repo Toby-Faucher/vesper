@@ -20,6 +20,7 @@ pub async fn resolve_public(host: &str, port: u16) -> Vec<SocketAddr> {
 
 /// Re-resolve `host` every `every` and hand the result to the SFU. A failed or empty
 /// resolution keeps the previous addresses rather than advertising nothing.
+/// Limit: `set_advertised` only affects later sessions, so after an IP change clients must rejoin.
 pub fn spawn_refresh(sfu: SfuHandle, host: String, port: u16, every: Duration) {
     tokio::spawn(async move {
         let mut last = vec![];
