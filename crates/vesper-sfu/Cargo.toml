@@ -1,0 +1,19 @@
+[package]
+name = "vesper-sfu"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+# Exposes `vesper_sfu::testing` (a fake WebRTC client) for this crate's and other crates' tests.
+test-support = []
+
+[dependencies]
+str0m = { version = "0.24", default-features = false, features = ["aws-lc-rs"] }
+tokio = { version = "1", features = ["sync"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+# Self dev-dependency so plain `cargo test -p vesper-sfu` turns on `test-support`.
+vesper-sfu = { path = ".", features = ["test-support"] }

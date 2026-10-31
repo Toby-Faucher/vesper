@@ -1,0 +1,6 @@
+{
+  // base config sets no lib, so ES2019+ builtins (Object.fromEntries) need it here
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": { "types": ["svelte"], "lib": ["ES2022", "DOM", "DOM.Iterable"], "noEmit": true, "skipLibCheck": true },
+  "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
+}
