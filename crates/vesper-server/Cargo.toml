@@ -8,14 +8,14 @@ publish.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 serde_json.workspace = true
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tower-http = { version = "0.6", default-features = false, features = ["fs"] }
-tracing = "0.1"
+tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-vesper-protocol = { path = "../vesper-protocol" }
-vesper-sfu = { path = "../vesper-sfu" }
+vesper-protocol.workspace = true
+vesper-sfu.workspace = true
 
 [dev-dependencies]
-futures-util = { version = "0.3", default-features = false, features = ["sink"] }
-tokio-tungstenite = "0.28"
-vesper-sfu = { path = "../vesper-sfu", features = ["test-support"] }
+futures-util = { workspace = true, features = ["sink"] }
+tokio-tungstenite.workspace = true
+vesper-sfu = { workspace = true, features = ["test-support"] }
