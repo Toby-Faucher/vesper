@@ -11,3 +11,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 tokio-tungstenite.workspace = true
 vesper-protocol.workspace = true
 vesper-sfu = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

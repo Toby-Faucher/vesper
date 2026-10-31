@@ -19,3 +19,6 @@ vesper-sfu.workspace = true
 futures-util = { workspace = true, features = ["sink"] }
 tokio-tungstenite.workspace = true
 vesper-sfu = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

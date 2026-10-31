@@ -25,3 +25,11 @@ vesper-sfu = { path = "crates/vesper-sfu" }
 [profile.dev.package.tract-core]
 debug-assertions = false
 
+# Small on purpose. Prints are deliberate in loadtest and server main, so no print lints.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
