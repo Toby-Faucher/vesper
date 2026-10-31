@@ -1,0 +1,165 @@
+{
+  "base_eval": "research/results/gate/base-473764df6af1-34b896b88391-20fa5fed.json",
+  "base_sha": "473764df6af1ed94835e84175b9a74c7f2f7dec2",
+  "branch": "exp/E10-dfn3ll",
+  "cand_eval": "research/results/gate/cand-E10-dfn3ll-473764df6af1.json",
+  "cand_sha": "473764df6af1ed94835e84175b9a74c7f2f7dec2",
+  "config_hash": "6103032d9629",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        -0.1001122440632733,
+        -0.047445733986274344
+      ],
+      "mean": -0.07377898902477383
+    },
+    "hb_err_db": {
+      "ci95": [
+        -2.082260975614659,
+        -0.9005596960445541
+      ],
+      "mean": -1.4914103358296067
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        -24.26124573813067,
+        -16.941717756678038
+      ],
+      "mean": -20.601481747404353
+    },
+    "lsd": {
+      "ci95": [
+        -2.336582922217124,
+        -1.8640764293808276
+      ],
+      "mean": -2.100329675798976
+    },
+    "lsd_wb": {
+      "ci95": [
+        -1.6605888625919745,
+        -1.2819176294573396
+      ],
+      "mean": -1.471253246024657
+    },
+    "mcd": {
+      "ci95": [
+        -2.6448502849279363,
+        -1.7645649983528058
+      ],
+      "mean": -2.204707641640371
+    },
+    "ovrl": {
+      "ci95": [
+        -0.0178664040434577,
+        0.03086154525630067
+      ],
+      "mean": 0.006497570606421484
+    },
+    "si_sdr_i": {
+      "ci95": [
+        0.05982799160892871,
+        0.9667810788716281
+      ],
+      "mean": 0.5133045352402784
+    },
+    "sig": {
+      "ci95": [
+        0.020075963267562457,
+        0.06815193782377464
+      ],
+      "mean": 0.04411395054566855
+    }
+  },
+  "eval": "eval.toml",
+  "guards": {
+    "bak_mean": {
+      "limit": -0.05,
+      "pass": false,
+      "value": -0.07377898902477383
+    },
+    "clipped_items": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "lead_in_mean": {
+      "limit": -3.0,
+      "pass": false,
+      "value": -20.601481747404353
+    },
+    "lsd_wb_mean": {
+      "limit": 0.05,
+      "pass": true,
+      "value": -1.471253246024657
+    },
+    "rtf": {
+      "advisory": true,
+      "limit": 0.06,
+      "pass": true,
+      "value": 0.2390445334
+    },
+    "rtf_ratio": {
+      "advisory": true,
+      "limit": 1.25,
+      "pass": true,
+      "value": 5.141998204400268
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": true,
+      "value": 0.5133045352402784
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": true,
+      "value": 0.04411395054566855
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": false,
+      "value": -0.190770660339952
+    }
+  },
+  "id": "E10-dfn3ll",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "model": "research/models/DeepFilterNet3_ll_onnx.tar.gz",
+  "n_total": 400,
+  "n_used": 400,
+  "opus": "",
+  "ovrl_delta_sd_full": 0.24861198622325698,
+  "pipeline": "pipeline.toml",
+  "reason": "SPRT had no verdict but guards failed: sig_p10, bak_mean, lead_in_mean",
+  "rtf": {
+    "base": 0.046488645833333335,
+    "cand": 0.2390445334
+  },
+  "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": -0.45333082374241046,
+    "lower": -2.9444389791664403,
+    "n": 400,
+    "upper": 2.9444389791664403,
+    "verdict": "none"
+  },
+  "stack": "",
+  "status": "rejected"
+}

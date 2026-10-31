@@ -16,7 +16,7 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | E3-beta05 | E3-beta05 | inconclusive | +0.009 [+0.005, +0.014] | +0.001 [-0.003, +0.005] | +0.023 [+0.017, +0.029] | -0.07 [-0.10, -0.04] | 0.048 | 240 |  |  | exp/E3-beta05 | 6de7b42ee5ca | SPRT hit the item cap without a verdict |
 
-## Rejected (14)
+## Rejected (19)
 
 | id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | model | opus | branch | sha | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -26,7 +26,12 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 | E-null-v3 | Null check without UTMOS (warms the no-UTMOS baseline) | rejected | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.00 [+0.00, +0.00] | 0.064 | 20 |  |  | exp/E-null-v3 | b8a2d44af9e9 | SPRT accepted H0 (no gain of delta1) |
 | E1-gain12 | E1-gain12 | rejected | -0.113 [-0.164, -0.061] | -0.104 [-0.154, -0.055] | -0.126 [-0.176, -0.075] | +0.76 [+0.12, +1.39] | 0.046 | 100 |  |  | exp/E1-gain12 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
 | E1-gain6 | E1-gain6 | rejected | -0.039 [-0.071, -0.007] | -0.040 [-0.070, -0.010] | -0.057 [-0.092, -0.021] | +0.37 [+0.08, +0.66] | 0.047 | 120 |  |  | exp/E1-gain6 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
+| E10-dfn3ll | E10-dfn3ll | rejected | +0.006 [-0.018, +0.031] | +0.044 [+0.020, +0.068] | -0.074 [-0.100, -0.047] | +0.51 [+0.06, +0.97] | 0.239 | 400 | DeepFilterNet3_ll_onnx.tar.gz |  | exp/E10-dfn3ll | 473764df6af1 | SPRT had no verdict but guards failed: sig_p10, bak_mean, lead_in_mean |
 | E11-gate-v2 | A post gate driven by the model's local SNR attenuates residual noise between words | rejected | +0.025 [+0.006, +0.045] | +0.029 [+0.008, +0.050] | +0.031 [+0.015, +0.046] | -0.07 [-0.14, -0.01] | 0.242 | 80 |  |  | exp/E11-gate-v2 | 3ab51224a393 | SPRT accepted H1 but guards failed: lsd_wb_mean; Post gate on the model's lsnr: after 150 ms under -3 dB the gain falls at 300 dB/s to -24 dB, and returns to 0 dB within one frame at lsnr >= 0 dB. Expected to cut residual noise in pauses. |
+| E12-nofec | E12-nofec | rejected | -0.095 [-0.133, -0.056] | -0.091 [-0.131, -0.051] | -0.045 [-0.070, -0.020] | -0.74 [-0.88, -0.61] | 0.040 | 40 |  | bitrate=64000,complexity=10,fec=0,dtx=1,loss=0.05,seed=1 | exp/E12-nofec | 473764df6af1 | SPRT accepted H0 (no gain of delta1) |
+| E12-opus32 | E12-opus32 | rejected | -0.040 [-0.074, -0.006] | -0.048 [-0.083, -0.012] | +0.007 [-0.014, +0.028] | -0.25 [-0.34, -0.16] | 0.040 | 20 |  | bitrate=32000,complexity=10,fec=1,dtx=1,loss=0.05,seed=1 | exp/E12-opus32 | 473764df6af1 | SPRT accepted H0 (no gain of delta1) |
+| E12-opus48 | E12-opus48 | rejected | -0.017 [-0.034, -0.001] | -0.017 [-0.035, -0.000] | -0.006 [-0.027, +0.015] | -0.05 [-0.07, -0.03] | 0.079 | 40 |  | bitrate=48000,complexity=10,fec=1,dtx=1,loss=0.05,seed=1 | exp/E12-opus48 | 473764df6af1 | SPRT accepted H0 (no gain of delta1) |
+| E12-opus96 | E12-opus96 | rejected | -0.004 [-0.022, +0.014] | +0.000 [-0.017, +0.017] | -0.016 [-0.033, +0.002] | +0.04 [+0.02, +0.06] | 0.039 | 40 |  | bitrate=96000,complexity=10,fec=1,dtx=1,loss=0.05,seed=1 | exp/E12-opus96 | 473764df6af1 | SPRT accepted H0 (no gain of delta1) |
 | E13-beta05 | post filter 0.05 | rejected | +0.009 [+0.004, +0.013] | +0.002 [-0.003, +0.007] | +0.019 [+0.013, +0.025] | -0.14 [-0.17, -0.10] | 0.148 | 240 |  |  | exp/E13-beta05 | a23fde74b356 | SPRT accepted H0 (no gain of delta1) |
 | E14-atten40 | attenuation limit 40 dB | rejected | +0.101 [+0.052, +0.150] | +0.127 [+0.072, +0.181] | +0.089 [+0.009, +0.170] | +0.09 [+0.06, +0.12] | 0.204 | 20 |  |  | exp/E14-atten40 | a23fde74b356 | SPRT accepted H1 but guards failed: rtf_ratio |
 | E2-atten12 | E2-atten12 | rejected | -0.101 [-0.147, -0.055] | +0.174 [+0.111, +0.238] | -0.594 [-0.682, -0.507] | -0.56 [-1.13, -0.00] | 0.046 | 140 |  |  | exp/E2-atten12 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
@@ -34,13 +39,3 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 | E3-beta0 | E3-beta0 | rejected | -0.019 [-0.038, +0.000] | -0.008 [-0.029, +0.013] | -0.037 [-0.054, -0.019] | +0.02 [-0.12, +0.15] | 0.045 | 40 |  |  | exp/E3-beta0 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
 | E4-highpass | A causal 2nd-order Butterworth high-pass before DeepFilterNet removes sub-speech rumble and thumps | rejected | -0.059 [-0.098, -0.021] | -0.055 [-0.092, -0.017] | -0.021 [-0.057, +0.016] | -3.55 [-4.82, -2.28] | 0.042 | 80 |  |  | exp/E4-highpass | 43d0aa4a6d16 | SPRT accepted H0 (no gain of delta1); Added an optional causal 2nd-order Butterworth high-pass (`[pre.highpass] cutoff_hz`) before DeepFilterNet to remove rumble; on dev it lowers every metric at all cutoffs, so the guard (BAK, SIG must not drop) fails. |
 | E5-leveler | A slow, speech-gated input leveler before DeepFilterNet lifts quiet mics without clipping loud ones | rejected | +0.011 [+0.000, +0.022] | +0.012 [+0.001, +0.023] | -0.019 [-0.033, -0.005] | -1.06 [-1.41, -0.71] | 0.046 | 240 |  |  | exp/E5-leveler | 9e083e98ae92 | SPRT had no verdict but guards failed: si_sdr_i_mean; Added an optional speech-gated input leveler before DeepFilterNet (`[pre.leveler]`). The idea was to lift quiet mics toward -23 dBFS so the model gets a stronger input without clipping loud ones. On dev it is close to neutral on DNSMOS and loses SI-SDR. |
-
-## Pending (5)
-
-| id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | model | opus | branch | sha | note |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| E10-dfn3ll | E10-dfn3ll | pending |  |  |  |  |  |  |  |  | exp/E10-dfn3ll |  |  |
-| E12-nofec | <one-line hypothesis> | pending |  |  |  |  |  |  |  |  | exp/E12-nofec |  |  |
-| E12-opus32 | E12-opus32 | pending |  |  |  |  |  |  |  |  | exp/E12-opus32 |  |  |
-| E12-opus48 | E12-opus48 | pending |  |  |  |  |  |  |  |  | exp/E12-opus48 |  |  |
-| E12-opus96 | E12-opus96 | pending |  |  |  |  |  |  |  |  | exp/E12-opus96 |  |  |
