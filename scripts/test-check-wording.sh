@@ -8,6 +8,7 @@ ok() { echo "ok   $1"; }
 bad() { echo "FAIL $1"; fails=$((fails + 1)); }
 run() { WORDING_ROOT=$tmp WORDING_BANNED=$here/wording-banned.txt "$here/check-wording.sh" 2>&1; }
 
+git -C "$tmp" init -q
 mkdir -p "$tmp/docs" "$tmp/web/src/lib/gen" "$tmp/web/node_modules/x"
 printf 'Plain short sentences.\n' > "$tmp/README.md"
 out=$(run) && ok "clean tree passes" || bad "clean tree passes: $out"
@@ -26,6 +27,7 @@ rm "$tmp/web/src/App.svelte"
 printf 'seamless\n' > "$tmp/web/src/lib/gen/X.ts"
 printf 'seamless\n' > "$tmp/web/src/a.test.ts"
 printf 'seamless\n' > "$tmp/web/node_modules/x/r.md"
+printf 'node_modules/\n' > "$tmp/.gitignore"
 out=$(run) && ok "gen, tests and node_modules are skipped" || bad "skips: $out"
 
 [ $fails = 0 ] && echo "all ok" || { echo "$fails failed"; exit 1; }
