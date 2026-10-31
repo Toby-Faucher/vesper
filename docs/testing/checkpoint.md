@@ -24,14 +24,21 @@ Pick one mic and write its model in 11.1. Windows/Mac/Linux system "mic enhancem
 
 ### Running Vesper
 
-Local (from the repo root; see docs/deploy.md for the server and the join key, and for the deployed instance):
+Full server and deployment instructions: docs/deploy.md (created when the server branch is merged). Until then, run locally from the repo root, in two terminals:
 
 ```bash
-scripts/build-dsp.sh          # builds the denoiser wasm into web/public/dsp/ (fetches the model if missing)
-cd web && npm install && npm run dev   # prints a localhost URL
+# terminal 1: server. The join key is whatever you set as VESPER_DEV_KEY (required, no default).
+VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
+  cargo run -p vesper-server --release
+
+# terminal 2: web app
+scripts/build-dsp.sh                 # denoiser wasm into web/public/dsp/ (fetches the model if missing)
+npm --prefix web install && npm --prefix web run dev   # prints a localhost URL; proxies /ws to localhost:8080
 ```
 
-Run the server per docs/deploy.md and use its key to join. Browsers only allow mic access on `localhost` or HTTPS, so for a second machine or the listeners use the deployed instance (see docs/deploy.md).
+Open the printed URL, enter the join key. Browsers only allow mic access on `localhost` or HTTPS.
+
+Friends or a second machine: the server must be reachable and must advertise a reachable address. Set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000` and `VESPER_PUBLIC_HOST=<hostname or IP the other machine can reach>` (without it the server advertises its bound address, which with 127.0.0.1 or 0.0.0.0 is useless to others), forward UDP 40000, and serve the web app over HTTPS: for anything beyond your own machine use the deployed instance (see docs/deploy.md).
 
 Record the git commit and URL in 11.1: `git rev-parse --short HEAD`.
 
@@ -74,18 +81,18 @@ Recording the listener's output measures the whole path (mic, denoiser, encoder,
 
 **Method A: a listener machine records (best).** A second machine joins the call and records what it hears.
 1. Machine 2 joins the Vesper room (Chrome). Toby's machine joins with the settings above.
-2. On machine 2 (Linux, PipeWire), find the output monitor: `pw-record --list-targets` or `pactl list short sources | grep monitor`. If `pw-record` is missing: `sudo pacman -S pipewire` (Arch), or use Audacity.
+2. On machine 2 (Linux, PipeWire), find the output monitor: `pw-record --list-targets` or `pactl list short sources | grep monitor`. If `pw-record` is missing, install pipewire via your package manager, or use Audacity.
 3. Start: `pw-record --target <monitor-name> fan-vesper-chrome-usbmic-1.wav` (Ctrl+C to stop). Audacity alternative: Transport, Recording device set to the monitor/loopback (Linux), "Windows WASAPI loopback" (Windows), or BlackHole (Mac).
 4. Toby reads the script. Stop recording. Machine 2 must not play anything else.
 5. Repeat with Toby and machine 2 in a Discord call (same noise scenario, same mic, same position).
 
-**Method B: one machine, OBS.** Join both calls from a second device or account so something else produces the remote audio. In OBS add an "Audio Output Capture" source (Desktop Audio) on the listener machine, Settings, Output, Recording format wav, record, stop. Same steps otherwise.
+**Method B: OBS on the listener machine.** Same call setup as method A (Toby on machine 1, a listener joined on machine 2), but record with OBS on machine 2: add an "Audio Output Capture" source (Desktop Audio), Settings, Output, Recording format wav, record, stop. Record the LISTENER side output only, never Toby's own mic.
 
 Always: Machine 2 records only what it hears from the call (not Toby's local mic monitor), and keep levels untouched (no OBS filters, no normalising) so volume differences between apps stay audible. Do NOT normalise later either.
 
 ### Naming
 
-`<scenario>-<app>-<browser>-<mic>-<run>.wav`, for example `keys-vesper-firefox-usbmic-1.wav`, `tv-discord-chrome-usbmic-1.wav`. Apps: `vesper`, `discord`. Discord is browser-independent: use `discord-app` or the browser it ran in. Keep all clips in one folder, `~/checkpoint/clips/`.
+`<scenario>-<app>-<browser>-<mic>-<run>.wav`, for example `keys-vesper-firefox-usbmic-1.wav`, `tv-discord-chrome-usbmic-1.wav`. Apps: `vesper`, `discord`. For Discord clips the browser field is the browser the Discord app ran in, or `app` for the desktop client (e.g. `keys-discord-app-usbmic-1.wav`). Keep all clips in one folder, `~/checkpoint/clips/`.
 
 Minimum set: 4 scenarios x 2 apps = 8 clips for Chrome, then repeat the 4 Vesper clips in Firefox, and run the weaker laptop (section 8).
 
@@ -136,13 +143,13 @@ Edited thresholds: ____________________
 
 ## 5. Tuning `attenDb`, `postFilter`, `inputBoostDb`
 
-Defaults live in `web/src/lib/audio/settings.ts`, `DEFAULT_AUDIO_SETTINGS` (now `attenDb: 100`, `postFilter: 0.02`, `inputBoostDb: 0`). Tune in the Settings sliders while the listener machine records; no rebuild needed. Change ONE knob at a time, record a clip of the fan and quiet scenarios for each value, and listen blind.
+Defaults live in `web/src/lib/audio/settings.ts`, `DEFAULT_AUDIO_SETTINGS` (now `attenDb: 100`, `postFilter: 0.02`, `inputBoostDb: 0`). Tune in the Settings sliders while the listener machine records. Verified in `capture.ts`: input boost, attenuation limit and post filter all apply live mid-call (the sliders send a `set` message to the worker; input boost changes the gain node), no rejoin or rebuild. Only the final edit of `DEFAULT_AUDIO_SETTINGS` needs a reload, and it only affects browsers with no saved `vesper.audio`. Change ONE knob at a time, record a clip of the fan and quiet scenarios for each value, and listen blind.
 
 Order: input boost, then attenuation limit, then post filter.
 
 | Knob | In plain words | Step | Try |
 |---|---|---|---|
-| Input boost (`inputBoostDb`) | Gain applied before the denoiser. The model works best with a healthy level; a quiet mic makes it treat speech as noise. | 3 dB | 0, 3, 6, 9, 12. Stop when the input meter clips (red hint "Too loud"). |
+| Input boost (`inputBoostDb`) | Gain applied before the denoiser. The model works best with a healthy level; a quiet mic makes it treat speech as noise. | 3 dB | 0, 3, 6, 9, 12. Stop when the input meter clips (amber hint "Too loud: the signal is clipping"). |
 | Attenuation limit (`attenDb`) | How much noise it may remove at most. 100 = no limit (strongest). Lower keeps some natural background, which sounds less robotic but leaks more noise. | 10 dB from 100 down | 100, 40, 30, 20. Stop at the first value that stops sounding watery without leaking too much. |
 | Post filter (`postFilter`) | Extra suppression of leftover noise in already-quiet spots. Higher is cleaner in pauses, but can make speech edges choppy. | 0.01 | 0, 0.01, 0.02, 0.03, 0.05. |
 
@@ -163,7 +170,8 @@ To swap (experiment only, do not commit the binary):
 2. In `scripts/build-dsp.sh` change `MODEL=` to `crates/vesper-dsp/model/DeepFilterNet3_ll_onnx.tar.gz`. It is installed as `web/public/dsp/model.tar.gz`, which is where the app loads it.
 3. Run `scripts/fetch-model.sh && scripts/build-dsp.sh`, hard-reload the app (Ctrl+Shift+R), join and check the status line says `deepfilter` with no fallback reason.
 4. If the Rust DSP code assumes the standard model's tensor shapes, the ll model may fail to load (the status line shows `denoiser unavailable: ...`); record that and stop: it then needs code work, not tuning.
-5. Revert: `git checkout scripts/` and rebuild.
+5. Native Rust tests/benches still use the standard model (`crates/vesper-dsp/src/lib.rs` test helper hard-codes `DeepFilterNet3_onnx.tar.gz`); the swap affects only the browser build.
+6. Revert: `git checkout scripts/` and rebuild.
 
 Compare (same scenarios, same settings):
 
@@ -181,12 +189,15 @@ Switch only if the delay gain is noticeable and quality is not worse in a blind 
 
 Target: the denoiser path adds at most 30 ms over mode=off. DeepFilterNet's own lookahead was never measured and may add on its own, so this number is unknown until now. See docs/testing/latency.md for the acoustic loopback method (end to end, mic to the other person's ears).
 
-Quick in-app comparison (round-trip click test), same machine, two tabs, headphones off the mic's reach:
-1. Tab 1 joins as Toby (set the mode under test here), tab 2 joins as a second user in a different browser profile. Tab 2 plays through the speakers (no headphones on tab 2's side).
-2. Put the mic about 10 cm from the speaker. Record the mic with Audacity (input: the mic). The click is heard directly by the mic, then again from the speaker after the round trip, so one recording holds both.
-3. Make a sharp click (clap or knuckle on the desk next to the mic) every 2 seconds, 10 times, in mode=off. In Audacity, zoom to the waveform and measure the time between the click at the mic and its echo at the output; note the median.
-4. Repeat with mode=deepfilter (change the dropdown, wait for `Noise suppression: deepfilter` with no reason shown).
-5. Added delay = median(deepfilter) minus median(off). (A click may be partly removed as noise by the denoiser; if it vanishes, clap harder, or use a short "tick" sound with your tongue, or measure on a sustained consonant onset.)
+Primary method: the acoustic loopback in docs/testing/latency.md (prefer it once it exists). It measures real mic-to-ear delay.
+
+Rough secondary method (use only if latency.md is not there yet; expect +/- 20 ms error, which is as big as the target, so treat it as a sanity check):
+1. Two devices: machine A (Toby, joined in the mode under test, USB mic and headphones) and machine B (joined as a listener, with speakers, volume moderate).
+2. Put machine A's mic 10 cm from machine B's speaker. Machine A's headphones stay on; nothing else is recorded. The mic must be the only input in the recording.
+3. On machine A open Audacity, input = the USB mic, record. Make a short sharp click (clap, or snap your fingers next to the mic) every 2 seconds, 10 times. The recording will show each click twice: first heard directly in the air, then again a bit later as it comes back from machine B's speaker after travelling through the call.
+4. Echo cancellation and the denoiser can eat clicks. Check the waveform shows both peaks for each click; if the second is missing, click louder or move the mic closer to the speaker. Do the test in mode=off first to confirm it works.
+5. In Audacity zoom in on a click, select from the first peak to the second, and read the length at the bottom (set the selection format to milliseconds). Take the median of 10.
+6. Repeat with mode=deepfilter (wait for `Noise suppression: deepfilter` with no reason shown). Added delay = median(deepfilter) minus median(off).
 
 | Run | mode | Median round trip (ms) | Notes |
 |---|---|---|---|
