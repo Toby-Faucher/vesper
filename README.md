@@ -42,27 +42,22 @@ It exists because the other Discord replacements sound bad. Discord's edge is it
 
 Signaling and presence go over one WebSocket. Audio never goes through Caddy.
 
-## Run it locally
+## Quickstart
 
-You need Rust (stable), Node, and the `wasm32-unknown-unknown` target. From the repo root:
+You need Rust, Node and the `wasm32-unknown-unknown` target. From the repo root:
 
 ```bash
-# denoiser wasm + model into web/public/dsp/ (prints the exact wasm-bindgen install command if one is missing)
 scripts/build-dsp.sh
-
-# build the web app, then run the server, which serves it at http://127.0.0.1:8080
 npm --prefix web install && npm --prefix web run build
-VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
-  VESPER_WEB_DIR=web/dist cargo run -p vesper-server --release
+VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 VESPER_WEB_DIR=web/dist cargo run -p vesper-server --release
 ```
 
-Open the page, type any name, and use your passphrase as the join key. Browsers only allow the mic on `localhost` or HTTPS.
-
+Open http://127.0.0.1:8080, type any name, and use your passphrase as the join key. More detail, tests and the hot-reload setup are in [docs/dev.md](docs/dev.md).
 For friends on other machines, see [docs/deploy.md](docs/deploy.md): Docker or systemd, Caddy for HTTPS, and forwarding UDP 40000 on your router.
 
 ## Status
 
-This is a personal project and the voice foundation is built, not battle tested.
+Last updated 2026-10-30. This is a personal project and the voice foundation is built, not battle tested.
 
 - Built and covered by tests: the SFU, the server, the web client, the load test (12 speakers for 30 s, no loss on a local run), the deploy files.
 - **Not tried yet in a real browser:** Chrome and Firefox behaviour, the encoder bitrate after the Opus fix, the Docker build, a real deploy, the router forward.
@@ -83,11 +78,18 @@ This is a personal project and the voice foundation is built, not battle tested.
 
 ## Docs
 
-- [docs/deploy.md](docs/deploy.md): configuration, Docker, Caddy, ports.
+- [docs/dev.md](docs/dev.md): build, run, test, the checks.
+- [docs/env.md](docs/env.md): every environment variable.
+- [docs/architecture.md](docs/architecture.md): how the parts fit.
+- [docs/deploy.md](docs/deploy.md): Docker, Caddy, ports.
+- [docs/runbook.md](docs/runbook.md): running it and fixing it.
+- [docs/decisions/](docs/decisions/README.md): why it is built this way.
+- [docs/known-issues.md](docs/known-issues.md): small things left on purpose.
 - [docs/testing/checkpoint.md](docs/testing/checkpoint.md): the quality checkpoint, step by step.
 - [docs/testing/latency.md](docs/testing/latency.md): measuring delay, loss and server load.
-- [docs/superpowers/specs](docs/superpowers/specs): the design.
-- [docs/superpowers/plans](docs/superpowers/plans): the build plan.
+- [docs/rust-style.md](docs/rust-style.md) and [docs/ui-design.md](docs/ui-design.md): code rules and UI principles.
+- [docs/superpowers/specs](docs/superpowers/specs): the design. [docs/superpowers/plans](docs/superpowers/plans): the build plan.
+- [SECURITY.md](SECURITY.md): reporting a problem.
 
 ## Credits
 

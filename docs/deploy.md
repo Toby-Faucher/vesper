@@ -2,42 +2,9 @@
 
 Vesper is one server binary (`vesper-server`): HTTP (the web app, `/health`, the `/ws` signaling WebSocket) on a TCP port and all media on one UDP port. HTTPS is not done by the server; put Caddy (or similar) in front of the TCP port. Media never goes through Caddy.
 
-## Configuration (environment variables)
+## Configuration
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `VESPER_DEV_KEY` | none, required | The shared join key. Whatever you set here is what people type into the join form. Empty or unset: the server refuses to start. Pick a passphrase; there are no accounts yet. |
-| `VESPER_HTTP_BIND` | `0.0.0.0:8080` | HTTP listen address. |
-| `VESPER_UDP_BIND` | `0.0.0.0:40000` | Media UDP listen address. |
-| `VESPER_PUBLIC_HOST` | unset | Hostname or IP clients are told to send media to. Resolved at start and re-resolved periodically. Unset: the server advertises its bound address, which is useless to other machines when bound to 0.0.0.0 or 127.0.0.1. |
-| `VESPER_UDP_PORT_PUBLIC` | the `VESPER_UDP_BIND` port | The UDP port clients reach from outside (set only if the router maps a different external port). |
-| `VESPER_WEB_DIR` | `web/dist` | Directory with the built web app, served at `/` (extensionless unknown paths fall back to `index.html`, a missing file with an extension is a 404; `/assets/*` is `Cache-Control: immutable`, everything else `no-cache`; dotfiles and anything outside the dir are not served). |
-| `VESPER_JOIN_DEADLINE_SECS` | `10` | A socket that has not joined in this time is closed. |
-| `VESPER_MAX_SOCKETS` | `256` | Concurrent WebSockets. |
-| `RUST_LOG` | `info` | Log filter. |
-
-## Run locally
-
-From the repo root. The join key is whatever you put in `VESPER_DEV_KEY`.
-
-```bash
-# 1. denoiser wasm + model into web/public/dsp/ (needs the wasm32 target and a wasm-bindgen CLI
-#    whose version equals the one in Cargo.lock; the script tells you the exact install command)
-scripts/build-dsp.sh
-
-# 2a. dev: server in one terminal ...
-VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
-  cargo run -p vesper-server --release
-# ... Vite dev server in another (proxies /ws to localhost:8080, prints a localhost URL)
-npm --prefix web install && npm --prefix web run dev
-
-# 2b. or no Vite: build the app and let the server serve it (http://127.0.0.1:8080)
-npm --prefix web run build
-VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
-  VESPER_WEB_DIR=web/dist cargo run -p vesper-server --release
-```
-
-Browsers only allow the mic on `localhost` or HTTPS. For another machine on the LAN or friends, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000`, `VESPER_PUBLIC_HOST=<address they can reach>`, and use the deployed setup below (HTTPS is needed for their mic).
+Every variable, with defaults, is in [env.md](env.md). To run on one machine first, see [dev.md](dev.md#run). The two you must set to deploy are `VESPER_DEV_KEY` (the shared join key, no default, the server refuses to start without it) and `VESPER_PUBLIC_HOST` (see Network below).
 
 ## Docker / Dockge
 
@@ -79,7 +46,7 @@ The server sets `X-Content-Type-Options: nosniff` only. `deploy/Caddyfile.exampl
 
 ## Not verified
 
-Written and checked for syntax and against the real files, but not executed (no Docker or browser on the dev machine):
+Last updated 2026-10-30. Written and checked for syntax and against the real files, but not executed (no Docker or browser on the dev machine):
 
 - `docker build` / `docker compose up`, the image's healthcheck, non-root and read-only operation.
 - The Dockerfile's `cargo install wasm-bindgen-cli` and wasm build inside the image.

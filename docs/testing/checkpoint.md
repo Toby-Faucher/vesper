@@ -24,21 +24,9 @@ Pick one mic and write its model in 11.1. Windows/Mac/Linux system "mic enhancem
 
 ### Running Vesper
 
-Full server and deployment instructions: docs/deploy.md. To run locally from the repo root, in two terminals:
-
-```bash
-# terminal 1: server. The join key is whatever you set as VESPER_DEV_KEY (required, no default).
-VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
-  cargo run -p vesper-server --release
-
-# terminal 2: web app
-scripts/build-dsp.sh                 # denoiser wasm into web/public/dsp/ (fetches the model if missing)
-npm --prefix web install && npm --prefix web run dev   # prints a localhost URL; proxies /ws to localhost:8080
-```
-
-Open the printed URL, enter the join key. Browsers only allow mic access on `localhost` or HTTPS.
-
-Friends or a second machine: the server must be reachable and must advertise a reachable address. Set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000` and `VESPER_PUBLIC_HOST=<hostname or IP the other machine can reach; from the server's own DNS view it must be the address clients use for media, see docs/deploy.md>` (without it the server advertises its bound address, which with 127.0.0.1 or 0.0.0.0 is useless to others), forward UDP 40000, and serve the web app over HTTPS: for anything beyond your own machine use the deployed instance (see docs/deploy.md).
+Run the server and the web app as in [docs/dev.md](../dev.md#run) (build the denoiser first). For friends or a second machine, deploy it as in
+[docs/deploy.md](../deploy.md): the server must advertise an address the other machine can reach, and the web app needs HTTPS for their mic.
+Variables are in [docs/env.md](../env.md).
 
 Record the git commit and URL in 11.1: `git rev-parse --short HEAD`.
 
@@ -228,7 +216,7 @@ Run the 4 scenarios in each cell (at least `fan` and `quiet` on the laptop).
 
 ## 9. Unverified items carried from the build
 
-Tick as you check. Use two tabs (or two machines) where a second participant is needed.
+Last updated 2026-10-30. Tick as you check. Use two tabs (or two machines) where a second participant is needed.
 
 - [ ] Two-tab join: a second tab joins; you hear yourself from the other tab; tab names show; leaving removes the entry.
 - [ ] Mute: the other side sees `(muted)` and hears nothing; unmute restores.
