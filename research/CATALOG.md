@@ -32,9 +32,15 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 | E4-highpass | A causal 2nd-order Butterworth high-pass before DeepFilterNet removes sub-speech rumble and thumps | rejected | -0.059 [-0.098, -0.021] | -0.055 [-0.092, -0.017] | -0.021 [-0.057, +0.016] | -3.55 [-4.82, -2.28] | 0.042 | 80 | exp/E4-highpass | 43d0aa4a6d16 | SPRT accepted H0 (no gain of delta1); Added an optional causal 2nd-order Butterworth high-pass (`[pre.highpass] cutoff_hz`) before DeepFilterNet to remove rumble; on dev it lowers every metric at all cutoffs, so the guard (BAK, SIG must not drop) fails. |
 | E5-leveler | A slow, speech-gated input leveler before DeepFilterNet lifts quiet mics without clipping loud ones | rejected | +0.011 [+0.000, +0.022] | +0.012 [+0.001, +0.023] | -0.019 [-0.033, -0.005] | -1.06 [-1.41, -0.71] | 0.046 | 240 | exp/E5-leveler | 9e083e98ae92 | SPRT had no verdict but guards failed: si_sdr_i_mean; Added an optional speech-gated input leveler before DeepFilterNet (`[pre.leveler]`). The idea was to lift quiet mics toward -23 dBFS so the model gets a stronger input without clipping loud ones. On dev it is close to neutral on DNSMOS and loses SI-SDR. |
 
+## Broken (1)
+
+| id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| E11-gate-v2 | A post gate driven by the model's local SNR attenuates residual noise between words | broken |  |  |  |  |  |  | exp/E11-gate-v2 | 3ab51224a393 | ancestry: candidate does not descend from the base cc1c25dfc3ec; Post gate on the model's lsnr: after 150 ms under -3 dB the gain falls at 300 dB/s to -24 dB, and returns to 0 dB within one frame at lsnr >= 0 dB. Expected to cut residual noise in pauses. |
+
 ## Pending (2)
 
 | id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | E13-beta05 | post filter 0.05 | pending |  |  |  |  |  |  | exp/E13-beta05 |  |  |
-| E14-atten40 | <one-line hypothesis> | pending |  |  |  |  |  |  | exp/E14-atten40 |  |  |
+| E14-atten40 | attenuation limit 40 dB | pending |  |  |  |  |  |  | exp/E14-atten40 |  |  |

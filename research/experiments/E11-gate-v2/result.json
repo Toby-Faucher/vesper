@@ -1,0 +1,12 @@
+{
+  "base_sha": "cc1c25dfc3eca6ec1771cf4a0a86c00a05757821",
+  "branch": "exp/E11-gate-v2",
+  "cand_sha": "3ab51224a393bdb99a54e4d1b6ce6de7654eaa9d",
+  "config_hash": "cf01c739e8fa",
+  "id": "E11-gate-v2",
+  "pipeline": "pipeline.toml",
+  "reason": "ancestry: candidate does not descend from the base cc1c25dfc3ec",
+  "split": "gate",
+  "stack": "",
+  "status": "broken"
+}
