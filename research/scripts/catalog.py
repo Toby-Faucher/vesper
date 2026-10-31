@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 ORDER = ["accepted", "inconclusive", "rejected", "broken", "pending"]
-HEADER = "| id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |"
+HEADER = "| id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | model | opus | branch | sha | note |"
 
 
 def _lines(path):
@@ -77,6 +77,9 @@ def load(exp):
         "sdr": _delta(res, "si_sdr_i", 2),
         "rtf": _rtf(res),
         "n": res.get("n_used", ""),
+        # Set only when eval.toml changes them; opus is the candidate's full setting (bitrate included).
+        "model": Path(res.get("model") or "").name,
+        "opus": res.get("opus") or "",
         "branch": f"exp/{exp.name}",
         "sha": str(res.get("cand_sha") or "")[:12],
         "note": note,
@@ -94,16 +97,17 @@ def render(root):
         "over the items the sequential test used (`n`). DNSMOS is a proxy: listen before you trust it.",
         "",
     ]
+    cols = ("id", "title", "status", "ovrl", "sig", "bak", "sdr", "rtf", "n", "model", "opus", "branch",
+            "sha", "note")
     if not rows:
-        out += [HEADER, "|" + "---|" * 12, ""]
+        out += [HEADER, "|" + "---|" * len(cols), ""]
     for status in ORDER:
         group = [r for r in rows if r["status"] == status]
         if not group:
             continue
-        out += [f"## {status.capitalize()} ({len(group)})", "", HEADER, "|" + "---|" * 12]
+        out += [f"## {status.capitalize()} ({len(group)})", "", HEADER, "|" + "---|" * len(cols)]
         for r in group:
-            cells = [r[k] for k in ("id", "title", "status", "ovrl", "sig", "bak", "sdr", "rtf",
-                                    "n", "branch", "sha", "note")]
+            cells = [r[k] for k in cols]
             out.append("| " + " | ".join(_cell(c) for c in cells) + " |")
         out.append("")
     return "\n".join(out)

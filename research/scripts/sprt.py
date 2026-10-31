@@ -2,7 +2,7 @@
 """Paired SPRT and guards for the audio lab gate. Writes result.json.
 
   sprt.py gate --manifest M --base B.json --cand C.json --det D.json --hypothesis H.md
-               --out result.json [--meta KEY=VALUE ...]
+               --out result.json [--allow-more-bitrate] [--meta KEY=VALUE ...]
   sprt.py broken --reason TEXT --out result.json [--meta KEY=VALUE ...]
 
 The eval runs the whole split once. The sequential rule is then replayed on the per-item OVRL deltas
@@ -84,6 +84,7 @@ def guards(sig_d, sdr_d, base, cand, declared_latency, g, bak_d=None, lsd_wb_d=N
     # DNSMOS SIG rises when less noise is removed, so BAK must not fall (found with E2-atten24).
     if bak_d is not None:
         add("bak_mean", mean(bak_d), g["bak_mean_min"], mean(bak_d) >= g["bak_mean_min"])
+    # Through Opus (VOIP) SI-SDR sits near 10 dB from the high-pass alone: only the paired delta is used.
     add("si_sdr_i_mean", mean(sdr_d), g["si_sdr_i_mean_min"], mean(sdr_d) >= g["si_sdr_i_mean_min"])
     # The second judge: the wideband log-mel distance to the clean reference must not grow by more
     # than the margin. Fails closed when the evals have no lsd_wb (a v1 corpus or an old binary).
@@ -123,9 +124,32 @@ def declared_latency(path):
     return int(m.group(1)) if m else 0
 
 
-def decide(manifest_ids, base, cand, det, latency_decl, cfg):
-    """Return the result fields (status, reason, sprt, deltas, guards, ...)."""
+def bitrate_reason(path):
+    """True if hypothesis.md says why the candidate may use more bitrate (`Bitrate reason: ...`)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return re.search(r"^Bitrate reason:[ \t]*\S", text, re.M) is not None
+
+
+def opus_mismatch(base, cand):
+    """Why the two evals are not an exact Opus pairing, or None."""
+    bo, co = base.get("opus"), cand.get("opus")
+    if bool(bo) != bool(co):
+        return "only one side was scored through Opus"
+    if bo and any(bo.get(k) != co.get(k) for k in ("loss", "burst", "seed")):
+        return "the two sides saw different packet losses (loss, burst or seed)"
+    return None
+
+
+def decide(manifest_ids, base, cand, det, latency_decl, cfg, allow_more_bitrate=False):
+    """Return the result fields (status, reason, sprt, deltas, guards, ...).
+    allow_more_bitrate: eval.toml sets it and hypothesis.md gives the reason."""
     s, g = cfg["sprt"], cfg["guards"]
+    mismatch = opus_mismatch(base, cand)
+    if mismatch:
+        return {"status": "broken", "reason": f"opus: {mismatch}"}
     bi = {it["id"]: it for it in base["items"]}
     ci = {it["id"]: it for it in cand["items"]}
     missing = [i for i in manifest_ids if i not in bi or i not in ci]
@@ -141,6 +165,13 @@ def decide(manifest_ids, base, cand, det, latency_decl, cfg):
     gd = guards(d["sig"], d["si_sdr_i"], base, cand, latency_decl, g, d["bak"], d["lsd_wb"])
     det_ok = deterministic(cand["items"], det["items"])
     gd["deterministic"] = {"value": det_ok, "limit": True, "pass": det_ok}
+    bitrate = None
+    if cand.get("opus"):
+        # An Opus change may not buy its gain with more bitrate unless it says so.
+        bitrate = {"base": base["opus"]["bitrate"], "cand": cand["opus"]["bitrate"]}
+        ok = bitrate["cand"] <= bitrate["base"] or allow_more_bitrate
+        gd["bitrate_bps"] = {"value": bitrate["cand"], "limit": bitrate["base"], "pass": ok,
+                             "allowed_more": allow_more_bitrate}
     failed = [k for k, v in gd.items() if not v["pass"]]
     if not det_ok:
         status, reason = "broken", "not deterministic: two runs gave different scores"
@@ -156,7 +187,8 @@ def decide(manifest_ids, base, cand, det, latency_decl, cfg):
         status, reason = "accepted", "SPRT accepted H1 and every guard holds"
     if failed and status != "rejected":
         reason += "; guards failed: " + ", ".join(failed)
-    return {
+    out = {} if bitrate is None else {"bitrate_bps": bitrate}
+    return out | {
         "status": status,
         "reason": reason,
         "n_used": seq["n"],
@@ -192,6 +224,7 @@ def main(argv=None):
     for a in ("manifest", "base", "cand", "det", "hypothesis", "out"):
         gp.add_argument("--" + a, required=True)
     gp.add_argument("--config", default=str(CONFIG))
+    gp.add_argument("--allow-more-bitrate", action="store_true")
     gp.add_argument("--meta", action="append")
     bp = sub.add_parser("broken")
     bp.add_argument("--reason", required=True)
@@ -205,7 +238,9 @@ def main(argv=None):
             cfg = tomllib.load(f)
         load = lambda q: json.loads(Path(q).read_text(encoding="utf-8"))  # noqa: E731
         ids = [it["id"] for it in load(a.manifest)["items"]]
-        res = decide(ids, load(a.base), load(a.cand), load(a.det), declared_latency(a.hypothesis), cfg)
+        allow = a.allow_more_bitrate and bitrate_reason(a.hypothesis)
+        res = decide(ids, load(a.base), load(a.cand), load(a.det), declared_latency(a.hypothesis), cfg,
+                     allow)
     res = _meta(a.meta) | res
     _write(a.out, res)
     print(f"{res['status']}  {res['reason']}")

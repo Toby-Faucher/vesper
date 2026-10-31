@@ -88,6 +88,7 @@ research/scripts/attempt.sh E10-stack --base <ref>    # any other base
 
 # 3. Run the gate yourself (about 5 minutes; the baseline eval is cached per base commit).
 research/scripts/gate.sh E0-lsnr-thresh
+research/scripts/gate.sh --dry-run E0-lsnr-thresh    # preflight, then print the eval commands only
 
 # 4. Read research/CATALOG.md and research/experiments/<id>/result.json.
 ```
@@ -96,7 +97,8 @@ The first `attempt.sh` creates `research/audio-main` from the `research/audio-la
 `repo.origin_sha` in `research/config.toml`. That sha is the original baseline for the final holdout check.
 
 Files of an experiment (`research/experiments/<id>/`): `baseline_commit` and `prompt.md` (attempt.sh),
-`hypothesis.md`, `trace.md` and optional `pipeline.toml` (the agent), `result.json` (the gate), and the gate logs
+`hypothesis.md`, `trace.md`, optional `pipeline.toml` and optional `eval.toml` (the agent, see
+[Model and Opus experiments](#model-and-opus-experiments)), `result.json` (the gate), and the gate logs
 `build.log`, `test.log`, `eval.log` (git-ignored). Eval JSON lives in `research/results/gate/` (git-ignored).
 
 ## What the gate does
@@ -116,7 +118,8 @@ Files of an experiment (`research/experiments/<id>/`): `baseline_commit` and `pr
    Looks come every 20 items in manifest order, up to the whole split (400 items on v2).
    `result.json` also records `ovrl_delta_sd_full`, the spread of the per-item deltas over the whole split.
 6. **Guards**, on the same items the test used: mean SIG delta >= -0.03; 10th percentile of the SIG deltas
-   >= -0.15; mean SI-SDRi delta >= -0.3 dB; RTF <= 0.30 and at most 1.25 times the baseline's; extra latency
+   >= -0.15; mean BAK delta >= -0.05; mean SI-SDRi delta >= -0.3 dB; native RTF <= 0.06 and at most 1.25
+   times the baseline's (the browser runs 5 to 8 times slower, by our WASM bench); extra latency
    at most the `Added latency (samples):` line in hypothesis.md and at most 240 samples (5 ms); no clipped item;
    and the second judge: mean `lsd_wb` delta at most +0.05 dB (`guards.lsd_wb_mean_max`). So a candidate is
    accepted only if DNSMOS OVRL passes the SPRT and the wideband distance to the clean speech does not grow.
@@ -187,6 +190,37 @@ packets at the same long-run rate; without it, losses are independent) and `app=
   OVRL by about 0.12 over the unencoded output, so compare Opus runs with Opus runs only; and SI-SDR
   falls by 3.5 to 5.7 dB from the VOIP high-pass alone.
 
+## Model and Opus experiments
+
+An experiment folder may hold an `eval.toml`. Both keys are optional:
+
+```toml
+model = "research/models/DeepFilterNet3_ll_onnx.tar.gz"   # repo-relative, under research/models/
+opus = "bitrate=48000,complexity=10,fec=1,dtx=1"
+allow_more_bitrate = false
+```
+
+- `model` changes the candidate's model only. The baseline uses `[eval_baseline] model`, by default
+  `paths.model` (the shipped DeepFilterNet3). Models are git-ignored; `research/scripts/fetch-model-ll.sh`
+  fetches the low-latency DeepFilterNet3 with its sha256.
+- `opus` puts BOTH sides through Opus and scores the decoded audio. The baseline uses `[eval_baseline] opus`:
+  `bitrate=64000,complexity=10,fec=1,dtx=1,loss=0.05,seed=1`. Bitrate, DTX and FEC are what the web client
+  sends (`web/src/lib/audio/settings.ts`, `signaling.ts`). The client does not set complexity, so 10 is the
+  libopus default; what the browser's WebRTC stack uses is not verified. The 5 percent loss is our choice.
+  Keys the candidate leaves out come from the baseline, not from audiolab's defaults. `loss`, `burst` and
+  `seed` are the network, not a setting: the candidate may not change them, so both sides lose the same packets.
+- Without `opus` neither side goes through Opus, so older experiments and their cached baselines are unchanged.
+  The baseline cache key adds a hash of the baseline model file and Opus setting when either differs from
+  the old default.
+- Extra rules for an Opus experiment: the result carries `bitrate_bps` (baseline and candidate), and the
+  `bitrate_bps` guard fails when the candidate uses more bitrate than the baseline. `allow_more_bitrate = true`
+  lifts it only if hypothesis.md has a `Bitrate reason: ...` line. All other guards hold. SI-SDR after a VOIP
+  round trip sits near 10 dB from the high-pass alone, so only the paired SI-SDRi delta is judged, as always.
+  The RTF is the pipeline's alone; Opus cost is not in it.
+- A bad `eval.toml` (unknown key, a model outside `research/models/`, a changed loss) makes the attempt `broken`.
+  `gate.sh --dry-run <id>` shows the parsed options as the exact eval commands without running them.
+- The catalog shows the candidate's `model` and full `opus` setting when `eval.toml` changes them.
+
 ## Self-tests
 
 Two experiments are kept as proof that the gate cannot rubber-stamp:
@@ -194,7 +228,7 @@ Two experiments are kept as proof that the gate cannot rubber-stamp:
 - `E-null`: no code change, default config. It must come out `rejected` or `inconclusive` with a zero delta.
 - `E-neg`: a deliberately bad config (`atten_db = 3`, `post_filter_beta = 0.3`). It must come out `rejected`.
 
-Script tests: `python3 -m unittest discover -s research/scripts/tests` (SPRT, guards, catalog) and
+Script tests: `python3 -m unittest discover -s research/scripts/tests` (SPRT, guards, eval.toml, catalog) and
 `bash research/scripts/tests/test_paths.sh` (path and test-weakening checks).
 
 ## Machine limits
@@ -234,7 +268,8 @@ RTF may be from a quieter moment.
   BAK guard stays.
 
 - The gate measures the committed HEAD but runs `cargo test` in the live worktree.
-- The gate uses one DeepFilterNet model for both sides, so a model-choice experiment (E8) needs a gate change first.
+- A model or Opus experiment changes the candidate only through `eval.toml`; a code change and an
+  `eval.toml` in one attempt are judged together, so keep them apart.
 - DNSMOS is checked by behaviour, not against Microsoft's onnxruntime numbers.
 - DNSMOS and UTMOS both resample to 16 kHz: above 8 kHz only `lsd_wb`, `hb_err_db` and `mcd` judge.
 - UTMOS is checked by behaviour (it ranks 0, 10 and 20 dB SNR and clean in order on dev items), not

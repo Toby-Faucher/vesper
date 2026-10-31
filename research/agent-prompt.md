@@ -16,6 +16,9 @@ You are attempting one hypothesis to make the Vesper voice path sound better.
    - Config: put the settings that turn your change on in {{EXPERIMENT}}/pipeline.toml (same format as
      {{RESEARCH}}/configs/default.toml). A config-only experiment has a pipeline.toml and no code change.
      Without a pipeline.toml the gate runs the default config.
+   - Model or Opus: put `model = "research/models/<file>"` or `opus = "bitrate=..."` in {{EXPERIMENT}}/eval.toml
+     (see docs/research-loop.md, "Model and Opus experiments"). An Opus change may not raise the bitrate unless
+     eval.toml sets `allow_more_bitrate = true` and hypothesis.md has a `Bitrate reason:` line.
    - Stages must be causal, per frame (480 samples at 48 kHz), allocation free in the hot path, and use no `unsafe`.
 3. Commit your code on branch `exp/{{ID}}`. The gate measures the committed HEAD and refuses uncommitted changes.
 4. Write {{EXPERIMENT}}/trace.md with these sections:
@@ -50,7 +53,7 @@ compare paired. Keep a dev run under 2 minutes; use `--limit` while you iterate.
    Do not remove tests or asserts.
 2. Never run `research/scripts/gate.sh`, never use `--split gate` or `--split holdout`, and never read files under
    `{{REPO}}/research/results/gate/` or another experiment's `result.json`. The gate is run by someone else, so you cannot tune against it.
-3. In {{EXPERIMENT}} write only `hypothesis.md`, `trace.md` and `pipeline.toml`. Never write `result.json` or `baseline_commit`.
+3. In {{EXPERIMENT}} write only `hypothesis.md`, `trace.md`, `pipeline.toml` and `eval.toml`. Never write `result.json` or `baseline_commit`.
 4. Do not rebase, merge or cherry-pick other branches. Do not push. Do not start subagents. Never run `sudo`.
 5. DNSMOS is a learned proxy and can be gamed (over-suppression scores well on BAK). Aim for speech that sounds better,
    not for a number. Report what you measured, including losses.
