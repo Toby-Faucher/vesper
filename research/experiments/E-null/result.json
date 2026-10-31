@@ -1,0 +1,122 @@
+{
+  "base_eval": "research/results/gate/base-308df0b41800-ab3bbd85aacc.json",
+  "base_sha": "308df0b4180051d660016d8a17884ee58398a182",
+  "branch": "exp/E-null",
+  "cand_eval": "research/results/gate/cand-E-null-308df0b41800.json",
+  "cand_sha": "308df0b4180051d660016d8a17884ee58398a182",
+  "config_hash": "ea933b1b26dc",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "lsd": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "ovrl": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "si_sdr_i": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    },
+    "sig": {
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "mean": 0.0
+    }
+  },
+  "guards": {
+    "clipped_items": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "rtf": {
+      "limit": 0.3,
+      "pass": true,
+      "value": 0.04331107746666666
+    },
+    "rtf_ratio": {
+      "limit": 1.25,
+      "pass": true,
+      "value": 0.9530294524389646
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": true,
+      "value": 0.0
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": true,
+      "value": 0.0
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": true,
+      "value": 0.0
+    }
+  },
+  "id": "E-null",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "n_total": 240,
+  "n_used": 20,
+  "pipeline": "",
+  "reason": "SPRT accepted H0 (no gain of delta1)",
+  "rtf": {
+    "base": 0.04544568623333333,
+    "cand": 0.04331107746666666
+  },
+  "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": -4000000000.0,
+    "lower": -2.9444389791664403,
+    "n": 20,
+    "upper": 2.9444389791664403,
+    "verdict": "H0"
+  },
+  "status": "rejected"
+}

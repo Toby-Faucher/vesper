@@ -69,8 +69,8 @@ run would give; only the compute is not saved.
 | status | meaning |
 |---|---|
 | `accepted` | SPRT accepted H1 and every guard holds. Merging into `research/audio-main` is the controller's call. |
-| `rejected` | SPRT accepted H0, or it accepted H1 but a guard failed (see `reason`). |
-| `inconclusive` | Hit the 240-item cap without a verdict. Never treated as accepted; a candidate for stacking. |
+| `rejected` | SPRT accepted H0, or a guard failed (see `reason`), whatever the SPRT said. |
+| `inconclusive` | Hit the 240-item cap without a verdict, and every guard holds. Never treated as accepted; a candidate for stacking. |
 | `broken` | Protected path touched, build or test failed, nondeterministic output, or an eval failed. |
 | `pending` | In the catalog only: an attempt with no result yet. |
 
@@ -103,6 +103,11 @@ checkout. RTF is measured inside the capped scope (nice 19) on a shared machine,
 RTF may be from a quieter moment.
 
 ## Known limits
+
+- The SPRT has little power for small effects on this corpus. Per-item OVRL deltas spread widely (standard
+  deviation about 0.6 MOS for the E-neg config). At that spread a true gain of 0.05 needs far more than 240 items
+  to reach H1, and a loss of 0.08 still ended inconclusive at 240 (E-neg was rejected by a guard). Large effects
+  (like the E0 scratch result) decide fast. Expect many `inconclusive` results for small changes.
 
 - The gate measures the committed HEAD but runs `cargo test` in the live worktree.
 - The gate uses one DeepFilterNet model for both sides, so a model-choice experiment (E8) needs a gate change first.

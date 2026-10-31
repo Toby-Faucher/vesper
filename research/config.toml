@@ -5,7 +5,7 @@
 # and writes the source tip into `origin_sha` (the ORIGINAL baseline for the final holdout check).
 integration_branch = "research/audio-main"
 source_branch = "research/audio-lab"
-origin_sha = ""
+origin_sha = "308df0b4180051d660016d8a17884ee58398a182"
 
 [paths]
 # Relative to the repo root (the controller checkout).

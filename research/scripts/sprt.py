@@ -134,10 +134,12 @@ def decide(manifest_ids, base, cand, det, latency_decl, cfg):
         status, reason = "broken", "not deterministic: two runs gave different scores"
     elif seq["verdict"] == "H0":
         status, reason = "rejected", "SPRT accepted H0 (no gain of delta1)"
+    elif failed:
+        # A failed guard rules the change out; more items would not make it acceptable.
+        verdict = "accepted H1" if seq["verdict"] == "H1" else "had no verdict"
+        status, reason = "rejected", f"SPRT {verdict} but guards failed: " + ", ".join(failed)
     elif seq["verdict"] == "none":
         status, reason = "inconclusive", "SPRT hit the item cap without a verdict"
-    elif failed:
-        status, reason = "rejected", "SPRT accepted H1 but guards failed: " + ", ".join(failed)
     else:
         status, reason = "accepted", "SPRT accepted H1 and every guard holds"
     if failed and status != "rejected":
