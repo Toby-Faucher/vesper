@@ -11,7 +11,7 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 | E0-skip-thresholds | Disable DeepFilterNet's high-SNR stage skipping | accepted | +0.335 [+0.244, +0.427] | +0.284 [+0.202, +0.366] | +0.220 [+0.148, +0.291] | +5.24 [+3.62, +6.87] | 0.046 | 60 | exp/E0-skip-thresholds | 308df0b41800 | SPRT accepted H1 and every guard holds |
 | E2-atten24 | E2-atten24 | accepted | +0.061 [+0.027, +0.094] | +0.188 [+0.143, +0.233] | -0.166 [-0.214, -0.117] | +0.14 [-0.03, +0.30] | 0.046 | 120 | exp/E2-atten24 | 6de7b42ee5ca | SPRT accepted H1 and every guard holds |
 
-## Rejected (4)
+## Rejected (5)
 
 | id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -19,9 +19,10 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 | E-null | Self-test: no change at all (the gate must not accept a no-op) | rejected | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.00 [+0.00, +0.00] | 0.043 | 20 | exp/E-null | 308df0b41800 | SPRT accepted H0 (no gain of delta1); Self-test written by the framework author: no code change and the default config. |
 | E1-gain12 | E1-gain12 | rejected | -0.113 [-0.164, -0.061] | -0.104 [-0.154, -0.055] | -0.126 [-0.176, -0.075] | +0.76 [+0.12, +1.39] | 0.046 | 100 | exp/E1-gain12 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
 | E1-gain6 | E1-gain6 | rejected | -0.039 [-0.071, -0.007] | -0.040 [-0.070, -0.010] | -0.057 [-0.092, -0.021] | +0.37 [+0.08, +0.66] | 0.047 | 120 | exp/E1-gain6 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
+| E2-atten12 | E2-atten12 | rejected | -0.101 [-0.147, -0.055] | +0.174 [+0.111, +0.238] | -0.594 [-0.682, -0.507] | -0.56 [-1.13, -0.00] | 0.046 | 140 | exp/E2-atten12 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
 
 ## Pending (1)
 
 | id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| E2-atten12 | <one-line hypothesis> | pending |  |  |  |  |  |  | exp/E2-atten12 |  |  |
+| E3-beta0 | <one-line hypothesis> | pending |  |  |  |  |  |  | exp/E3-beta0 |  |  |
