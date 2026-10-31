@@ -20,7 +20,7 @@ Steps:
   scripts   every scripts/test-*.sh
   shell     shellcheck scripts/*.sh (skipped with a note if shellcheck is missing)
   web       npm ci, then `npm run ci` in web/ (svelte-check, vitest, vite build, gzip size budget)
-  dsp       not in the full run: fetches the model, runs the denoiser tests and builds the wasm
+  dsp       not in the full run: fetches the models, runs the denoiser and audio lab tests, builds the wasm
             (scripts/build-dsp.sh; needs the wasm-bindgen CLI at the Cargo.lock version)
   fast      fmt clippy test
 EOF
@@ -50,7 +50,8 @@ run_step() {
     fmt) step "cargo fmt --check"; capped cargo fmt --all --check ;;
     clippy) step "clippy"; capped cargo clippy --locked --workspace --all-targets -- -D warnings ;;
     # No doc tests exist yet; nextest skips them, so add `cargo test --doc --workspace` with the first.
-    test) step "nextest"; capped cargo nextest run --locked --workspace --profile ci ;;
+    # vesper-audiolab needs the models and turns on vesper-dsp's tract feature, so it runs in `dsp`.
+    test) step "nextest"; capped cargo nextest run --locked --workspace --exclude vesper-audiolab --profile ci ;;
     bindings)
       step "ts-rs bindings up to date"
       # The vesper-protocol export tests rewrite web/src/lib/gen (TS_RS_EXPORT_DIR in .cargo/config.toml).
@@ -85,6 +86,8 @@ run_step() {
       step "denoiser: native tests, then the wasm build"
       [ -f crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz ] || scripts/fetch-model.sh
       capped cargo nextest run --locked -p vesper-dsp --features tract --profile ci
+      [ -f research/models/sig_bak_ovr.onnx ] || research/scripts/fetch-dnsmos.sh
+      capped cargo nextest run --locked -p vesper-audiolab --profile ci
       capped scripts/build-dsp.sh
       ;;
   esac
