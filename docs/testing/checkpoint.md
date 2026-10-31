@@ -175,7 +175,7 @@ Switch only if the delay gain is noticeable and quality is not worse in a blind 
 
 ## 7. Delay measurement
 
-Target: the denoiser path adds at most 30 ms over mode=off. DeepFilterNet's own lookahead was never measured and may add on its own, so this number is unknown until now. See docs/testing/latency.md for the acoustic loopback method (end to end, mic to the other person's ears).
+Target: the denoiser path adds at most 30 ms over mode=off. The output buffer alone starts at 30 ms (estimated from the code, not measured), so expect to miss this target. Record the real number. DeepFilterNet's own lookahead was never measured and may add on its own, so this number is unknown until now. See docs/testing/latency.md for the acoustic loopback method (end to end, mic to the other person's ears).
 
 Primary method: the acoustic loopback in docs/testing/latency.md (prefer it once it exists). It measures real mic-to-ear delay.
 

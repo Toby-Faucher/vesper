@@ -28,16 +28,16 @@ describe('DenoiseCore', () => {
     expect(t.sent).toHaveLength(0);
   });
 
-  it('sends 480-sample frames and caps frames in flight at 2', () => {
+  it('sends 480-sample frames and caps frames in flight at 4', () => {
     const t = make();
     t.connect();
-    for (let i = 0; i < 12; i++) render(t.core, blk(i)); // 3 frames of input
-    expect(t.sent).toHaveLength(2);
+    for (let i = 0; i < 20; i++) render(t.core, blk(i)); // 5 frames of input
+    expect(t.sent).toHaveLength(4);
     expect(t.sent[0]).toHaveLength(480);
-    expect(t.core.inflight).toBe(2);
+    expect(t.core.inflight).toBe(4);
     t.core.reply(frame(0));
     render(t.core, blk(0));
-    expect(t.sent).toHaveLength(3);
+    expect(t.sent).toHaveLength(5);
   });
 
   it('stalls after half a second of in-flight frames with no reply', () => {
@@ -78,28 +78,31 @@ describe('DenoiseCore', () => {
     expect(t.onFail).toHaveBeenCalledWith('denoiser error: panic');
   });
 
-  it('primes with two frames, re-primes after underrun', () => {
+  it('primes with three frames, re-primes after underrun', () => {
     const t = make();
     t.connect();
     t.core.reply(frame(1));
-    expect(render(t.core)[0]).toBe(0);
     t.core.reply(frame(2));
-    expect(t.core.queued).toBe(960);
-    const outs = Array.from({ length: 8 }, () => render(t.core));
+    expect(render(t.core)[0]).toBe(0);
+    t.core.reply(frame(3));
+    expect(t.core.queued).toBe(1440);
+    const outs = Array.from({ length: 12 }, () => render(t.core));
     expect(outs[0][0]).toBe(1);
     expect(outs[4][0]).toBe(2); // samples 512.. come from frame 2
-    expect(outs[7][63]).toBe(2);
-    expect(outs[7][64]).toBe(0); // 960 samples exhausted mid-quantum
-    t.core.reply(frame(3));
+    expect(outs[8][0]).toBe(3); // samples 1024.. come from frame 3
+    expect(outs[11][31]).toBe(3);
+    expect(outs[11][32]).toBe(0); // 1440 samples exhausted mid-quantum
+    t.core.reply(frame(4));
+    t.core.reply(frame(5));
     expect(render(t.core)[0]).toBe(0); // re-priming
   });
 
-  it('caps the output queue at 3 frames, dropping the oldest', () => {
+  it('caps the output queue at 8 frames, dropping the oldest', () => {
     const t = make();
     t.connect();
-    for (let v = 1; v <= 5; v++) t.core.reply(frame(v));
-    expect(t.core.queued).toBe(1440);
+    for (let v = 1; v <= 10; v++) t.core.reply(frame(v));
+    expect(t.core.queued).toBe(3840);
     expect(render(t.core)[0]).toBe(3);
-    expect(t.core.queued).toBe(1440 - Q);
+    expect(t.core.queued).toBe(3840 - Q);
   });
 });

@@ -45,7 +45,7 @@ Last updated 2026-10-30. Nothing here was run in a real browser or a real deploy
 
 - **The wasm is about 15 MB** because the `wasm` feature of `deep_filter` embeds a second copy of the model. A build on `deep_filter/tract` plus `getrandom` with the `js` feature should halve it. Not tried.
 - **No panic hook in the wasm**, so a Rust panic shows as an opaque error.
-- **Added delay is not measured.** The algorithm's lookahead plus the 30 ms output queue may exceed 30 ms. The [checkpoint](testing/checkpoint.md) must measure it.
+- **Added delay is not measured.** The output queue starts at 30 ms and may grow to 80 ms, on top of the algorithm's lookahead. From the code we estimate about 30 ms more than before the larger buffers. The [checkpoint](testing/checkpoint.md) must measure it.
 - **`ndarray` and the `tract-core` pin in `vesper-dsp` are not optional**, although only the `tract` feature needs them. A featureless build pulls them in for nothing.
 - **Thresholds are untuned:** the fallback trips at 20 late frames out of 100, with a 30 ms budget, after a 3 s warm-up. The numbers come from one laptop (2.1 ms average per frame there). The fallback is one-way for the rest of the call.
 

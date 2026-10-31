@@ -2,9 +2,13 @@ import type { DspOut } from './dsp-handler';
 import { FrameRing, HOP } from './ring';
 import { ModeController } from './mode';
 
-const MAX_INFLIGHT = 2; // frames at the worker; beyond this the input ring drops the oldest
-const MAX_OUT = 3; // denoised frames queued for output (30 ms); beyond this drop the oldest
-// Fallback rule. A frame is late past 30 ms, where the 3-frame output queue would run dry.
+// The cushion. postMessage between the worklet and the worker jitters in a browser, so keep enough frames in
+// each place to ride out a slow hop. This adds about 30 ms of delay over the old 2/3/2 setup (estimated, not measured).
+const MAX_INFLIGHT = 4; // frames at the worker; beyond this they wait in the input ring
+const IN_FRAMES = 4; // input ring size (40 ms); beyond this it drops the oldest samples
+const MAX_OUT = 8; // denoised frames queued for output (80 ms); beyond this drop the oldest
+const PRIME = 3 * HOP; // start output with 30 ms queued, so one late reply does not cause a gap
+// Fallback rule. A frame is late past 30 ms, the depth the output queue primes to.
 const LATE_MS = 30;
 // Judge the last second (100 frames of 10 ms) so one GC pause or CPU burst cannot trip it.
 const WINDOW_FRAMES = 100;
@@ -12,7 +16,6 @@ const WINDOW_FRAMES = 100;
 const MAX_LATE = 20;
 // Skip the first 3 s of replies: the WASM engine runs on its slow baseline tier right after load.
 const WARMUP_FRAMES = 300;
-const PRIME = 2 * HOP; // start output with one spare frame to absorb worker spikes
 
 /**
  * The denoise worklet's logic, free of AudioWorkletGlobalScope so it can be unit-tested.
@@ -22,7 +25,7 @@ export class DenoiseCore {
   failure: string | null = null;
   inflight = 0;
   private send: ((f: Float32Array) => void) | null = null;
-  private input = new FrameRing(2);
+  private input = new FrameRing(IN_FRAMES);
   private out: Float32Array[] = [];
   private pos = 0;
   private count = 0;
