@@ -16,11 +16,13 @@ const track = (label: string) => ({ kind: 'audio', label, enabled: true, stop: v
 const node = () => ({ connect: vi.fn((n: unknown) => n), disconnect: vi.fn() });
 
 function setup(over: Partial<CaptureDeps> = {}) {
+  let micFail: Error | null = null;
   const mics: { c: MediaTrackConstraints; t: ReturnType<typeof track> }[] = [];
   const workers: any[] = [];
   const worklets: any[] = [];
   const dests: ReturnType<typeof track>[] = [];
   const ctx = {
+    sampleRate: 48000,
     resume: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     createMediaStreamSource: vi.fn(() => node()),
@@ -33,6 +35,7 @@ function setup(over: Partial<CaptureDeps> = {}) {
   };
   const deps: CaptureDeps = {
     getUserMedia: async (c) => {
+      if (micFail) throw micFail;
       const t = track(`mic${mics.length}`);
       mics.push({ c: c.audio as MediaTrackConstraints, t });
       return new FakeStream([t]) as unknown as MediaStream;
@@ -52,7 +55,7 @@ function setup(over: Partial<CaptureDeps> = {}) {
     ...over,
   };
   const sender = { track: null as any, replaceTrack: vi.fn(async (t: any) => { sender.track = t; }) };
-  return { deps, ctx, mics, workers, worklets, dests, sender, asSender: sender as unknown as RTCRtpSender };
+  return { failMic: (e: Error) => (micFail = e), deps, ctx, mics, workers, worklets, dests, sender, asSender: sender as unknown as RTCRtpSender };
 }
 
 beforeEach(() => vi.stubGlobal('MediaStream', FakeStream));
@@ -67,7 +70,11 @@ describe('createCapture', () => {
     const w = t.workers[0];
     expect(w.postMessage).toHaveBeenCalledWith({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: 100, beta: 0.02 });
     expect(t.worklets[0].port.postMessage).not.toHaveBeenCalled(); // no frames before ready
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', 'loading, unfiltered');
     w.onmessage({ data: { type: 'ready' } });
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', '');
     const [msg, transfer] = w.postMessage.mock.calls[1];
     expect(msg).toEqual({ type: 'port' });
     const [wmsg, wtransfer] = t.worklets[0].port.postMessage.mock.calls[0];
@@ -92,7 +99,8 @@ describe('createCapture', () => {
     expect(t.sender.replaceTrack).toHaveBeenCalledWith(t.mics[1].t);
     expect(cap.stream.getAudioTracks()).toEqual([t.mics[1].t]);
     expect(t.mics[1].t.enabled).toBe(false);
-    expect(seen).toEqual([['browser', expect.stringContaining('wasm panicked')]]);
+    expect(seen.at(-1)).toEqual(['browser', expect.stringContaining('wasm panicked')]);
+    expect(t.worklets[0].port.postMessage).toHaveBeenCalledWith({ type: 'stop' });
     expect(t.workers[0].terminate).toHaveBeenCalled();
     expect(t.mics[0].t.stop).toHaveBeenCalled();
     expect(t.dests[0].stop).toHaveBeenCalled();
@@ -109,7 +117,7 @@ describe('createCapture', () => {
     const cb = vi.fn();
     cap.onModeChange(cb);
     await vi.advanceTimersByTimeAsync(4999);
-    expect(cb).not.toHaveBeenCalled();
+    expect(cb).not.toHaveBeenCalledWith('browser', expect.anything());
     await vi.advanceTimersByTimeAsync(1);
     await flush();
     expect(cb).toHaveBeenCalledWith('browser', expect.stringMatching(/5 s/));
@@ -161,8 +169,49 @@ describe('createCapture', () => {
     await flush();
     expect(t.mics[1].c.noiseSuppression).toBe(false);
     expect(cap.stream.getAudioTracks()).toEqual([t.mics[1].t]);
-    expect(cb).toHaveBeenCalledWith('off', 'settings');
+    expect(cb).toHaveBeenLastCalledWith('off', '');
     expect(t.workers[0].terminate).toHaveBeenCalled();
+  });
+
+  it('fallback mic request fails: dead pipeline stopped, microphone loss surfaced', async () => {
+    const t = setup();
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    t.failMic(new Error('NotFoundError'));
+    t.workers[0].onmessage({ data: { type: 'error', message: 'boom' } });
+    await flush();
+    expect(t.workers[0].terminate).toHaveBeenCalled();
+    expect(t.mics[0].t.stop).toHaveBeenCalled();
+    expect(cb).toHaveBeenLastCalledWith('off', expect.stringMatching(/microphone lost: .*NotFoundError/));
+  });
+
+  it('replaceTrack rejects: the sent track is kept and the failure surfaced', async () => {
+    const t = setup();
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    t.sender.track = t.dests[0];
+    cap.setSender(t.asSender);
+    t.sender.replaceTrack.mockRejectedValueOnce(new Error('InvalidStateError'));
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    t.workers[0].onmessage({ data: { type: 'error', message: 'boom' } });
+    await flush();
+    expect(t.dests[0].stop).not.toHaveBeenCalled();
+    expect(t.mics[0].t.stop).not.toHaveBeenCalled();
+    expect(t.mics[1].t.stop).toHaveBeenCalled();
+    expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', expect.stringMatching(/track swap failed: .*InvalidStateError/));
+  });
+
+  it('context not at 48 kHz: falls back with a clear reason, no worker', async () => {
+    const t = setup();
+    t.ctx.sampleRate = 44100;
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    expect(cb).toHaveBeenCalledWith('browser', expect.stringContaining('44100'));
+    expect(t.workers).toHaveLength(0);
+    expect(t.mics).toHaveLength(1);
   });
 
   it('close stops everything and later timeouts do nothing', async () => {
@@ -171,6 +220,7 @@ describe('createCapture', () => {
     const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
     cap.close();
     expect(t.workers[0].terminate).toHaveBeenCalled();
+    expect(t.worklets[0].port.postMessage).toHaveBeenCalledWith({ type: 'stop' });
     expect(t.mics[0].t.stop).toHaveBeenCalled();
     expect(t.ctx.close).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(6000);

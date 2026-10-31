@@ -27,7 +27,7 @@ const browserDeps: CaptureDeps = {
   readyTimeoutMs: 5000,
 };
 
-type Pipe = { mode: DenoiseMode; track: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void };
+type Pipe = { mode: DenoiseMode; track: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string };
 const stopAll = (m: MediaStream) => m.getTracks().forEach((t) => t.stop());
 
 /**
@@ -65,6 +65,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   }
 
   async function deep(): Promise<Pipe> {
+    if (ctx.sampleRate !== 48000) throw new Error(`AudioContext runs at ${ctx.sampleRate} Hz, DeepFilterNet needs 48000`);
     const m = await mic('deepfilter');
     let dead = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -77,6 +78,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       dead = true;
       clearTimeout(timer);
       worker?.terminate();
+      node?.port.postMessage({ type: 'stop' });
       nodes.forEach((n) => n.disconnect());
       stopAll(m);
       if (out) stopAll(out.stream);
@@ -84,7 +86,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     const fail = (reason: string) => {
       if (dead) return;
       dead = true;
-      void switchTo('browser', reason).catch((e) => console.error('denoiser fallback failed', e));
+      void switchTo('browser', reason).catch(lost);
     };
     try {
       node = await d.createWorkletNode(ctx);
@@ -107,12 +109,15 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         w.postMessage({ type: 'port' }, [ch.port1]);
         n.port.postMessage({ type: 'port' }, [ch.port2]);
         set(); // settings may have changed while the model loaded
+        me.status = '';
+        if (pipe === me) notify('deepfilter', '');
       };
       w.onerror = (e) => fail(`denoiser worker failed: ${e.message ?? ''}`);
       n.port.onmessage = ({ data }: MessageEvent<{ type: 'error'; message: string }>) => fail(data.message);
       w.postMessage({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: s.attenDb, beta: s.postFilter });
-      return {
+      const me: Pipe = {
         mode: 'deepfilter',
+        status: 'loading, unfiltered',
         track: out.stream.getAudioTracks()[0],
         stop,
         set: (n) => {
@@ -120,41 +125,62 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
           if (ready) set();
         },
       };
+      return me;
     } catch (e) {
       stop();
       throw e;
     }
   }
 
+  const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  const lost = (e: unknown) => notify('off', `microphone lost: ${msg(e)}`);
+  const notify = (m: DenoiseMode, reason: string) => {
+    last = [m, reason];
+    cbs.forEach((cb) => cb(m, reason));
+  };
+
+  /** Rejects only when there is no current pipeline (initial start); later failures are surfaced via notify. */
   async function switchTo(mode: DenoiseMode, reason: string) {
     const g = ++gen;
+    const stale = () => g !== gen || closed;
     let next: Pipe;
     try {
-      next = mode === 'deepfilter' ? await deep() : await plain(mode);
+      try {
+        next = mode === 'deepfilter' ? await deep() : await plain(mode);
+      } catch (e) {
+        if (mode !== 'deepfilter') throw e;
+        reason = `denoiser unavailable: ${msg(e)}`;
+        next = await plain('browser');
+      }
     } catch (e) {
-      if (mode !== 'deepfilter') throw e;
-      reason = `denoiser unavailable: ${e instanceof Error ? e.message : String(e)}`;
-      next = await plain('browser');
+      if (!pipe) throw e;
+      if (stale()) return;
+      pipe.stop();
+      pipe = null;
+      return lost(e);
     }
-    if (g !== gen || closed) return next.stop();
+    if (stale()) return next.stop();
+    const prev = stream.getAudioTracks()[0];
+    if (prev) next.track.enabled = prev.enabled; // keep mute across the swap
+    if (sender) {
+      try {
+        await sender.replaceTrack(next.track);
+      } catch (e) {
+        next.stop(); // the sender still uses the old track, so keep it running
+        return notify(pipe?.mode ?? mode, `track swap failed: ${msg(e)}`);
+      }
+      if (stale()) return next.stop();
+    }
     const old = pipe;
     pipe = next;
-    const prev = stream.getAudioTracks()[0];
-    if (prev) {
-      next.track.enabled = prev.enabled; // keep mute across the swap
-      stream.removeTrack(prev);
-    }
+    if (prev) stream.removeTrack(prev);
     stream.addTrack(next.track);
-    sender?.replaceTrack(next.track).catch((e) => console.error('replaceTrack failed', e));
     old?.stop();
-    if (old || next.mode !== mode) {
-      last = [next.mode, reason];
-      cbs.forEach((cb) => cb(next.mode, reason));
-    }
+    notify(next.mode, next.status ?? reason);
   }
 
   try {
-    await switchTo(s.mode, 'initial');
+    await switchTo(s.mode, '');
   } catch (e) {
     void ctx.close().catch(() => {});
     throw e;
@@ -165,13 +191,13 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     setSender(snd: RTCRtpSender) {
       sender = snd;
       const cur = stream.getAudioTracks()[0];
-      if (snd.track !== cur) snd.replaceTrack(cur).catch((e) => console.error('replaceTrack failed', e));
+      if (snd.track !== cur) snd.replaceTrack(cur).catch((e) => notify(last?.[0] ?? s.mode, `track swap failed: ${msg(e)}`));
     },
     setSettings(n: AudioSettings) {
       const rebuild =
         n.mode !== s.mode || n.micId !== s.micId || n.noiseSuppression !== s.noiseSuppression || n.autoGain !== s.autoGain;
       s = n;
-      if (rebuild) void switchTo(n.mode, 'settings').catch((e) => console.error('capture switch failed', e));
+      if (rebuild) void switchTo(n.mode, '').catch(lost);
       else pipe?.set?.(n);
     },
     onModeChange(cb: (m: DenoiseMode, reason: string) => void) {

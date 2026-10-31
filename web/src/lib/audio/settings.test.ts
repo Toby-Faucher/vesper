@@ -25,4 +25,12 @@ describe('clampSettings', () => {
     s.vad.thresholdDb = 0;
     expect(DEFAULT_AUDIO_SETTINGS.vad.thresholdDb).not.toBe(0);
   });
+  it('rejects wrong types and unknown keys from storage', () => {
+    const s = clampSettings({
+      dtx: 'yes', noiseSuppression: 1, autoGain: null, micId: 7, speakerId: 'spk',
+      vad: { thresholdDb: 'x' }, pushToTalk: { enabled: 'true', key: 5 }, junk: 1,
+    } as unknown as Partial<AudioSettings>);
+    expect(s).toEqual({ ...DEFAULT_AUDIO_SETTINGS, speakerId: 'spk' });
+    expect(clampSettings({ vad: { thresholdDb: -500 } }).vad.thresholdDb).toBe(-100);
+  });
 });
