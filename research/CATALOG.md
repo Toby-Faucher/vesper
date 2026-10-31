@@ -16,7 +16,7 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | E3-beta05 | E3-beta05 | inconclusive | +0.009 [+0.005, +0.014] | +0.001 [-0.003, +0.005] | +0.023 [+0.017, +0.029] | -0.07 [-0.10, -0.04] | 0.048 | 240 | exp/E3-beta05 | 6de7b42ee5ca | SPRT hit the item cap without a verdict |
 
-## Rejected (8)
+## Rejected (9)
 
 | id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -27,4 +27,5 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 | E2-atten12 | E2-atten12 | rejected | -0.101 [-0.147, -0.055] | +0.174 [+0.111, +0.238] | -0.594 [-0.682, -0.507] | -0.56 [-1.13, -0.00] | 0.046 | 140 | exp/E2-atten12 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
 | E2-atten24 | E2-atten24 | rejected | +0.061 [+0.027, +0.094] | +0.188 [+0.143, +0.233] | -0.166 [-0.214, -0.117] | +0.14 [-0.03, +0.30] | 0.046 | 120 | exp/E2-atten24 | 6de7b42ee5ca | SPRT accepted H1 but guards failed: bak_mean |
 | E3-beta0 | E3-beta0 | rejected | -0.019 [-0.038, +0.000] | -0.008 [-0.029, +0.013] | -0.037 [-0.054, -0.019] | +0.02 [-0.12, +0.15] | 0.045 | 40 | exp/E3-beta0 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
+| E4-highpass | A causal 2nd-order Butterworth high-pass before DeepFilterNet removes sub-speech rumble and thumps | rejected | -0.059 [-0.098, -0.021] | -0.055 [-0.092, -0.017] | -0.021 [-0.057, +0.016] | -3.55 [-4.82, -2.28] | 0.042 | 80 | exp/E4-highpass | 43d0aa4a6d16 | SPRT accepted H0 (no gain of delta1); Added an optional causal 2nd-order Butterworth high-pass (`[pre.highpass] cutoff_hz`) before DeepFilterNet to remove rumble; on dev it lowers every metric at all cutoffs, so the guard (BAK, SIG must not drop) fails. |
 | E5-leveler | A slow, speech-gated input leveler before DeepFilterNet lifts quiet mics without clipping loud ones | rejected | +0.011 [+0.000, +0.022] | +0.012 [+0.001, +0.023] | -0.019 [-0.033, -0.005] | -1.06 [-1.41, -0.71] | 0.046 | 240 | exp/E5-leveler | 9e083e98ae92 | SPRT had no verdict but guards failed: si_sdr_i_mean; Added an optional speech-gated input leveler before DeepFilterNet (`[pre.leveler]`). The idea was to lift quiet mics toward -23 dBFS so the model gets a stronger input without clipping loud ones. On dev it is close to neutral on DNSMOS and loses SI-SDR. |
