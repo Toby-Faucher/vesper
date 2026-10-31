@@ -43,6 +43,50 @@ mod tests {
         Denoiser::new(&bytes, 100.0, 0.0).unwrap()
     }
 
+    /// Output of the shipped `Denoiser` (100 dB, beta 0.02) on `golden_input`, taken before `Pipeline` existed.
+    const GOLDEN_HASH: u64 = 0x4ae8befc195842e3;
+
+    /// 300 frames: xorshift noise plus a 100 Hz to 8 kHz sine sweep, rounded to i16 steps.
+    fn golden_input() -> Vec<f32> {
+        let n = 300 * HOP;
+        let mut s: u64 = 0x9E3779B97F4A7C15;
+        let mut phase = 0f64;
+        (0..n)
+            .map(|i| {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                let noise = (s >> 40) as f64 / (1u64 << 23) as f64 - 1.0;
+                let f = 100.0 * 80f64.powf(i as f64 / n as f64);
+                phase += 2.0 * std::f64::consts::PI * f / 48_000.0;
+                let x = 0.02 * noise + 0.1 * phase.sin();
+                ((x * 32768.0).round() / 32768.0) as f32
+            })
+            .collect()
+    }
+
+    /// FNV-1a over the bits of every output sample.
+    fn hash_output(mut process: impl FnMut(&[f32]) -> Vec<f32>, input: &[f32]) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for frame in input.chunks(HOP) {
+            for x in process(frame) {
+                for b in x.to_bits().to_le_bytes() {
+                    h ^= b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+        h
+    }
+
+    #[test]
+    fn denoiser_matches_golden_hash() {
+        let mut d = denoiser();
+        d.set_post_filter(0.02);
+        let h = hash_output(|f| d.process(f).unwrap(), &golden_input());
+        assert_eq!(h, GOLDEN_HASH, "got {h:#018x}");
+    }
+
     #[test]
     fn rejects_wrong_frame_length() {
         assert_eq!(
