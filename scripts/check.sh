@@ -4,7 +4,7 @@
 # VESPER_NO_CAP=1 runs them plain (CI runners).
 set -euo pipefail
 
-all=(fmt clippy test bindings deny secrets scripts shell web)
+all=(fmt clippy test bindings deny secrets wording scripts shell web)
 usage() {
   cat <<EOF
 Usage: scripts/check.sh [step]...
@@ -16,9 +16,10 @@ Steps:
   bindings  fail if the committed ts-rs bindings in web/src/lib/gen differ from the Rust types
   deny      cargo deny check (advisories need network)
   secrets   scripts/check-secrets.sh
+  wording   scripts/check-wording.sh (stock phrases and em dashes in docs and web strings)
   scripts   every scripts/test-*.sh
   shell     shellcheck scripts/*.sh (skipped with a note if shellcheck is missing)
-  web       npm ci, svelte-check, vitest, vite build in web/
+  web       npm ci, then `npm run ci` in web/ (svelte-check, vitest, vite build, gzip size budget)
   dsp       not in the full run: fetches the model, runs the denoiser tests and builds the wasm
             (scripts/build-dsp.sh; needs the wasm-bindgen CLI at the Cargo.lock version)
   fast      fmt clippy test
@@ -30,7 +31,7 @@ for a in "$@"; do
   case $a in
     -h | --help) usage; exit 0 ;;
     fast) steps+=(fmt clippy test) ;;
-    fmt | clippy | test | bindings | deny | secrets | scripts | shell | web | dsp) steps+=("$a") ;;
+    fmt | clippy | test | bindings | deny | secrets | wording | scripts | shell | web | dsp) steps+=("$a") ;;
     *) echo "unknown step: $a" >&2; usage >&2; exit 2 ;;
   esac
 done
@@ -59,6 +60,7 @@ run_step() {
       ;;
     deny) step "cargo deny"; capped cargo deny --locked check ;;
     secrets) step "check-secrets"; scripts/check-secrets.sh ;;
+    wording) step "check-wording"; scripts/check-wording.sh ;;
     scripts)
       for t in scripts/test-*.sh; do
         step "$t"
@@ -75,11 +77,9 @@ run_step() {
       fi
       ;;
     web)
-      step "web: npm ci, check, test, build"
+      step "web: npm ci, then npm run ci"
       capped npm --prefix web ci --no-audit --no-fund
-      capped npm --prefix web run check
-      capped npm --prefix web test
-      capped npm --prefix web run build
+      capped npm --prefix web run ci
       ;;
     dsp)
       step "denoiser: native tests, then the wasm build"

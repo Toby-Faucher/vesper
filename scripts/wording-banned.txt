@@ -1,0 +1,65 @@
+# Phrases and words that read as machine-written. One extended regexp per line, matched
+# case-insensitively against user-facing text (see scripts/check-wording.sh). Add a line when
+# you catch a new tell. There is no allowlist: reword the text instead.
+# Based on Brisk's list.
+\bdelv(e|es|ed|ing)\b
+\btapestry\b
+testament to
+\bseamless(ly)?\b
+\bleverag(e|es|ed|ing)\b
+\brobust(ly|ness)?\b
+\belevat(e|es|ed|ing)\b
+\bunleash(es|ed|ing)?\b
+game[- ]chang(er|ing)
+cutting[- ]edge
+state[- ]of[- ]the[- ]art
+in today'?s (fast|digital|world|landscape)
+(it'?s|it is) (worth|important|crucial) (noting|to note)
+ever[- ]evolving
+\bnavigat(e|es|ing) the\b
+\blandscape\b
+\brealm\b
+\bdive (in|into|deep)\b
+look no further
+\bsupercharg(e|es|ed|ing)\b
+\bempower(s|ed|ing|ment)?\b
+\bstreamlin(e|es|ed|ing)\b
+\bharness(es|ed|ing)? (the|its|your|their|that|this)\b
+\bfoster(s|ed|ing)?\b
+\bintricate\b
+\bmeticulous(ly)?\b
+\bpivotal\b
+\bvibrant\b
+\bbustling\b
+\bunlock(s|ed|ing)? the\b
+\bplethora\b
+\bmyriad\b
+\bembark(s|ed|ing)?\b
+\bbeacon\b
+\bholistic(ally)?\b
+\bsynerg(y|ies|istic)\b
+\brevolution(ize|ise|izes|ises|ized|ised|izing|ising)\b
+comprehensive guide
+let'?s (dive|explore|unpack|break)
+\bwhether you'?re\b
+not just [^.,;:]{1,40}, but
+at the end of the day
+\b(furthermore|moreover|additionally)\b
+\bin conclusion\b
+\bnestled\b
+\bboasts\b
+\beffortless(ly)?\b
+(lightning|blazing)[- ]fast
+next[- ]level
+\bcrucial(ly)?\b
+\bparamount\b
+feel free to
+hope this helps
+^certainly[!,]
+great question
+—
+# Vesper additions (voice/audio copy tends to say these):
+crystal[- ]clear
+studio[- ]quality
+\bpristine\b
+\bimmersive\b

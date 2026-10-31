@@ -30,7 +30,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.2
       # The runner image ships shellcheck; install it anyway in case a new image drops it.
       - run: command -v shellcheck || (sudo apt-get update && sudo apt-get install -y shellcheck)
-      - run: scripts/check.sh fmt clippy shell scripts secrets
+      - run: scripts/check.sh fmt clippy shell scripts secrets wording
 
   test-rust:
     runs-on: ubuntu-24.04
