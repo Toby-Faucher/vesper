@@ -163,5 +163,33 @@ class Decide(unittest.TestCase):
         self.assertEqual(sprt.declared_latency("/nonexistent/h.md"), 0)
 
 
+class Wideband(unittest.TestCase):
+    def test_lsd_wb_guard(self):
+        ids = [f"gate-{i:04}" for i in range(240)]
+        r = random.Random(3)
+        base = [item(i, ovrl=2.5, sig=3.0, lsd_wb=8.0) for i in range(240)]
+        good = [item(i, ovrl=2.55 + r.gauss(0, 0.1), sig=3.0, lsd_wb=8.0) for i in range(240)]
+        res = sprt.decide(ids, evaljson(base), evaljson(good), evaljson(good[:5]), 0, CFG)
+        self.assertEqual(res["status"], "accepted", res["reason"])
+        self.assertGreater(res["ovrl_delta_sd_full"], 0.05)
+        worse = [dict(c, lsd_wb=8.0 + 2 * CFG["guards"]["lsd_wb_mean_max"]) for c in good]
+        res = sprt.decide(ids, evaljson(base), evaljson(worse), evaljson(worse[:5]), 0, CFG)
+        self.assertEqual(res["status"], "rejected")
+        self.assertFalse(res["guards"]["lsd_wb_mean"]["pass"])
+        # No lsd_wb in the evals (v1 corpus): fail closed.
+        old = [{k: v for k, v in c.items() if k != "lsd_wb"} for c in good]
+        res = sprt.decide(ids, evaljson(base), evaljson(old), evaljson(old[:5]), 0, CFG)
+        self.assertFalse(res["guards"]["lsd_wb_mean"]["pass"])
+
+
+class Mde(unittest.TestCase):
+    def test_power_rises_with_the_gain(self):
+        import mde
+        lo, _ = mde.power(0.0, 0.05, 400, S, 200, 1)
+        hi, _ = mde.power(0.05, 0.05, 400, S, 200, 2)
+        self.assertLess(lo, 0.1)
+        self.assertGreater(hi, 0.95)
+
+
 if __name__ == "__main__":
     unittest.main()

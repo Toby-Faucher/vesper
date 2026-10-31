@@ -18,7 +18,8 @@ import tomllib
 from pathlib import Path
 
 CONFIG = Path(__file__).resolve().parent.parent / "config.toml"
-METRICS = ("ovrl", "sig", "bak", "si_sdr_i", "lsd", "lead_in_reduction_db")
+METRICS = ("ovrl", "sig", "bak", "si_sdr_i", "lsd", "lead_in_reduction_db", "lsd_wb", "hb_err_db", "mcd",
+           "second_mos")
 VAR_FLOOR = 1e-12  # all-equal deltas (a no-op candidate) give zero variance
 
 
@@ -70,7 +71,7 @@ def ci95(xs):
     return {"mean": m, "ci95": [m - h, m + h]}
 
 
-def guards(sig_d, sdr_d, base, cand, declared_latency, g, bak_d=None):
+def guards(sig_d, sdr_d, base, cand, declared_latency, g, bak_d=None, lsd_wb_d=None):
     """Each guard: value, limit, pass. base and cand are the eval JSON objects."""
     out = {}
 
@@ -84,6 +85,11 @@ def guards(sig_d, sdr_d, base, cand, declared_latency, g, bak_d=None):
     if bak_d is not None:
         add("bak_mean", mean(bak_d), g["bak_mean_min"], mean(bak_d) >= g["bak_mean_min"])
     add("si_sdr_i_mean", mean(sdr_d), g["si_sdr_i_mean_min"], mean(sdr_d) >= g["si_sdr_i_mean_min"])
+    # The second judge: the wideband log-mel distance to the clean reference must not grow by more
+    # than the margin. Fails closed when the evals have no lsd_wb (a v1 corpus or an old binary).
+    if "lsd_wb_mean_max" in g:
+        v = mean(lsd_wb_d) if lsd_wb_d else None
+        add("lsd_wb_mean", v, g["lsd_wb_mean_max"], v is not None and v <= g["lsd_wb_mean_max"])
     rb, rc = base.get("rtf"), cand.get("rtf")
     add("rtf", rc, g["rtf_max"], rc is not None and rc <= g["rtf_max"])
     ratio = rc / rb if rb and rc is not None else None
@@ -96,14 +102,15 @@ def guards(sig_d, sdr_d, base, cand, declared_latency, g, bak_d=None):
 
 
 SCORE_KEYS = ("sig", "bak", "ovrl", "si_sdr", "si_sdr_input", "si_sdr_i", "lsd",
-              "lead_in_reduction_db", "peak_dbfs", "clipped")
+              "lead_in_reduction_db", "peak_dbfs", "clipped", "lsd_wb", "hb_err_db", "mcd",
+              "second_mos")
 
 
 def deterministic(full_items, det_items):
     """True if every score of the short run equals the full run's, bit for bit (JSON floats round-trip)."""
     if not det_items or len(det_items) > len(full_items):
         return False
-    return all(a["id"] == b["id"] and all(a[k] == b[k] for k in SCORE_KEYS)
+    return all(a["id"] == b["id"] and all(a.get(k) == b.get(k) for k in SCORE_KEYS)
                for a, b in zip(full_items, det_items))
 
 
@@ -128,8 +135,10 @@ def decide(manifest_ids, base, cand, det, latency_decl, cfg):
     ovrl = [c["ovrl"] - b["ovrl"] for b, c in pairs]
     seq = sequential(ovrl, s["delta0"], s["delta1"], s["alpha"], s["beta"], s["batch"])
     used = pairs[: seq["n"]]
-    d = {m: [c[m] - b[m] for b, c in used] for m in METRICS}
-    gd = guards(d["sig"], d["si_sdr_i"], base, cand, latency_decl, g, d["bak"])
+    # Metrics an eval did not compute (null or absent) are left out of their delta list.
+    d = {m: [c[m] - b[m] for b, c in used if c.get(m) is not None and b.get(m) is not None]
+         for m in METRICS}
+    gd = guards(d["sig"], d["si_sdr_i"], base, cand, latency_decl, g, d["bak"], d["lsd_wb"])
     det_ok = deterministic(cand["items"], det["items"])
     gd["deterministic"] = {"value": det_ok, "limit": True, "pass": det_ok}
     failed = [k for k, v in gd.items() if not v["pass"]]
@@ -154,7 +163,9 @@ def decide(manifest_ids, base, cand, det, latency_decl, cfg):
         "n_total": len(pairs),
         "sprt": seq | {"delta0": s["delta0"], "delta1": s["delta1"], "alpha": s["alpha"],
                        "beta": s["beta"], "batch": s["batch"]},
-        "deltas": {m: ci95(v) for m, v in d.items()},
+        "deltas": {m: ci95(v) for m, v in d.items() if v},
+        # Spread of the per-item OVRL deltas over the whole split, for the minimum detectable effect.
+        "ovrl_delta_sd_full": math.sqrt(var(ovrl)),
         "guards": gd,
         "rtf": {"base": base.get("rtf"), "cand": cand.get("rtf")},
         "latency_samples": {"base": base["latency_samples"], "cand": cand["latency_samples"],

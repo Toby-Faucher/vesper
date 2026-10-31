@@ -9,8 +9,11 @@ origin_sha = "308df0b4180051d660016d8a17884ee58398a182"
 
 [paths]
 # Relative to the repo root (the controller checkout).
-corpus = "research/corpus/built"
+# Corpus v2 (VCTK 48 kHz, built by `audiolab corpus build --name v2`). v1 was research/corpus/built.
+corpus = "research/corpus48/built"
 dnsmos = "research/models/sig_bak_ovr.onnx"
+# UTMOS (second_mos): scored and reported when the file exists, not gated.
+second_mos = "research/models/utmos22_strong.onnx"
 model = "crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz"
 # Baseline config, read from the BASE commit (so stacked config changes move with the base).
 default_config = "research/configs/default.toml"
@@ -33,6 +36,13 @@ alpha = 0.05
 beta = 0.05
 batch = 20
 
+[stack]
+# Gate a combination of already-run configs: `<id> = ["<exp id>", ...]`. The gate merges each listed
+# experiment's pipeline.toml (research/experiments/<exp id>/ in this checkout, else its exp/<exp id>
+# branch) and then <id>'s own, in that order; a key
+# set to two values is broken. Code changes are not stacked here: cherry-pick them onto exp/<id>.
+# Example: E10-stack = ["E3-beta05", "E2-atten24"]
+
 [guards]
 sig_mean_min = -0.03
 # 10th percentile of the per-item SIG deltas.
@@ -40,6 +50,9 @@ sig_p10_min = -0.15
 # Mean BAK delta. Stops a gain that only comes from leaving noise in.
 bak_mean_min = -0.05
 si_sdr_i_mean_min = -0.3
+# Second judge: mean lsd_wb delta (dB, candidate minus baseline) must be at most this. A gain in
+# DNSMOS OVRL that comes with more wideband spectral distortion is not accepted.
+lsd_wb_mean_max = 0.05
 rtf_max = 0.30
 # Candidate RTF may be at most this many times the baseline RTF.
 rtf_ratio_max = 1.25

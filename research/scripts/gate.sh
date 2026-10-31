@@ -27,9 +27,10 @@ export RAYON_NUM_THREADS=$threads CARGO_BUILD_JOBS=$threads
 
 pconf="$exp/pipeline.toml"
 [[ -f $pconf ]] || pconf=""
+mapfile -t stack < <(python3 "$SCRIPTS/cfg.py" opt "stack.$id")
 meta=(--meta "id=$id" --meta "branch=exp/$id" --meta "base_sha=$baseline" --meta "cand_sha=$candidate"
       --meta "config_hash=$(python3 "$SCRIPTS/cfg.py" hash)" --meta "pipeline=${pconf:+pipeline.toml}"
-      --meta "split=$split")
+      --meta "split=$split" --meta "stack=${stack[*]}")
 
 finish() {
   "$SCRIPTS/catalog.sh"
@@ -58,13 +59,17 @@ build_bin() {
   fi
   echo "$bin"
 }
-# run_eval BIN CONFIG OUT [ARGS...]: score a config on the gate split.
+# UTMOS is scored when its model is there (reported, not gated). Part of the baseline cache key.
+utmos="$REPO_ROOT/$(python3 "$SCRIPTS/cfg.py" opt paths.second_mos)"
+utmos_args=()
+if [[ -f $utmos ]]; then utmos_args=(--second-mos "$utmos"); fi
+# run_eval BIN OUT ARGS...: score on the gate split; ARGS holds one or more --config FILE.
 run_eval() {
-  local bin=$1 conf=$2 out=$3
-  shift 3
-  (cd "$REPO_ROOT" && heavy "$bin" eval --config "$conf" --split "$split" --out "$out" --jobs "$threads" \
+  local bin=$1 out=$2
+  shift 2
+  (cd "$REPO_ROOT" && heavy "$bin" eval --split "$split" --out "$out" --jobs "$threads" \
      --model "$REPO_ROOT/$(cfg paths.model)" --dnsmos "$REPO_ROOT/$(cfg paths.dnsmos)" \
-     --corpus "$REPO_ROOT/$(cfg paths.corpus)" "$@") >>"$exp/eval.log" 2>&1
+     --corpus "$REPO_ROOT/$(cfg paths.corpus)" "${utmos_args[@]}" "$@") >>"$exp/eval.log" 2>&1
 }
 
 # --- 2. Build and unit tests (candidate). The candidate binary is always rebuilt from its tree. ---
@@ -77,25 +82,41 @@ cand_bin=$(build_bin "$wt" "$candidate") || broken "build failed (see build.log)
 default_conf="$cache/default-$b12.toml"
 git -C "$REPO_ROOT" show "$baseline:$(cfg paths.default_config)" >"$default_conf" \
   || broken "no $(cfg paths.default_config) at base $b12"
-cand_conf=${pconf:-$default_conf}
+# A stack ([stack] in config.toml) merges the listed experiments' pipeline.toml, then this one's.
+cand_confs=()
+for s in "${stack[@]}"; do
+  [[ $s =~ $ID_RE ]] || broken "stack entry '$s' is not an experiment id"
+  f="$cache/stack-$id-$s.toml"
+  # The controller checkout first (config-only results are committed there), else the exp branch.
+  if [[ -f $EXP_DIR/$s/pipeline.toml ]]; then
+    cp "$EXP_DIR/$s/pipeline.toml" "$f"
+  else
+    git -C "$REPO_ROOT" show "exp/${s}:research/experiments/${s}/pipeline.toml" >"$f" 2>/dev/null \
+      || broken "stack: no pipeline.toml for $s (checkout or exp/$s)"
+  fi
+  cand_confs+=(--config "$f")
+done
+if [[ -n $pconf ]]; then cand_confs+=(--config "$pconf"); fi
+((${#cand_confs[@]})) || cand_confs=(--config "$default_conf")
 dh=$(sha256sum "$default_conf" | cut -c1-12)
 
 # --- 4. Baseline eval, cached per base commit and default config. ---
-base_json="$cache/base-$b12-$dh.json"
+corpus_tag=$(sha256sum "$REPO_ROOT/$(cfg paths.corpus)/$split/manifest.json" | cut -c1-8)
+base_json="$cache/base-$b12-$dh-$corpus_tag${utmos_args:+-utmos}.json"
 if [[ ! -f $base_json ]]; then
   bwt="$WORKTREES/.base-$b12"
   [[ -d $bwt ]] || git -C "$REPO_ROOT" worktree add -q --detach "$bwt" "$baseline"
   base_bin=$(build_bin "$bwt" "$baseline") || broken "baseline build failed (see build.log)"
   git -C "$REPO_ROOT" worktree remove --force "$bwt"
-  run_eval "$base_bin" "$default_conf" "$base_json.tmp" || broken "baseline eval failed (see eval.log)"
+  run_eval "$base_bin" "$base_json.tmp" --config "$default_conf" || broken "baseline eval failed (see eval.log)"
   mv -f "$base_json.tmp" "$base_json"
 fi
 
 # --- 5. Candidate eval on the whole split, then a short second run for the determinism check. ---
 cand_json="$cache/cand-$id-$c12.json"
 det_json="$cache/det-$id-$c12.json"
-run_eval "$cand_bin" "$cand_conf" "$cand_json" || broken "candidate eval failed (see eval.log)"
-run_eval "$cand_bin" "$cand_conf" "$det_json" --limit "$(cfg eval.determinism_items)" \
+run_eval "$cand_bin" "$cand_json" "${cand_confs[@]}" || broken "candidate eval failed (see eval.log)"
+run_eval "$cand_bin" "$det_json" "${cand_confs[@]}" --limit "$(cfg eval.determinism_items)" \
   || broken "determinism eval failed (see eval.log)"
 
 # --- 6. Paired SPRT (replayed in manifest order) and guards. ---
