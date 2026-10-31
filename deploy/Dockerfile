@@ -5,7 +5,7 @@
 FROM rust:1-bookworm AS dsp
 WORKDIR /src
 COPY . .
-# rust-toolchain.toml (channel stable + the wasm32 target) governs inside /src; trigger its install here.
+# rust-toolchain.toml (the pinned version + the wasm32 target) governs inside /src; install it here.
 RUN rustup toolchain install
 # The wasm-bindgen CLI must equal the crate version in Cargo.lock exactly (build-dsp.sh checks too).
 RUN cargo install wasm-bindgen-cli --locked \
@@ -26,6 +26,8 @@ RUN npm run build
 FROM rust:1-bookworm AS server
 WORKDIR /src
 COPY . .
+# Install the pinned toolchain explicitly; do not rely on rustup auto-installing it.
+RUN rustup toolchain install
 RUN cargo build --release --locked -p vesper-server
 
 # --- 4. runtime ---------------------------------------------------------------------------------

@@ -7,13 +7,29 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+# Only crates used by 2+ members. Members add their own feature lists.
 [workspace.dependencies]
+futures-util = { version = "0.3", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = "1"
+tokio-tungstenite = "0.28"
+tracing = "0.1"
 ts-rs = "10"
+vesper-protocol = { path = "crates/vesper-protocol" }
+vesper-sfu = { path = "crates/vesper-sfu" }
 
 # tract 0.21.4 trips a debug-only assertion on the DeepFilterNet3 model:
 # "duplicate name /convt3/Conv.bias" (release builds are fine). Remove this override once
 # tract is upgraded past the bug and debug-build tests pass without it.
 [profile.dev.package.tract-core]
 debug-assertions = false
+
+# Small on purpose. Prints are deliberate in loadtest and server main, so no print lints.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"

@@ -1,0 +1,35 @@
+name: advisories
+# New advisories land without any push, so check both lockfiles weekly too.
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny-advisories:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - uses: taiki-e/install-action@v2.87.28
+        with:
+          tool: cargo-deny@0.20.2
+      - run: cargo deny --locked check advisories
+
+  npm-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22 # same as ci.yml and the deploy/Dockerfile web stage
+      - run: npm ci --no-audit --no-fund
+        working-directory: web
+      # Fails on high and critical only.
+      - run: npm audit --audit-level=high
+        working-directory: web

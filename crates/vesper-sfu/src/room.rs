@@ -71,9 +71,11 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
         let wait = timeout
             .saturating_duration_since(Instant::now())
             .max(Duration::from_millis(1));
+        // set_read_timeout only fails for a zero duration (ruled out above) or a bad fd, which
+        // would be our bug, so panicking here is correct; AliveGuard reports the dead thread.
         socket
             .set_read_timeout(Some(wait))
-            .expect("setting socket read timeout");
+            .expect("non-zero read timeout on an owned socket");
 
         match socket.recv_from(&mut buf) {
             Ok((n, source)) => route(&buf[..n], source, socket_addr, &mut clients),

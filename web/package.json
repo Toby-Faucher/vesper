@@ -3,11 +3,16 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "test": "vitest run",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "size": "node scripts/size-check.mjs",
+    "ci": "npm run check && npm test && npm run build && npm run size"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.3.1",

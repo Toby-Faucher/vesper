@@ -1,0 +1,40 @@
+# Version updates, weekly. Every ecosystem waits 14 days after a release before it proposes it
+# (security updates skip the cooldown). Minor and patch bumps come as one grouped PR.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 3
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+    # tract-core is pinned (=0.21.4) on purpose: newer 0.21.x breaks the deep_filter build, see
+    # crates/vesper-dsp/Cargo.toml. deep_filter is a git rev pin. Remove when the denoiser moves on.
+    # A wasm-bindgen bump also needs the local CLI reinstalled (scripts/build-dsp.sh says how).
+    ignore:
+      - dependency-name: "tract-*"
+      - dependency-name: "deep_filter"
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    versioning-strategy: increase
+    open-pull-requests-limit: 3
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 3

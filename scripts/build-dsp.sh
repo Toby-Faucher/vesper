@@ -13,7 +13,7 @@ fi
 MODEL=crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz
 [ -f "$MODEL" ] || scripts/fetch-model.sh
 OUT=web/public/dsp
-RUSTFLAGS="-C target-feature=+simd128" cargo build -p vesper-dsp --lib --release \
+RUSTFLAGS="-C target-feature=+simd128" cargo build --locked -p vesper-dsp --lib --release \
   --target wasm32-unknown-unknown --no-default-features --features wasm
 mkdir -p "$OUT"
 wasm-bindgen --target web --out-dir "$OUT" target/wasm32-unknown-unknown/release/vesper_dsp.wasm

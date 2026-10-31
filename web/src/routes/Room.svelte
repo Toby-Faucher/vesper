@@ -224,12 +224,12 @@
 <main class="mx-auto max-w-sm space-y-4 p-6">
   {#if !joined}
     <form onsubmit={join} class="space-y-3">
-      <input class="w-full rounded bg-neutral-900 p-2" placeholder="Name" bind:value={name} required />
-      <input class="w-full rounded bg-neutral-900 p-2" placeholder="Key" type="password" bind:value={key} required />
+      <input class="w-full rounded bg-neutral-900 p-2" placeholder="Name" aria-label="Name" bind:value={name} required />
+      <input class="w-full rounded bg-neutral-900 p-2" placeholder="Key" aria-label="Key" type="password" bind:value={key} required />
       <button class="w-full rounded bg-neutral-700 p-2">Join</button>
     </form>
   {/if}
-  {#if error}<p class="text-red-400">{error}</p>{/if}
+  {#if error}<p class="text-red-400" role="alert">{error}</p>{/if}
   {#if deviceError}<p class="text-amber-400" role="alert">{deviceError}</p>{/if}
   {#if offered}
     <p class="text-sm">

@@ -10,10 +10,13 @@ test-support = []
 
 [dependencies]
 str0m = { version = "0.24", default-features = false, features = ["aws-lc-rs"] }
-tokio = { version = "1", features = ["sync"] }
-tracing = "0.1"
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 # Self dev-dependency so plain `cargo test -p vesper-sfu` turns on `test-support`.
 vesper-sfu = { path = ".", features = ["test-support"] }
+
+[lints]
+workspace = true

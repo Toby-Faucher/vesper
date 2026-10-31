@@ -2,49 +2,16 @@
 
 Vesper is one server binary (`vesper-server`): HTTP (the web app, `/health`, the `/ws` signaling WebSocket) on a TCP port and all media on one UDP port. HTTPS is not done by the server; put Caddy (or similar) in front of the TCP port. Media never goes through Caddy.
 
-## Configuration (environment variables)
+## Configuration
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `VESPER_DEV_KEY` | none, required | The shared join key. Whatever you set here is what people type into the join form. Empty or unset: the server refuses to start. Pick a passphrase; there are no accounts yet. |
-| `VESPER_HTTP_BIND` | `0.0.0.0:8080` | HTTP listen address. |
-| `VESPER_UDP_BIND` | `0.0.0.0:40000` | Media UDP listen address. |
-| `VESPER_PUBLIC_HOST` | unset | Hostname or IP clients are told to send media to. Resolved at start and re-resolved periodically. Unset: the server advertises its bound address, which is useless to other machines when bound to 0.0.0.0 or 127.0.0.1. |
-| `VESPER_UDP_PORT_PUBLIC` | the `VESPER_UDP_BIND` port | The UDP port clients reach from outside (set only if the router maps a different external port). |
-| `VESPER_WEB_DIR` | `web/dist` | Directory with the built web app, served at `/` (extensionless unknown paths fall back to `index.html`, a missing file with an extension is a 404; `/assets/*` is `Cache-Control: immutable`, everything else `no-cache`; dotfiles and anything outside the dir are not served). |
-| `VESPER_JOIN_DEADLINE_SECS` | `10` | A socket that has not joined in this time is closed. |
-| `VESPER_MAX_SOCKETS` | `256` | Concurrent WebSockets. |
-| `RUST_LOG` | `info` | Log filter. |
-
-## Run locally
-
-From the repo root. The join key is whatever you put in `VESPER_DEV_KEY`.
-
-```bash
-# 1. denoiser wasm + model into web/public/dsp/ (needs the wasm32 target and a wasm-bindgen CLI
-#    whose version equals the one in Cargo.lock; the script tells you the exact install command)
-scripts/build-dsp.sh
-
-# 2a. dev: server in one terminal ...
-VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
-  cargo run -p vesper-server --release
-# ... Vite dev server in another (proxies /ws to localhost:8080, prints a localhost URL)
-npm --prefix web install && npm --prefix web run dev
-
-# 2b. or no Vite: build the app and let the server serve it (http://127.0.0.1:8080)
-npm --prefix web run build
-VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
-  VESPER_WEB_DIR=web/dist cargo run -p vesper-server --release
-```
-
-Browsers only allow the mic on `localhost` or HTTPS. For another machine on the LAN or friends, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000`, `VESPER_PUBLIC_HOST=<address they can reach>`, and use the deployed setup below (HTTPS is needed for their mic).
+Every variable, with defaults, is in [env.md](env.md). To run on one machine first, see [dev.md](dev.md#run). The two you must set to deploy are `VESPER_DEV_KEY` (the shared join key, no default, the server refuses to start without it) and `VESPER_PUBLIC_HOST` (see Network below).
 
 ## Docker / Dockge
 
 Files: `deploy/Dockerfile` (build from the repo root), `deploy/compose.yaml`.
 
 1. Put `VESPER_DEV_KEY=<passphrase>` and `VESPER_PUBLIC_HOST` (see Network: it must resolve to the public IP from this host) in a `.env` next to `compose.yaml`. Compose refuses to start without the key; the image never contains it.
-2. `docker compose -f deploy/compose.yaml up -d --build` (in Dockge: create the stack from this repo and add the `.env`). The first build is slow: it compiles the denoiser to wasm and downloads the DeepFilterNet model (sha256-checked by `scripts/fetch-model.sh`).
+2. `docker compose -f deploy/compose.yaml up -d --build` (in Dockge: create the stack from this repo and add the `.env`; it is not verified that the compose file's `context: ..` finds the repo inside a Dockge stack directory). The first build is slow: it compiles the denoiser to wasm and downloads the DeepFilterNet model (sha256-checked by `scripts/fetch-model.sh`).
 3. `curl http://127.0.0.1:8080/health` returns `ok`; `docker compose ps` shows `healthy`.
 
 If Docker's UDP NAT misbehaves, `network_mode: host` is the alternative (see the comment in `compose.yaml`): drop `ports:`, the server binds the host directly, and the `VESPER_HTTP_BIND`/`VESPER_UDP_BIND` values are the real host listeners.
@@ -69,17 +36,17 @@ Plain binary instead: `deploy/vesper.service` (systemd, hardened, `DynamicUser`)
 
 ## Upgrade and rollback
 
-Upgrade: first tag the current image, `docker tag vesper:latest vesper:previous`; then `git pull` and `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins; there is no state to migrate (presence is in memory). Rollback: set `image: vesper:previous` and `up -d` without `--build`, or `git checkout <old>` and rebuild. For the binary install keep the previous binary next to the new one and swap the file, then `systemctl restart vesper`.
+Upgrade: first tag the current image, `docker tag vesper:latest vesper:previous`; then `git pull` and `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins; there is no state to migrate (presence is in memory). Rollback: `VESPER_TAG=previous docker compose -f deploy/compose.yaml up -d` (no `--build`), or `git checkout <old>` and rebuild. For the binary install keep the previous binary next to the new one and swap the file, then `systemctl restart vesper`.
 
 If the voice engine thread dies (a bug on hostile input), `/health` returns 503 and the server process exits non-zero so Docker (`restart: unless-stopped`) or systemd (`Restart=on-failure`) restarts it; look for "voice engine (SFU thread) died" in `docker compose logs` / `journalctl -u vesper`. Covered by a test of the watcher, not verified with a real container.
 
 ## Security headers
 
-The server sets `X-Content-Type-Options: nosniff` only. It sends no Content-Security-Policy. A suggested CSP is commented out in `deploy/Caddyfile.example`; it is **untested** against the real app (WASM, the audio worklet and WebRTC all break silently under a wrong CSP), so verify in a browser before enabling it.
+The server sets `X-Content-Type-Options: nosniff` only. `deploy/Caddyfile.example` adds HSTS, `Referrer-Policy`, `Permissions-Policy` and `X-Content-Type-Options`. Nothing sends a Content-Security-Policy: a suggested CSP is commented out in the Caddyfile; it is **untested** against the real app (WASM, the audio worklet and WebRTC all break silently under a wrong CSP), so verify in a browser before enabling it.
 
 ## Not verified
 
-Written and checked for syntax and against the real files, but not executed (no Docker or browser on the dev machine):
+Last updated 2026-10-30. Written and checked for syntax and against the real files, but not executed (no Docker or browser on the dev machine):
 
 - `docker build` / `docker compose up`, the image's healthcheck, non-root and read-only operation.
 - The Dockerfile's `cargo install wasm-bindgen-cli` and wasm build inside the image.

@@ -1,12 +1,24 @@
 # Dockge / docker compose stack. Put VESPER_DEV_KEY and VESPER_PUBLIC_HOST in a .env next to this file.
-# Build context is the repo root (this file lives in deploy/).
+# Build context is the repo root (this file lives in deploy/). Unverified: Dockge keeps each stack
+# in its own directory, so `..` may not point at a repo clone there; check before the first deploy.
 services:
   vesper:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: vesper:latest
+    # Tag builds (for example with the git sha) so a rollback has an image to point at:
+    # VESPER_TAG=<tag> docker compose -f deploy/compose.yaml up -d
+    image: vesper:${VESPER_TAG:-latest}
     restart: unless-stopped
+    # The server is PID 1 and has no signal handler, so without an init `docker stop` waits 10 s
+    # and then kills it.
+    init: true
+    # Docker's default json-file log has no size limit.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       VESPER_DEV_KEY: ${VESPER_DEV_KEY:?set it in .env}
       VESPER_PUBLIC_HOST: ${VESPER_PUBLIC_HOST:?set it in .env}

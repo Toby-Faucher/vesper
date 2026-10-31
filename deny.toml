@@ -1,0 +1,42 @@
+# cargo deny check            (needs network for the RustSec advisory db)
+# cargo deny check bans licenses sources    (offline subset)
+# Schema: cargo-deny 0.20. Add a license or an advisory ignore only after reading why it applies.
+
+[graph]
+# No `targets` filter: vesper-dsp is also built for wasm32 in the Docker image, so scan it too.
+
+[advisories]
+unmaintained = "workspace"
+yanked = "deny"
+# Every ignore needs: advisory id, whether the code is reachable, a date and a TODO to remove it.
+ignore = []
+
+[licenses]
+confidence-threshold = 0.93
+# Workspace crates carry no license field.
+private = { ignore = true }
+# Only the licenses the current graph actually uses (checked with cargo deny).
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause", # subtle, matchit, aws-lc-sys
+    "ISC",          # aws-lc-rs, aws-lc-sys
+    "MIT",
+    "Unicode-3.0",  # unicode-ident, unicode-normalization
+]
+
+[bans]
+# Duplicates are common in a webrtc + tract + wasm graph; show them, do not block.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# Do not ban aws-lc-sys: str0m's aws-lc-rs backend needs it on purpose.
+deny = [
+    { crate = "openssl-sys", reason = "Vesper uses aws-lc-rs via str0m; a second TLS stack means a dependency changed" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The one git dependency, pinned by rev in crates/vesper-dsp/Cargo.toml.
+allow-git = ["https://github.com/Rikorose/DeepFilterNet"]

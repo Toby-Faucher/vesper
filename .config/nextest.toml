@@ -1,0 +1,17 @@
+# cargo nextest run --workspace              (default profile)
+# cargo nextest run --workspace --profile ci (what scripts/check.sh and CI run)
+# Doc tests are not run by nextest. There are none yet; add `cargo test --doc` to check.sh with the first.
+# No retries: a retry would hide a flaky timing test; make the test deterministic instead.
+[profile.default]
+retries = 0
+# Most tests take well under 3 s; the slowest normal waits are 10-15 s deadlines in signaling.rs.
+slow-timeout = { period = "20s", terminate-after = 3 }
+
+[profile.ci]
+fail-fast = false
+
+# Tests that wait for a real timeout path. abrupt_disconnect_closes_client waits for str0m's ICE
+# timeout (about 21 s here, deadline 45 s); the other two wait on 15 s / ping deadlines.
+[[profile.default.overrides]]
+filter = 'test(=abrupt_disconnect_closes_client) | test(=abrupt_close_removes_presence) | test(=unanswered_pings_remove_presence)'
+slow-timeout = { period = "30s", terminate-after = 3 }
