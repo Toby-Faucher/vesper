@@ -18,6 +18,9 @@ updates:
     ignore:
       - dependency-name: "tract-*"
       - dependency-name: "deep_filter"
+      # ndarray stays on 0.15: vesper-dsp hands 0.15 arrays to the pinned deep_filter (tract 0.21.4).
+      - dependency-name: "ndarray"
+        versions: [">0.15"]
 
   - package-ecosystem: npm
     directory: /web
@@ -30,6 +33,10 @@ updates:
     groups:
       npm-minor-patch:
         update-types: ["minor", "patch"]
+    # svelte-check supports TypeScript 5 and 6 only; drop this when it supports 7.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
