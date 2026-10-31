@@ -16,8 +16,13 @@ const handle = createDspHandler({
   },
 });
 
-self.onmessage = async ({ data }: MessageEvent<DspIn>) => {
-  for (const r of await handle(data)) {
-    (self as unknown as Worker).postMessage(r, r.type === 'frame' ? [r.data.buffer] : []);
-  }
+// Control messages arrive on self; audio frames on the port the capture hands over after 'ready',
+// so the audio worklet talks to this worker directly and replies go back the same way.
+const serve = (to: MessagePort | Worker) => async ({ data }: MessageEvent<DspIn>) => {
+  for (const r of await handle(data)) to.postMessage(r, r.type === 'frame' ? [r.data.buffer] : []);
+};
+const main = serve(self as unknown as Worker);
+self.onmessage = (e: MessageEvent<DspIn | { type: 'port' }>) => {
+  if (e.data.type !== 'port') return main(e as MessageEvent<DspIn>);
+  e.ports[0].onmessage = serve(e.ports[0]);
 };

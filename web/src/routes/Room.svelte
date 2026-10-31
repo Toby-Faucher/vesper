@@ -3,6 +3,9 @@
   import { applyPeerMsg } from '../lib/peers';
   import { Playback } from '../lib/playback';
   import { restoreVolumes, saveVolumes } from '../lib/volume';
+  import { createCapture, type Capture } from '../lib/audio/capture';
+  import { DEFAULT_AUDIO_SETTINGS } from '../lib/audio/settings';
+  import type { DenoiseMode } from '../lib/audio/mode';
   import type { Peer } from '../lib/gen/Peer';
   import type { ServerMsg } from '../lib/gen/ServerMsg';
 
@@ -18,6 +21,9 @@
   let speaking = $state<Set<string>>(new Set());
   let playback: Playback | undefined;
   let mic: MediaStream | undefined;
+  let capture: Capture | undefined;
+  let mode = $state<DenoiseMode>(DEFAULT_AUDIO_SETTINGS.mode);
+  let modeReason = $state('');
   let sig: Signaling | undefined;
   let poll: ReturnType<typeof setInterval> | undefined;
   let releaseLock: (() => void) | undefined;
@@ -43,8 +49,10 @@
     playback = undefined;
     releaseLock?.();
     releaseLock = undefined;
-    mic?.getTracks().forEach((t) => t.stop());
+    capture?.close();
+    capture = undefined;
     mic = undefined;
+    modeReason = '';
     muted = false;
     deafened = false;
     speaking = new Set();
@@ -63,10 +71,12 @@
     const held = new Promise<void>((res) => (releaseLock = res));
     if (navigator.locks) void navigator.locks.request('vesper-call', () => held);
     else console.warn('navigator.locks missing: audio may stop when the tab is backgrounded');
+    // Shortcut: default settings until Task 9 persists them. Called before any await: it creates its AudioContext.
+    const capturing = createCapture(DEFAULT_AUDIO_SETTINGS);
+    mode = DEFAULT_AUDIO_SETTINGS.mode;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, channelCount: 1 },
-      });
+      const cap = (capture = await capturing);
+      const stream = cap.stream;
       mic = stream;
       volumes = Object.fromEntries(restoreVolumes(localStorage));
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -89,6 +99,15 @@
       });
       userId = r.userId;
       playback?.addLocal(r.userId, stream);
+      const audioSender = r.pc.getSenders().find((s) => s.track?.kind === 'audio');
+      if (audioSender) cap.setSender(audioSender);
+      cap.onModeChange((m, reason) => {
+        mode = m;
+        modeReason = reason;
+        // The speaking analyser is bound to the old track; re-tap the swapped one.
+        playback?.remove(r.userId);
+        playback?.addLocal(r.userId, stream);
+      });
       poll = setInterval(() => {
         const next = playback?.speaking() ?? new Set<string>();
         if (next.size !== speaking.size || [...next].some((i) => !speaking.has(i))) speaking = next;
@@ -118,6 +137,7 @@
       <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleDeafen}>{deafened ? 'Undeafen' : 'Deafen'}</button>
     </div>
     <p class="rounded p-1 {speaking.has(userId) ? 'ring-2 ring-green-500' : ''}">You{muted ? ' (muted)' : ''}</p>
+    <p class="text-sm text-neutral-400" role="status">Noise suppression: {mode}{modeReason ? ` (${modeReason})` : ''}</p>
   {/if}
   <ul class="space-y-1">
     {#each peers as p (p.user_id)}
