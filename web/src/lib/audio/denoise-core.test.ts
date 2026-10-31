@@ -18,6 +18,29 @@ const render = (core: DenoiseCore, input?: Float32Array) => {
 };
 
 describe('DenoiseCore', () => {
+  // Hold the queue at `frames` entries while time passes; returns total dropped after each call.
+  const hold = (t: ReturnType<typeof make>, frames: number, sec: number) => {
+    for (let i = 0; i < (sec * 48000) / Q; i++) {
+      while (t.core.queued < (frames - 0.5) * 480) t.core.reply(frame(1));
+      render(t.core);
+    }
+    return t.core.stats().droppedOut;
+  };
+
+  it('trims a queue held above 5 frames for 2 s: one frame per second', () => {
+    const t = make();
+    t.connect();
+    expect(hold(t, 6, 1.9)).toBe(0);
+    expect(hold(t, 6, 0.2)).toBe(1);
+    expect(hold(t, 6, 1)).toBe(2);
+  });
+
+  it('does not trim a queue at 5 frames', () => {
+    const t = make();
+    t.connect();
+    expect(hold(t, 5, 6)).toBe(0);
+  });
+
   it('passes the raw mic through before the worker is connected and after failure', () => {
     const t = make();
     expect(Array.from(render(t.core, blk(0.5)))).toEqual(Array.from(blk(0.5)));

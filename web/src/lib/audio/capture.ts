@@ -54,7 +54,9 @@ const MUTE_GRACE_MS = 3000;
 const stopAll = (m: MediaStream) => m.getTracks().forEach((t) => t.stop());
 
 /**
- * deepfilter: mic -> AudioWorklet <-MessageChannel-> DSP worker, worklet -> gain -> MediaStreamDestination.
+ * deepfilter: mic -> gain -> AudioWorklet <-MessageChannel-> DSP worker, gain -> worklet, worklet -> MediaStreamDestination.
+ * The boost sits before the denoiser, so the model and the worklet's input meter (and the mic-silent banner) see the boosted signal.
+ * Digital silence stays silent at any gain, so the banner means what it did.
  * browser/off: the raw mic track, so the fallback does not depend on the AudioContext or worklet.
  * `stream` is stable; its one track is swapped (and replaceTrack'd on the sender) when the mode changes.
  */
@@ -158,8 +160,8 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       const gain = ctx.createGain();
       gain.gain.value = 10 ** (s.inputBoostDb / 20);
       out = ctx.createMediaStreamDestination();
-      nodes.push(src, node, gain);
-      src.connect(node).connect(gain).connect(out);
+      nodes.push(src, gain, node);
+      src.connect(gain).connect(node).connect(out);
       const w = (worker = d.createWorker());
       const n = node;
       const set = () => w.postMessage({ type: 'set', atten: s.attenDb, beta: s.postFilter });

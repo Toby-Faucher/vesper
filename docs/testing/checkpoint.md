@@ -34,7 +34,7 @@ Record the git commit and URL in 11.1: `git rev-parse --short HEAD`.
 
 - In the room, button **Audio settings** opens Settings:
   - **Noise suppression**: DeepFilterNet (best) / Browser built-in / Off. This is `mode`.
-  - **Attenuation limit** (6 to 100 dB), **Post filter** (0 to 0.05), **Input boost** (0 to 20 dB). Only shown in DeepFilterNet mode.
+  - **Attenuation limit** (6 to 100 dB), **Post filter** (0 to 0.05), **Input boost** (0 to 12 dB). Only shown in DeepFilterNet mode.
   - **Bitrate** (32 to 510 kbps), **DTX** (applies at next join), **Browser noise suppression on top**, **Auto gain**. Echo cancellation is always on.
   - **Microphone**, **Speaker**, input level meter, **Mic test (hear yourself)**, **Push to talk**.
 - In the room, button **Diagnostics**: RTT, jitter, loss, send kbps, codec, ICE, path; an **Audio pipeline** section (state, input and output level, queue, underruns, drops, denoiser time, mic track, capture context); **Copy report**; **Test connection**.

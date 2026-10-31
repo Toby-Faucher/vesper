@@ -49,7 +49,7 @@ export function clampSettings(s: Partial<AudioSettings>): AudioSettings {
     mode: (['deepfilter', 'browser', 'off'] as unknown[]).includes(s.mode) ? s.mode! : D.mode,
     attenDb: num(s.attenDb, D.attenDb, 6, 100),
     postFilter: num(s.postFilter, D.postFilter, 0, 0.05),
-    inputBoostDb: num(s.inputBoostDb, D.inputBoostDb, 0, 20),
+    inputBoostDb: num(s.inputBoostDb, D.inputBoostDb, 0, 12),
     bitrateKbps: num(s.bitrateKbps, D.bitrateKbps, 32, 510),
     dtx: bool(s.dtx, D.dtx),
     echoCancellation: true,

@@ -297,6 +297,17 @@ describe('createCapture', () => {
     cap.close();
   });
 
+  it('puts the boost gain before the worklet', async () => {
+    const t = setup();
+    const g = { ...node(), gain: { value: 1 } };
+    t.ctx.createGain = () => g;
+    await createCapture(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, inputBoostDb: 6 }), t.deps);
+    const src = t.ctx.createMediaStreamSource.mock.results[0].value;
+    expect(src.connect).toHaveBeenCalledWith(g);
+    expect(g.connect).toHaveBeenCalledWith(t.worklets[0]);
+    expect(g.gain.value).toBeCloseTo(1.995, 2);
+  });
+
   it('notes that input boost is ignored outside deepfilter mode', async () => {
     const t = setup();
     const browser = clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'browser' });
