@@ -9,7 +9,7 @@ axum = { version = "0.8", features = ["ws"] }
 serde_json.workspace = true
 sha2 = "0.10"
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
-tower-http = { version = "0.6", default-features = false, features = ["fs"] }
+tower-http = { version = "0.7", default-features = false, features = ["fs"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 vesper-protocol.workspace = true
