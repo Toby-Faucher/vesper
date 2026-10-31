@@ -32,7 +32,7 @@ The "Not verified" list at the end says what was only read.
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, and the limits `MAX_NAME_CHARS` (32) and `MAX_MSG_BYTES` (64 KiB). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
 | `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher), `ws.rs` (one socket), `rooms.rs` (presence and session numbers), `public_addr.rs` (advertised address). |
-| `vesper-dsp` | Wrapper over DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
+| `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
 ## Message flow
@@ -90,6 +90,14 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), Dee
   suppression is on only in `browser` mode, or in `deepfilter` mode if the user turned it on.
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is
   also set on the sender (`web/src/lib/devices.ts`). Remote SDP is tuned too, then applied (`signaling.ts`).
+
+## DSP pipeline (Rust)
+
+`vesper-dsp` runs each 10 ms frame through a `Pipeline`: input gain, pre stages, DeepFilterNet, post stages. A `PipelineConfig`
+sets each step, and its default gives the same output as the shipped denoiser bit for bit (a golden hash test pins it). The WASM
+`WasmDenoiser` is backed by the same `Pipeline`, so an audio experiment changes Rust only and never needs a change under `web/`.
+DeepFilterNet3 delays the output by 1440 samples (30 ms), which a test checks against a measured delay to within one sample; `latency_samples()` reports what our own stages add on top.
+The `serde` feature lets the audio lab load configs from TOML. It is off by default and the WASM build does not use it.
 
 ## Fallback logic
 

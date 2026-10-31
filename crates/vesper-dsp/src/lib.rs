@@ -1,10 +1,14 @@
 #![forbid(unsafe_code)]
-//! Thin wrapper over DeepFilterNet3 (tract runtime) for 10 ms mono frames at 48 kHz.
+//! The capture DSP path around DeepFilterNet3 (tract runtime) for 10 ms mono frames at 48 kHz.
 
 #[cfg(feature = "tract")]
 mod denoiser;
 #[cfg(feature = "tract")]
 pub use denoiser::Denoiser;
+#[cfg(feature = "tract")]
+mod pipeline;
+#[cfg(feature = "tract")]
+pub use pipeline::{Pipeline, PipelineConfig, PostConfig, PreConfig};
 #[cfg(feature = "wasm")]
 mod wasm;
 
@@ -32,15 +36,21 @@ impl std::error::Error for DspError {}
 mod tests {
     use super::*;
 
-    fn denoiser() -> Denoiser {
+    fn model() -> Vec<u8> {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/model/DeepFilterNet3_onnx.tar.gz"
         );
-        let bytes = std::fs::read(path).unwrap_or_else(|e| {
-            panic!("model missing at {path} ({e}); run scripts/fetch-model.sh")
-        });
-        Denoiser::new(&bytes, 100.0, 0.0).unwrap()
+        std::fs::read(path)
+            .unwrap_or_else(|e| panic!("model missing at {path} ({e}); run scripts/fetch-model.sh"))
+    }
+
+    fn denoiser() -> Denoiser {
+        Denoiser::new(&model(), 100.0, 0.0).unwrap()
+    }
+
+    fn pipeline(cfg: &PipelineConfig) -> Pipeline {
+        Pipeline::new(&model(), cfg).unwrap()
     }
 
     /// Output of the shipped `Denoiser` (100 dB, beta 0.02) on `golden_input`, taken before `Pipeline` existed.
@@ -85,6 +95,91 @@ mod tests {
         d.set_post_filter(0.02);
         let h = hash_output(|f| d.process(f).unwrap(), &golden_input());
         assert_eq!(h, GOLDEN_HASH, "got {h:#018x}");
+    }
+
+    #[test]
+    fn default_pipeline_matches_golden_hash() {
+        let mut p = pipeline(&PipelineConfig::default());
+        let h = hash_output(|f| p.process(f).unwrap(), &golden_input());
+        assert_eq!(h, GOLDEN_HASH, "got {h:#018x}");
+        assert_eq!(p.latency_samples(), 0);
+    }
+
+    #[test]
+    fn pipeline_rejects_wrong_frame_length() {
+        let mut p = pipeline(&PipelineConfig::default());
+        assert_eq!(
+            p.process(&[0.0; HOP + 1]),
+            Err(DspError::BadFrameLength { got: HOP + 1 })
+        );
+    }
+
+    #[test]
+    fn input_gain_equals_scaling_the_input() {
+        let g = 10f32.powf(6.0 / 20.0);
+        let scaled: Vec<f32> = golden_input().iter().map(|x| x * g).collect();
+        let mut old = pipeline(&PipelineConfig::default());
+        let want = hash_output(|f| old.process(f).unwrap(), &scaled);
+        let mut p = pipeline(&PipelineConfig {
+            input_gain_db: 6.0,
+            ..PipelineConfig::default()
+        });
+        assert_eq!(
+            hash_output(|f| p.process(f).unwrap(), &golden_input()),
+            want
+        );
+        assert_ne!(want, GOLDEN_HASH);
+    }
+
+    #[test]
+    fn atten_limit_keeps_more_noise() {
+        let rms = |atten_db: f32| {
+            let mut p = pipeline(&PipelineConfig {
+                atten_db,
+                ..PipelineConfig::default()
+            });
+            let mut s: u32 = 777;
+            let mut e = 0f64;
+            for i in 0..300 {
+                let f: Vec<f32> = (0..HOP)
+                    .map(|_| {
+                        s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+                        ((s >> 8) as f32 / (1u32 << 23) as f32 - 1.0) * 0.05
+                    })
+                    .collect();
+                let out = p.process(&f).unwrap();
+                if i >= 50 {
+                    e += out.iter().map(|x| (*x as f64).powi(2)).sum::<f64>();
+                }
+            }
+            (e / (250 * HOP) as f64).sqrt()
+        };
+        let (limited, free) = (rms(12.0), rms(100.0));
+        assert!(limited > free, "12 dB {limited} vs 100 dB {free}");
+    }
+
+    #[test]
+    fn model_latency_matches_the_measured_delay() {
+        let mut p = pipeline(&PipelineConfig::default());
+        let input = golden_input();
+        let out: Vec<f32> = input
+            .chunks(HOP)
+            .flat_map(|f| p.process(f).unwrap())
+            .collect();
+        let corr = |lag: usize| -> f64 {
+            (lag..out.len())
+                .map(|i| out[i] as f64 * input[i - lag] as f64)
+                .sum()
+        };
+        let best = (0..3 * HOP)
+            .max_by(|a, b| corr(*a).total_cmp(&corr(*b)))
+            .unwrap();
+        // the sweep dominates the denoised output, so the peak is broad: allow one sample
+        assert!(
+            best.abs_diff(p.model_latency_samples()) <= 1,
+            "measured {best}, reported {}",
+            p.model_latency_samples()
+        );
     }
 
     #[test]

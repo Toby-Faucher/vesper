@@ -2506,6 +2506,7 @@ version = "0.1.0"
 dependencies = [
  "deep_filter",
  "ndarray",
+ "serde",
  "tract-core",
  "wasm-bindgen",
 ]
