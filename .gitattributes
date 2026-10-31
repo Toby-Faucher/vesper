@@ -4,5 +4,6 @@
 *.onnx binary
 *.tar.gz binary
 web/src/lib/gen/** linguist-generated=true
-Cargo.lock -diff linguist-generated=true
-web/package-lock.json -diff linguist-generated=true
+# Lockfiles keep text diffs so reviewers see version changes; GitHub still collapses them.
+Cargo.lock linguist-generated=true
+web/package-lock.json linguist-generated=true
