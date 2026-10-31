@@ -4,6 +4,7 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 use str0m::change::{SdpAnswer, SdpPendingOffer};
 use str0m::media::{Direction, MediaData, MediaKind, Mid};
@@ -70,7 +71,11 @@ pub(crate) struct Client {
     events: UnboundedSender<SfuEvent>,
     /// Candidates this session was created with (see `local_addr_for`).
     advertised: Vec<SocketAddr>,
-    pending: Option<SdpPendingOffer>,
+    /// Our outstanding offer and when it was sent.
+    pending: Option<(SdpPendingOffer, Instant)>,
+    answer_timeout: Duration,
+    /// The shared socket is IPv6 (dual-stack), so IPv4 peers need v4-mapped destinations.
+    socket_v6: bool,
     /// The client owns the strong refs to its incoming tracks; others hold weak ones.
     pub tracks_in: Vec<Arc<TrackIn>>,
     tracks_out: Vec<TrackOut>,
@@ -83,6 +88,8 @@ impl Client {
         user: String,
         events: UnboundedSender<SfuEvent>,
         advertised: Vec<SocketAddr>,
+        socket_v6: bool,
+        answer_timeout: Duration,
     ) -> Client {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
         Client {
@@ -93,6 +100,8 @@ impl Client {
             events,
             advertised,
             pending: None,
+            answer_timeout,
+            socket_v6,
             tracks_in: vec![],
             tracks_out: vec![],
         }
@@ -105,7 +114,7 @@ impl Client {
         self.advertised
             .iter()
             .copied()
-            .find(|a| a.is_ipv4() == source.is_ipv4())
+            .find(|a| a.is_ipv4() == source.ip().to_canonical().is_ipv4())
             .unwrap_or(socket_addr)
     }
 
@@ -129,6 +138,14 @@ impl Client {
         if !self.rtc.is_alive() {
             return Propagated::Noop;
         }
+        if let Some((_, sent)) = &self.pending
+            && sent.elapsed() > self.answer_timeout
+        {
+            // No more offers can go out until this one is answered: end it so the server rejoins.
+            warn!("client {} did not answer an offer in time", self.user);
+            self.rtc.disconnect();
+            return Propagated::Noop;
+        }
         if self.negotiate_if_needed() {
             return Propagated::Noop;
         }
@@ -145,7 +162,13 @@ impl Client {
     fn handle_output(&mut self, output: Output, socket: &UdpSocket) -> Propagated {
         match output {
             Output::Transmit(t) => {
-                if let Err(e) = socket.send_to(&t.contents, t.destination) {
+                let destination = match t.destination {
+                    SocketAddr::V4(v4) if self.socket_v6 => {
+                        SocketAddr::new(v4.ip().to_ipv6_mapped().into(), v4.port())
+                    }
+                    d => d,
+                };
+                if let Err(e) = socket.send_to(&t.contents, destination) {
                     // UDP send errors (e.g. ICMP unreachable) are transient; ICE handles loss.
                     debug!("send_to {} failed: {e}", t.destination);
                 }
@@ -225,13 +248,13 @@ impl Client {
         let Some((offer, pending)) = change.apply() else {
             return false;
         };
-        self.pending = Some(pending);
+        self.pending = Some((pending, Instant::now()));
         let _ = self.events.send(SfuEvent::Offer(offer.to_sdp_string()));
         true
     }
 
     pub fn handle_answer(&mut self, sdp: &str) {
-        let Some(pending) = self.pending.take() else {
+        let Some((pending, _)) = self.pending.take() else {
             debug!("client {} sent an answer with no offer pending", self.user);
             return;
         };
@@ -261,6 +284,15 @@ impl Client {
     }
 
     pub fn handle_track_open(&mut self, track_in: Weak<TrackIn>) {
+        // A client joining while a TrackOpen is still queued subscribes from `tracks_in` at join
+        // and then gets the TrackOpen too; a second m-line would be a silent duplicate stream.
+        if self
+            .tracks_out
+            .iter()
+            .any(|t| Weak::ptr_eq(&t.track_in, &track_in))
+        {
+            return;
+        }
         self.tracks_out.push(TrackOut {
             track_in,
             state: TrackOutState::ToOpen,
@@ -290,5 +322,34 @@ impl Client {
             warn!("client {} write failed: {e:?}", self.user);
             self.rtc.disconnect();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn track_open_is_idempotent() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let rtc = Rtc::builder().build(Instant::now());
+        let mut c = Client::new(
+            rtc,
+            "r".into(),
+            "b".into(),
+            tx,
+            vec![],
+            false,
+            Duration::MAX,
+        );
+        let track = Arc::new(TrackIn {
+            origin: ClientId(u64::MAX),
+            user: "a".into(),
+            mid: Mid::from("0"),
+        });
+        // The join-time subscription and the queued TrackOpen deliver the same track.
+        c.handle_track_open(Arc::downgrade(&track));
+        c.handle_track_open(Arc::downgrade(&track));
+        assert_eq!(c.tracks_out.len(), 1);
     }
 }

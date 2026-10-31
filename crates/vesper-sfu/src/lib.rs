@@ -12,16 +12,32 @@ mod room;
 #[cfg(feature = "test-support")]
 pub mod testing;
 
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::mpsc;
+use std::time::Duration;
 
 use tokio::sync::{mpsc as tmpsc, oneshot};
 
+/// Build with struct syntax plus `..Default::default()` for the fields you don't set.
+#[derive(Debug, Clone)]
 pub struct SfuConfig {
     /// Address the single media UDP socket binds to.
     pub bind: SocketAddr,
     /// Addresses clients can reach that socket on; each becomes a host ICE candidate.
     pub advertised: Vec<SocketAddr>,
+    /// How long a client may take to answer an [`SfuEvent::Offer`] before its session is closed.
+    pub answer_timeout: Duration,
+}
+
+impl Default for SfuConfig {
+    /// Binds `0.0.0.0:0` with no advertised addresses (set them!) and a 10 s answer timeout.
+    fn default() -> Self {
+        SfuConfig {
+            bind: (Ipv4Addr::UNSPECIFIED, 0).into(),
+            advertised: vec![],
+            answer_timeout: Duration::from_secs(10),
+        }
+    }
 }
 
 pub struct Sfu;
@@ -32,10 +48,11 @@ impl Sfu {
     pub fn spawn(cfg: SfuConfig) -> std::io::Result<SfuHandle> {
         let socket = UdpSocket::bind(cfg.bind)?;
         let local_addr = socket.local_addr()?;
+        room::check_advertised(local_addr, &cfg.advertised);
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("vesper-sfu".into())
-            .spawn(move || room::run(socket, rx, cfg.advertised))?;
+            .spawn(move || room::run(socket, rx, cfg))?;
         Ok(SfuHandle { tx, local_addr })
     }
 }
@@ -56,7 +73,8 @@ pub struct JoinOk {
 pub enum SfuEvent {
     /// SFU-initiated renegotiation (tracks added or stopped); answer via [`SfuHandle::answer`].
     Offer(String),
-    /// The session ended: ICE timeout, error, [`SfuHandle::leave`], or a new join by the same user.
+    /// The session ended: ICE timeout, error, an offer left unanswered for
+    /// [`SfuConfig::answer_timeout`], [`SfuHandle::leave`], or a new join by the same user.
     Closed,
 }
 
@@ -96,7 +114,8 @@ pub(crate) enum Command {
 
 impl SfuHandle {
     /// Start a session for `user` in `room` from the client's SDP offer. A second join by the
-    /// same user replaces (and closes) the first session.
+    /// same user replaces (and closes) the first session. The offer must carry exactly one audio
+    /// m-line (no video, no data channel); anything else is [`JoinError::BadOffer`].
     pub async fn join(
         &self,
         room: String,
@@ -113,7 +132,9 @@ impl SfuHandle {
         rx.await.unwrap_or(Err(JoinError::Shutdown))
     }
 
-    /// Answer to the latest [`SfuEvent::Offer`] sent to `user`. A malformed answer closes the session.
+    /// Answer to the latest [`SfuEvent::Offer`] sent to `user`. A malformed answer closes the
+    /// session, and so does no answer within [`SfuConfig::answer_timeout`]: the SFU makes no
+    /// further offers to a client while one is outstanding, so it cannot be left waiting forever.
     pub fn answer(&self, user: &str, answer_sdp: String) {
         self.send(Command::Answer {
             user: user.into(),

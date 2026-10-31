@@ -16,15 +16,9 @@ fn spawn_sfu(advertised: Vec<SocketAddr>) -> SfuHandle {
     Sfu::spawn(SfuConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         advertised,
+        ..Default::default()
     })
     .expect("sfu spawns")
-}
-
-/// An SFU reachable on loopback: its own socket address is the only candidate.
-fn loopback_sfu() -> SfuHandle {
-    let h = spawn_sfu(vec![]);
-    h.set_advertised(vec![h.local_addr()]);
-    h
 }
 
 #[derive(Debug, Clone)]
@@ -60,64 +54,123 @@ impl Peer {
     }
 }
 
-/// Join like the server will: send the offer, apply the answer, then answer every SFU offer.
-async fn join(h: &SfuHandle, room: &str, user: &str) -> Peer {
-    let client = Arc::new(FakeClient::new().expect("fake client"));
-    let ok = h
-        .join(room.into(), user.into(), client.offer().to_string())
-        .await
-        .expect("join");
-    client
-        .accept_answer(&ok.answer_sdp)
-        .expect("answer accepted");
+/// One test's SFU plus a sink for errors raised in background answer tasks, so a failure there
+/// shows up as itself instead of as a later timeout.
+struct Ctx {
+    h: SfuHandle,
+    errors: Arc<Mutex<Vec<String>>>,
+}
 
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let (c, l, h, user) = (client.clone(), log.clone(), h.clone(), user.to_string());
-    let mut events = ok.events;
-    tokio::spawn(async move {
-        while let Some(ev) = events.recv().await {
-            match ev {
-                SfuEvent::Offer(sdp) => {
-                    let answer = c.accept_offer(&sdp).expect("sfu offer accepted");
-                    h.answer(&user, answer);
-                    l.lock().unwrap().push(Logged::Offer(sdp));
-                }
-                SfuEvent::Closed => l.lock().unwrap().push(Logged::Closed),
-            }
+impl Ctx {
+    fn new(cfg: SfuConfig) -> Ctx {
+        Ctx {
+            h: Sfu::spawn(cfg).expect("sfu spawns"),
+            errors: Arc::default(),
         }
-    });
-    Peer { client, log }
-}
-
-async fn wait_until(what: &str, timeout: Duration, mut cond: impl FnMut() -> bool) {
-    let deadline = Instant::now() + timeout;
-    while !cond() {
-        assert!(Instant::now() < deadline, "timed out waiting for: {what}");
-        tokio::time::sleep(Duration::from_millis(10)).await;
     }
-}
 
-/// Wait until `listener` is connected and has negotiated `tracks` incoming tracks.
-async fn ready(listener: &Peer, tracks: usize) {
-    wait_until("connected", CONNECT, || listener.client.is_connected()).await;
-    wait_until("remote tracks", CONNECT, || {
-        listener.client.remote_tracks() == tracks
-    })
-    .await;
+    /// An SFU reachable on loopback: its own socket address is the only candidate.
+    fn loopback() -> Ctx {
+        let t = Ctx::new(SfuConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        });
+        t.h.set_advertised(vec![t.h.local_addr()]);
+        t
+    }
+
+    /// Join like the server will: send the offer, apply the answer, then answer every SFU offer.
+    async fn join(&self, room: &str, user: &str) -> Peer {
+        self.join_with(room, user, true).await
+    }
+
+    /// Like `join`, but never answers SFU offers (they are still logged).
+    async fn join_silent(&self, room: &str, user: &str) -> Peer {
+        self.join_with(room, user, false).await
+    }
+
+    async fn join_with(&self, room: &str, user: &str, answer: bool) -> Peer {
+        let client = Arc::new(FakeClient::new().expect("fake client"));
+        let ok = self
+            .h
+            .join(room.into(), user.into(), client.offer().to_string())
+            .await
+            .expect("join");
+        client
+            .accept_answer(&ok.answer_sdp)
+            .expect("answer accepted");
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (c, l, h, user) = (
+            client.clone(),
+            log.clone(),
+            self.h.clone(),
+            user.to_string(),
+        );
+        let errors = self.errors.clone();
+        let mut events = ok.events;
+        tokio::spawn(async move {
+            while let Some(ev) = events.recv().await {
+                match ev {
+                    SfuEvent::Offer(sdp) => {
+                        if answer {
+                            match c.accept_offer(&sdp) {
+                                Ok(a) => h.answer(&user, a),
+                                Err(e) => {
+                                    errors
+                                        .lock()
+                                        .unwrap()
+                                        .push(format!("{user} rejected sfu offer: {e}\n{sdp}"));
+                                    return;
+                                }
+                            }
+                        }
+                        l.lock().unwrap().push(Logged::Offer(sdp));
+                    }
+                    SfuEvent::Closed => l.lock().unwrap().push(Logged::Closed),
+                }
+            }
+        });
+        Peer { client, log }
+    }
+
+    async fn wait_until(&self, what: &str, timeout: Duration, mut cond: impl FnMut() -> bool) {
+        let deadline = Instant::now() + timeout;
+        while !cond() {
+            if let Some(e) = self.errors.lock().unwrap().first() {
+                panic!("while waiting for {what}: {e}");
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for: {what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Wait until `listener` is connected and has negotiated `tracks` incoming tracks.
+    async fn ready(&self, listener: &Peer, tracks: usize) {
+        self.wait_until("connected", CONNECT, || listener.client.is_connected())
+            .await;
+        self.wait_until("remote tracks", CONNECT, || {
+            listener.client.remote_tracks() == tracks
+        })
+        .await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn forwards_audio_between_two_clients() {
-    let h = loopback_sfu();
-    let a = join(&h, "r", "a").await;
-    let b = join(&h, "r", "b").await;
-    wait_until("a connected", CONNECT, || a.client.is_connected()).await;
-    ready(&b, 1).await;
+    let t = Ctx::loopback();
+    let a = t.join("r", "a").await;
+    let b = t.join("r", "b").await;
+    t.wait_until("a connected", CONNECT, || a.client.is_connected())
+        .await;
+    t.ready(&b, 1).await;
 
     a.client.send_audio(50);
-    wait_until("a sent 50", CONNECT, || a.client.sent().len() == 50).await;
+    t.wait_until("a sent 50", CONNECT, || a.client.sent().len() == 50)
+        .await;
     let sent = a.client.sent();
-    wait_until("b received 45", CONNECT, || b.client.received().len() >= 45).await;
+    t.wait_until("b received 45", CONNECT, || b.client.received().len() >= 45)
+        .await;
 
     for p in b.client.received() {
         assert!(sent.contains(&p), "received bytes not sent verbatim: {p:?}");
@@ -126,14 +179,15 @@ async fn forwards_audio_between_two_clients() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sender_does_not_hear_itself() {
-    let h = loopback_sfu();
-    let a = join(&h, "r", "a").await;
-    let b = join(&h, "r", "b").await;
-    ready(&a, 1).await;
-    ready(&b, 1).await;
+    let t = Ctx::loopback();
+    let a = t.join("r", "a").await;
+    let b = t.join("r", "b").await;
+    t.ready(&a, 1).await;
+    t.ready(&b, 1).await;
 
     a.client.send_audio(50);
-    wait_until("b received 45", CONNECT, || b.client.received().len() >= 45).await;
+    t.wait_until("b received 45", CONNECT, || b.client.received().len() >= 45)
+        .await;
 
     // A's only incoming track is B's (silent); its own track never comes back.
     assert_eq!(a.client.remote_tracks(), 1);
@@ -142,17 +196,19 @@ async fn sender_does_not_hear_itself() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn rooms_are_isolated() {
-    let h = loopback_sfu();
+    let t = Ctx::loopback();
     // x joins between y1 and y2: covers both the join-time and the propagated subscription path.
-    let y1 = join(&h, "y", "y1").await;
-    let x = join(&h, "x", "x1").await;
-    let y2 = join(&h, "y", "y2").await;
-    wait_until("x connected", CONNECT, || x.client.is_connected()).await;
-    wait_until("y1 connected", CONNECT, || y1.client.is_connected()).await;
-    ready(&y2, 1).await;
+    let y1 = t.join("y", "y1").await;
+    let x = t.join("x", "x1").await;
+    let y2 = t.join("y", "y2").await;
+    t.wait_until("x connected", CONNECT, || x.client.is_connected())
+        .await;
+    t.wait_until("y1 connected", CONNECT, || y1.client.is_connected())
+        .await;
+    t.ready(&y2, 1).await;
 
     y1.client.send_audio(50);
-    wait_until("y2 received 45", CONNECT, || {
+    t.wait_until("y2 received 45", CONNECT, || {
         y2.client.received().len() >= 45
     })
     .await;
@@ -164,18 +220,18 @@ async fn rooms_are_isolated() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn abrupt_disconnect_closes_client() {
-    let h = loopback_sfu();
-    let a = join(&h, "r", "a").await;
-    let b = join(&h, "r", "b").await;
-    ready(&a, 1).await;
-    ready(&b, 1).await;
+    let t = Ctx::loopback();
+    let a = t.join("r", "a").await;
+    let b = t.join("r", "b").await;
+    t.ready(&a, 1).await;
+    t.ready(&b, 1).await;
     let offers_before = b.offers().len();
 
     // Vanish without a goodbye: no more UDP from A at all.
     a.client.stop();
 
-    wait_until("a closed", ICE_TIMEOUT, || a.closed()).await;
-    wait_until("b offered a's track stopped", CONNECT, || {
+    t.wait_until("a closed", ICE_TIMEOUT, || a.closed()).await;
+    t.wait_until("b offered a's track stopped", CONNECT, || {
         b.offers()[offers_before..]
             .iter()
             .any(|sdp| sdp.contains("m=audio 0 "))
@@ -186,10 +242,10 @@ async fn abrupt_disconnect_closes_client() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn forwarded_track_msid_is_sender_user_id() {
-    let h = loopback_sfu();
-    let _alice = join(&h, "r", "alice-42").await;
-    let bob = join(&h, "r", "bob-7").await;
-    ready(&bob, 1).await;
+    let t = Ctx::loopback();
+    let _alice = t.join("r", "alice-42").await;
+    let bob = t.join("r", "bob-7").await;
+    t.ready(&bob, 1).await;
 
     let offers = bob.offers();
     let msid_streams: Vec<&str> = offers
@@ -202,6 +258,13 @@ async fn forwarded_track_msid_is_sender_user_id() {
         msid_streams.contains(&"alice-42"),
         "no a=msid with alice's user id in bob's offers: {offers:#?}"
     );
+    // The latest offer lists every m-line: alice's stream must be in exactly one.
+    let latest = offers.last().unwrap();
+    let alice_lines = latest
+        .lines()
+        .filter(|l| l.starts_with("a=msid:alice-42 "))
+        .count();
+    assert_eq!(alice_lines, 1, "duplicate m-lines for alice:\n{latest}");
     assert!(
         !msid_streams.contains(&"bob-7"),
         "bob was offered his own stream"
@@ -258,10 +321,116 @@ async fn advertised_addresses_appear_as_candidates() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn bad_offer_is_rejected() {
-    let h = loopback_sfu();
-    let err = h
-        .join("r".into(), "u".into(), "not sdp".into())
-        .await
-        .unwrap_err();
+    let t = Ctx::loopback();
+    let err =
+        t.h.join("r".into(), "u".into(), "not sdp".into())
+            .await
+            .unwrap_err();
     assert!(matches!(err, vesper_sfu::JoinError::BadOffer(_)), "{err:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unanswered_offer_closes_client() {
+    let t = Ctx::new(SfuConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        answer_timeout: Duration::from_millis(500),
+        ..Default::default()
+    });
+    t.h.set_advertised(vec![t.h.local_addr()]);
+    let a = t.join_silent("r", "a").await;
+    let b = t.join("r", "b").await;
+
+    // B's arrival makes the SFU offer A a track; A never answers.
+    t.wait_until("a offered b's track", CONNECT, || !a.offers().is_empty())
+        .await;
+    t.wait_until("a closed", CONNECT, || a.closed()).await;
+    assert!(!b.closed());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leave_after_rejoin_closes_the_live_session() {
+    let t = Ctx::loopback();
+    let first = t.join("r", "u").await;
+
+    // Re-join and leave back to back, so both usually land in one command drain while the
+    // superseded session is still in the SFU's list.
+    let c = FakeClient::new().unwrap();
+    let (rejoin, ()) = tokio::join!(
+        t.h.join("r".into(), "u".into(), c.offer().to_string()),
+        async { t.h.leave("u") }
+    );
+    let mut events = rejoin.expect("rejoin").events;
+
+    t.wait_until("first closed", CONNECT, || first.closed())
+        .await;
+    let ev = tokio::time::timeout(CONNECT, events.recv()).await;
+    assert_eq!(
+        ev,
+        Ok(Some(SfuEvent::Closed)),
+        "leave did not end the live session"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hostile_offers_are_rejected() {
+    use str0m::Rtc;
+    use str0m::media::{Direction, MediaKind};
+
+    let t = Ctx::loopback();
+    let offer = |media: &[MediaKind]| {
+        let mut rtc = Rtc::builder().build(Instant::now());
+        let mut change = rtc.sdp_api();
+        for kind in media {
+            change.add_media(*kind, Direction::RecvOnly, None, None, None);
+        }
+        change.apply().unwrap().0.to_sdp_string()
+    };
+
+    let many_audio = offer(&[MediaKind::Audio; 50]);
+    let with_video = offer(&[MediaKind::Audio, MediaKind::Video]);
+    for (name, sdp) in [
+        ("50 audio m-lines", many_audio),
+        ("audio + video", with_video),
+    ] {
+        let err = t.h.join("r".into(), "evil".into(), sdp).await.unwrap_err();
+        assert!(
+            matches!(err, vesper_sfu::JoinError::BadOffer(_)),
+            "{name}: {err:?}"
+        );
+    }
+}
+
+/// Media flows when the socket is bound to a wildcard address, so packets arrive "on" an
+/// address that is not itself a candidate (the Docker / NAT case).
+async fn forwards_with_bind(bind: &str) {
+    let t = Ctx::new(SfuConfig {
+        bind: bind.parse().unwrap(),
+        ..Default::default()
+    });
+    t.h.set_advertised(vec![SocketAddr::new(
+        "127.0.0.1".parse().unwrap(),
+        t.h.local_addr().port(),
+    )]);
+    let a = t.join("r", "a").await;
+    let b = t.join("r", "b").await;
+    t.wait_until("a connected", CONNECT, || a.client.is_connected())
+        .await;
+    t.ready(&b, 1).await;
+    a.client.send_audio(20);
+    t.wait_until("b received 15", CONNECT, || b.client.received().len() >= 15)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wildcard_ipv4_bind_uses_advertised_address() {
+    forwards_with_bind("0.0.0.0:0").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dual_stack_bind_serves_ipv4_clients() {
+    if std::net::UdpSocket::bind("[::]:0").is_err() {
+        eprintln!("skipping: no IPv6 on this host");
+        return;
+    }
+    forwards_with_bind("[::]:0").await;
 }

@@ -15,14 +15,15 @@ use tokio::sync::mpsc as tmpsc;
 use tracing::{debug, warn};
 
 use crate::client::{Client, Propagated};
-use crate::{Command, JoinError, JoinOk, SfuEvent};
+use crate::{Command, JoinError, JoinOk, SfuConfig, SfuEvent};
 
 /// Upper bound on one loop iteration's socket wait, so commands (joins, answers) are picked up
 /// within this time even when the socket is idle.
 const MAX_WAIT: Duration = Duration::from_millis(10);
 
-pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, mut advertised: Vec<SocketAddr>) {
+pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
     let socket_addr = socket.local_addr().expect("bound socket has an address");
+    let mut advertised = cfg.advertised;
     let mut clients: Vec<Client> = vec![];
     let mut to_propagate: VecDeque<Propagated> = VecDeque::new();
     let mut buf = vec![0; 2000];
@@ -39,7 +40,13 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, mut advertised: Vec<
 
         loop {
             match rx.try_recv() {
-                Ok(cmd) => handle_command(cmd, &mut clients, &mut advertised),
+                Ok(cmd) => handle_command(
+                    cmd,
+                    &mut clients,
+                    &mut advertised,
+                    socket_addr,
+                    cfg.answer_timeout,
+                ),
                 Err(TryRecvError::Empty) => break,
                 // Every SfuHandle is gone: shut down, telling clients their sessions ended.
                 Err(TryRecvError::Disconnected) => {
@@ -94,7 +101,21 @@ fn receive(data: &[u8], source: SocketAddr, destination: SocketAddr) -> Option<I
     ))
 }
 
+/// Warn about advertised sets clients cannot use to reach a socket bound to `bind`.
+pub(crate) fn check_advertised(bind: SocketAddr, advertised: &[SocketAddr]) {
+    // A [::] socket is dual-stack (on Linux by default), so it serves both families.
+    let dual_stack = bind.is_ipv6() && bind.ip().is_unspecified();
+    if advertised.is_empty() {
+        warn!("no advertised addresses: clients cannot reach the SFU on {bind}");
+    } else if !dual_stack && !advertised.iter().any(|a| a.is_ipv4() == bind.is_ipv4()) {
+        warn!("no advertised address {advertised:?} has the same IP family as bind {bind}");
+    }
+}
+
 fn route(data: &[u8], source: SocketAddr, socket_addr: SocketAddr, clients: &mut [Client]) {
+    // A dual-stack socket reports IPv4 peers as ::ffff:a.b.c.d; str0m and the SDP know them as
+    // plain IPv4, so canonicalize (Client maps them back when sending).
+    let source = SocketAddr::new(source.ip().to_canonical(), source.port());
     // rtc.accepts() demultiplexes on source address / STUN credentials, not destination.
     let Some(probe) = receive(data, source, socket_addr) else {
         return;
@@ -110,7 +131,13 @@ fn route(data: &[u8], source: SocketAddr, socket_addr: SocketAddr, clients: &mut
     }
 }
 
-fn handle_command(cmd: Command, clients: &mut Vec<Client>, advertised: &mut Vec<SocketAddr>) {
+fn handle_command(
+    cmd: Command,
+    clients: &mut Vec<Client>,
+    advertised: &mut Vec<SocketAddr>,
+    socket_addr: SocketAddr,
+    answer_timeout: Duration,
+) {
     match cmd {
         Command::Join {
             room,
@@ -118,14 +145,20 @@ fn handle_command(cmd: Command, clients: &mut Vec<Client>, advertised: &mut Vec<
             offer,
             reply,
         } => {
-            let (mut client, answer_sdp, events) =
-                match new_client(&room, &user, &offer, advertised) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let _ = reply.send(Err(e));
-                        return;
-                    }
-                };
+            let (mut client, answer_sdp, events) = match new_client(
+                &room,
+                &user,
+                &offer,
+                advertised,
+                socket_addr,
+                answer_timeout,
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                    return;
+                }
+            };
             if let Some(old) = clients.iter_mut().find(|c| c.user == user) {
                 // Superseded: the retain at the top of the loop closes and removes it.
                 old.rtc.disconnect();
@@ -152,11 +185,18 @@ fn handle_command(cmd: Command, clients: &mut Vec<Client>, advertised: &mut Vec<
             }
         }
         Command::Leave { user } => {
-            if let Some(c) = clients.iter_mut().find(|c| c.user == user) {
+            // Live only: after a re-join the dead old session may still be in the list.
+            if let Some(c) = clients
+                .iter_mut()
+                .find(|c| c.user == user && c.rtc.is_alive())
+            {
                 c.rtc.disconnect();
             }
         }
-        Command::SetAdvertised(addrs) => *advertised = addrs,
+        Command::SetAdvertised(addrs) => {
+            check_advertised(socket_addr, &addrs);
+            *advertised = addrs;
+        }
     }
 }
 
@@ -165,8 +205,20 @@ fn new_client(
     user: &str,
     offer: &str,
     advertised: &[SocketAddr],
+    socket_addr: SocketAddr,
+    answer_timeout: Duration,
 ) -> Result<(Client, String, tmpsc::UnboundedReceiver<SfuEvent>), JoinError> {
     let bad = |e: &dyn std::fmt::Display| JoinError::BadOffer(e.to_string());
+    // Untrusted input: a voice client needs exactly one audio m-line. More would let one client
+    // make the SFU hold (and offer others) arbitrarily many tracks.
+    let m_lines: Vec<&str> = offer.lines().filter(|l| l.starts_with("m=")).collect();
+    if m_lines.len() != 1 || !m_lines[0].starts_with("m=audio ") {
+        return Err(bad(&format!(
+            "expected exactly one audio m-line, got {} (first: {:?})",
+            m_lines.len(),
+            m_lines.first()
+        )));
+    }
     let offer = SdpOffer::from_sdp_string(offer).map_err(|e| bad(&e))?;
     let mut rtc = Rtc::builder()
         .clear_codecs()
@@ -182,7 +234,15 @@ fn new_client(
     }
     let answer = rtc.sdp_api().accept_offer(offer).map_err(|e| bad(&e))?;
     let (tx, events) = tmpsc::unbounded_channel();
-    let client = Client::new(rtc, room.into(), user.into(), tx, advertised.to_vec());
+    let client = Client::new(
+        rtc,
+        room.into(),
+        user.into(),
+        tx,
+        advertised.to_vec(),
+        socket_addr.is_ipv6(),
+        answer_timeout,
+    );
     Ok((client, answer.to_sdp_string(), events))
 }
 
@@ -197,6 +257,7 @@ fn poll_until_timeout(
         }
         match client.poll_output(socket) {
             Propagated::Timeout(t) => return t,
+            Propagated::Noop => {}
             p => queue.push_back(p),
         }
     }
