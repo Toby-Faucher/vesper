@@ -10,15 +10,16 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | E0-skip-thresholds | Disable DeepFilterNet's high-SNR stage skipping | accepted | +0.335 [+0.244, +0.427] | +0.284 [+0.202, +0.366] | +0.220 [+0.148, +0.291] | +5.24 [+3.62, +6.87] | 0.046 | 60 | exp/E0-skip-thresholds | 308df0b41800 | SPRT accepted H1 and every guard holds |
 
-## Rejected (2)
+## Rejected (3)
 
 | id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | E-neg | Self-test: a deliberately bad config (the gate must reject it) | rejected | -0.077 [-0.153, -0.002] | +0.261 [+0.174, +0.348] | -0.942 [-1.048, -0.836] | +1.30 [+0.36, +2.24] | 0.043 | 240 | exp/E-neg | 308df0b41800 | SPRT had no verdict but guards failed: sig_p10; Self-test written by the framework author: a bad config (atten_db 3, post_filter_beta 0.3), no code. |
 | E-null | Self-test: no change at all (the gate must not accept a no-op) | rejected | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.00 [+0.00, +0.00] | 0.043 | 20 | exp/E-null | 308df0b41800 | SPRT accepted H0 (no gain of delta1); Self-test written by the framework author: no code change and the default config. |
+| E1-gain6 | E1-gain6 | rejected | -0.039 [-0.071, -0.007] | -0.040 [-0.070, -0.010] | -0.057 [-0.092, -0.021] | +0.37 [+0.08, +0.66] | 0.047 | 120 | exp/E1-gain6 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
 
 ## Pending (1)
 
 | id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| E1-gain6 | <one-line hypothesis> | pending |  |  |  |  |  |  | exp/E1-gain6 |  |  |
+| E1-gain12 | <one-line hypothesis> | pending |  |  |  |  |  |  | exp/E1-gain12 |  |  |
