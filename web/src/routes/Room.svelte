@@ -7,6 +7,7 @@
   import { createCapture, type Capture } from '../lib/audio/capture';
   import { loadSettings, saveSettings, type AudioSettings } from '../lib/audio/settings';
   import { DEVICE_MESSAGES, applyBitrate, classifyMediaError, missingDevice, newInputs, trackLive, watchDevices } from '../lib/devices';
+  import { pttKeyEvent } from '../lib/audio/ptt';
   import Settings from './Settings.svelte';
   import type { DenoiseMode } from '../lib/audio/mode';
   import type { Peer } from '../lib/gen/Peer';
@@ -43,7 +44,7 @@
 
   // Push to talk is mute-gated: the track is live only when not muted and (PTT off or key held).
   function applyTrack() {
-    mic?.getAudioTracks().forEach((t) => (t.enabled = trackLive(muted, settings.pushToTalk.enabled, pttDown)));
+    capture?.setLive(trackLive(muted, settings.pushToTalk.enabled, pttDown));
   }
   function toggleMute() {
     muted = !muted;
@@ -65,17 +66,21 @@
     if (next.speakerId !== prev.speakerId)
       playback?.setSink(next.speakerId).catch(() => (error = 'could not switch speaker'));
   }
-  function onKey(down: boolean) {
+  function onKey(type: 'keydown' | 'keyup') {
     return (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (!settings.pushToTalk.enabled || e.code !== settings.pushToTalk.key || t?.matches('input,textarea,select')) return;
-      e.preventDefault(); // Space would otherwise click a focused button
-      pttDown = down;
-      applyTrack();
+      const r = pttKeyEvent(pttDown, {
+        type, code: e.code, pttKey: settings.pushToTalk.key, enabled: settings.pushToTalk.enabled,
+        typing: !!(e.target as HTMLElement | null)?.matches?.('input,textarea,select'), capturing: false, // Settings stops keys itself while capturing
+      });
+      if (r.prevent) e.preventDefault();
+      if (r.held !== pttDown) {
+        pttDown = r.held;
+        applyTrack();
+      }
     };
   }
   onMount(() => {
-    const [kd, ku] = [onKey(true), onKey(false)];
+    const [kd, ku] = [onKey('keydown'), onKey('keyup')];
     window.addEventListener('keydown', kd);
     window.addEventListener('keyup', ku);
     // keyup never arrives if focus leaves while the key is held, which would leave the mic hot.
@@ -87,9 +92,10 @@
       if (joined && missingDevice(list, settings.micId)) deviceError = DEVICE_MESSAGES.unplugged;
       const fresh = newInputs(known, list);
       if (joined && fresh.length) offered = fresh[0];
+      // Heals a pre-permission (unlabelled) list as soon as labels show up.
       if (list.some((d) => d.kind === 'audioinput' && d.deviceId && d.label)) known = list;
     });
-    void navigator.mediaDevices.enumerateDevices().then((l) => (known = l), () => {});
+    void navigator.mediaDevices.enumerateDevices().then((l) => { if (!known.length) known = l; }, () => {});
     return () => {
       stop();
       window.removeEventListener('keydown', kd);
@@ -141,7 +147,7 @@
     else console.warn('navigator.locks missing: audio may stop when the tab is backgrounded');
     void playback.setSink(settings.speakerId).catch(() => {});
     // Called before any await: it creates its AudioContext.
-    const capturing = createCapture(settings);
+    const capturing = createCapture(settings, { startLive: trackLive(false, settings.pushToTalk.enabled, false) });
     mode = settings.mode;
     try {
       const cap = (capture = await capturing);
@@ -177,7 +183,7 @@
         mode = m;
         modeReason = reason;
         deviceError = reason.startsWith('microphone lost') ? DEVICE_MESSAGES[classifyMediaError(reason) === 'unknown' ? 'unplugged' : classifyMediaError(reason)] : '';
-        if (!deviceError) applyTrack();
+        applyTrack(); // also after a device error: the new/absent track must still obey mute/PTT
         // The speaking analyser is bound to the old track; re-tap the swapped one.
         playback?.remove(r.userId);
         playback?.addLocal(r.userId, stream);

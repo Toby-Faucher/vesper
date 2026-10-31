@@ -52,6 +52,7 @@ function setup(over: Partial<CaptureDeps> = {}) {
       return w as unknown as Worker;
     },
     readyTimeoutMs: 5000,
+    startLive: true,
     ...over,
   };
   const sender = { track: null as any, replaceTrack: vi.fn(async (t: any) => { sender.track = t; }) };
@@ -85,6 +86,19 @@ describe('createCapture', () => {
     cap.close();
   });
 
+  it('starts silent when startLive is false, and new tracks after a mic switch stay gated', async () => {
+    const t = setup({ startLive: false });
+    const cap = await createCapture(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'browser' }), t.deps);
+    expect(t.mics[0].t.enabled).toBe(false);
+    cap.setLive(true);
+    expect(t.mics[0].t.enabled).toBe(true);
+    cap.setLive(false);
+    cap.setSettings(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'browser', micId: 'usb' }));
+    await flush();
+    expect(t.mics[1].t.enabled).toBe(false);
+    cap.close();
+  });
+
   it('worker error: falls back to browser NS, replaces the track, keeps mute, reports reason', async () => {
     const t = setup();
     const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
@@ -92,7 +106,7 @@ describe('createCapture', () => {
     const seen: [string, string][] = [];
     cap.onModeChange((m, r) => seen.push([m, r]));
     t.workers[0].onmessage({ data: { type: 'ready' } });
-    cap.stream.getAudioTracks()[0].enabled = false; // muted
+    cap.setLive(false); // muted
     t.workers[0].onmessage({ data: { type: 'error', message: 'wasm panicked' } });
     await flush();
     expect(t.mics[1].c).toMatchObject({ echoCancellation: true, noiseSuppression: true });

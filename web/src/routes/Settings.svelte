@@ -97,6 +97,7 @@
     e.preventDefault();
     capturingKey = false;
     set({ pushToTalk: { ...settings.pushToTalk, key: e.code } });
+    (e.currentTarget as HTMLElement).blur(); // keep focus off the button so the PTT key reaches the window handler
   }
 
   const pct = $derived(Math.max(0, Math.min(100, (levelDb + 100))));
@@ -199,8 +200,8 @@
       onchange={(e) => set({ pushToTalk: { ...settings.pushToTalk, enabled: e.currentTarget.checked } })} /> Push to talk</label>
     {#if settings.pushToTalk.enabled}
       <button class="rounded bg-neutral-700 px-3 py-1" onclick={() => (capturingKey = true)}
-        onkeydown={(e) => { e.stopPropagation(); if (capturingKey) captureKey(e); }}
-        onkeyup={(e) => e.stopPropagation()}>
+        onkeydown={(e) => { if (capturingKey) { e.stopPropagation(); captureKey(e); } }}
+        onkeyup={(e) => { if (capturingKey) e.stopPropagation(); }}>
         {capturingKey ? 'Press a key...' : `Key: ${settings.pushToTalk.key}`}
       </button>
       <p class="text-neutral-500">

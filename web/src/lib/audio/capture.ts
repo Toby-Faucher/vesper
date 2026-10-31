@@ -10,6 +10,8 @@ export interface CaptureDeps {
   createWorkletNode(ctx: AudioContext): Promise<AudioWorkletNode>;
   createWorker(): Worker;
   readyTimeoutMs: number;
+  /** Initial track state: false when PTT/mute must start silent. */
+  startLive: boolean;
 }
 
 const modules = new WeakMap<BaseAudioContext, Promise<void>>();
@@ -25,6 +27,7 @@ const browserDeps: CaptureDeps = {
   },
   createWorker: () => new Worker(new URL('./dsp.worker.ts', import.meta.url), { type: 'module' }),
   readyTimeoutMs: 5000,
+  startLive: true,
 };
 
 type Pipe = { mode: DenoiseMode; track: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string };
@@ -46,6 +49,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   let sender: RTCRtpSender | null = null;
   let gen = 0;
   let closed = false;
+  let live = d.startLive; // applied to every new track, so mute/PTT survive swaps and rebuilds
 
   const mic = (mode: DenoiseMode) =>
     d.getUserMedia({
@@ -161,7 +165,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     }
     if (stale()) return next.stop();
     const prev = stream.getAudioTracks()[0];
-    if (prev) next.track.enabled = prev.enabled; // keep mute across the swap
+    next.track.enabled = live;
     if (sender) {
       try {
         await sender.replaceTrack(next.track);
@@ -192,6 +196,11 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       sender = snd;
       const cur = stream.getAudioTracks()[0];
       if (snd.track !== cur) snd.replaceTrack(cur).catch((e) => notify(last?.[0] ?? s.mode, `track swap failed: ${msg(e)}`));
+    },
+    /** Mute / push-to-talk gate: applies to the current track and every future one. */
+    setLive(v: boolean) {
+      live = v;
+      stream.getAudioTracks().forEach((t) => (t.enabled = v));
     },
     setSettings(n: AudioSettings) {
       const rebuild =
