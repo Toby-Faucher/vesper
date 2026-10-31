@@ -2,6 +2,7 @@ import type { ClientMsg } from './gen/ClientMsg';
 import type { ServerMsg } from './gen/ServerMsg';
 import type { Peer } from './gen/Peer';
 import { tuneOpus } from './audio/opus';
+import { applyBitrate } from './devices';
 
 export class Signaling {
   private ws: WebSocket;
@@ -54,6 +55,9 @@ export async function joinRoom(
     onRemoteStreamEnd?: (id: string) => void;
   },
 ): Promise<{ pc: RTCPeerConnection; peers: Peer[]; userId: string }> {
+  // Browsers configure their Opus encoder from the REMOTE description, and str0m's carries only
+  // minptime/useinbandfec, so remote SDP is tuned before it is applied. The local offer is tuned too
+  // (cheap; it states what we want to receive).
   const tune = (sdp: string) => tuneOpus(sdp, { bitrateKbps: opts.bitrateKbps, dtx: opts.dtx ?? true, fec: true });
   const report = (e: unknown) => opts.onError?.(e instanceof Error ? e : new Error(String(e)));
   const pc = new RTCPeerConnection();
@@ -73,7 +77,7 @@ export async function joinRoom(
 
   let chain = Promise.resolve(); // renegotiation offers must run one at a time
   const handleOffer = async (sdp: string) => {
-    await pc.setRemoteDescription({ type: 'offer', sdp });
+    await pc.setRemoteDescription({ type: 'offer', sdp: tune(sdp) });
     const a = await pc.createAnswer();
     const ans = tune(a.sdp ?? '');
     await pc.setLocalDescription({ type: 'answer', sdp: ans });
@@ -113,7 +117,9 @@ export async function joinRoom(
 
   try {
     const { answer, peers, user_id } = await joined;
-    await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+    await pc.setRemoteDescription({ type: 'answer', sdp: tune(answer) });
+    const audio = pc.getSenders().find((x) => x.track?.kind === 'audio');
+    if (audio) await applyBitrate(audio, opts.bitrateKbps).catch(report); // the SDP value is only a hint
     return { pc, peers, userId: user_id };
   } catch (e) {
     pc.close();
