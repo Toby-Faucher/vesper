@@ -123,6 +123,15 @@ class Decide(unittest.TestCase):
         b, c, d = self.pair(lat=480)
         self.assertEqual(sprt.decide(self.ids, b, c, d, 480, CFG)["status"], "rejected")
 
+    def test_inconclusive_with_failed_guard_is_rejected(self):
+        b, c, d = self.pair(ovrl_gain=0.01, sig=-0.05)
+        for it in c["items"]:  # wide spread: the SPRT cannot decide in 240 items
+            it["ovrl"] += random.Random(it["id"]).gauss(0, 0.3)
+        res = sprt.decide(self.ids, b, c, d, 0, CFG)
+        self.assertEqual(res["sprt"]["verdict"], "none")
+        self.assertEqual(res["status"], "rejected")
+        self.assertIn("had no verdict", res["reason"])
+
     def test_clipping_rejects(self):
         b, c, d = self.pair(clipped=1)
         self.assertEqual(sprt.decide(self.ids, b, c, d, 0, CFG)["status"], "rejected")

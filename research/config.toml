@@ -5,7 +5,7 @@
 # and writes the source tip into `origin_sha` (the ORIGINAL baseline for the final holdout check).
 integration_branch = "research/audio-main"
 source_branch = "research/audio-lab"
-origin_sha = ""
+origin_sha = "308df0b4180051d660016d8a17884ee58398a182"
 
 [paths]
 # Relative to the repo root (the controller checkout).
@@ -37,6 +37,8 @@ batch = 20
 sig_mean_min = -0.03
 # 10th percentile of the per-item SIG deltas.
 sig_p10_min = -0.15
+# Mean BAK delta. Stops a gain that only comes from leaving noise in.
+bak_mean_min = -0.05
 si_sdr_i_mean_min = -0.3
 rtf_max = 0.30
 # Candidate RTF may be at most this many times the baseline RTF.

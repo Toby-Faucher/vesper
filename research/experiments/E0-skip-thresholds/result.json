@@ -1,0 +1,122 @@
+{
+  "base_eval": "research/results/gate/base-308df0b41800-ab3bbd85aacc.json",
+  "base_sha": "308df0b4180051d660016d8a17884ee58398a182",
+  "branch": "exp/E0-skip-thresholds",
+  "cand_eval": "research/results/gate/cand-E0-skip-thresholds-308df0b41800.json",
+  "cand_sha": "308df0b4180051d660016d8a17884ee58398a182",
+  "config_hash": "ea933b1b26dc",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        0.1484598204334896,
+        0.29131642124739054
+      ],
+      "mean": 0.21988812084044007
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        -0.5941056660709295,
+        -0.11152506404787763
+      ],
+      "mean": -0.3528153650594036
+    },
+    "lsd": {
+      "ci95": [
+        -0.688236812085478,
+        -0.3402732787190608
+      ],
+      "mean": -0.5142550454022694
+    },
+    "ovrl": {
+      "ci95": [
+        0.2436504978293019,
+        0.427166877672273
+      ],
+      "mean": 0.33540868775078747
+    },
+    "si_sdr_i": {
+      "ci95": [
+        3.6177545772188897,
+        6.870481622348821
+      ],
+      "mean": 5.244118099783855
+    },
+    "sig": {
+      "ci95": [
+        0.20216136858380812,
+        0.3657680491304843
+      ],
+      "mean": 0.2839647088571462
+    }
+  },
+  "guards": {
+    "clipped_items": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "rtf": {
+      "limit": 0.3,
+      "pass": true,
+      "value": 0.046239744066666665
+    },
+    "rtf_ratio": {
+      "limit": 1.25,
+      "pass": true,
+      "value": 1.0174726778083265
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": true,
+      "value": 5.244118099783855
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": true,
+      "value": 0.2839647088571462
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": true,
+      "value": 0.0
+    }
+  },
+  "id": "E0-skip-thresholds",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "n_total": 240,
+  "n_used": 60,
+  "pipeline": "pipeline.toml",
+  "reason": "SPRT accepted H1 and every guard holds",
+  "rtf": {
+    "base": 0.04544568623333333,
+    "cand": 0.046239744066666665
+  },
+  "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": 2.9694882166727177,
+    "lower": -2.9444389791664403,
+    "n": 60,
+    "upper": 2.9444389791664403,
+    "verdict": "H1"
+  },
+  "status": "accepted"
+}
