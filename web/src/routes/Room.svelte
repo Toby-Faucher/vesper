@@ -43,27 +43,44 @@
     playback = undefined;
     releaseLock?.();
     releaseLock = undefined;
+    mic?.getTracks().forEach((t) => t.stop());
+    mic = undefined;
+    muted = false;
+    deafened = false;
+    speaking = new Set();
     joined = false;
   }
 
   async function join(e: Event) {
     e.preventDefault();
     error = '';
+    muted = false;
+    deafened = false;
+    // Create and resume the AudioContext inside the click gesture, before any await.
+    playback = new Playback(restoreVolumes(localStorage));
+    // Held for the call's lifetime so the browser does not freeze the tab's audio in the background.
+    // The resolver exists up front so teardown releases it even if the lock callback has not run yet.
+    const held = new Promise<void>((res) => (releaseLock = res));
+    if (navigator.locks) void navigator.locks.request('vesper-call', () => held);
+    else console.warn('navigator.locks missing: audio may stop when the tab is backgrounded');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, channelCount: 1 },
       });
       mic = stream;
-      const saved = restoreVolumes(localStorage);
-      volumes = Object.fromEntries(saved);
-      playback = new Playback(saved);
-      // Held for the call's lifetime so the browser does not freeze the tab's audio in the background.
-      void navigator.locks?.request('vesper-call', () => new Promise<void>((res) => (releaseLock = res)));
+      volumes = Object.fromEntries(restoreVolumes(localStorage));
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       sig = new Signaling(`${proto}://${location.host}/ws`);
       const early: ServerMsg[] = []; // peer events that arrive before Joined
       sig.onClose(teardown);
-      sig.onMessage((m) => (joined ? (peers = applyPeerMsg(peers, m)) : early.push(m)));
+      sig.onMessage((m) => {
+        if (m.type === 'peer_left') {
+          playback?.remove(m.user_id);
+          if (speaking.has(m.user_id)) speaking = new Set([...speaking].filter((i) => i !== m.user_id));
+        }
+        if (joined) peers = applyPeerMsg(peers, m);
+        else early.push(m);
+      });
       const r = await joinRoom(sig, {
         room: 'main', name, key, stream, bitrateKbps: 64,
         onError: (err) => (error = err.message),
@@ -71,8 +88,11 @@
         onRemoteStreamEnd: (id) => playback?.remove(id),
       });
       userId = r.userId;
-      playback.addLocal(r.userId, stream);
-      poll = setInterval(() => (speaking = playback?.speaking() ?? new Set()), 100);
+      playback?.addLocal(r.userId, stream);
+      poll = setInterval(() => {
+        const next = playback?.speaking() ?? new Set<string>();
+        if (next.size !== speaking.size || [...next].some((i) => !speaking.has(i))) speaking = next;
+      }, 100);
       peers = early.reduce(applyPeerMsg, r.peers);
       joined = true;
     } catch (err) {

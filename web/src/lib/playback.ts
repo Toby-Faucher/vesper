@@ -4,14 +4,16 @@ type Node = { gain?: GainNode; analyser: AnalyserNode; src: MediaStreamAudioSour
 
 /** One AudioContext; per stream: source -> gain -> destination, plus an analyser for the speaking ring. */
 export class Playback {
-  private ctx = new AudioContext();
+  private ctx: AudioContext;
   private nodes = new Map<string, Node>();
   private volumes = new Map<string, number>();
   private deafened = false;
   private buf = new Float32Array(1024);
 
-  constructor(volumes: Map<string, number>) {
+  constructor(volumes: Map<string, number>, ctx: AudioContext = new AudioContext()) {
     this.volumes = volumes;
+    this.ctx = ctx;
+    void ctx.resume();
   }
 
   private tap(stream: MediaStream) {
@@ -25,6 +27,7 @@ export class Playback {
   /** Local mic: analysed only, never played back. */
   addLocal(id: string, stream: MediaStream) {
     this.nodes.set(id, this.tap(stream));
+    void this.ctx.resume();
   }
 
   addRemote(id: string, stream: MediaStream) {
