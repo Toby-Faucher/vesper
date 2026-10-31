@@ -1,0 +1,97 @@
+name: ci
+# Pushes to main and every pull request (one run per PR, not a second one for the branch push).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# The step list lives in scripts/check.sh; CI runners are not the dev box, so the memory cap is off.
+env:
+  VESPER_NO_CAP: 1
+  CARGO_TERM_COLOR: always
+
+# No job waits for another (no `needs`), so the slow dsp-wasm job never holds up the rest.
+jobs:
+  lint-rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # Installs the toolchain pinned in rust-toolchain.toml (rustfmt, clippy, wasm32 target).
+      - run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@v2.9.2
+      # The runner image ships shellcheck; install it anyway in case a new image drops it.
+      - run: command -v shellcheck || (sudo apt-get update && sudo apt-get install -y shellcheck)
+      - run: scripts/check.sh fmt clippy shell scripts secrets
+
+  test-rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: taiki-e/install-action@v2.87.28
+        with:
+          tool: cargo-nextest@0.9.148
+      # bindings reruns the vesper-protocol export tests and diffs web/src/lib/gen against the commit.
+      - run: scripts/check.sh test bindings
+
+  supply-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - uses: taiki-e/install-action@v2.87.28
+        with:
+          tool: cargo-deny@0.20.2
+      - run: scripts/check.sh deny
+
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          # 22 matches the deploy/Dockerfile web stage and the engines floor in web/package.json.
+          # .nvmrc (26) is the author's local Node, not what the image builds with.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # The build does not need web/public/dsp: the worker fetches /dsp/ at runtime.
+      - run: scripts/check.sh web
+      # Fails on high and critical advisories only; moderate and low are reported, not blocking.
+      - run: npm audit --audit-level=high
+        working-directory: web
+
+  dsp-wasm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      # Also caches ~/.cargo/bin, so the wasm-bindgen CLI below is only compiled on a cold cache.
+      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: taiki-e/install-action@v2.87.28
+        with:
+          tool: cargo-nextest@0.9.148
+      # The CLI must equal the wasm-bindgen crate in Cargo.lock; read it the way scripts/build-dsp.sh does.
+      - name: install wasm-bindgen CLI at the Cargo.lock version
+        run: |
+          v=$(awk '/^name = "wasm-bindgen"$/ {getline; gsub(/[^0-9.]/, "", $3); print $3; exit}' Cargo.lock)
+          test -n "$v"
+          cargo install wasm-bindgen-cli --version "$v" --locked
+          wasm-bindgen --version
+      # The model is gitignored and the denoiser tests need it; fetch-model.sh checks its sha256.
+      - run: scripts/fetch-model.sh
+      - run: scripts/check.sh dsp
