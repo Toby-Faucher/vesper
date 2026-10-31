@@ -9,6 +9,7 @@
   import { DEVICE_MESSAGES, applyBitrate, classifyMediaError, missingDevice, newInputs, trackLive, watchDevices } from '../lib/devices';
   import { pttKeyEvent } from '../lib/audio/ptt';
   import Settings from './Settings.svelte';
+  import Diagnostics from './Diagnostics.svelte';
   import type { DenoiseMode } from '../lib/audio/mode';
   import type { Peer } from '../lib/gen/Peer';
   import type { ServerMsg } from '../lib/gen/ServerMsg';
@@ -31,6 +32,8 @@
   let settings = $state<AudioSettings>(loadSettings(storage));
   let joinedBitrate = $state(64); // set at join
   let showSettings = $state(false);
+  let showDiag = $state(false);
+  let pc = $state.raw<RTCPeerConnection>();
   let deviceError = $state('');
   let offered = $state<MediaDeviceInfo | null>(null);
   let sender: RTCRtpSender | undefined;
@@ -123,6 +126,7 @@
     capture?.close();
     capture = undefined;
     sender = undefined;
+    pc = undefined;
     deviceError = '';
     offered = null;
     mic = undefined;
@@ -132,6 +136,8 @@
     speaking = new Set();
     joined = false;
   }
+
+  const wsUrl = () => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
 
   async function join(e: Event) {
     e.preventDefault();
@@ -154,8 +160,7 @@
       const stream = cap.stream;
       mic = stream;
       volumes = Object.fromEntries(restoreVolumes(localStorage));
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      sig = new Signaling(`${proto}://${location.host}/ws`);
+      sig = new Signaling(wsUrl());
       const early: ServerMsg[] = []; // peer events that arrive before Joined
       sig.onClose(teardown);
       sig.onMessage((m) => {
@@ -173,6 +178,7 @@
         onRemoteStreamEnd: (id) => playback?.remove(id),
       });
       userId = r.userId;
+      pc = r.pc;
       joinedBitrate = settings.bitrateKbps;
       playback?.addLocal(r.userId, stream);
       const audioSender = r.pc.getSenders().find((s) => s.track?.kind === 'audio');
@@ -224,6 +230,12 @@
   </button>
   {#if showSettings}
     <Settings {settings} {joinedBitrate} {joined} onchange={onSettings} liveStream={mic} sinkSupported={'setSinkId' in AudioContext.prototype} />
+  {/if}
+  <button class="rounded bg-neutral-800 px-3 py-1 text-sm" onclick={() => (showDiag = !showDiag)}>
+    {showDiag ? 'Hide diagnostics' : 'Diagnostics'}
+  </button>
+  {#if showDiag}
+    <Diagnostics {pc} wsUrl={wsUrl()} joinKey={key} {mode} status={joined ? 'joined' : 'not joined'} />
   {/if}
   {#if joined}
     <div class="flex gap-2">
