@@ -18,9 +18,10 @@ export function audioRows(s: CaptureStats | null): [string, string][] {
         ['Output level', fmtDb(p.outputRms)],
         ['Queue', `${p.queuedMs.toFixed(1)} ms, ${p.inflight} frames at the denoiser`],
         ['Underruns', `${p.underruns}`],
-        ['Dropped', `${p.droppedInput} input frames, ${p.droppedOut} output frames`],
+        ['Dropped frames', `${p.droppedInput} input, ${p.droppedOut} output`],
         ['Denoiser time', `avg ${fmtMs(p.avgReplyMs)}, max ${fmtMs(p.maxReplyMs)}`],
-        ['Input blocks', `${p.inputBlocks} with sound data, ${p.emptyInputBlocks} empty`],
+        ['Input blocks', `${p.inputBlocks} received, ${p.emptyInputBlocks} missing`],
+        ['Last report', `${((s.ageMs ?? 0) / 1000).toFixed(1)} s ago`],
       ] as [string, string][])
       : []),
     ['Mic track', `${readyState}, ${muted ? 'muted by the system' : 'not muted'}, ${enabled ? 'enabled' : 'disabled'}`],

@@ -24,7 +24,7 @@ describe('FrameRing', () => {
     expect(r.push(block(0, 100))).toBe(0); // push returns the samples it dropped
     expect(r.push(block(0, 400))).toBe(20);
     r.pop();
-    expect(() => r.push(block(0, 2000))).not.toThrow();
+    expect(r.push(block(0, 2000))).toBe(1520); // ring empty: only the oversized block's head is dropped
     expect(r.pop()![479]).toBe(1999);
   });
   it('wraps around the buffer', () => {
