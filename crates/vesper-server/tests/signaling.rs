@@ -549,3 +549,53 @@ async fn rejoin_while_old_socket_closes_keeps_new_session() {
         }
     }
 }
+
+fn spawn_sfu() -> vesper_sfu::SfuHandle {
+    vesper_sfu::Sfu::spawn(vesper_sfu::SfuConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+#[tokio::test]
+async fn watch_sfu_fires_after_crash_and_not_while_healthy() {
+    let sfu = spawn_sfu();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    vesper_server::watch_sfu(sfu.clone(), Duration::from_millis(20), move || {
+        let _ = tx.send(());
+    });
+    // Healthy for many intervals: nothing fires.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), rx.recv())
+            .await
+            .is_err(),
+        "on_dead fired for a healthy SFU"
+    );
+    sfu.crash_for_test();
+    tokio::time::timeout(WAIT, rx.recv())
+        .await
+        .expect("on_dead did not fire after crash")
+        .unwrap();
+    // FnOnce: exactly once, then the sender is dropped.
+    assert!(rx.recv().await.is_none());
+}
+
+#[tokio::test]
+async fn wrong_key_while_sfu_dead_still_says_bad_key() {
+    let sfu = spawn_sfu();
+    let (addr, _serving) = vesper_server::start_with_sfu(config(), sfu.clone())
+        .await
+        .unwrap();
+    sfu.crash_for_test();
+    wait_until("SFU death", || !sfu.is_alive()).await;
+    let mut c = Conn::open(addr).await;
+    c.join("main", "mallory", "wrong");
+    match c.next().await {
+        ServerMsg::Error { code, message } => {
+            assert_eq!(code, ErrorCode::BadKey);
+            assert_ne!(message, "server voice engine unavailable");
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}

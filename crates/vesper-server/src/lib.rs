@@ -8,6 +8,7 @@ pub mod ws;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use std::path::PathBuf;
@@ -32,7 +33,28 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
         bind: cfg.udp_bind,
         ..Default::default()
     })?;
+    // Not in start_with_sfu: tests crash the SFU on purpose and must survive it.
+    watch_sfu(sfu.clone(), SFU_POLL, || {
+        tracing::error!("voice engine (SFU thread) died; exiting so the supervisor restarts us");
+        std::process::exit(1);
+    });
     start_with_sfu(cfg, sfu).await
+}
+
+const SFU_POLL: Duration = Duration::from_secs(1);
+
+/// Poll `sfu.is_alive()` every `interval`; run `on_dead` once when it turns false.
+/// is_alive only goes false when the SFU thread exits, and this watcher's own handle clone keeps
+/// the thread from ending by "all handles dropped", so a normal shutdown (process exit or
+/// runtime teardown, which just drops this task) never fires it.
+pub fn watch_sfu(sfu: SfuHandle, interval: Duration, on_dead: impl FnOnce() + Send + 'static) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        while sfu.is_alive() {
+            tick.tick().await;
+        }
+        on_dead();
+    });
 }
 
 /// [`start`] with an SFU the caller already spawned (`cfg.udp_bind` is then unused).
@@ -85,7 +107,8 @@ pub async fn start_with_sfu(
     ))
 }
 
-/// 503 once the SFU thread has died, so Docker/systemd health checks restart the server.
+/// 503 once the SFU thread has died, for external monitors and load balancers. (Docker does not
+/// restart an unhealthy container; `start` also exits the process so restart policies recover.)
 async fn health(State(st): State<ws::WsState>) -> (StatusCode, &'static str) {
     if st.rooms.sfu_alive() {
         (StatusCode::OK, "ok")

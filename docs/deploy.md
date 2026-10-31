@@ -71,6 +71,8 @@ Plain binary instead: `deploy/vesper.service` (systemd, hardened, `DynamicUser`)
 
 Upgrade: first tag the current image, `docker tag vesper:latest vesper:previous`; then `git pull` and `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins; there is no state to migrate (presence is in memory). Rollback: set `image: vesper:previous` and `up -d` without `--build`, or `git checkout <old>` and rebuild. For the binary install keep the previous binary next to the new one and swap the file, then `systemctl restart vesper`.
 
+If the voice engine thread dies (a bug on hostile input), `/health` returns 503 and the server process exits non-zero so Docker (`restart: unless-stopped`) or systemd (`Restart=on-failure`) restarts it; look for "voice engine (SFU thread) died" in `docker compose logs` / `journalctl -u vesper`. Covered by a test of the watcher, not verified with a real container.
+
 ## Security headers
 
 The server sets `X-Content-Type-Options: nosniff` only. It sends no Content-Security-Policy. A suggested CSP is commented out in `deploy/Caddyfile.example`; it is **untested** against the real app (WASM, the audio worklet and WebRTC all break silently under a wrong CSP), so verify in a browser before enabling it.

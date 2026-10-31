@@ -88,8 +88,9 @@ async fn handle(mut socket: WebSocket, st: WsState, _permit: OwnedSemaphorePermi
                                 joined = Some(j);
                                 None
                             }
-                            // Same wire code (the enum is shared with the client), clearer text.
-                            Err(code) if !rooms.sfu_alive() => {
+                            // Same wire code (the enum is shared with the client), clearer text. Only BadMessage:
+                            // that is what a dead SFU produces; a wrong key must still say so.
+                            Err(code @ ErrorCode::BadMessage) if !rooms.sfu_alive() => {
                                 Some((code, "server voice engine unavailable".into()))
                             }
                             Err(code) => Some((code, describe(code).into())),
