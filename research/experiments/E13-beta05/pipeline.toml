@@ -1,0 +1,7 @@
+atten_db = 100.0
+post_filter_beta = 0.05
+input_gain_db = 0.0
+
+[pre]
+
+[post]

@@ -1,0 +1,162 @@
+{
+  "base_eval": "research/results/gate/base-a23fde74b356-34b896b88391-20fa5fed.json",
+  "base_sha": "a23fde74b356ef2967c4acdc6ea3d9e9eb853de8",
+  "branch": "exp/E14-atten40",
+  "cand_eval": "research/results/gate/cand-E14-atten40-a23fde74b356.json",
+  "cand_sha": "a23fde74b356ef2967c4acdc6ea3d9e9eb853de8",
+  "config_hash": "6103032d9629",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        0.008887363653448624,
+        0.16967590800536847
+      ],
+      "mean": 0.08928163582940854
+    },
+    "hb_err_db": {
+      "ci95": [
+        -0.04367480789446275,
+        0.20172071328088964
+      ],
+      "mean": 0.07902295269321344
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        -34.31577562207175,
+        -4.417913854444093
+      ],
+      "mean": -19.36684473825792
+    },
+    "lsd": {
+      "ci95": [
+        -1.314705376538674,
+        -0.1785516717686707
+      ],
+      "mean": -0.7466285241536724
+    },
+    "lsd_wb": {
+      "ci95": [
+        -0.9928911149916873,
+        -0.30547941211470125
+      ],
+      "mean": -0.6491852635531943
+    },
+    "mcd": {
+      "ci95": [
+        -0.3973417519445916,
+        -0.14326050531372708
+      ],
+      "mean": -0.27030112862915934
+    },
+    "ovrl": {
+      "ci95": [
+        0.0524406353169631,
+        0.1500033165201635
+      ],
+      "mean": 0.1012219759185633
+    },
+    "si_sdr_i": {
+      "ci95": [
+        0.05714348230959184,
+        0.12072291052903658
+      ],
+      "mean": 0.08893319641931421
+    },
+    "sig": {
+      "ci95": [
+        0.07246099921861783,
+        0.18074083062243168
+      ],
+      "mean": 0.12660091492052475
+    }
+  },
+  "eval": "",
+  "guards": {
+    "bak_mean": {
+      "limit": -0.05,
+      "pass": true,
+      "value": 0.08928163582940854
+    },
+    "clipped_items": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "lead_in_mean": {
+      "limit": -3.0,
+      "pass": false,
+      "value": -19.36684473825792
+    },
+    "lsd_wb_mean": {
+      "limit": 0.05,
+      "pass": true,
+      "value": -0.6491852635531943
+    },
+    "rtf": {
+      "limit": 0.06,
+      "pass": true,
+      "value": 0.039851117133333336
+    },
+    "rtf_ratio": {
+      "limit": 1.25,
+      "pass": true,
+      "value": 0.835538502471846
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": true,
+      "value": 0.08893319641931421
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": true,
+      "value": 0.12660091492052475
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": true,
+      "value": -0.004329082393095928
+    }
+  },
+  "id": "E14-atten40",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "n_total": 400,
+  "n_used": 20,
+  "opus": "",
+  "ovrl_delta_sd_full": 0.1324630426596045,
+  "pipeline": "pipeline.toml",
+  "reason": "SPRT accepted H1 but guards failed: lead_in_mean",
+  "rtf": {
+    "base": 0.04769512956666667,
+    "cand": 0.039851117133333336
+  },
+  "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": 2.9453312868752293,
+    "lower": -2.9444389791664403,
+    "n": 20,
+    "upper": 2.9444389791664403,
+    "verdict": "H1"
+  },
+  "stack": "",
+  "status": "rejected"
+}

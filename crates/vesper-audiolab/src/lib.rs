@@ -3,7 +3,9 @@
 //! metrics, and the `audiolab` CLI that scores `vesper_dsp::Pipeline` on it.
 
 pub mod audio;
+pub mod codec;
 pub mod corpus;
 pub mod dnsmos;
 pub mod eval;
 pub mod metrics;
+pub mod second_mos;

@@ -9,8 +9,11 @@ origin_sha = "308df0b4180051d660016d8a17884ee58398a182"
 
 [paths]
 # Relative to the repo root (the controller checkout).
-corpus = "research/corpus/built"
+# Corpus v2 (VCTK 48 kHz, built by `audiolab corpus build --name v2`). v1 was research/corpus/built.
+corpus = "research/corpus48/built"
 dnsmos = "research/models/sig_bak_ovr.onnx"
+# UTMOS (second_mos): scored and reported when the file exists, not gated.
+second_mos = "research/models/utmos22_strong.onnx"
 model = "crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz"
 # Baseline config, read from the BASE commit (so stacked config changes move with the base).
 default_config = "research/configs/default.toml"
@@ -25,6 +28,16 @@ memory_cap_mib = 5120
 split = "gate"
 determinism_items = 5
 
+[eval_baseline]
+# The baseline side of an experiment whose eval.toml has an `opus` key: both sides then go through
+# Opus and are scored on the decoded audio. Without `opus` in eval.toml neither side does.
+# These are what the web client sends: 64 kbps (web/src/lib/audio/settings.ts bitrateKbps), DTX on
+# (settings.ts dtx), in-band FEC on (signaling.ts tuneOpus fec: true), 20 ms packets. The client does
+# not set complexity or loss. Complexity 10 is the libopus default; the browser's WebRTC stack may
+# pick a lower one (not verified). 5 percent loss is our choice.
+# `model` (a repo-relative path) is optional; the default is paths.model, the shipped model.
+opus = "bitrate=64000,complexity=10,fec=1,dtx=1,loss=0.05,seed=1"
+
 [sprt]
 # Paired deltas of DNSMOS OVRL. H0: gain <= 0. H1: gain >= delta1.
 delta0 = 0.0
@@ -33,6 +46,13 @@ alpha = 0.05
 beta = 0.05
 batch = 20
 
+[stack]
+# Gate a combination of already-run configs: `<id> = ["<exp id>", ...]`. The gate merges each listed
+# experiment's pipeline.toml (research/experiments/<exp id>/ in this checkout, else its exp/<exp id>
+# branch) and then <id>'s own, in that order; a key
+# set to two values is broken. Code changes are not stacked here: cherry-pick them onto exp/<id>.
+# Example: E10-stack = ["E3-beta05", "E2-atten24"]
+
 [guards]
 sig_mean_min = -0.03
 # 10th percentile of the per-item SIG deltas.
@@ -40,7 +60,14 @@ sig_p10_min = -0.15
 # Mean BAK delta. Stops a gain that only comes from leaving noise in.
 bak_mean_min = -0.05
 si_sdr_i_mean_min = -0.3
-rtf_max = 0.30
+# Second judge: mean lsd_wb delta (dB, candidate minus baseline) must be at most this. A gain in
+# DNSMOS OVRL that comes with more wideband spectral distortion is not accepted.
+lsd_wb_mean_max = 0.05
+# Native RTF ceiling. The browser (WASM) runs about 5 to 8 times slower than native, so 0.06 here
+# is about 0.3 to 0.5 in a browser.
+# Mean lead-in noise reduction delta (dB) may not fall below this: less suppression raises DNSMOS (E14).
+lead_in_mean_min = -3.0
+rtf_max = 0.06
 # Candidate RTF may be at most this many times the baseline RTF.
 rtf_ratio_max = 1.25
 # Extra algorithmic latency allowed, in samples at 48 kHz (5 ms), and only if hypothesis.md declares it.

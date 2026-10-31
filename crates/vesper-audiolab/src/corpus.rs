@@ -1,6 +1,11 @@
-//! Deterministic noisy mixtures: LibriSpeech speakers (disjoint across splits) plus recorded and
-//! synthesised noise, on a balanced grid of noise type x SNR x level.
+//! Deterministic noisy mixtures, speakers disjoint across splits.
+//!
+//! - `v1`: LibriSpeech (16 kHz, upsampled) on a balanced grid of 8 noise types x SNR x level.
+//! - `v2`: VCTK 0.92 mic2 (native 48 kHz), 14 noise types, 5 room conditions (dry, the
+//!   DeepFilterNet RIR, synthetic RIRs of RT60 0.3, 0.6 and 1.0 s), lower levels for headroom.
+//!   Each factor is balanced on its own (see [`plan_split_v2`]), not as a full grid.
 
+use std::collections::BTreeMap;
 use std::f64::consts::PI;
 use std::path::{Path, PathBuf};
 
@@ -35,6 +40,87 @@ pub enum Noise {
     Babble,
     Street,
     Tv,
+    /// v2: one other talker of the split, 5 to 15 dB below the target (its own SNR range).
+    SecondTalker,
+    /// v2: synthetic music: notes with harmonics, a bass line and hi-hat noise bursts.
+    Music,
+    /// v2: babble of 6 talkers, a murmur bed and dish clinks.
+    Cafe,
+    /// v2: vacuum cleaner or hair dryer: motor harmonics on broadband noise up to 20 kHz.
+    Vacuum,
+    /// v2: door slams and thuds: damped low resonances with a click, on a quiet bed.
+    DoorSlam,
+    /// v2: mouth clicks: sub-2 ms high-passed clicks on a quiet bed.
+    MouthClicks,
+}
+
+/// Room condition of an item. None in the manifest means dry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rir {
+    /// DeepFilterNet asset rir_sim_1001 (RT60 0.79 s by its file name).
+    DeepFilterNet,
+    Rt03,
+    Rt06,
+    Rt10,
+}
+
+impl Rir {
+    pub fn rt60_s(self) -> f64 {
+        match self {
+            Rir::DeepFilterNet => 0.7919,
+            Rir::Rt03 => 0.3,
+            Rir::Rt06 => 0.6,
+            Rir::Rt10 => 1.0,
+        }
+    }
+}
+
+pub const NOISES_V2: [Noise; 14] = [
+    Noise::Freesound2530,
+    Noise::Freesound573577,
+    Noise::Fan,
+    Noise::Keyboard,
+    Noise::AcHiss,
+    Noise::Babble,
+    Noise::Street,
+    Noise::Tv,
+    Noise::SecondTalker,
+    Noise::Music,
+    Noise::Cafe,
+    Noise::Vacuum,
+    Noise::DoorSlam,
+    Noise::MouthClicks,
+];
+/// v2 levels (whole-mixture RMS). The top is 7 dB under v1's -15, which could not be met without
+/// clipping. Items that would still peak above [`PEAK_LIMIT`] are scaled down as in v1 and counted.
+pub const LEVELS_DBFS_V2: [f64; 3] = [-40.0, -32.0, -24.0];
+/// v2 room conditions, cycled: half the items dry.
+const ROOMS_V2: [Option<Rir>; 8] = [
+    None,
+    None,
+    None,
+    None,
+    Some(Rir::DeepFilterNet),
+    Some(Rir::Rt03),
+    Some(Rir::Rt06),
+    Some(Rir::Rt10),
+];
+
+/// Which corpus to build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Version {
+    V1,
+    V2,
+}
+
+impl Version {
+    fn name(self) -> &'static str {
+        match self {
+            Version::V1 => "v1",
+            Version::V2 => "v2",
+        }
+    }
 }
 
 pub const NOISES: [Noise; 8] = [
@@ -55,15 +141,22 @@ fn reps(split: &str) -> usize {
     if split == "gate" { 2 } else { 1 }
 }
 
-/// One speaker's utterances at 16 kHz (LibriSpeech's rate), with their source file names.
+/// One speaker's utterances at [`Sources::speech_sr`], with their source file names.
 pub struct Speaker {
     pub id: String,
+    /// 'F' or 'M' when the corpus says (VCTK speaker-info.txt); v2 splits are balanced on it.
+    pub gender: Option<char>,
     pub utts: Vec<(String, Vec<f32>)>,
 }
 
-/// Everything the builder reads. Real runs load it with [`Sources::load`]; tests make tiny ones.
+/// Everything the builder reads. Real runs load it with [`Sources::load`] or
+/// [`Sources::load_v2`]; tests make tiny ones.
 pub struct Sources {
     pub speakers: Vec<Speaker>,
+    /// 16 000 (LibriSpeech, upsampled 3x when mixed) or 48 000 (VCTK, used as is).
+    pub speech_sr: u32,
+    /// Measured bandwidth of each speech file ([`audio::bandwidth_hz`]), by file name.
+    pub bandwidth_hz: BTreeMap<String, f64>,
     /// 48 kHz, in [`Noise::Freesound2530`], [`Noise::Freesound573577`] order.
     pub sample_noises: [Vec<f32>; 2],
     /// 48 kHz room impulse response, starting at its direct path.
@@ -80,6 +173,9 @@ pub struct Item {
     pub snr_db: f64,
     pub level_dbfs: f64,
     pub reverb: bool,
+    /// Which room. Absent in v1 manifests (there `reverb` means the DeepFilterNet RIR).
+    #[serde(default)]
+    pub rir: Option<Rir>,
     /// Paths relative to the manifest's folder.
     pub mix: String,
     pub clean: String,
@@ -87,13 +183,25 @@ pub struct Item {
     pub snr_db_actual: f64,
     /// Whole-mixture RMS of the written file. Below `level_dbfs` only when the peak limit applied.
     pub level_dbfs_actual: f64,
+    /// Measured bandwidth of each file in `speech_files`, same order ([`audio::bandwidth_hz`]).
+    #[serde(default)]
+    pub speech_bandwidth_hz: Vec<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
+    /// "v1" or "v2". Absent in manifests written before v2.
+    #[serde(default)]
+    pub corpus: String,
     pub split: String,
     pub seed: u64,
     pub sample_rate: u32,
+    /// Native rate of the speech files before mixing.
+    #[serde(default)]
+    pub speech_sample_rate: u32,
+    /// Bandwidth over the speech files this split uses: min, median, max in Hz.
+    #[serde(default)]
+    pub speech_bandwidth_hz: Option<[f64; 3]>,
     pub lead_in_samples: usize,
     pub item_samples: usize,
     pub speakers: Vec<String>,
@@ -149,10 +257,82 @@ impl Sources {
                 })
                 .collect::<Result<_>>()?;
             let id = spk.file_name().unwrap().to_string_lossy().into_owned();
-            speakers.push(Speaker { id, utts });
+            speakers.push(Speaker {
+                id,
+                gender: None,
+                utts,
+            });
         }
+        Self::with_assets(speakers, 16_000, &corpus.join("assets"))
+    }
+
+    /// `corpus48` is research/corpus48 as written by research/scripts/fetch-corpus48.sh:
+    /// `vctk/<speaker>_<utt>_mic2.flac`, `vctk/speaker-info.txt` and the DeepFilterNet `assets/`.
+    pub fn load_v2(corpus48: &Path) -> Result<Self> {
+        let dir = corpus48.join("vctk");
+        let info = std::fs::read_to_string(dir.join("speaker-info.txt")).with_context(|| {
+            format!(
+                "read {} (run research/scripts/fetch-corpus48.sh)",
+                dir.display()
+            )
+        })?;
+        // "ID  AGE  GENDER ...", ids without the p prefix.
+        let gender: BTreeMap<String, char> = info
+            .lines()
+            .skip(1)
+            .filter_map(|l| {
+                let mut w = l.split_whitespace();
+                let id = w.next()?;
+                let g = w.nth(1)?.chars().next()?;
+                let id = if id.starts_with('p') {
+                    id.to_string()
+                } else {
+                    format!("p{id}")
+                };
+                Some((id, g))
+            })
+            .collect();
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)?
+            .map(|e| e.map(|e| e.path()))
+            .collect::<Result<_, _>>()?;
+        files.retain(|f| f.extension().is_some_and(|e| e == "flac"));
+        files.sort();
+        let utts: Vec<(String, Vec<f32>)> = files
+            .par_iter()
+            .map(|f| {
+                let (x, sr) = audio::read_flac(f)?;
+                if sr != SR {
+                    bail!("{}: expected 48 kHz", f.display());
+                }
+                Ok((f.file_name().unwrap().to_string_lossy().into_owned(), x))
+            })
+            .collect::<Result<_>>()?;
+        let mut speakers: Vec<Speaker> = Vec::new();
+        for (name, x) in utts {
+            let id = name.split('_').next().unwrap_or_default().to_string();
+            match speakers.last_mut() {
+                Some(s) if s.id == id => s.utts.push((name, x)),
+                _ => speakers.push(Speaker {
+                    gender: gender.get(&id).copied(),
+                    id,
+                    utts: vec![(name, x)],
+                }),
+            }
+        }
+        if speakers.is_empty() {
+            bail!("no FLAC files in {}", dir.display());
+        }
+        Self::with_assets(speakers, SR, &corpus48.join("assets"))
+    }
+
+    fn with_assets(speakers: Vec<Speaker>, speech_sr: u32, assets: &Path) -> Result<Self> {
+        let bandwidth_hz = speakers
+            .par_iter()
+            .flat_map(|s| s.utts.par_iter())
+            .map(|(n, x)| (n.clone(), audio::bandwidth_hz(x, speech_sr)))
+            .collect();
         let wav48 = |name: &str| -> Result<Vec<f32>> {
-            let (x, sr) = audio::read_wav(&corpus.join("assets").join(name))?;
+            let (x, sr) = audio::read_wav(&assets.join(name))?;
             if sr != SR {
                 bail!("{name}: expected 48 kHz");
             }
@@ -170,6 +350,8 @@ impl Sources {
         rir.drain(..direct);
         Ok(Self {
             speakers,
+            speech_sr,
+            bandwidth_hz,
             sample_noises: [
                 wav48("noise_freesound_2530.wav")?,
                 wav48("noise_freesound_573577.wav")?,
@@ -190,6 +372,22 @@ pub fn split_speakers(ids: &[String], seed: u64) -> [Vec<String>; 3] {
     [ids, gate, holdout]
 }
 
+/// v2: [`split_speakers`] on each gender on its own (unknown gender is its own group), so every
+/// split gets the same share of female and male voices.
+pub fn split_speakers_by_gender(spk: &[(String, Option<char>)], seed: u64) -> [Vec<String>; 3] {
+    let mut groups: BTreeMap<Option<char>, Vec<String>> = BTreeMap::new();
+    for (id, g) in spk {
+        groups.entry(*g).or_default().push(id.clone());
+    }
+    let mut out: [Vec<String>; 3] = Default::default();
+    for ids in groups.values() {
+        for (o, part) in out.iter_mut().zip(split_speakers(ids, seed)) {
+            o.extend(part);
+        }
+    }
+    out
+}
+
 fn shuffle<T>(v: &mut [T], rng: &mut ChaCha8Rng) {
     for i in (1..v.len()).rev() {
         v.swap(i, rng.random_range(0..=i));
@@ -204,8 +402,65 @@ pub struct Plan {
     pub noise: Noise,
     pub snr_db: f64,
     pub level_dbfs: f64,
-    pub reverb: bool,
+    pub rir: Option<Rir>,
     pub seed: u64,
+}
+
+/// v2 items per split.
+pub fn items_v2(split: &str) -> usize {
+    match split {
+        "gate" => 400,
+        _ => 160,
+    }
+}
+
+/// v2 SNRs for every noise but [`Noise::SecondTalker`] ([`TALKER_SNRS_DB`]) and
+/// [`Noise::MouthClicks`] ([`CLICK_SNRS_DB`]).
+pub const SNRS_DB_V2: [f64; 5] = [-5.0, 0.0, 5.0, 10.0, 20.0];
+/// A second talker 5 to 15 dB below the target.
+pub const TALKER_SNRS_DB: [f64; 5] = [5.0, 7.5, 10.0, 12.5, 15.0];
+/// Mouth clicks are faint next to the voice; at -5 dB SNR they would be loud bangs (and clip).
+pub const CLICK_SNRS_DB: [f64; 5] = [10.0, 15.0, 20.0, 25.0, 30.0];
+
+/// `n` values cycling through `vals`, then shuffled: each value appears n / len times (plus at most one).
+fn balanced<T: Copy>(vals: &[T], n: usize, rng: &mut ChaCha8Rng) -> Vec<T> {
+    let mut v: Vec<T> = (0..n).map(|i| vals[i % vals.len()]).collect();
+    shuffle(&mut v, rng);
+    v
+}
+
+/// The v2 split: noise type, SNR, level and room are each balanced over the split on their own
+/// (14 x 5 x 3 x 8 does not fit 160 items as a grid) and shuffled independently with the seed.
+/// Speakers go round-robin over the item order.
+pub fn plan_split_v2(split: &str, speakers: &[String], seed: u64) -> Vec<Plan> {
+    let s = SPLITS
+        .iter()
+        .position(|&x| x == split)
+        .expect("known split") as u64;
+    let n = items_v2(split);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed ^ (0x5eed_0200 + s));
+    let noises = balanced(&NOISES_V2, n, &mut rng);
+    let snrs = balanced(&SNRS_DB_V2, n, &mut rng);
+    let levels = balanced(&LEVELS_DBFS_V2, n, &mut rng);
+    let rooms = balanced(&ROOMS_V2, n, &mut rng);
+    (0..n)
+        .map(|k| {
+            let snr_db = match noises[k] {
+                Noise::SecondTalker => TALKER_SNRS_DB[k % TALKER_SNRS_DB.len()],
+                Noise::MouthClicks => CLICK_SNRS_DB[k % CLICK_SNRS_DB.len()],
+                _ => snrs[k],
+            };
+            Plan {
+                id: format!("{split}-{k:04}"),
+                speaker: speakers[k % speakers.len()].clone(),
+                noise: noises[k],
+                snr_db,
+                level_dbfs: levels[k],
+                rir: rooms[k],
+                seed: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (s << 32 | k as u64) ^ 0x0200,
+            }
+        })
+        .collect()
 }
 
 /// The split's items: the full grid `reps` times, in a seeded order. Speakers go round-robin over
@@ -236,7 +491,7 @@ pub fn plan_split(split: &str, speakers: &[String], seed: u64) -> Vec<Plan> {
             noise,
             snr_db,
             level_dbfs,
-            reverb: k % 4 == 3,
+            rir: (k % 4 == 3).then_some(Rir::DeepFilterNet),
             seed: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (s << 32 | k as u64),
         })
         .collect()
@@ -279,11 +534,12 @@ pub fn build_item(
         .iter()
         .find(|s| s.id == p.speaker)
         .expect("planned speaker exists");
-    let (speech16, files) = speech(spk, (ITEM_LEN - LEAD_IN) / 3, 0.25, &mut rng);
-    let mut speech = audio::up3(&speech16);
+    let (mut speech, files) = speech48(src, spk, ITEM_LEN - LEAD_IN, 0.25, &mut rng);
     fade(&mut speech, SR as usize / 200);
-    if p.reverb {
-        speech = audio::convolve(&speech, &src.rir);
+    match p.rir {
+        None => {}
+        Some(Rir::DeepFilterNet) => speech = audio::convolve(&speech, &src.rir),
+        Some(r) => speech = audio::convolve(&speech, &synth_rir(r.rt60_s(), &mut rng)),
     }
     let mut clean = vec![0.0f32; ITEM_LEN];
     clean[LEAD_IN..].copy_from_slice(&speech);
@@ -304,14 +560,37 @@ pub fn build_item(
     (m, c, files)
 }
 
-/// Joins a speaker's utterances (from a random start, `gap_s` of silence between) to `len` samples at 16 kHz.
-fn speech(spk: &Speaker, len: usize, gap_s: f64, rng: &mut ChaCha8Rng) -> (Vec<f32>, Vec<String>) {
+/// [`speech`] for `len48` samples at 48 kHz: native 48 kHz speech is used as is, 16 kHz speech
+/// is joined at 16 kHz and upsampled 3x.
+fn speech48(
+    src: &Sources,
+    spk: &Speaker,
+    len48: usize,
+    gap_s: f64,
+    rng: &mut ChaCha8Rng,
+) -> (Vec<f32>, Vec<String>) {
+    if src.speech_sr == SR {
+        speech(spk, len48, gap_s, SR, rng)
+    } else {
+        let (x, f) = speech(spk, len48 / 3, gap_s, 16_000, rng);
+        (audio::up3(&x), f)
+    }
+}
+
+/// Joins a speaker's utterances (from a random start, `gap_s` of silence between) to `len` samples at `sr`.
+fn speech(
+    spk: &Speaker,
+    len: usize,
+    gap_s: f64,
+    sr: u32,
+    rng: &mut ChaCha8Rng,
+) -> (Vec<f32>, Vec<String>) {
     let mut out = Vec::with_capacity(len);
     let mut files = Vec::new();
     let mut i = rng.random_range(0..spk.utts.len());
     while out.len() < len {
         if !out.is_empty() {
-            out.extend(std::iter::repeat_n(0.0, (gap_s * 16_000.0) as usize));
+            out.extend(std::iter::repeat_n(0.0, (gap_s * sr as f64) as usize));
         }
         let (name, x) = &spk.utts[i];
         out.extend_from_slice(x);
@@ -399,11 +678,42 @@ fn tone(t: f64, f: f64, phase: f64) -> f64 {
 }
 
 /// Another speaker's running speech, 10 s at 48 kHz, unit RMS.
-fn talker(spk: &Speaker, rng: &mut ChaCha8Rng) -> Vec<f64> {
-    let (x, _) = speech(spk, ITEM_LEN / 3, 0.1, rng);
-    let mut x: Vec<f64> = audio::up3(&x).into_iter().map(f64::from).collect();
+fn talker(src: &Sources, spk: &Speaker, rng: &mut ChaCha8Rng) -> Vec<f64> {
+    let (x, _) = speech48(src, spk, ITEM_LEN, 0.1, rng);
+    let mut x: Vec<f64> = x.into_iter().map(f64::from).collect();
     normalize(&mut x);
     x
+}
+
+/// A synthetic room impulse response at 48 kHz: a unit direct path, then exponentially decaying
+/// Gaussian noise (60 dB down after `rt60` s) from 2.5 ms on, low-passed at 6 kHz (air and wall
+/// absorption). Late energy grows with RT60 (Sabine): direct-to-reverberant ratio about +3 dB at
+/// 0.3 s, -0.8 dB at 0.6 s, -3.2 dB at 1.0 s.
+/// shortcut: one broadband decay rate and no discrete early reflections; use an image-source
+/// model if a result hinges on the room's colour.
+pub fn synth_rir(rt60: f64, rng: &mut ChaCha8Rng) -> Vec<f32> {
+    let n = (rt60 * SR as f64) as usize;
+    let start = SR as usize / 400;
+    let mut tail: Vec<f64> = (0..n)
+        .map(|i| {
+            if i < start {
+                0.0
+            } else {
+                gauss(rng) * (-6.908 * i as f64 / (rt60 * SR as f64)).exp()
+            }
+        })
+        .collect();
+    let a = (-2.0 * PI * 6_000.0 / SR as f64).exp();
+    let mut s = 0.0;
+    for v in &mut tail {
+        s = (1.0 - a) * *v + a * s;
+        *v = s;
+    }
+    let e: f64 = tail.iter().map(|v| v * v).sum();
+    let g = (0.5 * rt60 / 0.3 / e).sqrt();
+    let mut h: Vec<f32> = tail.iter().map(|v| (v * g) as f32).collect();
+    h[0] = 1.0;
+    h
 }
 
 /// A 10 s 48 kHz noise of the given type (any scale: [`mix`] sets the level).
@@ -485,7 +795,7 @@ fn make_noise(kind: Noise, src: &Sources, others: &[&Speaker], rng: &mut ChaCha8
             let mut x = vec![0.0; n];
             for spk in pick(others, 4, rng) {
                 x.iter_mut()
-                    .zip(talker(spk, rng))
+                    .zip(talker(src, spk, rng))
                     .for_each(|(a, b)| *a += b);
             }
             x
@@ -516,33 +826,144 @@ fn make_noise(kind: Noise, src: &Sources, others: &[&Speaker], rng: &mut ChaCha8
                 .collect()
         }
         Noise::Tv => {
-            let voice = talker(pick(others, 1, rng)[0], rng);
-            // Music-like: notes from an A minor pentatonic, three harmonics, decaying, in bursts.
-            const SCALE: [f64; 10] = [
-                220.0, 261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783.99,
-            ];
-            let mut music = vec![0.0; n];
-            let mut pos = 0;
-            while pos < n {
-                let len = (rng.random_range(0.15..0.6) * SR as f64) as usize;
-                if rng.random::<f64>() < 0.7 {
-                    let f = SCALE[rng.random_range(0..SCALE.len())];
-                    for k in 0..len.min(n - pos) {
-                        let tk = t(k);
-                        let env = (tk * 200.0).min(1.0) * (-tk * 4.0).exp();
-                        music[pos + k] += env
-                            * (tone(tk, f, 0.0)
-                                + 0.5 * tone(tk, 2.0 * f, 0.0)
-                                + 0.25 * tone(tk, 3.0 * f, 0.0));
-                    }
-                }
-                pos += len;
-            }
-            normalize(&mut music);
+            let voice = talker(src, pick(others, 1, rng)[0], rng);
+            let music = notes(n, rng);
             (0..n).map(|i| voice[i] + 0.5 * music[i]).collect()
+        }
+        Noise::SecondTalker => talker(src, pick(others, 1, rng)[0], rng),
+        Noise::Music => {
+            let tune = notes(n, rng);
+            let bass = notes(n, rng);
+            // Hi-hat: 30 ms bursts of high-passed noise on an eighth-note grid (100 to 140 bpm).
+            let step = (SR as f64 * 30.0 / rng.random_range(100.0..140.0)) as usize;
+            let mut hat = white(n, rng);
+            one_pole_highpass(&mut hat, 6_000.0);
+            let tau = 0.03 * SR as f64;
+            for (i, v) in hat.iter_mut().enumerate() {
+                *v *= (-((i % step) as f64) / tau).exp();
+            }
+            normalize(&mut hat);
+            // The bass line is the same note generator an octave and a half lower.
+            let bass: Vec<f64> = (0..n).map(|i| bass[(i * 3 / 8) % n]).collect();
+            (0..n)
+                .map(|i| tune[i] + 0.6 * bass[i] + 0.3 * hat[i])
+                .collect()
+        }
+        Noise::Cafe => {
+            let mut x: Vec<f64> = pink(n, rng).into_iter().map(|v| 0.3 * v).collect();
+            for spk in pick(others, 6, rng) {
+                let g = rng.random_range(0.3..1.0);
+                x.iter_mut()
+                    .zip(talker(src, spk, rng))
+                    .for_each(|(a, b)| *a += g * b);
+            }
+            // Dish and cutlery clinks: inharmonic decaying partials, 2 to 9 kHz, every 0.3 to 1.5 s.
+            let mut pos = rng.random_range(0..SR as usize);
+            while pos < n {
+                let f = rng.random_range(2_000.0..4_500.0);
+                let amp = rng.random_range(1.0..4.0);
+                let tau = rng.random_range(0.02..0.12);
+                for k in 0..((5.0 * tau * SR as f64) as usize).min(n - pos) {
+                    let tk = t(k);
+                    let env = amp * (-tk / tau).exp();
+                    x[pos + k] += env
+                        * (tone(tk, f, 0.0)
+                            + 0.6 * tone(tk, 2.76 * f, 0.0)
+                            + 0.3 * tone(tk, 5.4 * f, 0.0));
+                }
+                pos += (rng.random_range(0.3..1.5) * SR as f64) as usize;
+            }
+            x
+        }
+        Noise::Vacuum => {
+            // Motor at 150 to 450 Hz with 40 harmonics, on white and pink noise: energy up to 20 kHz.
+            let f0 = rng.random_range(150.0..450.0);
+            let ph: Vec<f64> = (0..40).map(|_| rng.random_range(0.0..2.0 * PI)).collect();
+            let mut hiss = white(n, rng);
+            one_pole_highpass(&mut hiss, 2_000.0);
+            normalize(&mut hiss);
+            let p = pink(n, rng);
+            (0..n)
+                .map(|i| {
+                    let t = t(i);
+                    let motor: f64 = (1..=40)
+                        .map(|h| tone(t, h as f64 * f0, ph[h - 1]) / h as f64)
+                        .sum();
+                    0.8 * hiss[i] + 0.6 * p[i] + 0.4 * motor
+                })
+                .collect()
+        }
+        Noise::DoorSlam => {
+            let mut x: Vec<f64> = pink(n, rng).into_iter().map(|v| 0.003 * v).collect();
+            // 2 to 4 thuds, at least one inside the speech: a 50 to 150 Hz resonance (30 to 90 ms
+            // decay), a 3 ms broadband click and a short rattle.
+            let k = rng.random_range(2..5);
+            for j in 0..k {
+                let pos = if j == 0 {
+                    rng.random_range(LEAD_IN..n - SR as usize)
+                } else {
+                    rng.random_range(0..n - SR as usize)
+                };
+                let f = rng.random_range(50.0..150.0);
+                let tau = rng.random_range(0.03..0.09);
+                let amp = rng.random_range(0.5..1.0);
+                for k in 0..(6.0 * tau * SR as f64) as usize {
+                    let tk = t(k);
+                    let click = if tk < 0.003 {
+                        gauss(rng) * (1.0 - tk / 0.003)
+                    } else {
+                        0.0
+                    };
+                    let rattle = 0.15 * gauss(rng) * (-tk / 0.02).exp();
+                    x[pos + k] +=
+                        amp * ((-tk / tau).exp() * tone(tk, f, 0.0) + 0.7 * click + rattle);
+                }
+            }
+            x
+        }
+        Noise::MouthClicks => {
+            let mut x: Vec<f64> = white(n, rng).into_iter().map(|v| 0.002 * v).collect();
+            let mut pos = rng.random_range(0..SR as usize / 2);
+            while pos < n {
+                let len = rng.random_range(24..96); // 0.5 to 2 ms
+                let amp = rng.random_range(0.3..1.0);
+                for k in 0..len.min(n - pos) {
+                    let w = (PI * k as f64 / len as f64).sin();
+                    x[pos + k] += amp * w * gauss(rng);
+                }
+                pos += (rng.random_range(0.15..1.2) * SR as f64) as usize;
+            }
+            one_pole_highpass(&mut x, 1_000.0);
+            x
         }
     };
     x.into_iter().map(|v| v as f32).collect()
+}
+
+/// Music-like notes: an A minor pentatonic, three harmonics, decaying, in bursts. Unit RMS.
+fn notes(n: usize, rng: &mut ChaCha8Rng) -> Vec<f64> {
+    const SCALE: [f64; 10] = [
+        220.0, 261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783.99,
+    ];
+    let mut music = vec![0.0; n];
+    let mut pos = 0;
+    while pos < n {
+        let len = (rng.random_range(0.15..0.6) * SR as f64) as usize;
+        if rng.random::<f64>() < 0.7 {
+            let f = SCALE[rng.random_range(0..SCALE.len())];
+            for k in 0..len.min(n - pos) {
+                let tk = k as f64 / SR as f64;
+                let env = (tk * 200.0).min(1.0) * (-tk * 4.0).exp();
+                music[pos + k] += env
+                    * (tone(tk, f, 0.0)
+                        + 0.5 * tone(tk, 2.0 * f, 0.0)
+                        + 0.25 * tone(tk, 3.0 * f, 0.0));
+            }
+        }
+        pos += len;
+    }
+    normalize(&mut music);
+    music
 }
 
 fn pick<'a>(v: &[&'a Speaker], k: usize, rng: &mut ChaCha8Rng) -> Vec<&'a Speaker> {
@@ -563,15 +984,36 @@ pub fn measure(m: &[f32], c: &[f32]) -> (f64, f64) {
     (snr, db(rms(m).powi(2)))
 }
 
-/// Builds every split under `out/<split>/` with a `manifest.json` each.
+/// Builds every split of corpus `version` under `out/<split>/` with a `manifest.json` each.
 /// `limit` keeps only the first N items of each split (for quick tests).
-pub fn build(src: &Sources, out: &Path, seed: u64, limit: Option<usize>) -> Result<()> {
-    let ids: Vec<String> = src.speakers.iter().map(|s| s.id.clone()).collect();
-    let groups = split_speakers(&ids, seed);
+pub fn build(
+    src: &Sources,
+    version: Version,
+    out: &Path,
+    seed: u64,
+    limit: Option<usize>,
+) -> Result<()> {
+    let groups = match version {
+        Version::V1 => {
+            let ids: Vec<String> = src.speakers.iter().map(|s| s.id.clone()).collect();
+            split_speakers(&ids, seed)
+        }
+        Version::V2 => {
+            let ids: Vec<_> = src
+                .speakers
+                .iter()
+                .map(|s| (s.id.clone(), s.gender))
+                .collect();
+            split_speakers_by_gender(&ids, seed)
+        }
+    };
     for (split, spks) in SPLITS.iter().zip(&groups) {
         let dir = out.join(split);
         std::fs::create_dir_all(&dir)?;
-        let mut plan = plan_split(split, spks, seed);
+        let mut plan = match version {
+            Version::V1 => plan_split(split, spks, seed),
+            Version::V2 => plan_split_v2(split, spks, seed),
+        };
         plan.truncate(limit.unwrap_or(usize::MAX));
         let items = plan
             .par_iter()
@@ -584,11 +1026,13 @@ pub fn build(src: &Sources, out: &Path, seed: u64, limit: Option<usize>) -> Resu
                 Ok(Item {
                     id: p.id.clone(),
                     speaker: p.speaker.clone(),
+                    speech_bandwidth_hz: files.iter().map(|f| src.bandwidth_hz[f]).collect(),
                     speech_files: files,
                     noise: p.noise,
                     snr_db: p.snr_db,
                     level_dbfs: p.level_dbfs,
-                    reverb: p.reverb,
+                    reverb: p.rir.is_some(),
+                    rir: p.rir,
                     mix,
                     clean,
                     snr_db_actual,
@@ -600,10 +1044,22 @@ pub fn build(src: &Sources, out: &Path, seed: u64, limit: Option<usize>) -> Resu
             .iter()
             .filter(|i| i.level_dbfs_actual < i.level_dbfs - 0.5)
             .count();
+        let mut bw: Vec<f64> = items
+            .iter()
+            .flat_map(|i| i.speech_files.iter())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|f| src.bandwidth_hz[f])
+            .collect();
+        bw.sort_by(f64::total_cmp);
         let manifest = Manifest {
+            corpus: version.name().to_string(),
             split: split.to_string(),
             seed,
             sample_rate: SR,
+            speech_sample_rate: src.speech_sr,
+            speech_bandwidth_hz: (!bw.is_empty())
+                .then(|| [bw[0], bw[bw.len() / 2], bw[bw.len() - 1]]),
             lead_in_samples: LEAD_IN,
             item_samples: ITEM_LEN,
             speakers: spks.clone(),
@@ -614,9 +1070,10 @@ pub fn build(src: &Sources, out: &Path, seed: u64, limit: Option<usize>) -> Resu
             serde_json::to_string_pretty(&manifest)?,
         )?;
         eprintln!(
-            "{split}: {} items, {} speakers, {scaled} scaled down for the peak limit",
+            "{split}: {} items, {} speakers, {scaled} scaled down for the peak limit, speech bandwidth (min, median, max) {:?} Hz",
             manifest.items.len(),
-            spks.len()
+            spks.len(),
+            manifest.speech_bandwidth_hz,
         );
     }
     Ok(())
@@ -649,7 +1106,13 @@ pub(crate) mod tests {
                         (format!("{s}-{u}.flac"), x)
                     })
                     .collect(),
+                gender: Some(if s % 2 == 0 { 'F' } else { 'M' }),
             })
+            .collect::<Vec<Speaker>>();
+        let bandwidth_hz = speakers
+            .iter()
+            .flat_map(|s| s.utts.iter())
+            .map(|(n, x)| (n.clone(), audio::bandwidth_hz(x, 16_000)))
             .collect();
         let sn = |f: f64| {
             (0..30_000)
@@ -658,6 +1121,8 @@ pub(crate) mod tests {
         };
         Sources {
             speakers,
+            speech_sr: 16_000,
+            bandwidth_hz,
             sample_noises: [sn(1_000.0), sn(3_000.0)],
             rir: vec![1.0, 0.0, 0.3, 0.1],
         }
@@ -694,7 +1159,7 @@ pub(crate) mod tests {
                 }
             }
         }
-        assert_eq!(p.iter().filter(|x| x.reverb).count(), 60);
+        assert_eq!(p.iter().filter(|x| x.rir.is_some()).count(), 60);
         assert_eq!(plan_split("dev", &spk, 1).len(), 120);
     }
 
@@ -747,8 +1212,8 @@ pub(crate) mod tests {
         let src = tiny_sources();
         let dir = std::env::temp_dir().join(format!("audiolab-test-{}", std::process::id()));
         let (a, b) = (dir.join("a"), dir.join("b"));
-        build(&src, &a, 3, Some(4)).unwrap();
-        build(&src, &b, 3, Some(4)).unwrap();
+        build(&src, Version::V1, &a, 3, Some(4)).unwrap();
+        build(&src, Version::V1, &b, 3, Some(4)).unwrap();
         for split in SPLITS {
             let ma = std::fs::read(a.join(split).join("manifest.json")).unwrap();
             assert_eq!(
@@ -766,10 +1231,150 @@ pub(crate) mod tests {
             }
         }
         let other = dir.join("c");
-        build(&src, &other, 4, Some(1)).unwrap();
+        build(&src, Version::V1, &other, 4, Some(1)).unwrap();
         assert_ne!(
             std::fs::read(a.join("dev/dev-0000.mix.wav")).unwrap(),
             std::fs::read(other.join("dev/dev-0000.mix.wav")).unwrap()
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// [`tiny_sources`] as native 48 kHz speech (the AM tones upsampled once, like VCTK files).
+    fn tiny_sources_48() -> Sources {
+        let mut src = tiny_sources();
+        for spk in &mut src.speakers {
+            for (_, x) in &mut spk.utts {
+                *x = audio::up3(x);
+            }
+        }
+        src.speech_sr = SR;
+        src
+    }
+
+    #[test]
+    fn v2_plan_balances_each_factor() {
+        let spk: Vec<String> = (0..10).map(|i| format!("{i}")).collect();
+        for (split, n) in [("dev", 160), ("gate", 400), ("holdout", 160)] {
+            let p = plan_split_v2(split, &spk, 1);
+            assert_eq!(p.len(), n);
+            let count = |f: &dyn Fn(&Plan) -> bool| p.iter().filter(|x| f(x)).count();
+            for &noise in &NOISES_V2 {
+                let c = count(&|x| x.noise == noise);
+                assert!(c == n / 14 || c == n / 14 + 1, "{split} {noise:?} {c}");
+            }
+            for &l in &LEVELS_DBFS_V2 {
+                let c = count(&|x| x.level_dbfs == l);
+                assert!(c.abs_diff(n / 3) <= 1, "{split} {l} {c}");
+            }
+            for r in [Rir::DeepFilterNet, Rir::Rt03, Rir::Rt06, Rir::Rt10] {
+                assert_eq!(count(&|x| x.rir == Some(r)), n / 8, "{split} {r:?}");
+            }
+            assert_eq!(count(&|x| x.rir.is_none()), n / 2);
+            for x in &p {
+                let ok = match x.noise {
+                    Noise::SecondTalker => TALKER_SNRS_DB.contains(&x.snr_db),
+                    Noise::MouthClicks => CLICK_SNRS_DB.contains(&x.snr_db),
+                    _ => SNRS_DB_V2.contains(&x.snr_db),
+                };
+                assert!(ok, "{x:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn v2_mix_hits_snr_and_level_for_every_noise_and_room() {
+        let src = tiny_sources_48();
+        let spk: Vec<String> = (0..9).map(|i| format!("{i}")).collect();
+        let plans = plan_split_v2("dev", &spk[..4], 7);
+        for &noise in &NOISES_V2 {
+            for p in plans.iter().filter(|p| p.noise == noise).take(3) {
+                let (m, c, _) = build_item(&src, &spk[..4], p);
+                let (snr, level) = measure(&m, &c);
+                assert!((snr - p.snr_db).abs() < 0.1, "{p:?}: snr {snr}");
+                if m.iter().all(|v| v.abs() < PEAK_LIMIT - 1e-4) {
+                    assert!((level - p.level_dbfs).abs() < 0.5, "{p:?}: level {level}");
+                } else {
+                    assert!(level < p.level_dbfs, "{p:?}: {level}");
+                }
+                assert!(c[..LEAD_IN].iter().all(|&v| v == 0.0));
+            }
+        }
+    }
+
+    #[test]
+    fn synth_rir_decays_at_its_rt60() {
+        for rt in [0.3, 0.6, 1.0] {
+            let h = synth_rir(rt, &mut ChaCha8Rng::seed_from_u64(5));
+            // Schroeder backward integral of the tail, fit from -5 to -25 dB (T20 x 3).
+            let e: Vec<f64> = h.iter().map(|&v| (v as f64).powi(2)).collect();
+            let tail: Vec<f64> = e[SR as usize / 400..].to_vec();
+            let mut acc = 0.0;
+            let mut sch: Vec<f64> = tail
+                .iter()
+                .rev()
+                .map(|v| {
+                    acc += v;
+                    acc
+                })
+                .collect();
+            sch.reverse();
+            let at = |d: f64| sch.iter().position(|&v| db(v / sch[0]) < d).unwrap();
+            let t20 = (at(-25.0) - at(-5.0)) as f64 / SR as f64;
+            assert!(
+                (3.0 * t20 / rt - 1.0).abs() < 0.15,
+                "rt {rt}: {}",
+                3.0 * t20
+            );
+            let drr = db(e[0] / tail.iter().sum::<f64>());
+            assert!(
+                (drr - db(0.3 / (0.5 * rt))).abs() < 0.3,
+                "rt {rt}: drr {drr}"
+            );
+        }
+    }
+
+    #[test]
+    fn gender_split_is_balanced_and_disjoint() {
+        let spk: Vec<(String, Option<char>)> = (0..40)
+            .map(|i| (format!("p{i}"), Some(if i < 20 { 'F' } else { 'M' })))
+            .collect();
+        let parts = split_speakers_by_gender(&spk, 1);
+        for (part, n) in parts.iter().zip([10, 20, 10]) {
+            assert_eq!(part.len(), n);
+            let f = part
+                .iter()
+                .filter(|id| id[1..].parse::<u32>().unwrap() < 20)
+                .count();
+            assert_eq!(f * 2, n);
+        }
+        let mut all: Vec<_> = parts.concat();
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), 40);
+    }
+
+    #[test]
+    fn v2_same_seed_gives_identical_bytes() {
+        let src = tiny_sources_48();
+        let dir = std::env::temp_dir().join(format!("audiolab-v2-test-{}", std::process::id()));
+        build(&src, Version::V2, &dir.join("a"), 3, Some(3)).unwrap();
+        build(&src, Version::V2, &dir.join("b"), 3, Some(3)).unwrap();
+        for split in SPLITS {
+            for f in std::fs::read_dir(dir.join("a").join(split)).unwrap() {
+                let name = f.unwrap().file_name();
+                assert_eq!(
+                    std::fs::read(dir.join("a").join(split).join(&name)).unwrap(),
+                    std::fs::read(dir.join("b").join(split).join(&name)).unwrap(),
+                    "{name:?}"
+                );
+            }
+        }
+        let m = Manifest::load(&dir.join("a/dev/manifest.json")).unwrap();
+        assert_eq!((m.corpus.as_str(), m.speech_sample_rate), ("v2", SR));
+        assert!(
+            m.items
+                .iter()
+                .all(|i| i.speech_bandwidth_hz.len() == i.speech_files.len())
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -1,0 +1,14 @@
+atten_db = 100.0
+post_filter_beta = 0.02
+input_gain_db = 0.0
+
+[pre]
+
+[post]
+
+[post.gate]
+close_db = -3.0
+open_db = 0.0
+hold_ms = 150.0
+floor_db = -24.0
+release_db_per_s = 300.0

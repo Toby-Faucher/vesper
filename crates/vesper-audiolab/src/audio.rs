@@ -183,6 +183,51 @@ pub fn convolve(x: &[f32], h: &[f32]) -> Vec<f32> {
     out.iter().map(|&v| (v / n as f64) as f32).collect()
 }
 
+/// Measured bandwidth (spectral rolloff) of speech at rate `sr`, in Hz: the upper edge of the
+/// highest 250 Hz band whose long-term power is within 50 dB of the strongest band. Long-term
+/// power is the mean over active 2048-point Hann frames (within 40 dB of the loudest frame), so
+/// pauses and the recording's noise floor do not count. LibriSpeech gives at most 8000 (its
+/// Nyquist); 16 kHz audio upsampled 3x gives about 7750.
+pub fn bandwidth_hz(x: &[f32], sr: u32) -> f64 {
+    const N: usize = 2048;
+    const BAND_HZ: f64 = 250.0;
+    if x.len() < N {
+        return 0.0;
+    }
+    let fft = RealFftPlanner::<f64>::new().plan_fft_forward(N);
+    let win: Vec<f64> = (0..N)
+        .map(|i| 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / N as f64).cos())
+        .collect();
+    let mut buf = vec![0.0; N];
+    let mut out = fft.make_output_vec();
+    let frames: Vec<Vec<f64>> = (0..=(x.len() - N) / (N / 2))
+        .map(|f| {
+            let s = &x[f * N / 2..f * N / 2 + N];
+            buf.iter_mut()
+                .zip(s.iter().zip(&win))
+                .for_each(|(b, (&v, &w))| *b = v as f64 * w);
+            fft.process(&mut buf, &mut out).expect("fft length");
+            out.iter().map(|c| c.norm_sqr()).collect()
+        })
+        .collect();
+    let e: Vec<f64> = frames.iter().map(|p| p.iter().sum()).collect();
+    let max_e = e.iter().copied().fold(0.0, f64::max);
+    if max_e <= 0.0 {
+        return 0.0;
+    }
+    let bin_hz = sr as f64 / N as f64;
+    let n_bands = ((sr as f64 / 2.0) / BAND_HZ).ceil() as usize;
+    let mut bands = vec![0.0; n_bands];
+    for (p, _) in frames.iter().zip(&e).filter(|(_, e)| **e >= max_e * 1e-4) {
+        for (k, v) in p.iter().enumerate().skip(1) {
+            bands[((k as f64 * bin_hz / BAND_HZ) as usize).min(n_bands - 1)] += v;
+        }
+    }
+    let top = bands.iter().copied().fold(0.0, f64::max);
+    let last = bands.iter().rposition(|&b| b >= top * 1e-5).unwrap_or(0);
+    ((last + 1) as f64 * BAND_HZ).min(sr as f64 / 2.0)
+}
+
 pub fn rms(x: &[f32]) -> f64 {
     (x.iter().map(|&v| (v as f64).powi(2)).sum::<f64>() / x.len().max(1) as f64).sqrt()
 }
@@ -220,6 +265,26 @@ mod tests {
         let y = down3(&up3(&x));
         let err: Vec<f32> = x.iter().zip(&y).map(|(a, b)| a - b).collect();
         assert!(db((mid_rms(&err) / mid_rms(&x)).powi(2)) < -60.0);
+    }
+
+    #[test]
+    fn bandwidth_of_upsampled_and_full_band_noise() {
+        let mut s = 9u32;
+        let mut white = |n: usize| -> Vec<f32> {
+            (0..n)
+                .map(|_| {
+                    s ^= s << 13;
+                    s ^= s >> 17;
+                    s ^= s << 5;
+                    s as f32 / u32::MAX as f32 - 0.5
+                })
+                .collect()
+        };
+        let up = up3(&white(16_000));
+        let bw = bandwidth_hz(&up, SR);
+        assert!((7_500.0..=8_250.0).contains(&bw), "{bw}");
+        assert_eq!(bandwidth_hz(&white(48_000), SR), 24_000.0);
+        assert_eq!(bandwidth_hz(&white(16_000), 16_000), 8_000.0);
     }
 
     #[test]

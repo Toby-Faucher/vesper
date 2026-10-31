@@ -19,6 +19,7 @@ web/dist/
 .claude/worktrees/
 # Audio lab data (fetched by research/scripts/fetch-*.sh, built by audiolab).
 research/corpus/
+research/corpus48/
 research/models/
 research/listen/
 research/results/
@@ -27,3 +28,4 @@ research/results/
 research/experiments/*/*.log
 __pycache__/
 research/experiments/*/prompt.md
+research/listen-v2/

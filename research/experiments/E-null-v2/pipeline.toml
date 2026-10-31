@@ -1,0 +1,10 @@
+# The shipped capture path: vesper_dsp::PipelineConfig::default(), written out.
+# Unset keys take PipelineConfig::default(): since E0 that sets max_db_erb_thresh and max_db_df_thresh
+# to 1000 (never skip a stage), and min_db_thresh unset keeps the library default.
+atten_db = 100.0
+post_filter_beta = 0.02
+input_gain_db = 0.0
+
+[pre]
+
+[post]

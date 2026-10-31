@@ -1,0 +1,2 @@
+opus = "bitrate=96000,complexity=10,fec=1,dtx=1,loss=0.05,seed=1"
+allow_more_bitrate = true

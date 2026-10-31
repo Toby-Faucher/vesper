@@ -1,0 +1,174 @@
+{
+  "base_eval": "research/results/gate/base-473764df6af1-34b896b88391-20fa5fed-c78e1677.json",
+  "base_sha": "473764df6af1ed94835e84175b9a74c7f2f7dec2",
+  "bitrate_bps": {
+    "base": 64000,
+    "cand": 48000
+  },
+  "branch": "exp/E12-opus48",
+  "cand_eval": "research/results/gate/cand-E12-opus48-473764df6af1.json",
+  "cand_sha": "473764df6af1ed94835e84175b9a74c7f2f7dec2",
+  "config_hash": "6103032d9629",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        -0.027439131706404038,
+        0.015406836955536171
+      ],
+      "mean": -0.006016147375433933
+    },
+    "hb_err_db": {
+      "ci95": [
+        -0.010346205495659257,
+        0.050737427443890315
+      ],
+      "mean": 0.02019561097411553
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        -0.07133546701102365,
+        0.026806965623027756
+      ],
+      "mean": -0.02226425069399795
+    },
+    "lsd": {
+      "ci95": [
+        0.08452072073647743,
+        0.17491537456687734
+      ],
+      "mean": 0.12971804765167738
+    },
+    "lsd_wb": {
+      "ci95": [
+        -0.002802597835556829,
+        0.03881096550917455
+      ],
+      "mean": 0.018004183836808862
+    },
+    "mcd": {
+      "ci95": [
+        0.10953481632552409,
+        0.18762210538346175
+      ],
+      "mean": 0.14857846085449292
+    },
+    "ovrl": {
+      "ci95": [
+        -0.03367625519716054,
+        -0.0012432117338147565
+      ],
+      "mean": -0.017459733465487647
+    },
+    "si_sdr_i": {
+      "ci95": [
+        -0.07179829574261622,
+        -0.03451868001870334
+      ],
+      "mean": -0.05315848788065978
+    },
+    "sig": {
+      "ci95": [
+        -0.03473958575663126,
+        -0.00010936662726346302
+      ],
+      "mean": -0.017424476191947362
+    }
+  },
+  "eval": "eval.toml",
+  "guards": {
+    "bak_mean": {
+      "limit": -0.05,
+      "pass": true,
+      "value": -0.006016147375433933
+    },
+    "bitrate_bps": {
+      "allowed_more": false,
+      "limit": 64000,
+      "pass": true,
+      "value": 48000
+    },
+    "clipped_items": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "lead_in_mean": {
+      "limit": -3.0,
+      "pass": true,
+      "value": -0.02226425069399795
+    },
+    "lsd_wb_mean": {
+      "limit": 0.05,
+      "pass": true,
+      "value": 0.018004183836808862
+    },
+    "rtf": {
+      "advisory": true,
+      "limit": 0.06,
+      "pass": true,
+      "value": 0.07856444526666667
+    },
+    "rtf_ratio": {
+      "advisory": true,
+      "limit": 1.25,
+      "pass": true,
+      "value": 1.7001731344560134
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": true,
+      "value": -0.05315848788065978
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": true,
+      "value": -0.017424476191947362
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": true,
+      "value": -0.07625466449442717
+    }
+  },
+  "id": "E12-opus48",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "n_total": 400,
+  "n_used": 40,
+  "opus": "bitrate=48000,complexity=10,fec=1,dtx=1,loss=0.05,seed=1",
+  "ovrl_delta_sd_full": 0.05884850116681843,
+  "pipeline": "pipeline.toml",
+  "reason": "SPRT accepted H0 (no gain of delta1)",
+  "rtf": {
+    "base": 0.046209673400000005,
+    "cand": 0.07856444526666667
+  },
+  "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": -8.022745933657996,
+    "lower": -2.9444389791664403,
+    "n": 40,
+    "upper": 2.9444389791664403,
+    "verdict": "H0"
+  },
+  "stack": "",
+  "status": "rejected"
+}

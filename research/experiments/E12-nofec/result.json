@@ -1,0 +1,174 @@
+{
+  "base_eval": "research/results/gate/base-473764df6af1-34b896b88391-20fa5fed-c78e1677.json",
+  "base_sha": "473764df6af1ed94835e84175b9a74c7f2f7dec2",
+  "bitrate_bps": {
+    "base": 64000,
+    "cand": 64000
+  },
+  "branch": "exp/E12-nofec",
+  "cand_eval": "research/results/gate/cand-E12-nofec-473764df6af1.json",
+  "cand_sha": "473764df6af1ed94835e84175b9a74c7f2f7dec2",
+  "config_hash": "6103032d9629",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        -0.07032037572540961,
+        -0.019577007212647435
+      ],
+      "mean": -0.04494869146902852
+    },
+    "hb_err_db": {
+      "ci95": [
+        0.25758895825091555,
+        0.36638586238501714
+      ],
+      "mean": 0.31198741031796634
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        -0.2968110740044587,
+        3.49681458973245
+      ],
+      "mean": 1.6000017578639956
+    },
+    "lsd": {
+      "ci95": [
+        0.09981001200843789,
+        0.16077269389405777
+      ],
+      "mean": 0.13029135295124783
+    },
+    "lsd_wb": {
+      "ci95": [
+        0.0535144496733822,
+        0.10240026816275963
+      ],
+      "mean": 0.07795735891807092
+    },
+    "mcd": {
+      "ci95": [
+        0.3227291016048534,
+        0.5098942385888012
+      ],
+      "mean": 0.41631167009682735
+    },
+    "ovrl": {
+      "ci95": [
+        -0.13315621518811702,
+        -0.056407377395124934
+      ],
+      "mean": -0.09478179629162098
+    },
+    "si_sdr_i": {
+      "ci95": [
+        -0.8797785812911876,
+        -0.6094255634163515
+      ],
+      "mean": -0.7446020723537695
+    },
+    "sig": {
+      "ci95": [
+        -0.13114064710328466,
+        -0.05145161019259955
+      ],
+      "mean": -0.0912961286479421
+    }
+  },
+  "eval": "eval.toml",
+  "guards": {
+    "bak_mean": {
+      "limit": -0.05,
+      "pass": true,
+      "value": -0.04494869146902852
+    },
+    "bitrate_bps": {
+      "allowed_more": false,
+      "limit": 64000,
+      "pass": true,
+      "value": 64000
+    },
+    "clipped_items": {
+      "limit": 0,
+      "pass": false,
+      "value": 1
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "lead_in_mean": {
+      "limit": -3.0,
+      "pass": true,
+      "value": 1.6000017578639956
+    },
+    "lsd_wb_mean": {
+      "limit": 0.05,
+      "pass": false,
+      "value": 0.07795735891807092
+    },
+    "rtf": {
+      "advisory": true,
+      "limit": 0.06,
+      "pass": true,
+      "value": 0.03999638146666666
+    },
+    "rtf_ratio": {
+      "advisory": true,
+      "limit": 1.25,
+      "pass": true,
+      "value": 0.8655413147037446
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": false,
+      "value": -0.7446020723537695
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": false,
+      "value": -0.0912961286479421
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": false,
+      "value": -0.25806353903501794
+    }
+  },
+  "id": "E12-nofec",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "n_total": 400,
+  "n_used": 40,
+  "opus": "bitrate=64000,complexity=10,fec=0,dtx=1,loss=0.05,seed=1",
+  "ovrl_delta_sd_full": 0.09448796110693317,
+  "pipeline": "pipeline.toml",
+  "reason": "SPRT accepted H0 (no gain of delta1)",
+  "rtf": {
+    "base": 0.046209673400000005,
+    "cand": 0.03999638146666666
+  },
+  "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": -5.46694058145272,
+    "lower": -2.9444389791664403,
+    "n": 40,
+    "upper": 2.9444389791664403,
+    "verdict": "H0"
+  },
+  "stack": "",
+  "status": "rejected"
+}
