@@ -14,7 +14,7 @@ if [ -n "$files" ]; then echo "$files"; echo "ERROR: secret-looking file is trac
 # A dev key value is anything but a placeholder: $VAR, <...>, ... or empty.
 patterns='-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|VESPER_DEV_KEY[[:space:]]*[=:][[:space:]]*["'"'"']?[^$<.?{[:space:]"'"'"'][^[:space:]]{3,}|/home/[a-z][a-z0-9_-]*/|[A-Za-z0-9-]+\.ts\.net'
 allow=scripts/secrets-allow.txt
-hits=$(git ls-files -z -- ':!scripts/check-secrets.sh' ':!Cargo.lock' ':!web/package-lock.json' \
+hits=$(git ls-files -z -- ':!scripts/check-secrets.sh' ':!scripts/test-check-secrets.sh' ':!Cargo.lock' ':!web/package-lock.json' \
   | xargs -0 grep -I -n -E -e "$patterns" 2>/dev/null)
 if [ -n "$hits" ] && [ -f "$allow" ]; then hits=$(grep -v -F -f "$allow" <<<"$hits"); fi
 if [ -n "$hits" ]; then echo "$hits"; echo "ERROR: possible secret or private detail above"; bad=1; fi
