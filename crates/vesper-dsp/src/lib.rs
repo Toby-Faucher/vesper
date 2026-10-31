@@ -106,6 +106,13 @@ mod tests {
     }
 
     #[test]
+    fn default_never_skips_stages_at_high_snr() {
+        let c = PipelineConfig::default();
+        assert_eq!(c.max_db_erb_thresh, Some(1000.0));
+        assert_eq!(c.max_db_df_thresh, Some(1000.0));
+    }
+
+    #[test]
     fn pipeline_rejects_wrong_frame_length() {
         let mut p = pipeline(&PipelineConfig::default());
         assert_eq!(

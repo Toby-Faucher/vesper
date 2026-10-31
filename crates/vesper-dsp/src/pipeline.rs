@@ -34,8 +34,9 @@ impl Default for PipelineConfig {
             atten_db: 100.0,
             post_filter_beta: 0.02,
             min_db_thresh: None,
-            max_db_erb_thresh: None,
-            max_db_df_thresh: None,
+            // E0: never skip the ERB or deep filter stage at high local SNR.
+            max_db_erb_thresh: Some(1000.0),
+            max_db_df_thresh: Some(1000.0),
             input_gain_db: 0.0,
             pre: PreConfig::default(),
             post: PostConfig::default(),
