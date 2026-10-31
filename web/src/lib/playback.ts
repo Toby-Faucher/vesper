@@ -67,6 +67,13 @@ export class Playback {
     this.volumes.set(id, v);
     this.apply(id);
   }
+  /** AudioContext.setSinkId is Chrome only; elsewhere the OS default output is used. */
+  async setSink(id: string | null): Promise<boolean> {
+    const c = this.ctx as AudioContext & { setSinkId?: (id: string) => Promise<void> };
+    if (!c.setSinkId) return false;
+    await c.setSinkId(id ?? '');
+    return true;
+  }
   setDeafened(d: boolean) {
     this.deafened = d;
     this.nodes.forEach((_, id) => this.apply(id));

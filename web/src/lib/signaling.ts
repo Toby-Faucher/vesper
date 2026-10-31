@@ -48,12 +48,13 @@ export async function joinRoom(
     key: string;
     stream: MediaStream;
     bitrateKbps: number;
+    dtx?: boolean;
     onError?: (e: Error) => void;
     onRemoteStream?: (s: MediaStream) => void;
     onRemoteStreamEnd?: (id: string) => void;
   },
 ): Promise<{ pc: RTCPeerConnection; peers: Peer[]; userId: string }> {
-  const tune = (sdp: string) => tuneOpus(sdp, { bitrateKbps: opts.bitrateKbps, dtx: true, fec: true });
+  const tune = (sdp: string) => tuneOpus(sdp, { bitrateKbps: opts.bitrateKbps, dtx: opts.dtx ?? true, fec: true });
   const report = (e: unknown) => opts.onError?.(e instanceof Error ? e : new Error(String(e)));
   const pc = new RTCPeerConnection();
   opts.stream.getAudioTracks().forEach((t) => pc.addTrack(t, opts.stream));

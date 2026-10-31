@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { Signaling, joinRoom } from '../lib/signaling';
   import { applyPeerMsg } from '../lib/peers';
   import { Playback } from '../lib/playback';
   import { restoreVolumes, saveVolumes } from '../lib/volume';
   import { createCapture, type Capture } from '../lib/audio/capture';
-  import { DEFAULT_AUDIO_SETTINGS } from '../lib/audio/settings';
+  import { loadSettings, saveSettings, type AudioSettings } from '../lib/audio/settings';
+  import { DEVICE_MESSAGES, applyBitrate, classifyMediaError, missingDevice, newInputs, watchDevices } from '../lib/devices';
+  import Settings from './Settings.svelte';
   import type { DenoiseMode } from '../lib/audio/mode';
   import type { Peer } from '../lib/gen/Peer';
   import type { ServerMsg } from '../lib/gen/ServerMsg';
@@ -20,19 +23,67 @@
   let volumes = $state<Record<string, number>>({});
   let speaking = $state<Set<string>>(new Set());
   let playback: Playback | undefined;
-  let mic: MediaStream | undefined;
+  let mic = $state<MediaStream>();
   let capture: Capture | undefined;
-  let mode = $state<DenoiseMode>(DEFAULT_AUDIO_SETTINGS.mode);
+  let settings = $state<AudioSettings>(loadSettings(localStorage));
+  let showSettings = $state(false);
+  let deviceError = $state('');
+  let offered = $state<MediaDeviceInfo | null>(null);
+  let sender: RTCRtpSender | undefined;
+  let pttDown = false;
+  let known: MediaDeviceInfo[] = [];
+  let mode = $state<DenoiseMode>('deepfilter');
   let modeReason = $state('');
   let sig: Signaling | undefined;
   let poll: ReturnType<typeof setInterval> | undefined;
   let releaseLock: (() => void) | undefined;
 
+  // Push to talk is mute-gated: the track is live only when not muted and (PTT off or key held).
+  function applyTrack() {
+    mic?.getAudioTracks().forEach((t) => (t.enabled = !muted && (!settings.pushToTalk.enabled || pttDown)));
+  }
   function toggleMute() {
     muted = !muted;
-    mic?.getAudioTracks().forEach((t) => (t.enabled = !muted));
+    applyTrack();
     sig?.send({ type: 'set_muted', muted });
   }
+  function onSettings(next: AudioSettings) {
+    const prev = settings;
+    settings = next;
+    saveSettings(localStorage, next);
+    deviceError = '';
+    capture?.setSettings(next);
+    applyTrack();
+    if (sender && next.bitrateKbps !== prev.bitrateKbps)
+      applyBitrate(sender, next.bitrateKbps).catch((e) => (error = `bitrate change failed: ${e}`));
+    if (next.speakerId !== prev.speakerId)
+      playback?.setSink(next.speakerId).catch(() => (error = 'could not switch speaker'));
+  }
+  function onKey(down: boolean) {
+    return (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!settings.pushToTalk.enabled || e.code !== settings.pushToTalk.key || t?.matches('input,select,textarea')) return;
+      pttDown = down;
+      applyTrack();
+    };
+  }
+  onMount(() => {
+    const [kd, ku] = [onKey(true), onKey(false)];
+    window.addEventListener('keydown', kd);
+    window.addEventListener('keyup', ku);
+    const stop = watchDevices((list) => {
+      if (joined && missingDevice(list, settings.micId)) deviceError = DEVICE_MESSAGES.unplugged;
+      const fresh = newInputs(known, list);
+      if (joined && fresh.length) offered = fresh[0];
+      known = list;
+    });
+    void navigator.mediaDevices.enumerateDevices().then((l) => (known = l), () => {});
+    return () => {
+      stop();
+      window.removeEventListener('keydown', kd);
+      window.removeEventListener('keyup', ku);
+    };
+  });
   function toggleDeafen() {
     deafened = !deafened;
     playback?.setDeafened(deafened);
@@ -51,6 +102,9 @@
     releaseLock = undefined;
     capture?.close();
     capture = undefined;
+    sender = undefined;
+    deviceError = '';
+    offered = null;
     mic = undefined;
     modeReason = '';
     muted = false;
@@ -71,9 +125,10 @@
     const held = new Promise<void>((res) => (releaseLock = res));
     if (navigator.locks) void navigator.locks.request('vesper-call', () => held);
     else console.warn('navigator.locks missing: audio may stop when the tab is backgrounded');
-    // Shortcut: default settings until Task 9 persists them. Called before any await: it creates its AudioContext.
-    const capturing = createCapture(DEFAULT_AUDIO_SETTINGS);
-    mode = DEFAULT_AUDIO_SETTINGS.mode;
+    void playback.setSink(settings.speakerId).catch(() => {});
+    // Called before any await: it creates its AudioContext.
+    const capturing = createCapture(settings);
+    mode = settings.mode;
     try {
       const cap = (capture = await capturing);
       const stream = cap.stream;
@@ -92,7 +147,7 @@
         else early.push(m);
       });
       const r = await joinRoom(sig, {
-        room: 'main', name, key, stream, bitrateKbps: 64,
+        room: 'main', name, key, stream, bitrateKbps: settings.bitrateKbps, dtx: settings.dtx,
         onError: (err) => (error = err.message),
         onRemoteStream: (s) => playback?.addRemote(s.id, s),
         onRemoteStreamEnd: (id) => playback?.remove(id),
@@ -100,10 +155,14 @@
       userId = r.userId;
       playback?.addLocal(r.userId, stream);
       const audioSender = r.pc.getSenders().find((s) => s.track?.kind === 'audio');
+      sender = audioSender;
       if (audioSender) cap.setSender(audioSender);
+      applyTrack();
       cap.onModeChange((m, reason) => {
         mode = m;
         modeReason = reason;
+        deviceError = reason.startsWith('microphone lost') ? DEVICE_MESSAGES[classifyMediaError(reason) === 'unknown' ? 'unplugged' : classifyMediaError(reason)] : '';
+        if (!deviceError) applyTrack();
         // The speaking analyser is bound to the old track; re-tap the swapped one.
         playback?.remove(r.userId);
         playback?.addLocal(r.userId, stream);
@@ -117,7 +176,7 @@
     } catch (err) {
       sig?.close();
       teardown();
-      error = String(err);
+      error = err instanceof DOMException ? DEVICE_MESSAGES[classifyMediaError(err)] : String(err);
     }
   }
 </script>
@@ -131,6 +190,20 @@
     </form>
   {/if}
   {#if error}<p class="text-red-400">{error}</p>{/if}
+  {#if deviceError}<p class="text-amber-400" role="alert">{deviceError}</p>{/if}
+  {#if offered}
+    <p class="text-sm">
+      New microphone: {offered.label || offered.deviceId}
+      <button class="rounded bg-neutral-700 px-2" onclick={() => { onSettings({ ...settings, micId: offered!.deviceId }); offered = null; }}>Use it</button>
+      <button class="px-2 text-neutral-400" onclick={() => (offered = null)}>Dismiss</button>
+    </p>
+  {/if}
+  <button class="rounded bg-neutral-800 px-3 py-1 text-sm" onclick={() => (showSettings = !showSettings)}>
+    {showSettings ? 'Hide settings' : 'Audio settings'}
+  </button>
+  {#if showSettings}
+    <Settings {settings} onchange={onSettings} liveStream={mic} sinkSupported={'setSinkId' in AudioContext.prototype} />
+  {/if}
   {#if joined}
     <div class="flex gap-2">
       <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleMute}>{muted ? 'Unmute' : 'Mute'}</button>

@@ -133,7 +133,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   }
 
   const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-  const lost = (e: unknown) => notify('off', `microphone lost: ${msg(e)}`);
+  const lost = (e: unknown) => notify('off', `microphone lost: ${(e as Error)?.name ?? 'Error'}: ${msg(e)}`);
   const notify = (m: DenoiseMode, reason: string) => {
     last = [m, reason];
     cbs.forEach((cb) => cb(m, reason));

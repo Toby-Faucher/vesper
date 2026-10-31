@@ -60,3 +60,18 @@ export function clampSettings(s: Partial<AudioSettings>): AudioSettings {
     speakerId: str(s.speakerId, D.speakerId),
   };
 }
+
+export const SETTINGS_KEY = 'vesper.audio';
+
+export function loadSettings(store: Storage): AudioSettings {
+  try {
+    const o = JSON.parse(store.getItem(SETTINGS_KEY) ?? 'null');
+    return clampSettings(o && typeof o === 'object' ? o : {});
+  } catch {
+    return clampSettings({}); // corrupt storage: defaults
+  }
+}
+
+export function saveSettings(store: Storage, s: AudioSettings): void {
+  store.setItem(SETTINGS_KEY, JSON.stringify(s));
+}
