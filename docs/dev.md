@@ -1,7 +1,7 @@
 # Development
 
 How to build, run and test Vesper on one machine. Variables: [env.md](env.md). How the parts fit: [architecture.md](architecture.md).
-Deploying: [deploy.md](deploy.md). Last updated 2026-10-30.
+Deploying: [deploy.md](deploy.md). Last updated 2026-10-31.
 
 ## Prerequisites
 
@@ -75,8 +75,27 @@ Other test commands:
 | Command | What it covers |
 |---|---|
 | `scripts/check.sh dsp` | The denoiser tests (4 tests behind the `tract` feature, so a plain workspace run skips them) and the wasm build. Fetches the model if missing. |
+| `npm --prefix web run e2e` | Two headless Chromium browsers join one room; checks that the second one receives and hears the first one's audio. The `e2e` CI job. See below. |
 | `docs/testing/latency.md` | Load test (12 speakers), loopback delay, `tc netem` loss. Manual. |
 | `docs/testing/checkpoint.md` | The listening test against Discord. Manual, Toby signs off. |
+
+### Two-browser test
+
+```bash
+scripts/capped.sh cargo build --release -p vesper-server
+npm --prefix web ci && npm --prefix web run build
+npx --prefix web playwright-core install chromium   # once; CI adds --with-deps for the system libraries
+npm --prefix web run e2e
+```
+
+`web/e2e/two-browser.mjs` starts `target/release/vesper-server` itself on 127.0.0.1:18090 (UDP 18091) with a throwaway key, and stops it at the end.
+Those ports must be free. It opens two Chromium browsers with fake microphones: alice plays `web/e2e/fixtures/speech.wav`, bob uses the default fake
+device. It passes when bob's ICE is connected, his inbound audio packets and bytes rise, alice's speaking ring lights on bob's page, and neither page
+throws. The test sets the denoise mode to `browser`, so it needs no wasm build. Its two variables are in [env.md](env.md#dev-machine-only).
+
+The fixture is synthetic (voiced syllables with vowel formants), so it has no third-party licence. `node web/e2e/fixtures/make-speech.mjs` rebuilds it.
+Not checked: the inbound `audioLevel` stat. It stays 0 because the app plays remote audio through Web Audio with the `<audio>` element muted.
+Verified on the dev machine with Chromium 156 (Playwright 1.64.1). Firefox is not covered.
 
 Debug-build note: `Cargo.toml` turns off debug assertions for `tract-core` only, because tract 0.21.4 trips one on the DeepFilterNet3 model
 ("duplicate name /convt3/Conv.bias"). Release builds are fine. Remove the override when tract moves past the bug.

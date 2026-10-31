@@ -42,6 +42,8 @@ Fixed, not configurable: the room size cap (12, `max_room_size`) and the WebSock
 |---|---|---|---|
 | `VESPER_NO_CAP` | `1` runs builds and checks without the memory cap. CI sets it. | unset | `scripts/capped.sh` |
 | `VESPER_CAP_MIB` | Memory cap for capped commands, in MiB. | `8192` | `scripts/capped.sh` |
+| `VESPER_SERVER_BIN` | Server binary the two-browser test starts. Relative paths start from `web/`. | `../target/release/vesper-server` | `web/e2e/two-browser.mjs` |
+| `E2E_CHROMIUM` | Path to a Chromium the two-browser test launches instead of the one Playwright downloaded. Local use only. | unset | `web/e2e/two-browser.mjs` |
 
 ## Not environment variables
 

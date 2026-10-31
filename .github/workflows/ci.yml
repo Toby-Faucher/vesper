@@ -74,6 +74,29 @@ jobs:
       - run: npm audit --audit-level=high
         working-directory: web
 
+  # Two headless Chromium browsers join one room through the release server; web/e2e/two-browser.mjs.
+  # No wasm build here (that is dsp-wasm's slow path): the test picks browser suppression.
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@v2.9.2
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: cargo build --release --locked -p vesper-server
+      - run: npm ci && npm run build
+        working-directory: web
+      # playwright-core is pinned in web/package.json, so this fetches the matching Chromium.
+      - run: npx playwright-core install --with-deps chromium
+        working-directory: web
+      - run: npm run e2e
+        working-directory: web
+
   dsp-wasm:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
