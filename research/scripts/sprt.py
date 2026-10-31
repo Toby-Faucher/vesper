@@ -2,13 +2,14 @@
 """Paired SPRT and guards for the audio lab gate. Writes result.json.
 
   sprt.py gate --manifest M --base B.json --cand C.json --det D.json --hypothesis H.md
-               --out result.json [--meta KEY=VALUE ...]
+               --out result.json [--allow-more-bitrate] [--meta KEY=VALUE ...]
   sprt.py broken --reason TEXT --out result.json [--meta KEY=VALUE ...]
 
 The eval runs the whole split once. The sequential rule is then replayed on the per-item OVRL deltas
 in manifest order, in batches: the verdict is the one a live sequential test would have reached, and
 the deltas and guards use only the items the test consumed.
 """
+import os
 import argparse
 import json
 import math
@@ -71,7 +72,7 @@ def ci95(xs):
     return {"mean": m, "ci95": [m - h, m + h]}
 
 
-def guards(sig_d, sdr_d, base, cand, declared_latency, g, bak_d=None, lsd_wb_d=None):
+def guards(sig_d, sdr_d, base, cand, declared_latency, g, bak_d=None, lsd_wb_d=None, lead_d=None):
     """Each guard: value, limit, pass. base and cand are the eval JSON objects."""
     out = {}
 
@@ -84,16 +85,26 @@ def guards(sig_d, sdr_d, base, cand, declared_latency, g, bak_d=None, lsd_wb_d=N
     # DNSMOS SIG rises when less noise is removed, so BAK must not fall (found with E2-atten24).
     if bak_d is not None:
         add("bak_mean", mean(bak_d), g["bak_mean_min"], mean(bak_d) >= g["bak_mean_min"])
+    # Through Opus (VOIP) SI-SDR sits near 10 dB from the high-pass alone: only the paired delta is used.
     add("si_sdr_i_mean", mean(sdr_d), g["si_sdr_i_mean_min"], mean(sdr_d) >= g["si_sdr_i_mean_min"])
     # The second judge: the wideband log-mel distance to the clean reference must not grow by more
     # than the margin. Fails closed when the evals have no lsd_wb (a v1 corpus or an old binary).
     if "lsd_wb_mean_max" in g:
         v = mean(lsd_wb_d) if lsd_wb_d else None
         add("lsd_wb_mean", v, g["lsd_wb_mean_max"], v is not None and v <= g["lsd_wb_mean_max"])
+    # Noise left in the noise-only lead-in. DNSMOS and lsd_wb both reward leaving some noise in (E14),
+    # so the lead-in reduction may not fall by more than the margin (dB).
+    if lead_d and "lead_in_mean_min" in g:
+        add("lead_in_mean", mean(lead_d), g["lead_in_mean_min"], mean(lead_d) >= g["lead_in_mean_min"])
     rb, rc = base.get("rtf"), cand.get("rtf")
-    add("rtf", rc, g["rtf_max"], rc is not None and rc <= g["rtf_max"])
     ratio = rc / rb if rb and rc is not None else None
-    add("rtf_ratio", ratio, g["rtf_ratio_max"], ratio is not None and ratio <= g["rtf_ratio_max"])
+    # Gates run side by side load the box and make RTF meaningless (E13, E14 read 3 to 4x). With
+    # VESPER_GATE_PARALLEL=1 the RTF guards are recorded but do not decide; a winner is re-run alone.
+    adv = bool(os.environ.get("VESPER_GATE_PARALLEL"))
+    add("rtf", rc, g["rtf_max"], adv or (rc is not None and rc <= g["rtf_max"]))
+    add("rtf_ratio", ratio, g["rtf_ratio_max"], adv or (ratio is not None and ratio <= g["rtf_ratio_max"]))
+    if adv:
+        out["rtf"]["advisory"] = out["rtf_ratio"]["advisory"] = True
     extra = cand["latency_samples"] - base["latency_samples"]
     limit = min(g["latency_max_samples"], declared_latency)
     add("latency_samples", extra, limit, extra <= max(limit, 0))
@@ -123,9 +134,32 @@ def declared_latency(path):
     return int(m.group(1)) if m else 0
 
 
-def decide(manifest_ids, base, cand, det, latency_decl, cfg):
-    """Return the result fields (status, reason, sprt, deltas, guards, ...)."""
+def bitrate_reason(path):
+    """True if hypothesis.md says why the candidate may use more bitrate (`Bitrate reason: ...`)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return re.search(r"^Bitrate reason:[ \t]*\S", text, re.M) is not None
+
+
+def opus_mismatch(base, cand):
+    """Why the two evals are not an exact Opus pairing, or None."""
+    bo, co = base.get("opus"), cand.get("opus")
+    if bool(bo) != bool(co):
+        return "only one side was scored through Opus"
+    if bo and any(bo.get(k) != co.get(k) for k in ("loss", "burst", "seed")):
+        return "the two sides saw different packet losses (loss, burst or seed)"
+    return None
+
+
+def decide(manifest_ids, base, cand, det, latency_decl, cfg, allow_more_bitrate=False):
+    """Return the result fields (status, reason, sprt, deltas, guards, ...).
+    allow_more_bitrate: eval.toml sets it and hypothesis.md gives the reason."""
     s, g = cfg["sprt"], cfg["guards"]
+    mismatch = opus_mismatch(base, cand)
+    if mismatch:
+        return {"status": "broken", "reason": f"opus: {mismatch}"}
     bi = {it["id"]: it for it in base["items"]}
     ci = {it["id"]: it for it in cand["items"]}
     missing = [i for i in manifest_ids if i not in bi or i not in ci]
@@ -138,9 +172,16 @@ def decide(manifest_ids, base, cand, det, latency_decl, cfg):
     # Metrics an eval did not compute (null or absent) are left out of their delta list.
     d = {m: [c[m] - b[m] for b, c in used if c.get(m) is not None and b.get(m) is not None]
          for m in METRICS}
-    gd = guards(d["sig"], d["si_sdr_i"], base, cand, latency_decl, g, d["bak"], d["lsd_wb"])
+    gd = guards(d["sig"], d["si_sdr_i"], base, cand, latency_decl, g, d["bak"], d["lsd_wb"], d["lead_in_reduction_db"])
     det_ok = deterministic(cand["items"], det["items"])
     gd["deterministic"] = {"value": det_ok, "limit": True, "pass": det_ok}
+    bitrate = None
+    if cand.get("opus"):
+        # An Opus change may not buy its gain with more bitrate unless it says so.
+        bitrate = {"base": base["opus"]["bitrate"], "cand": cand["opus"]["bitrate"]}
+        ok = bitrate["cand"] <= bitrate["base"] or allow_more_bitrate
+        gd["bitrate_bps"] = {"value": bitrate["cand"], "limit": bitrate["base"], "pass": ok,
+                             "allowed_more": allow_more_bitrate}
     failed = [k for k, v in gd.items() if not v["pass"]]
     if not det_ok:
         status, reason = "broken", "not deterministic: two runs gave different scores"
@@ -156,7 +197,8 @@ def decide(manifest_ids, base, cand, det, latency_decl, cfg):
         status, reason = "accepted", "SPRT accepted H1 and every guard holds"
     if failed and status != "rejected":
         reason += "; guards failed: " + ", ".join(failed)
-    return {
+    out = {} if bitrate is None else {"bitrate_bps": bitrate}
+    return out | {
         "status": status,
         "reason": reason,
         "n_used": seq["n"],
@@ -192,6 +234,7 @@ def main(argv=None):
     for a in ("manifest", "base", "cand", "det", "hypothesis", "out"):
         gp.add_argument("--" + a, required=True)
     gp.add_argument("--config", default=str(CONFIG))
+    gp.add_argument("--allow-more-bitrate", action="store_true")
     gp.add_argument("--meta", action="append")
     bp = sub.add_parser("broken")
     bp.add_argument("--reason", required=True)
@@ -205,7 +248,9 @@ def main(argv=None):
             cfg = tomllib.load(f)
         load = lambda q: json.loads(Path(q).read_text(encoding="utf-8"))  # noqa: E731
         ids = [it["id"] for it in load(a.manifest)["items"]]
-        res = decide(ids, load(a.base), load(a.cand), load(a.det), declared_latency(a.hypothesis), cfg)
+        allow = a.allow_more_bitrate and bitrate_reason(a.hypothesis)
+        res = decide(ids, load(a.base), load(a.cand), load(a.det), declared_latency(a.hypothesis), cfg,
+                     allow)
     res = _meta(a.meta) | res
     _write(a.out, res)
     print(f"{res['status']}  {res['reason']}")

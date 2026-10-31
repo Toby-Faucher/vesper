@@ -108,13 +108,37 @@ class Decide(unittest.TestCase):
         self.assertFalse(res["guards"]["si_sdr_i_mean"]["pass"])
 
     def test_rtf_guards(self):
-        b, c, d = self.pair(rtf=0.07)  # 1.4x the baseline
+        b, c, d = self.pair(rtf=0.055)
+        b["rtf"] = 0.04  # 1.375x the baseline, under the native ceiling
         res = sprt.decide(self.ids, b, c, d, 0, CFG)
         self.assertFalse(res["guards"]["rtf_ratio"]["pass"])
         self.assertTrue(res["guards"]["rtf"]["pass"])
         self.assertEqual(res["status"], "rejected")
-        b, c, d = self.pair(rtf=0.31)
-        self.assertFalse(sprt.decide(self.ids, b, c, d, 0, CFG)["guards"]["rtf"]["pass"])
+        b, c, d = self.pair(rtf=0.061)  # 1.22x the baseline, over the native ceiling
+        res = sprt.decide(self.ids, b, c, d, 0, CFG)
+        self.assertTrue(res["guards"]["rtf_ratio"]["pass"])
+        self.assertFalse(res["guards"]["rtf"]["pass"])
+
+    def test_rtf_is_advisory_when_gates_run_in_parallel(self):
+        import os
+        b, c, d = self.pair(rtf=0.055)
+        b["rtf"] = 0.04
+        os.environ["VESPER_GATE_PARALLEL"] = "1"
+        try:
+            res = sprt.decide(self.ids, b, c, d, 0, CFG)
+        finally:
+            del os.environ["VESPER_GATE_PARALLEL"]
+        self.assertTrue(res["guards"]["rtf_ratio"]["pass"])
+        self.assertTrue(res["guards"]["rtf_ratio"]["advisory"])
+
+    def test_lead_in_guard_rejects_leaving_noise_in(self):
+        b, c, d = self.pair()
+        for i in c["items"]:
+            i["lead_in_reduction_db"] = b["items"][0].get("lead_in_reduction_db", 30.0) - 10.0
+        for i in b["items"]:
+            i["lead_in_reduction_db"] = 30.0
+        res = sprt.decide(self.ids, b, c, d, 0, {**CFG, "guards": {**CFG["guards"], "lead_in_mean_min": -3.0}})
+        self.assertFalse(res["guards"]["lead_in_mean"]["pass"])
 
     def test_latency_needs_declaration(self):
         b, c, d = self.pair(lat=120)
@@ -180,6 +204,54 @@ class Wideband(unittest.TestCase):
         old = [{k: v for k, v in c.items() if k != "lsd_wb"} for c in good]
         res = sprt.decide(ids, evaljson(base), evaljson(old), evaljson(old[:5]), 0, CFG)
         self.assertFalse(res["guards"]["lsd_wb_mean"]["pass"])
+
+
+def opus(bitrate, loss=0.05, seed=1):
+    return {"bitrate": bitrate, "complexity": 10, "fec": True, "dtx": True, "loss": loss,
+            "burst": None, "seed": seed, "audio": False}
+
+
+class Opus(unittest.TestCase):
+    ids = Decide.ids
+
+    def pair(self, cand_bitrate, **kw):
+        b, c, d = Decide.pair(self)
+        b["opus"], c["opus"] = opus(64000), opus(cand_bitrate, **kw)
+        return b, c, d
+
+    def test_lower_bitrate_can_be_accepted(self):
+        res = sprt.decide(self.ids, *self.pair(48000), 0, CFG)
+        self.assertEqual(res["status"], "accepted", res["reason"])
+        self.assertEqual(res["bitrate_bps"], {"base": 64000, "cand": 48000})
+
+    def test_more_bitrate_needs_the_flag(self):
+        res = sprt.decide(self.ids, *self.pair(96000), 0, CFG)
+        self.assertEqual(res["status"], "rejected")
+        self.assertFalse(res["guards"]["bitrate_bps"]["pass"])
+        self.assertEqual(res["bitrate_bps"]["cand"], 96000)
+        res = sprt.decide(self.ids, *self.pair(96000), 0, CFG, allow_more_bitrate=True)
+        self.assertEqual(res["status"], "accepted", res["reason"])
+
+    def test_unpaired_losses_are_broken(self):
+        self.assertEqual(sprt.decide(self.ids, *self.pair(64000, seed=2), 0, CFG)["status"], "broken")
+        self.assertEqual(sprt.decide(self.ids, *self.pair(64000, loss=0.0), 0, CFG)["status"], "broken")
+        b, c, d = self.pair(64000)
+        del b["opus"]
+        self.assertEqual(sprt.decide(self.ids, b, c, d, 0, CFG)["status"], "broken")
+
+    def test_no_opus_has_no_bitrate(self):
+        res = sprt.decide(self.ids, *Decide.pair(self), 0, CFG)
+        self.assertNotIn("bitrate_bps", res)
+        self.assertNotIn("bitrate_bps", res["guards"])
+
+    def test_bitrate_reason_parse(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / "h.md"
+            p.write_text("# x\n\nBitrate reason: FEC needs the headroom\n")
+            self.assertTrue(sprt.bitrate_reason(p))
+            p.write_text("# x\n\nBitrate reason:\n")
+            self.assertFalse(sprt.bitrate_reason(p))
+        self.assertFalse(sprt.bitrate_reason("/nonexistent/h.md"))
 
 
 class Mde(unittest.TestCase):
