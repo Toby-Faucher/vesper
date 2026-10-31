@@ -1,0 +1,13 @@
+[package]
+name = "vesper-dsp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+tract = ["deep_filter/tract"]
+wasm = ["deep_filter/wasm"]
+
+[dependencies]
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "d375b2d", default-features = false }
+ndarray = "0.15"
