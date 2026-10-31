@@ -382,17 +382,52 @@ async fn resolve_public_returns_loopback() {
     );
 }
 
-#[tokio::test]
-async fn health_returns_ok() {
-    let addr = start().await;
+async fn health(addr: SocketAddr) -> String {
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
     s.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
         .await
         .unwrap();
     let mut resp = String::new();
     s.read_to_string(&mut resp).await.unwrap();
+    resp
+}
+
+#[tokio::test]
+async fn health_returns_ok() {
+    let resp = health(start().await).await;
     assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
     assert!(resp.ends_with("\r\n\r\nok"), "{resp}");
+}
+
+#[tokio::test]
+async fn dead_sfu_fails_health_and_joins_say_why() {
+    let sfu = vesper_sfu::Sfu::spawn(vesper_sfu::SfuConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        ..Default::default()
+    })
+    .unwrap();
+    let (addr, _serving) = vesper_server::start_with_sfu(config(), sfu.clone())
+        .await
+        .unwrap();
+    assert!(health(addr).await.starts_with("HTTP/1.1 200"));
+    sfu.crash_for_test();
+    let deadline = Instant::now() + WAIT;
+    while sfu.is_alive() {
+        assert!(Instant::now() < deadline, "SFU thread still alive");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let resp = health(addr).await;
+    assert!(resp.starts_with("HTTP/1.1 503"), "{resp}");
+    assert!(resp.ends_with("\r\n\r\nsfu down"), "{resp}");
+    let mut c = Conn::open(addr).await;
+    c.join("main", "alice", KEY);
+    match c.next().await {
+        ServerMsg::Error { code, message } => {
+            assert_eq!(code, ErrorCode::BadMessage);
+            assert_eq!(message, "server voice engine unavailable");
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
 }
 
 #[tokio::test]

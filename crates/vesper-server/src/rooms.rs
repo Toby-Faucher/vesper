@@ -78,6 +78,10 @@ impl Member {
 }
 
 impl Rooms {
+    pub fn sfu_alive(&self) -> bool {
+        self.0.sfu.is_alive()
+    }
+
     pub fn new(sfu: SfuHandle, dev_key: &str, max_room_size: usize) -> Rooms {
         Rooms(Arc::new(Inner {
             sfu,
@@ -121,12 +125,14 @@ impl Rooms {
             .await
         {
             Ok(ok) => ok,
-            Err(JoinError::BadOffer(e)) => {
-                warn!("join by {user_id}: {e}");
+            Err(JoinError::BadOffer(_)) => {
+                // Not the parser's text: it can echo SDP (addresses) from an untrusted client.
+                warn!("join by {user_id}: bad sdp offer");
                 return Err(ErrorCode::BadMessage);
             }
             Err(JoinError::Shutdown) => {
-                tracing::error!("join by {user_id}: the SFU has shut down");
+                // The SFU thread logs its own death once at error level.
+                warn!("join by {user_id}: the SFU has shut down");
                 return Err(ErrorCode::BadMessage);
             }
         };

@@ -197,6 +197,8 @@ fn handle_command(
             check_advertised(socket_addr, &addrs);
             *advertised = addrs;
         }
+        #[cfg(feature = "test-support")]
+        Command::Panic => panic!("SFU panic requested by a test"),
     }
 }
 

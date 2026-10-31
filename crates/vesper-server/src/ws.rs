@@ -88,6 +88,10 @@ async fn handle(mut socket: WebSocket, st: WsState, _permit: OwnedSemaphorePermi
                                 joined = Some(j);
                                 None
                             }
+                            // Same wire code (the enum is shared with the client), clearer text.
+                            Err(code) if !rooms.sfu_alive() => {
+                                Some((code, "server voice engine unavailable".into()))
+                            }
                             Err(code) => Some((code, describe(code).into())),
                         }
                     }

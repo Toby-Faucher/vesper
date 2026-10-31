@@ -13,6 +13,8 @@ mod room;
 pub mod testing;
 
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -50,10 +52,31 @@ impl Sfu {
         let local_addr = socket.local_addr()?;
         room::check_advertised(local_addr, &cfg.advertised);
         let (tx, rx) = mpsc::channel();
+        let alive = Arc::new(AtomicBool::new(true));
+        let guard = AliveGuard(alive.clone());
         std::thread::Builder::new()
             .name("vesper-sfu".into())
-            .spawn(move || room::run(socket, rx, cfg))?;
-        Ok(SfuHandle { tx, local_addr })
+            .spawn(move || {
+                let _guard = guard; // dropped on return and on panic unwind
+                room::run(socket, rx, cfg)
+            })?;
+        Ok(SfuHandle {
+            tx,
+            local_addr,
+            alive,
+        })
+    }
+}
+
+/// Clears the liveness flag when the SFU thread ends, however it ends.
+struct AliveGuard(Arc<AtomicBool>);
+
+impl Drop for AliveGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+        if std::thread::panicking() {
+            tracing::error!("SFU thread panicked: voice is down until the server restarts");
+        }
     }
 }
 
@@ -61,6 +84,7 @@ impl Sfu {
 pub struct SfuHandle {
     tx: mpsc::Sender<Command>,
     local_addr: SocketAddr,
+    alive: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -110,6 +134,8 @@ pub(crate) enum Command {
         user: String,
     },
     SetAdvertised(Vec<SocketAddr>),
+    #[cfg(feature = "test-support")]
+    Panic,
 }
 
 impl SfuHandle {
@@ -129,7 +155,12 @@ impl SfuHandle {
             offer: offer_sdp,
             reply,
         });
-        rx.await.unwrap_or(Err(JoinError::Shutdown))
+        rx.await.unwrap_or_else(|_| {
+            // The loop always replies, so a dropped reply means its thread is dying: say so now,
+            // before the unwind reaches the AliveGuard, so callers see is_alive() == false.
+            self.alive.store(false, Ordering::Release);
+            Err(JoinError::Shutdown)
+        })
     }
 
     /// Answer to the latest [`SfuEvent::Offer`] sent to `user`. A malformed answer closes the
@@ -156,6 +187,18 @@ impl SfuHandle {
     /// The address the media socket is actually bound to (useful when `bind` used port 0).
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    /// False once the SFU thread has ended (a panic inside str0m, or every handle dropped).
+    /// Joins then fail with [`JoinError::Shutdown`].
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
+    }
+
+    /// Make the SFU thread panic, to test what happens when it dies.
+    #[cfg(feature = "test-support")]
+    pub fn crash_for_test(&self) {
+        self.send(Command::Panic);
     }
 
     fn send(&self, cmd: Command) {

@@ -434,3 +434,17 @@ async fn dual_stack_bind_serves_ipv4_clients() {
     }
     forwards_with_bind("[::]:0").await;
 }
+
+#[tokio::test]
+async fn panic_in_the_loop_is_observable() {
+    let sfu = spawn_sfu(vec![]);
+    assert!(sfu.is_alive());
+    sfu.crash_for_test();
+    let deadline = Instant::now() + CONNECT;
+    while sfu.is_alive() {
+        assert!(Instant::now() < deadline, "SFU thread still alive");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let err = sfu.join("r".into(), "u".into(), "v=0".into()).await;
+    assert_eq!(err.unwrap_err(), vesper_sfu::JoinError::Shutdown);
+}

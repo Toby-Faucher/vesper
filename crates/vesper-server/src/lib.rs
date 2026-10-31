@@ -21,7 +21,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
-use vesper_sfu::{Sfu, SfuConfig};
+use vesper_sfu::{Sfu, SfuConfig, SfuHandle};
 
 use crate::config::Config;
 use crate::rooms::Rooms;
@@ -32,6 +32,14 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
         bind: cfg.udp_bind,
         ..Default::default()
     })?;
+    start_with_sfu(cfg, sfu).await
+}
+
+/// [`start`] with an SFU the caller already spawned (`cfg.udp_bind` is then unused).
+pub async fn start_with_sfu(
+    cfg: Config,
+    sfu: SfuHandle,
+) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
     match cfg.public_host {
         Some(host) => {
             public_addr::spawn_refresh(sfu.clone(), host, cfg.udp_port_public, public_addr::REFRESH)
@@ -54,7 +62,7 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
     }
     let rooms = Rooms::new(sfu, &cfg.dev_key, cfg.max_room_size);
     let app = Router::new()
-        .route("/health", get(|| async { "ok" }))
+        .route("/health", get(health))
         .route("/ws", get(ws::upgrade))
         // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`.
         .fallback_service(ServeDir::new(&cfg.web_dir))
@@ -75,6 +83,15 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
         addr,
         tokio::spawn(async move { axum::serve(listener, app).await }),
     ))
+}
+
+/// 503 once the SFU thread has died, so Docker/systemd health checks restart the server.
+async fn health(State(st): State<ws::WsState>) -> (StatusCode, &'static str) {
+    if st.rooms.sfu_alive() {
+        (StatusCode::OK, "ok")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "sfu down")
+    }
 }
 
 /// Static-serving policy around ServeDir:
