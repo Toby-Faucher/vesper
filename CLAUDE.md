@@ -4,8 +4,8 @@ Rust workspace (`crates/`) plus a Svelte 5 and Vite web app (`web/`). One server
 `docs/architecture.md` (how the parts fit), `docs/dev.md` (run, test, build the denoiser) and `docs/env.md` (every variable).
 
 - **Toolchain is pinned** in `rust-toolchain.toml` (1.99.1). Do not change it inside an unrelated commit.
-- **Never run a blanket `cargo update`.** `tract-core` is pinned `=0.21.4` (other versions trip a debug assertion on the DeepFilterNet3 model; see the
-  `[profile.dev.package.tract-core]` note in `Cargo.toml`). Update one crate: `cargo update -p <crate> --precise <ver>`, then run `scripts/check.sh`.
+- **Never run a blanket `cargo update`.** `tract-core` is pinned `=0.21.4` because newer 0.21.x breaks the `deep_filter` build (see `crates/vesper-dsp/Cargo.toml`).
+  0.21.4 itself trips a debug assertion on the model, so `Cargo.toml` turns debug assertions off for `tract-core`. Update one crate: `cargo update -p <crate> --precise <ver>`, then run `scripts/check.sh`.
 - **The `wasm-bindgen` crate in `Cargo.lock` and the `wasm-bindgen` CLI must be the same version.** `scripts/build-dsp.sh` checks it and prints the
   install command. Never bump one without the other.
 - **Run `scripts/build-dsp.sh` before any web build or run.** It writes `web/public/dsp/` (wasm plus model). Without it the app falls back to

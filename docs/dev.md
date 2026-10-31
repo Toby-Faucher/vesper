@@ -95,7 +95,7 @@ run `cargo test -p vesper-protocol` and commit the regenerated files. `scripts/c
 
 ## Dependencies
 
-- Rust: do not run a blanket `cargo update`. `tract` stays at 0.21.4 until the debug-assertion bug is gone. `wasm-bindgen` moves together with its CLI.
+- Rust: do not run a blanket `cargo update`. `tract` stays at 0.21.4 because newer 0.21.x breaks the `deep_filter` build. `wasm-bindgen` moves together with its CLI.
   Update one crate: `cargo update -p <crate> --precise <ver>`, then `scripts/check.sh`.
 - npm: `web/package.json` uses exact versions (`web/.npmrc` sets `save-exact`). Run `npm audit` after a change.
 - Dependabot opens weekly PRs for cargo, npm and GitHub Actions, waits 14 days after a release, and ignores `tract-*` and `deep_filter`.
