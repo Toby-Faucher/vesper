@@ -4,3 +4,16 @@ node_modules/
 crates/vesper-dsp/model/
 web/public/dsp/
 web/dist/
+# Secrets: deploy/compose.yaml reads the join key from a .env next to it.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Local data (SQLite and uploads, once accounts land).
+*.sqlite*
+*.db
+*.db-shm
+*.db-wal
+/data/
+.claude/worktrees/

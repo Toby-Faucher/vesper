@@ -4,4 +4,7 @@ target
 **/node_modules
 web/dist
 web/public/dsp
-.env
+**/.env
+**/.env.*
+**/*.pem
+**/*.key

@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.png binary
+*.wasm binary
+*.onnx binary
+*.tar.gz binary
+web/src/lib/gen/** linguist-generated=true
+Cargo.lock -diff linguist-generated=true
+web/package-lock.json -diff linguist-generated=true
