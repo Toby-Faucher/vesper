@@ -19,7 +19,7 @@ Log level: set `RUST_LOG` (default `info`), for example `RUST_LOG=vesper_server=
 
 ## Start, stop, status
 
-Docker, from the stack directory on the VM:
+Docker, from a clone of the repo (the `-f deploy/compose.yaml` form; in Dockge use the stack's own compose.yaml and drop `-f`):
 
     docker compose -f deploy/compose.yaml up -d      # start
     docker compose -f deploy/compose.yaml stop       # stop
@@ -74,7 +74,7 @@ Start with: `ps` shows healthy? `/health` says `ok`? Logs for the last 100 lines
 |---|---|---|
 | Page loads, join works, no audio, Test connection fails | UDP 40000 not reaching the server | Router forwards UDP 40000 to the Docker host (UDP, not TCP). Host firewall allows it. `docker compose ps` shows `0.0.0.0:40000->40000/udp`. Test from cellular first. |
 | Works on cellular, no audio from the LAN | Router has no hairpin NAT | LAN clients send media to the public IP and need loopback to it. Test from outside; treat LAN to LAN as unsupported or turn hairpin NAT on. |
-| No audio for anyone; Diagnostics shows a LAN or Docker address | `VESPER_PUBLIC_HOST` resolves to the wrong address from the server | It must resolve to the public IP as the server sees it. Use the literal IP or a public-only name, not a name your LAN DNS overrides. Check with `getent hosts <name>` on the Docker host (the image has no such tool). Fix `.env`, `up -d`. |
+| No audio for anyone; Diagnostics shows a LAN or Docker address | `VESPER_PUBLIC_HOST` resolves to the wrong address from the server | It must resolve to the public IP as the server sees it. Use the literal IP or a public-only name, not a name your LAN DNS overrides. Check with `docker compose exec vesper getent hosts <name>`. Fix `.env`, `up -d`. |
 | Log says `VESPER_PUBLIC_HOST unset and UDP bound to ...` | Variable missing | Set it in the env file, restart. |
 | It worked, then stopped working for new calls after the ISP changed your IP | Public IP changed | The name is re-resolved every 60 s, but running calls keep the old address. New joins recover by themselves; ask everyone to rejoin. |
 | `/health` returns 503 `sfu down`, log has `voice engine (SFU thread) died` | The media thread crashed | The process exits non-zero and Docker or systemd restarts it within seconds. If it repeats, keep the log lines before it and stop the stack. Check `docker compose ps` for a restart loop. |
@@ -83,7 +83,7 @@ Start with: `ps` shows healthy? `/health` says `ok`? Logs for the last 100 lines
 | Browser says it cannot use the microphone | Not a secure context, or permission denied | Use the HTTPS name or localhost, never the bare IP. Click the padlock, allow the microphone, reload. Another app may hold the device. |
 | Join form rejects the key | Wrong `VESPER_DEV_KEY`, or the env file changed without a restart | `up -d` recreates the container with the new value. |
 | 502 from Caddy, or WebSocket fails only through the proxy | Caddy cannot reach 8080 | If Caddy is on another host, the compose mapping must be `8080:8080`, not `127.0.0.1:8080:8080`. Test `curl http://<vm>:8080/health` from the Caddy host. |
-| Join works, then the call drops after about 10 seconds | Join deadline or proxy idle timeout | A socket that has not joined in `VESPER_JOIN_DEADLINE_SECS` (10) is closed. Check the proxy does not cut idle WebSockets. |
+| Join works, then the call drops after about 10 seconds | Proxy idle timeout | The join deadline only applies to sockets that have not joined yet. A joined socket that is silent for 2 x 25 s (the ping interval) is closed. Check the proxy does not cut idle WebSockets. |
 | Disk filling on the VM | Container logs or old images | Compose caps logs at 3 x 10 MB. `docker image prune` for images. |
 
 ## Before you ask for help

@@ -9,7 +9,7 @@ key := env("VESPER_DEV_KEY", "pick-a-passphrase")
 default:
     @just --list
 
-# everything CI runs except the wasm build (scripts/check.sh --help lists the steps)
+# everything CI runs except the wasm build and `npm audit` (scripts/check.sh --help lists the steps)
 check:
     scripts/check.sh
 

@@ -16,7 +16,6 @@ updates:
     # crates/vesper-dsp/Cargo.toml. deep_filter is a git rev pin. Remove when the denoiser moves on.
     # A wasm-bindgen bump also needs the local CLI reinstalled (scripts/build-dsp.sh says how).
     ignore:
-      - dependency-name: "tract-core"
       - dependency-name: "tract-*"
       - dependency-name: "deep_filter"
 

@@ -30,6 +30,7 @@ else
   # user systemd at all. Fails if the scope runs but the ceiling reads back wrong.
   cap_check() {
     local v
+    case $CAP_MAX_MIB in '' | *[!0-9]*) echo "capped.sh: VESPER_CAP_MIB must be a whole number of MiB" >&2; return 1 ;; esac
     if ! command -v systemd-run >/dev/null || ! systemd-run --user --scope -q true 2>/dev/null; then
       echo "capped.sh: WARNING: no systemd user scope here, so this runs WITHOUT a memory cap (nice/ionice only). VESPER_NO_CAP=1 silences this." >&2
       CAP_PLAIN=1

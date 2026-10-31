@@ -59,7 +59,7 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 ## Check before a PR
 
 ```bash
-scripts/check.sh          # everything CI runs except the wasm build
+scripts/check.sh          # everything CI runs except the wasm build and `npm audit`
 scripts/check.sh fast     # fmt, clippy, tests
 scripts/check.sh dsp      # opt in: denoiser tests and the wasm build (needs the CLI above)
 scripts/check.sh --help   # the step list

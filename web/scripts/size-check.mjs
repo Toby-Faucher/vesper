@@ -8,7 +8,7 @@ import { gzipSync } from 'node:zlib';
 const BUDGET_GZIP_KB = { js: 37, css: 3.5 };
 
 const dir = new URL('../dist/assets/', import.meta.url);
-const sums = { js: 37, css: 3.5 };
+const sums = { js: 0, css: 0 };
 for (const f of readdirSync(dir)) {
   const ext = f.endsWith('.js') ? 'js' : f.endsWith('.css') ? 'css' : null;
   if (ext) sums[ext] += gzipSync(readFileSync(new URL(f, dir))).length;

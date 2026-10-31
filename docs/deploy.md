@@ -42,7 +42,7 @@ If the voice engine thread dies (a bug on hostile input), `/health` returns 503 
 
 ## Security headers
 
-The server sets `X-Content-Type-Options: nosniff` only. `deploy/Caddyfile.example` adds HSTS, `Referrer-Policy` and `Permissions-Policy`. Nothing sends a Content-Security-Policy: a suggested CSP is commented out in the Caddyfile; it is **untested** against the real app (WASM, the audio worklet and WebRTC all break silently under a wrong CSP), so verify in a browser before enabling it.
+The server sets `X-Content-Type-Options: nosniff` only. `deploy/Caddyfile.example` adds HSTS, `Referrer-Policy`, `Permissions-Policy` and `X-Content-Type-Options`. Nothing sends a Content-Security-Policy: a suggested CSP is commented out in the Caddyfile; it is **untested** against the real app (WASM, the audio worklet and WebRTC all break silently under a wrong CSP), so verify in a browser before enabling it.
 
 ## Not verified
 
