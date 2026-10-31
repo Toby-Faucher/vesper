@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { connectivityCheck, summarize, type Diag } from '../lib/diag';
 
   // The key is used only for the connectivity check and never appears in the report.
@@ -9,22 +8,36 @@
   let testing = $state(false);
   let copied = $state('');
 
-  onMount(() => {
+  $effect(() => {
+    const conn = pc; // re-runs when the peer connection changes; prev resets with it
+    diag = null;
+    if (!conn) return;
     let prev: RTCStatsReport | null = null;
     let at = 0;
+    let busy = false;
+    let dead = false;
     const tick = async () => {
-      if (!pc) { diag = null; prev = null; return; }
+      if (busy) return;
+      busy = true;
       try {
-        const cur = await pc.getStats();
+        const cur = await conn.getStats();
+        if (dead) return;
         const now = performance.now();
-        diag = summarize(prev, cur, (now - at) / 1000);
+        diag = summarize(prev, cur, (now - at) / 1000, conn.iceConnectionState);
         prev = cur;
         at = now;
-      } catch { diag = null; }
+      } catch {
+        if (!dead) diag = null;
+      } finally {
+        busy = false;
+      }
     };
     void tick();
     const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
+    return () => {
+      dead = true;
+      clearInterval(id);
+    };
   });
 
   const f = (v: number | null, u: string) => (v === null ? 'n/a' : `${v.toFixed(1)} ${u}`);
@@ -37,7 +50,8 @@
       `Status: ${status}`,
       `RTT: ${f(d?.rttMs ?? null, 'ms')}`,
       `Jitter: ${f(d?.jitterMs ?? null, 'ms')}`,
-      `Loss: ${f(d?.lossPct ?? null, '%')}`,
+      `Loss (incoming): ${f(d?.lossDownPct ?? null, '%')}`,
+      `Loss (outgoing): ${f(d?.lossUpPct ?? null, '%')}`,
       `Send: ${f(d?.sendKbps ?? null, 'kbps')}`,
       `Codec: ${d?.codec ?? 'n/a'}`,
       `ICE state: ${d?.iceState ?? 'n/a'}`,
@@ -63,10 +77,12 @@
 </script>
 
 <section class="space-y-2 rounded bg-neutral-900 p-3 text-sm">
+  {#if !pc}<p class="text-neutral-400">Not in a call</p>{/if}
   <dl class="grid grid-cols-2 gap-x-2">
     <dt>RTT</dt><dd>{f(diag?.rttMs ?? null, 'ms')}</dd>
     <dt>Jitter</dt><dd>{f(diag?.jitterMs ?? null, 'ms')}</dd>
-    <dt>Loss</dt><dd>{f(diag?.lossPct ?? null, '%')}</dd>
+    <dt>Loss (incoming)</dt><dd>{f(diag?.lossDownPct ?? null, '%')}</dd>
+    <dt>Loss (outgoing)</dt><dd>{f(diag?.lossUpPct ?? null, '%')}</dd>
     <dt>Send</dt><dd>{f(diag?.sendKbps ?? null, 'kbps')}</dd>
     <dt>Codec</dt><dd>{diag?.codec ?? 'n/a'}</dd>
     <dt>ICE</dt><dd>{diag?.iceState ?? 'n/a'}</dd>
