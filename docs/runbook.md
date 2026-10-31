@@ -73,6 +73,7 @@ Start with: `ps` shows healthy? `/health` says `ok`? Logs for the last 100 lines
 | Symptom | Likely cause | Check and fix |
 |---|---|---|
 | Page loads, join works, no audio, Test connection fails | UDP 40000 not reaching the server | Router forwards UDP 40000 to the Docker host (UDP, not TCP). Host firewall allows it. `docker compose ps` shows `0.0.0.0:40000->40000/udp`. Test from cellular first. |
+| One person is silent, or the room says `No sound from your microphone` | The mic sends nothing: wrong device, volume at zero, hardware mute, or no input reaches the denoiser | Open Diagnostics on their machine. Input level near silent or many empty input blocks: fix the device or its volume. Underruns or drops rising: the denoiser cannot keep up; Copy report and file it. |
 | Works on cellular, no audio from the LAN | Router has no hairpin NAT | LAN clients send media to the public IP and need loopback to it. Test from outside; treat LAN to LAN as unsupported or turn hairpin NAT on. |
 | No audio for anyone; Diagnostics shows a LAN or Docker address | `VESPER_PUBLIC_HOST` resolves to the wrong address from the server | It must resolve to the public IP as the server sees it. Use the literal IP or a public-only name, not a name your LAN DNS overrides. Check with `docker compose exec vesper getent hosts <name>`. Fix `.env`, `up -d`. |
 | Log says `VESPER_PUBLIC_HOST unset and UDP bound to ...` | Variable missing | Set it in the env file, restart. |

@@ -37,7 +37,7 @@ Record the git commit and URL in 11.1: `git rev-parse --short HEAD`.
   - **Attenuation limit** (6 to 100 dB), **Post filter** (0 to 0.05), **Input boost** (0 to 20 dB). Only shown in DeepFilterNet mode.
   - **Bitrate** (32 to 510 kbps), **DTX** (applies at next join), **Browser noise suppression on top**, **Auto gain**. Echo cancellation is always on.
   - **Microphone**, **Speaker**, input level meter, **Mic test (hear yourself)**, **Push to talk**.
-- In the room, button **Diagnostics**: RTT, jitter, loss, send kbps, codec, ICE, path; **Copy report**; **Test connection**.
+- In the room, button **Diagnostics**: RTT, jitter, loss, send kbps, codec, ICE, path; an **Audio pipeline** section (state, input and output level, queue, underruns, drops, denoiser time, mic track, capture context); **Copy report**; **Test connection**.
 - The line under your name reads `Noise suppression: <mode> (<reason>)`. If the denoiser fails you see the fallback reason there, for example `denoiser too slow for real time`, `denoiser stalled`, `denoiser unavailable: ...`.
 - Settings are saved in the browser (localStorage key `vesper.audio`). To reset to defaults: devtools Console, `localStorage.removeItem('vesper.audio')`, then reload.
 
@@ -232,7 +232,7 @@ Last updated 2026-10-30. Tick as you check. Use two tabs (or two machines) where
 - [ ] Device switching mid-call: change Microphone and Speaker in Settings; audio follows (Firefox may not support Speaker choice: note the message).
 - [ ] Push to talk: enable, set a key, hold to talk, release to stop; switch window (alt-tab) while held and confirm the mic cuts off (does not stay open).
 - [ ] Connectivity check from a phone on cellular (Wi-Fi off): join, Diagnostics, Test connection, expect OK; note ICE path (relay or direct) and RTT.
-- [ ] Copy report button: paste into a text file, check it has user agent, mode, RTT, jitter, loss, codec, ICE state and no join key.
+- [ ] Copy report button: paste into a text file, check it has user agent, mode, RTT, jitter, loss, codec, ICE state, the audio pipeline lines and no join key.
 - [ ] Bitrate change mid-call: lower to 32 kbps while joined (applies now; Send kbps in Diagnostics drops); raise above the joined value (shows the "applies on rejoin" note).
 - [ ] DTX: with DTX on, Send kbps drops during silence.
 
