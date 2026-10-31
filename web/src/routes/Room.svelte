@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Signaling, joinRoom } from '../lib/signaling';
+  import { applyPeerMsg } from '../lib/peers';
   import type { Peer } from '../lib/gen/Peer';
+  import type { ServerMsg } from '../lib/gen/ServerMsg';
 
   let name = $state('');
   let key = $state('');
@@ -11,23 +13,24 @@
   async function join(e: Event) {
     e.preventDefault();
     error = '';
+    let sig: Signaling | undefined;
     try {
-      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      const sig = new Signaling(`${proto}://${location.host}/ws`);
-      sig.onClose(() => (joined = false));
-      sig.onMessage((m) => {
-        if (m.type === 'peer_joined') peers = [...peers, m.peer];
-        else if (m.type === 'peer_left') peers = peers.filter((p) => p.user_id !== m.user_id);
-        else if (m.type === 'peer_muted')
-          peers = peers.map((p) => (p.user_id === m.user_id ? { ...p, muted: m.muted } : p));
-      });
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, channelCount: 1 },
       });
-      const r = await joinRoom(sig, { room: 'main', name, key, stream, bitrateKbps: 64 });
-      peers = r.peers;
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      sig = new Signaling(`${proto}://${location.host}/ws`);
+      const early: ServerMsg[] = []; // peer events that arrive before Joined
+      sig.onClose(() => (joined = false));
+      sig.onMessage((m) => (joined ? (peers = applyPeerMsg(peers, m)) : early.push(m)));
+      const r = await joinRoom(sig, {
+        room: 'main', name, key, stream, bitrateKbps: 64,
+        onError: (err) => (error = err.message),
+      });
+      peers = early.reduce(applyPeerMsg, r.peers);
       joined = true;
     } catch (err) {
+      sig?.close();
       error = String(err);
     }
   }

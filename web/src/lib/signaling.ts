@@ -32,6 +32,9 @@ export class Signaling {
   onMessage(cb: (m: ServerMsg) => void): void {
     this.msgCbs.push(cb);
   }
+  close(): void {
+    this.ws.close();
+  }
   onClose(cb: () => void): void {
     this.closeCbs.push(cb);
   }
@@ -39,26 +42,72 @@ export class Signaling {
 
 export async function joinRoom(
   sig: Signaling,
-  opts: { room: string; name: string; key: string; stream: MediaStream; bitrateKbps: number },
+  opts: {
+    room: string;
+    name: string;
+    key: string;
+    stream: MediaStream;
+    bitrateKbps: number;
+    onError?: (e: Error) => void;
+  },
 ): Promise<{ pc: RTCPeerConnection; peers: Peer[] }> {
   const tune = (sdp: string) => tuneOpus(sdp, { bitrateKbps: opts.bitrateKbps, dtx: true, fec: true });
+  const report = (e: unknown) => opts.onError?.(e instanceof Error ? e : new Error(String(e)));
   const pc = new RTCPeerConnection();
   opts.stream.getAudioTracks().forEach((t) => pc.addTrack(t, opts.stream));
 
+  // Simple playback; Task 6 replaces this with per-peer GainNode playback.
+  const players = new Map<string, HTMLAudioElement>();
+  const drop = (id: string) => {
+    const a = players.get(id);
+    if (!a) return;
+    a.pause();
+    a.srcObject = null;
+    players.delete(id);
+  };
+  pc.ontrack = (e) => {
+    const s = e.streams[0] ?? new MediaStream([e.track]);
+    if (players.has(s.id)) return;
+    const a = new Audio();
+    a.autoplay = true;
+    a.srcObject = s;
+    players.set(s.id, a);
+    void a.play().catch(() => {});
+    const check = () => s.getTracks().length === 0 && drop(s.id);
+    s.onremovetrack = check;
+    e.track.onended = check;
+  };
+
+  let chain = Promise.resolve(); // renegotiation offers must run one at a time
+  const handleOffer = async (sdp: string) => {
+    await pc.setRemoteDescription({ type: 'offer', sdp });
+    const a = await pc.createAnswer();
+    const ans = tune(a.sdp ?? '');
+    await pc.setLocalDescription({ type: 'answer', sdp: ans });
+    sig.send({ type: 'answer', sdp: ans });
+  };
+
+  let settled = false;
   const joined = new Promise<{ answer: string; peers: Peer[] }>((resolve, reject) => {
-    sig.onClose(() => reject(new Error('signaling closed')));
+    sig.onClose(() => {
+      pc.close();
+      opts.stream.getTracks().forEach((t) => t.stop());
+      [...players.keys()].forEach(drop);
+      if (!settled) reject(new Error('signaling closed'));
+    });
     sig.onMessage((m) => {
-      if (m.type === 'joined') resolve(m);
-      else if (m.type === 'error') reject(new Error(`${m.code}: ${m.message}`));
-      else if (m.type === 'offer') {
-        // SFU-initiated renegotiation
-        void (async () => {
-          await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
-          const a = await pc.createAnswer();
-          const sdp = tune(a.sdp ?? '');
-          await pc.setLocalDescription({ type: 'answer', sdp });
-          sig.send({ type: 'answer', sdp });
-        })();
+      if (m.type === 'joined') {
+        settled = true;
+        resolve(m);
+      } else if (m.type === 'error') {
+        const err = new Error(`${m.code}: ${m.message}`);
+        if (settled) report(err);
+        else {
+          settled = true;
+          reject(err);
+        }
+      } else if (m.type === 'offer') {
+        chain = chain.then(() => handleOffer(m.sdp)).catch(report);
       }
     });
   });
