@@ -1,4 +1,4 @@
-export type DeviceError = 'denied' | 'no-device' | 'in-use' | 'unplugged' | 'unknown';
+export type DeviceError = 'denied' | 'no-device' | 'in-use' | 'unplugged' | 'ended' | 'muted' | 'unknown';
 
 /** Accepts an Error/DOMException, or a capture "microphone lost: <Name>: ..." reason string. */
 export function classifyMediaError(e: unknown): DeviceError {
@@ -7,6 +7,8 @@ export function classifyMediaError(e: unknown): DeviceError {
   if (/NotAllowedError|SecurityError/.test(s)) return 'denied';
   if (/NotFoundError|OverconstrainedError/.test(s)) return 'no-device';
   if (/NotReadableError/.test(s)) return 'in-use';
+  if (/^microphone lost: ended/.test(s)) return 'ended';
+  if (/^microphone lost: muted/.test(s)) return 'muted';
   return 'unknown';
 }
 
@@ -15,6 +17,8 @@ export const DEVICE_MESSAGES: Record<DeviceError, string> = {
   'no-device': 'No microphone found. Plug one in or pick another; the call stays connected.',
   'in-use': 'The microphone is in use by another app. Close it or pick another device.',
   unplugged: 'The selected microphone was unplugged. Pick another device; the call stays connected.',
+  ended: 'The microphone stopped (unplugged, permission revoked or taken by the system). Pick a device; the call stays connected.',
+  muted: 'The microphone has been muted by the system or another app; the call stays connected.',
   unknown: 'The microphone failed. Try another device.',
 };
 

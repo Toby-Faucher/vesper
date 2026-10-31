@@ -8,7 +8,8 @@ export class Signaling {
   private ws: WebSocket;
   private queue: string[] = [];
   private msgCbs: ((m: ServerMsg) => void)[] = [];
-  private closeCbs: (() => void)[] = [];
+  private closeCbs: ((byClient: boolean) => void)[] = [];
+  private byClient = false;
 
   constructor(url: string, ws: typeof WebSocket = WebSocket) {
     this.ws = new ws(url);
@@ -22,7 +23,7 @@ export class Signaling {
       }
       this.msgCbs.forEach((cb) => cb(m));
     };
-    this.ws.onclose = () => this.closeCbs.forEach((cb) => cb());
+    this.ws.onclose = () => this.closeCbs.forEach((cb) => cb(this.byClient));
   }
 
   send(m: ClientMsg): void {
@@ -34,9 +35,15 @@ export class Signaling {
     this.msgCbs.push(cb);
   }
   close(): void {
+    this.byClient = true;
     this.ws.close();
   }
-  onClose(cb: () => void): void {
+  leave(): void {
+    this.send({ type: 'leave' });
+    this.close();
+  }
+  /** `byClient` is true when close()/leave() caused it, false for a server or network close. */
+  onClose(cb: (byClient: boolean) => void): void {
     this.closeCbs.push(cb);
   }
 }

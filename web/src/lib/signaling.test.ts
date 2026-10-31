@@ -12,6 +12,7 @@ class FakeWS {
   constructor(public url: string) { FakeWS.last = this; }
   send(s: string) { this.sent.push(s); }
   open() { this.readyState = 1; this.onopen?.(); }
+  close() { this.onclose?.(); }
 }
 const make = () => {
   const s = new Signaling('ws://x/ws', FakeWS as unknown as typeof WebSocket);
@@ -45,5 +46,15 @@ describe('Signaling', () => {
     s.onClose(cb);
     ws.onclose!();
     expect(cb).toHaveBeenCalledOnce();
+    expect(cb).toHaveBeenCalledWith(false); // closed by the server or network
+  });
+  it('leave sends leave, closes, and reports the close as ours', () => {
+    const { s, ws } = make();
+    ws.open();
+    const cb = vi.fn();
+    s.onClose(cb);
+    s.leave();
+    expect(ws.sent.map((x) => JSON.parse(x))).toEqual([{ type: 'leave' }]);
+    expect(cb).toHaveBeenCalledWith(true);
   });
 });

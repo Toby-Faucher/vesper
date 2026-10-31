@@ -31,6 +31,7 @@ const browserDeps: CaptureDeps = {
 };
 
 type Pipe = { mode: DenoiseMode; track: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string };
+const MUTE_GRACE_MS = 3000;
 const stopAll = (m: MediaStream) => m.getTracks().forEach((t) => t.stop());
 
 /**
@@ -63,14 +64,51 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       },
     });
 
+  /**
+   * The raw mic can end under us (permission revoked, default device unplugged, OS reclaim): drop the pipe and
+   * report it. A mute that outlasts MUTE_GRACE_MS is reported too but the pipe is kept, since it may come back.
+   */
+  function watch(raw: MediaStreamTrack, me: () => Pipe | undefined) {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    let before: [DenoiseMode, string] | null = null;
+    const current = () => !closed && !!me() && pipe === me();
+    raw.onended = () => {
+      if (!current()) return;
+      pipe!.stop();
+      pipe = null;
+      notify('off', 'microphone lost: ended');
+    };
+    raw.onmute = () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        if (!raw.muted || !current()) return;
+        before = last;
+        notify(pipe!.mode, 'microphone lost: muted by the system');
+      }, MUTE_GRACE_MS);
+    };
+    raw.onunmute = () => {
+      clearTimeout(t);
+      if (before && current()) notify(...before);
+      before = null;
+    };
+    return () => {
+      clearTimeout(t);
+      raw.onended = raw.onmute = raw.onunmute = null;
+    };
+  }
+
   async function plain(mode: DenoiseMode): Promise<Pipe> {
     const m = await mic(mode);
-    return { mode, track: m.getAudioTracks()[0], stop: () => stopAll(m) };
+    const unwatch = watch(m.getAudioTracks()[0], () => me);
+    const me: Pipe = { mode, track: m.getAudioTracks()[0], stop: () => (unwatch(), stopAll(m)) };
+    return me;
   }
 
   async function deep(): Promise<Pipe> {
     if (ctx.sampleRate !== 48000) throw new Error(`AudioContext runs at ${ctx.sampleRate} Hz, DeepFilterNet needs 48000`);
     const m = await mic('deepfilter');
+    let me: Pipe | undefined;
+    const unwatch = watch(m.getAudioTracks()[0], () => me);
     let dead = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let node: AudioWorkletNode | undefined;
@@ -81,6 +119,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     const stop = () => {
       dead = true;
       clearTimeout(timer);
+      unwatch();
       worker?.terminate();
       node?.port.postMessage({ type: 'stop' });
       nodes.forEach((n) => n.disconnect());
@@ -113,13 +152,13 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         w.postMessage({ type: 'port' }, [ch.port1]);
         n.port.postMessage({ type: 'port' }, [ch.port2]);
         set(); // settings may have changed while the model loaded
-        me.status = '';
+        me!.status = '';
         if (pipe === me) notify('deepfilter', '');
       };
       w.onerror = (e) => fail(`denoiser worker failed: ${e.message ?? ''}`);
       n.port.onmessage = ({ data }: MessageEvent<{ type: 'error'; message: string }>) => fail(data.message);
       w.postMessage({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: s.attenDb, beta: s.postFilter });
-      const me: Pipe = {
+      me = {
         mode: 'deepfilter',
         status: 'loading, unfiltered',
         track: out.stream.getAudioTracks()[0],
@@ -204,7 +243,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     },
     setSettings(n: AudioSettings) {
       const rebuild =
-        n.mode !== s.mode || n.micId !== s.micId || n.noiseSuppression !== s.noiseSuppression || n.autoGain !== s.autoGain;
+        !pipe || n.mode !== s.mode || n.micId !== s.micId || n.noiseSuppression !== s.noiseSuppression || n.autoGain !== s.autoGain;
       s = n;
       if (rebuild) void switchTo(n.mode, '').catch(lost);
       else pipe?.set?.(n);

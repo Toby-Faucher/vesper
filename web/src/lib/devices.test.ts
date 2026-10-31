@@ -21,6 +21,8 @@ describe('classifyMediaError', () => {
   });
   it('reads the error name out of a capture "microphone lost" reason', () => {
     expect(classifyMediaError('microphone lost: NotAllowedError: Permission denied')).toBe('denied');
+    expect(classifyMediaError('microphone lost: ended')).toBe('ended');
+    expect(classifyMediaError('microphone lost: muted by the system')).toBe('muted');
   });
 });
 

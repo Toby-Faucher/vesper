@@ -12,7 +12,10 @@ class FakeStream {
   getAudioTracks() { return this.tracks; }
   getTracks() { return this.tracks; }
 }
-const track = (label: string) => ({ kind: 'audio', label, enabled: true, stop: vi.fn() });
+const track = (label: string) => ({
+  kind: 'audio', label, enabled: true, muted: false, stop: vi.fn(),
+  onended: null as any, onmute: null as any, onunmute: null as any,
+});
 const node = () => ({ connect: vi.fn((n: unknown) => n), disconnect: vi.fn() });
 
 function setup(over: Partial<CaptureDeps> = {}) {
@@ -239,5 +242,53 @@ describe('createCapture', () => {
     expect(t.ctx.close).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(6000);
     expect(t.mics).toHaveLength(1);
+  });
+
+  for (const mode of ['deepfilter', 'browser'] as const) {
+    it(`${mode}: the mic track ending mid-call is surfaced once; a stale pipe's end is ignored`, async () => {
+      const t = setup();
+      const cap = await createCapture(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode }), t.deps);
+      const seen: [string, string][] = [];
+      cap.onModeChange((m, r) => seen.push([m, r]));
+      seen.length = 0;
+      // swap to a new mic: the old pipe's end must not alarm
+      cap.setSettings(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode, micId: 'usb' }));
+      await flush();
+      seen.length = 0;
+      t.mics[0].t.onended?.();
+      expect(seen).toEqual([]);
+      t.mics[1].t.onended();
+      t.mics[1].t.onended?.();
+      expect(seen).toEqual([['off', 'microphone lost: ended']]);
+      expect(t.mics[1].t.stop).toHaveBeenCalled();
+      // any settings change retries the mic once the pipe is gone
+      cap.setSettings(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'browser', micId: 'usb' }));
+      await flush();
+      expect(t.mics).toHaveLength(3);
+      expect(seen.at(-1)?.[0]).toBe('browser');
+      cap.close();
+    });
+  }
+
+  it('a mute that persists is surfaced, a short one is not, and unmute clears it', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const cap = await createCapture(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'browser' }), t.deps);
+    const seen: [string, string][] = [];
+    cap.onModeChange((m, r) => seen.push([m, r]));
+    seen.length = 0;
+    const m = t.mics[0].t;
+    m.muted = true; m.onmute();
+    await vi.advanceTimersByTimeAsync(500);
+    m.muted = false; m.onunmute();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(seen).toEqual([]);
+    m.muted = true; m.onmute();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(seen).toEqual([['browser', 'microphone lost: muted by the system']]);
+    m.muted = false; m.onunmute();
+    expect(seen.at(-1)).toEqual(['browser', '']);
+    expect(m.stop).not.toHaveBeenCalled();
+    cap.close();
   });
 });

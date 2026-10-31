@@ -117,6 +117,12 @@
     const m = new Map(Object.entries(volumes));
     saveVolumes(localStorage, m);
   }
+  function leave() {
+    sig?.leave();
+    sig = undefined;
+    teardown();
+    error = '';
+  }
   function teardown() {
     clearInterval(poll);
     playback?.close();
@@ -126,7 +132,9 @@
     capture?.close();
     capture = undefined;
     sender = undefined;
+    pc?.close();
     pc = undefined;
+    peers = [];
     deviceError = '';
     offered = null;
     mic = undefined;
@@ -160,9 +168,14 @@
       const stream = cap.stream;
       mic = stream;
       volumes = Object.fromEntries(restoreVolumes(localStorage));
-      sig = new Signaling(wsUrl());
+      const mine = (sig = new Signaling(wsUrl()));
       const early: ServerMsg[] = []; // peer events that arrive before Joined
-      sig.onClose(teardown);
+      mine.onClose((byClient) => {
+        if (sig !== mine) return; // an old socket closing late must not tear down a newer call
+        const lostCall = joined && !byClient; // server restart, same-name takeover, ping timeout
+        teardown();
+        if (lostCall) error = 'Disconnected from the server';
+      });
       sig.onMessage((m) => {
         if (m.type === 'peer_left') {
           playback?.remove(m.user_id);
@@ -241,6 +254,7 @@
     <div class="flex gap-2">
       <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleMute}>{muted ? 'Unmute' : 'Mute'}</button>
       <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleDeafen}>{deafened ? 'Undeafen' : 'Deafen'}</button>
+      <button class="ml-auto rounded bg-red-900 px-3 py-1" onclick={leave}>Leave</button>
     </div>
     <p class="rounded p-1 {speaking.has(userId) ? 'ring-2 ring-green-500' : ''}">You{muted ? ' (muted)' : ''}</p>
     <p class="text-sm text-neutral-400" role="status">Noise suppression: {mode}{modeReason ? ` (${modeReason})` : ''}</p>
