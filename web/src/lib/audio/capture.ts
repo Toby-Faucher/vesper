@@ -1,4 +1,5 @@
 import type { DspOut } from './dsp-handler';
+import type { PipelineStats } from './denoise-core';
 import type { DenoiseMode } from './mode';
 import type { AudioSettings } from './settings';
 import workletUrl from './denoise.worklet.ts?worker&url';
@@ -30,7 +31,17 @@ const browserDeps: CaptureDeps = {
   startLive: true,
 };
 
-type Pipe = { mode: DenoiseMode; track: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string };
+type Pipe = {
+  mode: DenoiseMode; track: MediaStreamTrack; raw: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string;
+  stats?: PipelineStats;
+};
+/** pipeline is null outside deepfilter mode or before the worklet's first report (every 500 ms). */
+export interface CaptureStats {
+  pipeline: PipelineStats | null;
+  /** readyState and muted of the raw mic track; enabled is the sent track's mute gate. */
+  mic: { readyState: MediaStreamTrackState; muted: boolean; enabled: boolean };
+  context: { state: AudioContextState; sampleRate: number };
+}
 const MUTE_GRACE_MS = 3000;
 const stopAll = (m: MediaStream) => m.getTracks().forEach((t) => t.stop());
 
@@ -45,6 +56,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   void ctx.resume();
   const stream = new MediaStream();
   const cbs: ((m: DenoiseMode, reason: string) => void)[] = [];
+  const statCbs = new Set<(s: CaptureStats) => void>();
   let last: [DenoiseMode, string] | null = null; // replayed to late subscribers
   let pipe: Pipe | null = null;
   let sender: RTCRtpSender | null = null;
@@ -100,7 +112,8 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   async function plain(mode: DenoiseMode): Promise<Pipe> {
     const m = await mic(mode);
     const unwatch = watch(m.getAudioTracks()[0], () => me);
-    const me: Pipe = { mode, track: m.getAudioTracks()[0], stop: () => (unwatch(), stopAll(m)) };
+    const t = m.getAudioTracks()[0];
+    const me: Pipe = { mode, track: t, raw: t, stop: () => (unwatch(), stopAll(m)) };
     return me;
   }
 
@@ -156,12 +169,19 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         if (pipe === me) notify('deepfilter', '');
       };
       w.onerror = (e) => fail(`denoiser worker failed: ${e.message ?? ''}`);
-      n.port.onmessage = ({ data }: MessageEvent<{ type: 'error'; message: string }>) => fail(data.message);
+      n.port.onmessage = ({ data }: MessageEvent<{ type: 'error'; message: string } | ({ type: 'stats' } & PipelineStats)>) => {
+        if (data.type !== 'stats') return fail(data.message);
+        const { type: _, ...stats } = data;
+        me!.stats = stats;
+        const snap = pipe === me ? getStats() : null;
+        if (snap) statCbs.forEach((cb) => cb(snap));
+      };
       w.postMessage({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: s.attenDb, beta: s.postFilter });
       me = {
         mode: 'deepfilter',
         status: 'loading, unfiltered',
         track: out.stream.getAudioTracks()[0],
+        raw: m.getAudioTracks()[0],
         stop,
         set: (n) => {
           gain.gain.value = 10 ** (n.inputBoostDb / 20);
@@ -173,6 +193,16 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       stop();
       throw e;
     }
+  }
+
+  function getStats(): CaptureStats | null {
+    if (!pipe || closed) return null;
+    const { raw, track } = pipe;
+    return {
+      pipeline: pipe.stats ?? null,
+      mic: { readyState: raw.readyState, muted: raw.muted, enabled: track.enabled },
+      context: { state: ctx.state, sampleRate: ctx.sampleRate },
+    };
   }
 
   const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -252,6 +282,13 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       if (rebuild) void switchTo(n.mode, '').catch(lost);
       else pipe?.set?.(n);
       if (!rebuild && boostChanged && last) notify(...last);
+    },
+    /** The latest snapshot, or null when there is no pipeline. */
+    getStats,
+    /** Called with each new snapshot from the worklet (deepfilter mode only). Returns an unsubscribe function. */
+    onStats(cb: (s: CaptureStats) => void) {
+      statCbs.add(cb);
+      return () => void statCbs.delete(cb);
     },
     onModeChange(cb: (m: DenoiseMode, reason: string) => void) {
       cbs.push(cb);

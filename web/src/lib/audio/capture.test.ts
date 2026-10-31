@@ -13,7 +13,7 @@ class FakeStream {
   getTracks() { return this.tracks; }
 }
 const track = (label: string) => ({
-  kind: 'audio', label, enabled: true, muted: false, stop: vi.fn(),
+  kind: 'audio', label, enabled: true, muted: false, readyState: 'live', stop: vi.fn(),
   onended: null as any, onmute: null as any, onunmute: null as any,
 });
 const node = () => ({ connect: vi.fn((n: unknown) => n), disconnect: vi.fn() });
@@ -26,6 +26,7 @@ function setup(over: Partial<CaptureDeps> = {}) {
   const dests: ReturnType<typeof track>[] = [];
   const ctx = {
     sampleRate: 48000,
+    state: 'running',
     resume: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     createMediaStreamSource: vi.fn(() => node()),
@@ -304,6 +305,41 @@ describe('createCapture', () => {
     cap.setSettings({ ...browser, inputBoostDb: 6, mode: 'deepfilter' });
     await flush();
     expect(seen.at(-1)).toEqual(['deepfilter', 'loading, unfiltered']);
+    cap.close();
+  });
+
+  it('stats: the latest worklet snapshot plus the mic track and context state', async () => {
+    const t = setup();
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    const mic = { readyState: 'live', muted: false, enabled: true };
+    const context = { state: 'running', sampleRate: 48000 };
+    expect(cap.getStats()).toEqual({ pipeline: null, mic, context });
+    const seen = vi.fn();
+    const off = cap.onStats(seen);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    const { type: _, ...pipeline } = { type: 'stats', state: 'playing', inputRms: 0.1, underruns: 2 };
+    t.worklets[0].port.onmessage({ data: { type: 'stats', ...pipeline } });
+    await flush();
+    expect(t.mics).toHaveLength(1); // a stats message is not a failure
+    expect(cap.getStats()).toEqual({ pipeline, mic, context });
+    expect(seen).toHaveBeenCalledWith({ pipeline, mic, context });
+    cap.setLive(false);
+    t.mics[0].t.muted = true;
+    expect(cap.getStats()!.mic).toEqual({ readyState: 'live', muted: true, enabled: false }); // enabled is the sent track's gate
+    off();
+    t.worklets[0].port.onmessage({ data: { type: 'stats', ...pipeline } });
+    expect(seen).toHaveBeenCalledTimes(1);
+    cap.close();
+    expect(cap.getStats()).toBeNull();
+  });
+
+  it('stats in browser mode: no pipeline numbers, the raw mic track state', async () => {
+    const t = setup();
+    const cap = await createCapture(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'browser' }), t.deps);
+    t.mics[0].t.readyState = 'ended';
+    expect(cap.getStats()).toEqual({
+      pipeline: null, mic: { readyState: 'ended', muted: false, enabled: true }, context: { state: 'running', sampleRate: 48000 },
+    });
     cap.close();
   });
 });
