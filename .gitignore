@@ -17,3 +17,8 @@ web/dist/
 *.db-wal
 /data/
 .claude/worktrees/
+# Audio lab data (fetched by research/scripts/fetch-*.sh, built by audiolab).
+research/corpus/
+research/models/
+research/listen/
+research/results/
