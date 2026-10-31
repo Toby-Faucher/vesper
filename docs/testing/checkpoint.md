@@ -24,7 +24,7 @@ Pick one mic and write its model in 11.1. Windows/Mac/Linux system "mic enhancem
 
 ### Running Vesper
 
-Full server and deployment instructions: docs/deploy.md (created when the server branch is merged). Until then, run locally from the repo root, in two terminals:
+Full server and deployment instructions: docs/deploy.md. Until then, run locally from the repo root, in two terminals:
 
 ```bash
 # terminal 1: server. The join key is whatever you set as VESPER_DEV_KEY (required, no default).

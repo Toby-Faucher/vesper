@@ -1,0 +1,36 @@
+# Plain-binary install. Assumes: binary at /opt/vesper/vesper-server, web app (web/dist) at
+# /opt/vesper/web, and /etc/vesper/vesper.env containing (mode 600, owned by root):
+#   VESPER_DEV_KEY=<the join passphrase>
+#   VESPER_PUBLIC_HOST=vesper.tfaucher.com
+[Unit]
+Description=Vesper voice chat server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+EnvironmentFile=/etc/vesper/vesper.env
+Environment=VESPER_WEB_DIR=/opt/vesper/web
+Environment=VESPER_HTTP_BIND=127.0.0.1:8080
+Environment=VESPER_UDP_BIND=0.0.0.0:40000
+ExecStart=/opt/vesper/vesper-server
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

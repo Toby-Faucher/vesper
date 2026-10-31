@@ -1,0 +1,29 @@
+# Dockge / docker compose stack. Put VESPER_DEV_KEY and VESPER_PUBLIC_HOST in a .env next to this file.
+# Build context is the repo root (this file lives in deploy/).
+services:
+  vesper:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: vesper:latest
+    restart: unless-stopped
+    environment:
+      VESPER_DEV_KEY: ${VESPER_DEV_KEY:?set it in .env}
+      VESPER_PUBLIC_HOST: ${VESPER_PUBLIC_HOST:-vesper.tfaucher.com}
+      # VESPER_UDP_PORT_PUBLIC: 40000   # only if the router forwards a different external UDP port
+    ports:
+      # HTTP for the reverse proxy. Caddy on the same host: keep 127.0.0.1. Caddy on another host or
+      # in another compose network: use "8080:8080" (LAN-visible, firewall it) or put both services
+      # on a shared network and drop this line, pointing Caddy at vesper:8080.
+      - "127.0.0.1:8080:8080"
+      # Media: the router forwards UDP 40000 here. Must be published on all interfaces.
+      - "40000:40000/udp"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
