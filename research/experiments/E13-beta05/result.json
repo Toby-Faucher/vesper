@@ -1,0 +1,155 @@
+{
+  "base_eval": "research/results/gate/base-a23fde74b356-34b896b88391-20fa5fed.json",
+  "base_sha": "a23fde74b356ef2967c4acdc6ea3d9e9eb853de8",
+  "branch": "exp/E13-beta05",
+  "cand_eval": "research/results/gate/cand-E13-beta05-a23fde74b356.json",
+  "cand_sha": "a23fde74b356ef2967c4acdc6ea3d9e9eb853de8",
+  "config_hash": "cf01c739e8fa",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        0.013388476422931072,
+        0.025378691446765873
+      ],
+      "mean": 0.019383583934848472
+    },
+    "hb_err_db": {
+      "ci95": [
+        -0.30332377755402645,
+        -0.08331338427818213
+      ],
+      "mean": -0.1933185809161043
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        0.524972876088956,
+        0.8682643572375475
+      ],
+      "mean": 0.6966186166632518
+    },
+    "lsd": {
+      "ci95": [
+        0.38721335567568954,
+        0.45479834692306514
+      ],
+      "mean": 0.42100585129937734
+    },
+    "lsd_wb": {
+      "ci95": [
+        0.3040861537321544,
+        0.3517715657795215
+      ],
+      "mean": 0.32792885975583796
+    },
+    "mcd": {
+      "ci95": [
+        0.36899005549556574,
+        0.45558625107302164
+      ],
+      "mean": 0.4122881532842937
+    },
+    "ovrl": {
+      "ci95": [
+        0.003941037183786585,
+        0.0134012642307978
+      ],
+      "mean": 0.008671150707292193
+    },
+    "si_sdr_i": {
+      "ci95": [
+        -0.16928709045343915,
+        -0.10347885778472916
+      ],
+      "mean": -0.13638297411908415
+    },
+    "sig": {
+      "ci95": [
+        -0.002638117690362282,
+        0.00716274296870489
+      ],
+      "mean": 0.0022623126391713043
+    }
+  },
+  "guards": {
+    "bak_mean": {
+      "limit": -0.05,
+      "pass": true,
+      "value": 0.019383583934848472
+    },
+    "clipped_items": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "lsd_wb_mean": {
+      "limit": 0.05,
+      "pass": false,
+      "value": 0.32792885975583796
+    },
+    "rtf": {
+      "limit": 0.3,
+      "pass": true,
+      "value": 0.14786821963333333
+    },
+    "rtf_ratio": {
+      "limit": 1.25,
+      "pass": false,
+      "value": 3.100279231376194
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": true,
+      "value": -0.13638297411908415
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": true,
+      "value": 0.0022623126391713043
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": true,
+      "value": -0.037788973567352044
+    }
+  },
+  "id": "E13-beta05",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "n_total": 400,
+  "n_used": 240,
+  "ovrl_delta_sd_full": 0.03635488298996981,
+  "pipeline": "pipeline.toml",
+  "reason": "SPRT accepted H0 (no gain of delta1)",
+  "rtf": {
+    "base": 0.04769512956666667,
+    "cand": 0.14786821963333333
+  },
+  "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": -4.5632550170640895,
+    "lower": -2.9444389791664403,
+    "n": 240,
+    "upper": 2.9444389791664403,
+    "verdict": "H0"
+  },
+  "stack": "",
+  "status": "rejected"
+}

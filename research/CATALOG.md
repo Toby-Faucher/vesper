@@ -16,7 +16,7 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | E3-beta05 | E3-beta05 | inconclusive | +0.009 [+0.005, +0.014] | +0.001 [-0.003, +0.005] | +0.023 [+0.017, +0.029] | -0.07 [-0.10, -0.04] | 0.048 | 240 | exp/E3-beta05 | 6de7b42ee5ca | SPRT hit the item cap without a verdict |
 
-## Rejected (11)
+## Rejected (14)
 
 | id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -26,21 +26,11 @@ over the items the sequential test used (`n`). DNSMOS is a proxy: listen before 
 | E-null-v3 | Null check without UTMOS (warms the no-UTMOS baseline) | rejected | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.000 [+0.000, +0.000] | +0.00 [+0.00, +0.00] | 0.064 | 20 | exp/E-null-v3 | b8a2d44af9e9 | SPRT accepted H0 (no gain of delta1) |
 | E1-gain12 | E1-gain12 | rejected | -0.113 [-0.164, -0.061] | -0.104 [-0.154, -0.055] | -0.126 [-0.176, -0.075] | +0.76 [+0.12, +1.39] | 0.046 | 100 | exp/E1-gain12 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
 | E1-gain6 | E1-gain6 | rejected | -0.039 [-0.071, -0.007] | -0.040 [-0.070, -0.010] | -0.057 [-0.092, -0.021] | +0.37 [+0.08, +0.66] | 0.047 | 120 | exp/E1-gain6 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
+| E11-gate-v2 | A post gate driven by the model's local SNR attenuates residual noise between words | rejected | +0.025 [+0.006, +0.045] | +0.029 [+0.008, +0.050] | +0.031 [+0.015, +0.046] | -0.07 [-0.14, -0.01] | 0.242 | 80 | exp/E11-gate-v2 | 3ab51224a393 | SPRT accepted H1 but guards failed: lsd_wb_mean; Post gate on the model's lsnr: after 150 ms under -3 dB the gain falls at 300 dB/s to -24 dB, and returns to 0 dB within one frame at lsnr >= 0 dB. Expected to cut residual noise in pauses. |
+| E13-beta05 | post filter 0.05 | rejected | +0.009 [+0.004, +0.013] | +0.002 [-0.003, +0.007] | +0.019 [+0.013, +0.025] | -0.14 [-0.17, -0.10] | 0.148 | 240 | exp/E13-beta05 | a23fde74b356 | SPRT accepted H0 (no gain of delta1) |
+| E14-atten40 | attenuation limit 40 dB | rejected | +0.101 [+0.052, +0.150] | +0.127 [+0.072, +0.181] | +0.089 [+0.009, +0.170] | +0.09 [+0.06, +0.12] | 0.204 | 20 | exp/E14-atten40 | a23fde74b356 | SPRT accepted H1 but guards failed: rtf_ratio |
 | E2-atten12 | E2-atten12 | rejected | -0.101 [-0.147, -0.055] | +0.174 [+0.111, +0.238] | -0.594 [-0.682, -0.507] | -0.56 [-1.13, -0.00] | 0.046 | 140 | exp/E2-atten12 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
 | E2-atten24 | E2-atten24 | rejected | +0.061 [+0.027, +0.094] | +0.188 [+0.143, +0.233] | -0.166 [-0.214, -0.117] | +0.14 [-0.03, +0.30] | 0.046 | 120 | exp/E2-atten24 | 6de7b42ee5ca | SPRT accepted H1 but guards failed: bak_mean |
 | E3-beta0 | E3-beta0 | rejected | -0.019 [-0.038, +0.000] | -0.008 [-0.029, +0.013] | -0.037 [-0.054, -0.019] | +0.02 [-0.12, +0.15] | 0.045 | 40 | exp/E3-beta0 | 6de7b42ee5ca | SPRT accepted H0 (no gain of delta1) |
 | E4-highpass | A causal 2nd-order Butterworth high-pass before DeepFilterNet removes sub-speech rumble and thumps | rejected | -0.059 [-0.098, -0.021] | -0.055 [-0.092, -0.017] | -0.021 [-0.057, +0.016] | -3.55 [-4.82, -2.28] | 0.042 | 80 | exp/E4-highpass | 43d0aa4a6d16 | SPRT accepted H0 (no gain of delta1); Added an optional causal 2nd-order Butterworth high-pass (`[pre.highpass] cutoff_hz`) before DeepFilterNet to remove rumble; on dev it lowers every metric at all cutoffs, so the guard (BAK, SIG must not drop) fails. |
 | E5-leveler | A slow, speech-gated input leveler before DeepFilterNet lifts quiet mics without clipping loud ones | rejected | +0.011 [+0.000, +0.022] | +0.012 [+0.001, +0.023] | -0.019 [-0.033, -0.005] | -1.06 [-1.41, -0.71] | 0.046 | 240 | exp/E5-leveler | 9e083e98ae92 | SPRT had no verdict but guards failed: si_sdr_i_mean; Added an optional speech-gated input leveler before DeepFilterNet (`[pre.leveler]`). The idea was to lift quiet mics toward -23 dBFS so the model gets a stronger input without clipping loud ones. On dev it is close to neutral on DNSMOS and loses SI-SDR. |
-
-## Broken (1)
-
-| id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| E11-gate-v2 | A post gate driven by the model's local SNR attenuates residual noise between words | broken |  |  |  |  |  |  | exp/E11-gate-v2 | 3ab51224a393 | ancestry: candidate does not descend from the base cc1c25dfc3ec; Post gate on the model's lsnr: after 150 ms under -3 dB the gain falls at 300 dB/s to -24 dB, and returns to 0 dB within one frame at lsnr >= 0 dB. Expected to cut residual noise in pauses. |
-
-## Pending (2)
-
-| id | hypothesis | status | OVRL | SIG | BAK | SI-SDRi dB | RTF | n | branch | sha | note |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| E13-beta05 | post filter 0.05 | pending |  |  |  |  |  |  | exp/E13-beta05 |  |  |
-| E14-atten40 | attenuation limit 40 dB | pending |  |  |  |  |  |  | exp/E14-atten40 |  |  |

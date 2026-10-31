@@ -1,12 +1,155 @@
 {
-  "base_sha": "cc1c25dfc3eca6ec1771cf4a0a86c00a05757821",
+  "base_eval": "research/results/gate/base-f2d87a80dc19-34b896b88391-20fa5fed.json",
+  "base_sha": "f2d87a80dc195f161a215f4b053f34532f37d9ef",
   "branch": "exp/E11-gate-v2",
+  "cand_eval": "research/results/gate/cand-E11-gate-v2-3ab51224a393.json",
   "cand_sha": "3ab51224a393bdb99a54e4d1b6ce6de7654eaa9d",
   "config_hash": "cf01c739e8fa",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        0.015144750726744675,
+        0.04628306955113551
+      ],
+      "mean": 0.030713910138940093
+    },
+    "hb_err_db": {
+      "ci95": [
+        -0.35132947259113945,
+        -0.04907448294308786
+      ],
+      "mean": -0.20020197776711365
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        0.6893183989243514,
+        2.2453377777757995
+      ],
+      "mean": 1.4673280883500754
+    },
+    "lsd": {
+      "ci95": [
+        0.10411914948691516,
+        0.20619997154512815
+      ],
+      "mean": 0.15515956051602164
+    },
+    "lsd_wb": {
+      "ci95": [
+        0.07684340448253346,
+        0.16852206577099663
+      ],
+      "mean": 0.12268273512676504
+    },
+    "mcd": {
+      "ci95": [
+        0.0961620561098502,
+        0.3178760997079332
+      ],
+      "mean": 0.20701907790889168
+    },
+    "ovrl": {
+      "ci95": [
+        0.005687165832042106,
+        0.044868523071828564
+      ],
+      "mean": 0.025277844451935337
+    },
+    "si_sdr_i": {
+      "ci95": [
+        -0.1410259475597168,
+        -0.00506172588525354
+      ],
+      "mean": -0.07304383672248518
+    },
+    "sig": {
+      "ci95": [
+        0.008359027396749798,
+        0.050100036744620324
+      ],
+      "mean": 0.02922953207068506
+    }
+  },
+  "guards": {
+    "bak_mean": {
+      "limit": -0.05,
+      "pass": true,
+      "value": 0.030713910138940093
+    },
+    "clipped_items": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "lsd_wb_mean": {
+      "limit": 0.05,
+      "pass": false,
+      "value": 0.12268273512676504
+    },
+    "rtf": {
+      "limit": 0.3,
+      "pass": true,
+      "value": 0.24189739526666668
+    },
+    "rtf_ratio": {
+      "limit": 1.25,
+      "pass": true,
+      "value": 1.128109483549827
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": true,
+      "value": -0.07304383672248518
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": true,
+      "value": 0.02922953207068506
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": true,
+      "value": -0.044205652627812904
+    }
+  },
   "id": "E11-gate-v2",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "n_total": 400,
+  "n_used": 80,
+  "ovrl_delta_sd_full": 0.0728542888013377,
   "pipeline": "pipeline.toml",
-  "reason": "ancestry: candidate does not descend from the base cc1c25dfc3ec",
+  "reason": "SPRT accepted H1 but guards failed: lsd_wb_mean",
+  "rtf": {
+    "base": 0.21442723316666665,
+    "cand": 0.24189739526666668
+  },
   "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": 3.058477303680644,
+    "lower": -2.9444389791664403,
+    "n": 80,
+    "upper": 2.9444389791664403,
+    "verdict": "H1"
+  },
   "stack": "",
-  "status": "broken"
+  "status": "rejected"
 }
