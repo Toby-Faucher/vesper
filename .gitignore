@@ -28,3 +28,4 @@ research/results/
 research/experiments/*/*.log
 __pycache__/
 research/experiments/*/prompt.md
+research/listen-v2/
