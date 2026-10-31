@@ -2485,6 +2485,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "vesper-loadtest"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "vesper-protocol",
+ "vesper-sfu",
+]
+
+[[package]]
 name = "vesper-protocol"
 version = "0.1.0"
 dependencies = [

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/vesper-protocol", "crates/vesper-dsp", "crates/vesper-sfu", "crates/vesper-server"]
+members = ["crates/vesper-protocol", "crates/vesper-dsp", "crates/vesper-sfu", "crates/vesper-server", "crates/vesper-loadtest"]
 
 [workspace.package]
 version = "0.1.0"
