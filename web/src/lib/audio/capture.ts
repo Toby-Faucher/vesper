@@ -13,6 +13,7 @@ export interface CaptureDeps {
   readyTimeoutMs: number;
   /** Initial track state: false when PTT/mute must start silent. */
   startLive: boolean;
+  now(): number;
 }
 
 const modules = new WeakMap<BaseAudioContext, Promise<void>>();
@@ -29,15 +30,19 @@ const browserDeps: CaptureDeps = {
   createWorker: () => new Worker(new URL('./dsp.worker.ts', import.meta.url), { type: 'module' }),
   readyTimeoutMs: 5000,
   startLive: true,
+  now: () => performance.now(),
 };
 
 type Pipe = {
   mode: DenoiseMode; track: MediaStreamTrack; raw: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string;
   stats?: PipelineStats;
+  statsAt?: number;
 };
 /** pipeline is null outside deepfilter mode or before the worklet's first report (every 500 ms). */
 export interface CaptureStats {
   pipeline: PipelineStats | null;
+  /** ms since that snapshot arrived; a growing age means the worklet stopped running. null with no pipeline. */
+  ageMs: number | null;
   /** readyState and muted of the raw mic track; enabled is the sent track's mute gate. */
   mic: { readyState: MediaStreamTrackState; muted: boolean; enabled: boolean };
   context: { state: AudioContextState; sampleRate: number };
@@ -173,6 +178,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         if (data.type !== 'stats') return fail(data.message);
         const { type: _, ...stats } = data;
         me!.stats = stats;
+        me!.statsAt = d.now();
         const snap = pipe === me ? getStats() : null;
         if (snap) statCbs.forEach((cb) => cb(snap));
       };
@@ -200,6 +206,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     const { raw, track } = pipe;
     return {
       pipeline: pipe.stats ?? null,
+      ageMs: pipe.statsAt === undefined ? null : d.now() - pipe.statsAt,
       mic: { readyState: raw.readyState, muted: raw.muted, enabled: track.enabled },
       context: { state: ctx.state, sampleRate: ctx.sampleRate },
     };

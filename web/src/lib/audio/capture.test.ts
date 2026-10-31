@@ -18,6 +18,7 @@ const track = (label: string) => ({
 });
 const node = () => ({ connect: vi.fn((n: unknown) => n), disconnect: vi.fn() });
 
+const clock = { t: 0 };
 function setup(over: Partial<CaptureDeps> = {}) {
   let micFail: Error | null = null;
   const mics: { c: MediaTrackConstraints; t: ReturnType<typeof track> }[] = [];
@@ -57,6 +58,7 @@ function setup(over: Partial<CaptureDeps> = {}) {
     },
     readyTimeoutMs: 5000,
     startLive: true,
+    now: () => clock.t,
     ...over,
   };
   const sender = { track: null as any, replaceTrack: vi.fn(async (t: any) => { sender.track = t; }) };
@@ -313,16 +315,19 @@ describe('createCapture', () => {
     const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
     const mic = { readyState: 'live', muted: false, enabled: true };
     const context = { state: 'running', sampleRate: 48000 };
-    expect(cap.getStats()).toEqual({ pipeline: null, mic, context });
+    expect(cap.getStats()).toEqual({ pipeline: null, ageMs: null, mic, context });
     const seen = vi.fn();
     const off = cap.onStats(seen);
     t.workers[0].onmessage({ data: { type: 'ready' } });
     const { type: _, ...pipeline } = { type: 'stats', state: 'playing', inputRms: 0.1, underruns: 2 };
+    clock.t = 1000;
     t.worklets[0].port.onmessage({ data: { type: 'stats', ...pipeline } });
     await flush();
     expect(t.mics).toHaveLength(1); // a stats message is not a failure
-    expect(cap.getStats()).toEqual({ pipeline, mic, context });
-    expect(seen).toHaveBeenCalledWith({ pipeline, mic, context });
+    expect(cap.getStats()).toEqual({ pipeline, ageMs: 0, mic, context });
+    expect(seen).toHaveBeenCalledWith({ pipeline, ageMs: 0, mic, context });
+    clock.t = 3500;
+    expect(cap.getStats()!.ageMs).toBe(2500); // age since the snapshot arrived
     cap.setLive(false);
     t.mics[0].t.muted = true;
     expect(cap.getStats()!.mic).toEqual({ readyState: 'live', muted: true, enabled: false }); // enabled is the sent track's gate
@@ -338,7 +343,7 @@ describe('createCapture', () => {
     const cap = await createCapture(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'browser' }), t.deps);
     t.mics[0].t.readyState = 'ended';
     expect(cap.getStats()).toEqual({
-      pipeline: null, mic: { readyState: 'ended', muted: false, enabled: true }, context: { state: 'running', sampleRate: 48000 },
+      pipeline: null, ageMs: null, mic: { readyState: 'ended', muted: false, enabled: true }, context: { state: 'running', sampleRate: 48000 },
     });
     cap.close();
   });
