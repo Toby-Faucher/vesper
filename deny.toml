@@ -9,7 +9,13 @@
 unmaintained = "workspace"
 yanked = "deny"
 # Every ignore needs: advisory id, whether the code is reachable, a date and a TODO to remove it.
-ignore = []
+ignore = [
+    # tract-nnef 0.21.4 (via deep_filter and tract-onnx): out-of-bounds read when parsing a crafted NNEF
+    # .dat tensor. Not reachable: Vesper and deep_filter only call tract_onnx::onnx() loaders on the
+    # pinned, sha256-checked DeepFilterNet3 and DNSMOS models, never the NNEF loader. Added 2026-10-31.
+    # TODO: remove when tract moves past the =0.21.4 pin (see crates/vesper-dsp/Cargo.toml).
+    { id = "RUSTSEC-2026-0217", reason = "NNEF loader not reachable; tract pinned at 0.21.4 for deep_filter" },
+]
 
 [licenses]
 confidence-threshold = 0.93

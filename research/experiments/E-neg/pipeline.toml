@@ -1,0 +1,8 @@
+# Self-test E-neg: deliberately bad settings. Must be rejected by the gate.
+atten_db = 3.0
+post_filter_beta = 0.3
+input_gain_db = 0.0
+
+[pre]
+
+[post]

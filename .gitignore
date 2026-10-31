@@ -17,3 +17,13 @@ web/dist/
 *.db-wal
 /data/
 .claude/worktrees/
+# Audio lab data (fetched by research/scripts/fetch-*.sh, built by audiolab).
+research/corpus/
+research/models/
+research/listen/
+research/results/
+# Research loop: one git worktree per attempt, and gate logs.
+.worktrees/
+research/experiments/*/*.log
+__pycache__/
+research/experiments/*/prompt.md

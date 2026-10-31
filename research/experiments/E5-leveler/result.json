@@ -1,0 +1,127 @@
+{
+  "base_eval": "research/results/gate/base-6de7b42ee5ca-ab3bbd85aacc.json",
+  "base_sha": "6de7b42ee5ca8bb63c4b1c99491c56dc807a5fc4",
+  "branch": "exp/E5-leveler",
+  "cand_eval": "research/results/gate/cand-E5-leveler-9e083e98ae92.json",
+  "cand_sha": "9e083e98ae922f1e65d0e7ecdfde1eb5dc4aad63",
+  "config_hash": "d285138ce546",
+  "deltas": {
+    "bak": {
+      "ci95": [
+        -0.033393144852237745,
+        -0.00520533155861924
+      ],
+      "mean": -0.019299238205428493
+    },
+    "lead_in_reduction_db": {
+      "ci95": [
+        -0.38948648546673625,
+        -0.22849415541012155
+      ],
+      "mean": -0.3089903204384289
+    },
+    "lsd": {
+      "ci95": [
+        -0.16610086171831273,
+        0.021867811176349186
+      ],
+      "mean": -0.07211652527098177
+    },
+    "ovrl": {
+      "ci95": [
+        7.034844381176991e-05,
+        0.02184657752433765
+      ],
+      "mean": 0.01095846298407471
+    },
+    "si_sdr_i": {
+      "ci95": [
+        -1.4106418786084982,
+        -0.7074682064651869
+      ],
+      "mean": -1.0590550425368426
+    },
+    "sig": {
+      "ci95": [
+        0.0009288150918190033,
+        0.022624587797235998
+      ],
+      "mean": 0.0117767014445275
+    }
+  },
+  "guards": {
+    "bak_mean": {
+      "limit": -0.05,
+      "pass": true,
+      "value": -0.019299238205428493
+    },
+    "clipped_items": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "deterministic": {
+      "limit": true,
+      "pass": true,
+      "value": true
+    },
+    "latency_samples": {
+      "limit": 0,
+      "pass": true,
+      "value": 0
+    },
+    "rtf": {
+      "limit": 0.3,
+      "pass": true,
+      "value": 0.04646472076666666
+    },
+    "rtf_ratio": {
+      "limit": 1.25,
+      "pass": true,
+      "value": 0.9910032741908403
+    },
+    "si_sdr_i_mean": {
+      "limit": -0.3,
+      "pass": false,
+      "value": -1.0590550425368426
+    },
+    "sig_mean": {
+      "limit": -0.03,
+      "pass": true,
+      "value": 0.0117767014445275
+    },
+    "sig_p10": {
+      "limit": -0.15,
+      "pass": true,
+      "value": -0.04982536265422812
+    }
+  },
+  "id": "E5-leveler",
+  "latency_samples": {
+    "base": 0,
+    "cand": 0,
+    "declared": 0
+  },
+  "n_total": 240,
+  "n_used": 240,
+  "pipeline": "pipeline.toml",
+  "reason": "SPRT had no verdict but guards failed: si_sdr_i_mean",
+  "rtf": {
+    "base": 0.04688654616666667,
+    "cand": 0.04646472076666666
+  },
+  "split": "gate",
+  "sprt": {
+    "alpha": 0.05,
+    "batch": 20,
+    "beta": 0.05,
+    "delta0": 0.0,
+    "delta1": 0.02,
+    "llr": 0.6211723582055476,
+    "lower": -2.9444389791664403,
+    "n": 240,
+    "upper": 2.9444389791664403,
+    "verdict": "none"
+  },
+  "status": "rejected"
+}

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/vesper-protocol", "crates/vesper-dsp", "crates/vesper-sfu", "crates/vesper-server", "crates/vesper-loadtest"]
+members = ["crates/vesper-protocol", "crates/vesper-dsp", "crates/vesper-sfu", "crates/vesper-server", "crates/vesper-loadtest", "crates/vesper-audiolab"]
 
 [workspace.package]
 version = "0.1.0"
@@ -33,3 +33,7 @@ unsafe_code = "forbid"
 dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
+
+# The audio lab's corpus and metric tests do a lot of sample maths; unoptimised they take minutes.
+[profile.dev.package.vesper-audiolab]
+opt-level = 3

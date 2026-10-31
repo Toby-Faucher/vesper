@@ -1,0 +1,29 @@
+[package]
+name = "vesper-audiolab"
+description = "Audio lab: corpus builder, metrics and the audiolab CLI for the capture DSP path."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "audiolab"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+claxon = "0.4"
+clap = { version = "4", features = ["derive"] }
+hound = "3"
+rand = { version = "0.9", default-features = false }
+rand_chacha = { version = "0.9", default-features = false }
+rayon = "1"
+realfft = "3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "1"
+# Same version as the tract-core pin in vesper-dsp (and Cargo.lock). Do not bump on its own.
+tract-onnx = "=0.21.4"
+vesper-dsp = { path = "../vesper-dsp", features = ["tract", "serde"] }
+
+[lints]
+workspace = true
