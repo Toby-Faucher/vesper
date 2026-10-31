@@ -124,9 +124,10 @@
         oninput={(e) => set({ postFilter: +e.currentTarget.value })} />
     </label>
     <label class={label}>Input boost: {settings.inputBoostDb} dB
-      <input class="w-full" type="range" min="0" max="20" value={settings.inputBoostDb}
+      <input class="w-full" type="range" min="0" max="12" value={settings.inputBoostDb}
         oninput={(e) => set({ inputBoostDb: +e.currentTarget.value })} />
     </label>
+    <p class="text-neutral-500">Boost lifts the mic before the noise filter. High values can clip.</p>
   {/if}
 
   <label class={label}>Bitrate: {bitrateDraft} kbps
@@ -184,7 +185,7 @@
     <input class="w-full" type="range" min="-100" max="0" aria-label="Level marker" value={settings.vad.thresholdDb}
       oninput={(e) => set({ vad: { thresholdDb: +e.currentTarget.value } })} />
     {#if hint === 'clipping'}<p class="text-amber-400">Too loud: the signal is clipping. Lower input gain.</p>{/if}
-    {#if hint === 'too-quiet'}<p class="text-amber-400">Very quiet or silent. Speak, raise the input boost, or check the mic.</p>{/if}
+    {#if hint === 'too-quiet'}<p class="text-amber-400">Very quiet or silent. Speak, check the mic, or try a little input boost.</p>{/if}
   </div>
 
   <div class="space-y-1">

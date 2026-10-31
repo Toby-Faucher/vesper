@@ -22,7 +22,7 @@ Rust workspace (`crates/`) plus a Svelte 5 and Vite web app (`web/`). One server
   `cargo test -p vesper-protocol`, commit the regenerated files. Do not edit `gen/` by hand.
 - **The server's `user_id` is 32 lowercase hex characters** (`rooms.rs`) because it is also the MSID stream id of a forwarded track. The client keys
   remote streams on it. Do not change its format without changing `web/src/lib/signaling.ts` and `peers.ts`.
-- **Capture order is fixed:** mic, browser echo cancellation, DeepFilterNet, gain, Opus. The fallback is `deepfilter`, then `browser`, then `off`.
+- **Capture order is fixed:** mic, browser echo cancellation, gain, DeepFilterNet, Opus. The fallback is `deepfilter`, then `browser`, then `off`.
 - **`unsafe` is forbidden** in every crate. Do not add an exception.
 - **Wording.** README, docs and web strings use short, plain sentences. No em dashes, no stock AI phrases. `scripts/check-wording.sh` fails on the
   list in `scripts/wording-banned.txt`. Reword a line; do not add an allowlist.

@@ -7,6 +7,10 @@ import { ModeController } from './mode';
 const MAX_INFLIGHT = 4; // frames at the worker; beyond this they wait in the input ring
 const IN_FRAMES = 4; // input ring size (40 ms); beyond this it drops the oldest samples
 const MAX_OUT = 8; // denoised frames queued for output (80 ms); beyond this drop the oldest
+// Trim a deep queue: above 5 frames for 2 s straight, drop one frame per second until 3 are left.
+const TRIM_ABOVE = 5;
+const TRIM_TO = 3;
+const TRIM_AFTER_S = 2;
 const PRIME = 3 * HOP; // start output with 30 ms queued, so one late reply does not cause a gap
 // Fallback rule. A frame is late past 30 ms, the depth the output queue primes to.
 const LATE_MS = 30;
@@ -67,6 +71,9 @@ export class DenoiseCore {
   private n = { inputBlocks: 0, emptyInputBlocks: 0, framesSent: 0, replies: 0, underruns: 0, reprimes: 0, droppedOut: 0 };
   private droppedSamples = 0;
   private played = false;
+  private deep = 0; // samples the queue has stayed above TRIM_ABOVE
+  private trimming = false;
+  private cool = 0; // samples until the next trim drop
   private replyMs = new Float64Array(REPLY_WINDOW);
   // Level meters: sums over the current half second; the last full half second is what stats() reports.
   private sq = { in: 0, out: 0, n: 0 };
@@ -147,7 +154,22 @@ export class DenoiseCore {
     if (input) this.n.inputBlocks++;
     else this.n.emptyInputBlocks++;
     this.process(input, o);
+    this.trim(o.length);
     this.meter(input, o);
+  }
+
+  private trim(n: number) {
+    if (!this.trimming) {
+      this.deep = this.out.length > TRIM_ABOVE ? this.deep + n : 0;
+      if (this.deep < TRIM_AFTER_S * this.rate) return;
+      this.trimming = true;
+      this.cool = 0;
+    }
+    if (this.out.length <= TRIM_TO) return void (this.trimming = false, this.deep = 0);
+    if ((this.cool -= n) > 0) return;
+    this.cool = this.rate;
+    this.count -= this.out.splice(1, 1)[0].length; // not the head: it may be half played
+    this.n.droppedOut++;
   }
 
   private process(input: Float32Array | undefined, o: Float32Array): void {

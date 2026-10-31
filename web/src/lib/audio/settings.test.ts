@@ -13,7 +13,7 @@ describe('clampSettings', () => {
     expect(clampSettings({ bitrateKbps: 9999 }).bitrateKbps).toBe(510);
     const s = clampSettings({ attenDb: 1, postFilter: 1, inputBoostDb: -5 });
     expect([s.attenDb, s.postFilter, s.inputBoostDb]).toEqual([6, 0.05, 0]);
-    expect(clampSettings({ attenDb: 500, inputBoostDb: 99 })).toMatchObject({ attenDb: 100, inputBoostDb: 20 });
+    expect(clampSettings({ attenDb: 500, inputBoostDb: 99 })).toMatchObject({ attenDb: 100, inputBoostDb: 12 });
   });
   it('echoCancellation cannot be set false', () => {
     expect(clampSettings({ echoCancellation: false } as unknown as Partial<AudioSettings>).echoCancellation).toBe(true);
