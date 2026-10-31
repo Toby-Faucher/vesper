@@ -49,30 +49,22 @@ export async function joinRoom(
     stream: MediaStream;
     bitrateKbps: number;
     onError?: (e: Error) => void;
+    onRemoteStream?: (s: MediaStream) => void;
+    onRemoteStreamEnd?: (id: string) => void;
   },
-): Promise<{ pc: RTCPeerConnection; peers: Peer[] }> {
+): Promise<{ pc: RTCPeerConnection; peers: Peer[]; userId: string }> {
   const tune = (sdp: string) => tuneOpus(sdp, { bitrateKbps: opts.bitrateKbps, dtx: true, fec: true });
   const report = (e: unknown) => opts.onError?.(e instanceof Error ? e : new Error(String(e)));
   const pc = new RTCPeerConnection();
   opts.stream.getAudioTracks().forEach((t) => pc.addTrack(t, opts.stream));
 
-  // Simple playback; Task 6 replaces this with per-peer GainNode playback.
-  const players = new Map<string, HTMLAudioElement>();
-  const drop = (id: string) => {
-    const a = players.get(id);
-    if (!a) return;
-    a.pause();
-    a.srcObject = null;
-    players.delete(id);
-  };
+  const seen = new Set<string>();
+  const drop = (id: string) => seen.delete(id) && opts.onRemoteStreamEnd?.(id);
   pc.ontrack = (e) => {
     const s = e.streams[0] ?? new MediaStream([e.track]);
-    if (players.has(s.id)) return;
-    const a = new Audio();
-    a.autoplay = true;
-    a.srcObject = s;
-    players.set(s.id, a);
-    void a.play().catch(() => {});
+    if (seen.has(s.id)) return;
+    seen.add(s.id); // s.id is the sender's user_id (SFU labels MSID with it)
+    opts.onRemoteStream?.(s);
     const check = () => s.getTracks().length === 0 && drop(s.id);
     s.onremovetrack = check;
     e.track.onended = check;
@@ -88,11 +80,11 @@ export async function joinRoom(
   };
 
   let settled = false;
-  const joined = new Promise<{ answer: string; peers: Peer[] }>((resolve, reject) => {
+  const joined = new Promise<{ answer: string; peers: Peer[]; user_id: string }>((resolve, reject) => {
     sig.onClose(() => {
       pc.close();
       opts.stream.getTracks().forEach((t) => t.stop());
-      [...players.keys()].forEach(drop);
+      [...seen].forEach(drop);
       if (!settled) reject(new Error('signaling closed'));
     });
     sig.onMessage((m) => {
@@ -119,9 +111,9 @@ export async function joinRoom(
   sig.send({ type: 'join', room: opts.room, name: opts.name, key: opts.key, offer: sdp });
 
   try {
-    const { answer, peers } = await joined;
+    const { answer, peers, user_id } = await joined;
     await pc.setRemoteDescription({ type: 'answer', sdp: answer });
-    return { pc, peers };
+    return { pc, peers, userId: user_id };
   } catch (e) {
     pc.close();
     throw e;

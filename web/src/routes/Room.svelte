@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Signaling, joinRoom } from '../lib/signaling';
   import { applyPeerMsg } from '../lib/peers';
+  import { Playback } from '../lib/playback';
+  import { restoreVolumes, saveVolumes } from '../lib/volume';
   import type { Peer } from '../lib/gen/Peer';
   import type { ServerMsg } from '../lib/gen/ServerMsg';
 
@@ -9,28 +11,73 @@
   let peers = $state<Peer[]>([]);
   let joined = $state(false);
   let error = $state('');
+  let userId = $state('');
+  let muted = $state(false);
+  let deafened = $state(false);
+  let volumes = $state<Record<string, number>>({});
+  let speaking = $state<Set<string>>(new Set());
+  let playback: Playback | undefined;
+  let mic: MediaStream | undefined;
+  let sig: Signaling | undefined;
+  let poll: ReturnType<typeof setInterval> | undefined;
+  let releaseLock: (() => void) | undefined;
+
+  function toggleMute() {
+    muted = !muted;
+    mic?.getAudioTracks().forEach((t) => (t.enabled = !muted));
+    sig?.send({ type: 'set_muted', muted });
+  }
+  function toggleDeafen() {
+    deafened = !deafened;
+    playback?.setDeafened(deafened);
+  }
+  function setVolume(id: string, v: number) {
+    volumes[id] = v;
+    playback?.setVolume(id, v);
+    const m = new Map(Object.entries(volumes));
+    saveVolumes(localStorage, m);
+  }
+  function teardown() {
+    clearInterval(poll);
+    playback?.close();
+    playback = undefined;
+    releaseLock?.();
+    releaseLock = undefined;
+    joined = false;
+  }
 
   async function join(e: Event) {
     e.preventDefault();
     error = '';
-    let sig: Signaling | undefined;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, channelCount: 1 },
       });
+      mic = stream;
+      const saved = restoreVolumes(localStorage);
+      volumes = Object.fromEntries(saved);
+      playback = new Playback(saved);
+      // Held for the call's lifetime so the browser does not freeze the tab's audio in the background.
+      void navigator.locks?.request('vesper-call', () => new Promise<void>((res) => (releaseLock = res)));
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       sig = new Signaling(`${proto}://${location.host}/ws`);
       const early: ServerMsg[] = []; // peer events that arrive before Joined
-      sig.onClose(() => (joined = false));
+      sig.onClose(teardown);
       sig.onMessage((m) => (joined ? (peers = applyPeerMsg(peers, m)) : early.push(m)));
       const r = await joinRoom(sig, {
         room: 'main', name, key, stream, bitrateKbps: 64,
         onError: (err) => (error = err.message),
+        onRemoteStream: (s) => playback?.addRemote(s.id, s),
+        onRemoteStreamEnd: (id) => playback?.remove(id),
       });
+      userId = r.userId;
+      playback.addLocal(r.userId, stream);
+      poll = setInterval(() => (speaking = playback?.speaking() ?? new Set()), 100);
       peers = early.reduce(applyPeerMsg, r.peers);
       joined = true;
     } catch (err) {
       sig?.close();
+      teardown();
       error = String(err);
     }
   }
@@ -45,9 +92,21 @@
     </form>
   {/if}
   {#if error}<p class="text-red-400">{error}</p>{/if}
+  {#if joined}
+    <div class="flex gap-2">
+      <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleMute}>{muted ? 'Unmute' : 'Mute'}</button>
+      <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleDeafen}>{deafened ? 'Undeafen' : 'Deafen'}</button>
+    </div>
+    <p class="rounded p-1 {speaking.has(userId) ? 'ring-2 ring-green-500' : ''}">You{muted ? ' (muted)' : ''}</p>
+  {/if}
   <ul class="space-y-1">
     {#each peers as p (p.user_id)}
-      <li>{p.name}{p.muted ? ' (muted)' : ''}</li>
+      <li class="flex items-center gap-2 rounded p-1 {speaking.has(p.user_id) ? 'ring-2 ring-green-500' : ''}">
+        <span class="flex-1">{p.name}{p.muted ? ' (muted)' : ''}</span>
+        <input type="range" min="0" max="200" aria-label="Volume for {p.name}"
+          value={volumes[p.user_id] ?? 100}
+          oninput={(e) => setVolume(p.user_id, +e.currentTarget.value)} />
+      </li>
     {/each}
   </ul>
 </main>
