@@ -6,9 +6,13 @@ publish.workspace = true
 
 [features]
 tract = ["deep_filter/tract"]
-wasm = ["deep_filter/wasm"]
+wasm = ["tract", "deep_filter/wasm", "dep:wasm-bindgen"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
 deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "d375b2d", default-features = false }
 ndarray = "0.15"
 # Do NOT `cargo update` tract: newer 0.21.x breaks the deep_filter build. The exact pin on
