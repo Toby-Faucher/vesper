@@ -26,7 +26,7 @@
   let speaking = $state<Set<string>>(new Set());
   let playback: Playback | undefined;
   let mic = $state<MediaStream>();
-  let capture: Capture | undefined;
+  let capture = $state.raw<Capture>();
   // Accessing localStorage itself throws when storage is blocked.
   const storage = (() => { try { return localStorage; } catch { return null; } })();
   let settings = $state<AudioSettings>(loadSettings(storage));
@@ -248,7 +248,7 @@
     {showDiag ? 'Hide diagnostics' : 'Diagnostics'}
   </button>
   {#if showDiag}
-    <Diagnostics {pc} wsUrl={wsUrl()} joinKey={key} {mode} status={joined ? 'joined' : 'not joined'} />
+    <Diagnostics {pc} {capture} wsUrl={wsUrl()} joinKey={key} {mode} status={joined ? 'joined' : 'not joined'} />
   {/if}
   {#if joined}
     <div class="flex gap-2">
