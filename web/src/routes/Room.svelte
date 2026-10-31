@@ -8,6 +8,7 @@
   import { loadSettings, saveSettings, type AudioSettings } from '../lib/audio/settings';
   import { DEVICE_MESSAGES, applyBitrate, classifyMediaError, missingDevice, newInputs, trackLive, watchDevices } from '../lib/devices';
   import { pttKeyEvent } from '../lib/audio/ptt';
+  import { MIC_QUIET, micSilence, type MicWarning } from '../lib/audio/mic-silence';
   import Settings from './Settings.svelte';
   import Diagnostics from './Diagnostics.svelte';
   import type { DenoiseMode } from '../lib/audio/mode';
@@ -26,7 +27,7 @@
   let speaking = $state<Set<string>>(new Set());
   let playback: Playback | undefined;
   let mic = $state<MediaStream>();
-  let capture: Capture | undefined;
+  let capture = $state.raw<Capture>();
   // Accessing localStorage itself throws when storage is blocked.
   const storage = (() => { try { return localStorage; } catch { return null; } })();
   let settings = $state<AudioSettings>(loadSettings(storage));
@@ -44,6 +45,8 @@
   let sig: Signaling | undefined;
   let poll: ReturnType<typeof setInterval> | undefined;
   let releaseLock: (() => void) | undefined;
+  let silence = MIC_QUIET;
+  let micWarning = $state<MicWarning>(null);
 
   // Push to talk is mute-gated: the track is live only when not muted and (PTT off or key held).
   function applyTrack() {
@@ -139,6 +142,8 @@
     offered = null;
     mic = undefined;
     modeReason = '';
+    silence = MIC_QUIET;
+    micWarning = null;
     muted = false;
     deafened = false;
     speaking = new Set();
@@ -210,6 +215,10 @@
       poll = setInterval(() => {
         const next = playback?.speaking() ?? new Set<string>();
         if (next.size !== speaking.size || [...next].some((i) => !speaking.has(i))) speaking = next;
+        const gated = !trackLive(muted, settings.pushToTalk.enabled, pttDown);
+        const visible = document.visibilityState === 'visible';
+        silence = micSilence(silence, performance.now(), capture?.getStats() ?? null, { gated, visible });
+        micWarning = silence.show;
       }, 100);
       peers = early.reduce(applyPeerMsg, r.peers);
       joined = true;
@@ -248,7 +257,7 @@
     {showDiag ? 'Hide diagnostics' : 'Diagnostics'}
   </button>
   {#if showDiag}
-    <Diagnostics {pc} wsUrl={wsUrl()} joinKey={key} {mode} status={joined ? 'joined' : 'not joined'} />
+    <Diagnostics {pc} {capture} wsUrl={wsUrl()} joinKey={key} {mode} status={joined ? 'joined' : 'not joined'} />
   {/if}
   {#if joined}
     <div class="flex gap-2">
@@ -258,6 +267,10 @@
     </div>
     <p class="rounded p-1 {speaking.has(userId) ? 'ring-2 ring-green-500' : ''}">You{muted ? ' (muted)' : ''}</p>
     <p class="text-sm text-neutral-400" role="status">Noise suppression: {mode}{modeReason ? ` (${modeReason})` : ''}</p>
+    <p class="text-sm text-amber-400" role="status">
+      {micWarning === 'mic' ? 'No sound from your microphone. Check the input device, its volume, and the mute switch.'
+        : micWarning === 'pipeline' ? 'The audio pipeline stopped. Leave and join again.' : ''}
+    </p>
   {/if}
   <ul class="space-y-1">
     {#each peers as p (p.user_id)}

@@ -1,9 +1,15 @@
 <script lang="ts">
   import { connectivityCheck, summarize, type Diag } from '../lib/diag';
+  import { audioRows } from '../lib/audio/level';
+  import type { Capture, CaptureStats } from '../lib/audio/capture';
 
   // The key is used only for the connectivity check and never appears in the report.
-  let { pc, wsUrl, joinKey, mode, status }: { pc?: RTCPeerConnection; wsUrl: string; joinKey: string; mode: string; status: string } = $props();
+  let { pc, capture, wsUrl, joinKey, mode, status }: {
+    pc?: RTCPeerConnection; capture?: Capture; wsUrl: string; joinKey: string; mode: string; status: string;
+  } = $props();
   let diag = $state<Diag | null>(null);
+  let audio = $state.raw<CaptureStats | null>(null);
+  const rows = $derived(audioRows(capture ? audio : null));
   let result = $state('');
   let testing = $state(false);
   let copied = $state('');
@@ -11,6 +17,7 @@
   $effect(() => {
     const conn = pc; // re-runs when the peer connection changes; prev resets with it
     diag = null;
+    audio = null;
     if (!conn) return;
     let prev: RTCStatsReport | null = null;
     let at = 0;
@@ -19,6 +26,7 @@
     const tick = async () => {
       if (busy) return;
       busy = true;
+      audio = capture?.getStats() ?? null;
       try {
         const cur = await conn.getStats();
         if (dead) return;
@@ -56,6 +64,8 @@
       `Codec: ${d?.codec ?? 'n/a'}`,
       `ICE state: ${d?.iceState ?? 'n/a'}`,
       `Selected pair: ${d?.selectedPair ?? 'n/a'}`,
+      'Audio pipeline:',
+      ...rows.map(([k, v]) => `  ${k}: ${v}`),
       result ? `Connection test: ${result}` : '',
     ].filter(Boolean).join('\n');
   }
@@ -87,6 +97,10 @@
     <dt>Codec</dt><dd>{diag?.codec ?? 'n/a'}</dd>
     <dt>ICE</dt><dd>{diag?.iceState ?? 'n/a'}</dd>
     <dt>Path</dt><dd>{diag?.selectedPair ?? 'n/a'}</dd>
+  </dl>
+  <h3 class="font-semibold">Audio pipeline</h3>
+  <dl class="grid grid-cols-2 gap-x-2">
+    {#each rows as [k, v] (k)}<dt>{k}</dt><dd>{v}</dd>{/each}
   </dl>
   <div class="flex gap-2">
     <button class="rounded bg-neutral-700 px-3 py-1" onclick={copy}>Copy report</button>

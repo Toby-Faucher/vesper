@@ -21,7 +21,10 @@ describe('FrameRing', () => {
     for (let i = 0; i < 4; i++) r.push(block(i * 128)); // 512 samples into 480
     expect(r.queued).toBe(480);
     expect(r.pop()![0]).toBe(32);
-    expect(() => r.push(block(0, 2000))).not.toThrow();
+    expect(r.push(block(0, 100))).toBe(0); // push returns the samples it dropped
+    expect(r.push(block(0, 400))).toBe(20);
+    r.pop();
+    expect(r.push(block(0, 2000))).toBe(1520); // ring empty: only the oversized block's head is dropped
     expect(r.pop()![479]).toBe(1999);
   });
   it('wraps around the buffer', () => {

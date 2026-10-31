@@ -84,6 +84,8 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), Dee
 - In `deepfilter` mode: mic into an AudioWorklet, which exchanges 10 ms frames with a DSP worker over a MessageChannel; worklet output goes
   through a gain node into a `MediaStreamDestination`, and that track is what WebRTC sends (`web/src/lib/audio/capture.ts`, `denoise.worklet.ts`,
   `dsp.worker.ts`, `dsp-handler.ts`).
+- Buffers in `denoise-core.ts`: up to 4 frames at the worker, a 4 frame input ring, and an output queue that starts playing at 3 frames
+  (30 ms) and holds at most 8 (80 ms). They absorb jitter in the worklet to worker messages. The delay they add is estimated, not measured.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
   suppression is on only in `browser` mode, or in `deepfilter` mode if the user turned it on.
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is
@@ -92,7 +94,7 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), Dee
 ## Fallback logic
 
 - Modes: `deepfilter`, `browser`, `off` (`web/src/lib/audio/mode.ts`).
-- `ModeController` trips from `deepfilter` to `browser` when 10 of the last 100 frames each took longer than 10 ms. It stays tripped until `reset()`.
+- `ModeController` trips from `deepfilter` to `browser` when 20 of the last 100 frames each took longer than 30 ms. The first 300 frames (about 3 s) are ignored. It stays tripped until `reset()`.
   The numbers are set in `denoise-core.ts`.
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.

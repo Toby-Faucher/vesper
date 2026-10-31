@@ -11,6 +11,7 @@ declare class AudioWorkletProcessor {
 class Denoise extends AudioWorkletProcessor {
   private dsp: MessagePort | null = null;
   private stopped = false;
+  private sinceStats = 0;
   private core = new DenoiseCore((message) => this.port.postMessage({ type: 'error', message }), sampleRate);
 
   constructor() {
@@ -29,7 +30,12 @@ class Denoise extends AudioWorkletProcessor {
 
   process(inputs: Float32Array[][], outputs: Float32Array[][]) {
     if (this.stopped) return false;
-    this.core.render(inputs[0][0], outputs[0][0]);
+    const o = outputs[0][0];
+    this.core.render(inputs[0][0], o);
+    if ((this.sinceStats += o.length) >= sampleRate / 2) {
+      this.sinceStats = 0;
+      this.port.postMessage({ type: 'stats', ...this.core.stats() });
+    }
     return true;
   }
 }

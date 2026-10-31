@@ -24,4 +24,21 @@ describe('ModeController', () => {
       for (let i = 0; i < 20; i++) expect(m.report(2)).toBe('deepfilter');
     }
   });
+  it('ignores frames during warm-up, even a burst of slow ones', () => {
+    const m = new ModeController({ budgetMs: 30, windowFrames: 100, maxLate: 20, warmupFrames: 300 });
+    for (let i = 0; i < 50; i++) expect(m.report(80)).toBe('deepfilter');
+    for (let i = 0; i < 250; i++) expect(m.report(80)).toBe('deepfilter'); // still warm-up, nothing stored
+    for (let i = 0; i < 19; i++) expect(m.report(31)).toBe('deepfilter'); // window starts empty after warm-up
+  });
+  it('after warm-up, 19 slow frames of 100 do not trip and the 20th does', () => {
+    const m = new ModeController({ budgetMs: 30, windowFrames: 100, maxLate: 20, warmupFrames: 300 });
+    for (let i = 0; i < 300; i++) m.report(1);
+    for (let i = 0; i < 81; i++) m.report(1);
+    for (let i = 0; i < 19; i++) expect(m.report(31)).toBe('deepfilter');
+    expect(m.report(31)).toBe('browser');
+  });
+  it('frames of exactly the budget and under never count as late', () => {
+    const m = new ModeController({ budgetMs: 30, windowFrames: 100, maxLate: 20 });
+    for (let i = 0; i < 500; i++) expect(m.report(i % 2 ? 30 : 29)).toBe('deepfilter');
+  });
 });

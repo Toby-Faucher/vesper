@@ -28,16 +28,16 @@ describe('DenoiseCore', () => {
     expect(t.sent).toHaveLength(0);
   });
 
-  it('sends 480-sample frames and caps frames in flight at 2', () => {
+  it('sends 480-sample frames and caps frames in flight at 4', () => {
     const t = make();
     t.connect();
-    for (let i = 0; i < 12; i++) render(t.core, blk(i)); // 3 frames of input
-    expect(t.sent).toHaveLength(2);
+    for (let i = 0; i < 20; i++) render(t.core, blk(i)); // 5 frames of input
+    expect(t.sent).toHaveLength(4);
     expect(t.sent[0]).toHaveLength(480);
-    expect(t.core.inflight).toBe(2);
+    expect(t.core.inflight).toBe(4);
     t.core.reply(frame(0));
     render(t.core, blk(0));
-    expect(t.sent).toHaveLength(3);
+    expect(t.sent).toHaveLength(5);
   });
 
   it('stalls after half a second of in-flight frames with no reply', () => {
@@ -53,13 +53,22 @@ describe('DenoiseCore', () => {
     expect(t.onFail).toHaveBeenCalledWith('denoiser stalled');
   });
 
-  it('slow frames trip the mode controller', () => {
+  it('a startup burst of slow frames is ignored during warm-up', () => {
     const t = make();
     t.connect();
-    for (let i = 0; i < 9; i++) t.core.reply({ ...frame(0), ms: 15 });
+    for (let i = 0; i < 100; i++) t.core.reply({ ...frame(0), ms: 80 });
     expect(t.core.failure).toBeNull();
-    t.core.reply({ ...frame(0), ms: 15 });
-    expect(t.core.failure).toBe('denoiser too slow for real time');
+    expect(t.onFail).not.toHaveBeenCalled();
+  });
+
+  it('400 consecutive slow frames (300 warm-up + 100) trip the mode controller', () => {
+    const t = make();
+    t.connect();
+    for (let i = 0; i < 319; i++) t.core.reply({ ...frame(0), ms: 80 }); // 300 warm-up + 19 late
+    expect(t.core.failure).toBeNull();
+    for (let i = 319; i < 400; i++) t.core.reply({ ...frame(0), ms: 80 });
+    expect(t.onFail).toHaveBeenCalledTimes(1);
+    expect(t.onFail).toHaveBeenCalledWith('denoiser too slow for real time');
   });
 
   it('worker error replies fail the core', () => {
@@ -69,28 +78,117 @@ describe('DenoiseCore', () => {
     expect(t.onFail).toHaveBeenCalledWith('denoiser error: panic');
   });
 
-  it('primes with two frames, re-primes after underrun', () => {
+  it('primes with three frames, re-primes after underrun', () => {
     const t = make();
     t.connect();
     t.core.reply(frame(1));
-    expect(render(t.core)[0]).toBe(0);
     t.core.reply(frame(2));
-    expect(t.core.queued).toBe(960);
-    const outs = Array.from({ length: 8 }, () => render(t.core));
+    expect(render(t.core)[0]).toBe(0);
+    t.core.reply(frame(3));
+    expect(t.core.queued).toBe(1440);
+    const outs = Array.from({ length: 12 }, () => render(t.core));
     expect(outs[0][0]).toBe(1);
     expect(outs[4][0]).toBe(2); // samples 512.. come from frame 2
-    expect(outs[7][63]).toBe(2);
-    expect(outs[7][64]).toBe(0); // 960 samples exhausted mid-quantum
-    t.core.reply(frame(3));
+    expect(outs[8][0]).toBe(3); // samples 1024.. come from frame 3
+    expect(outs[11][31]).toBe(3);
+    expect(outs[11][32]).toBe(0); // 1440 samples exhausted mid-quantum
+    t.core.reply(frame(4));
+    t.core.reply(frame(5));
     expect(render(t.core)[0]).toBe(0); // re-priming
   });
 
-  it('caps the output queue at 3 frames, dropping the oldest', () => {
+  it('caps the output queue at 8 frames, dropping the oldest', () => {
     const t = make();
     t.connect();
-    for (let v = 1; v <= 5; v++) t.core.reply(frame(v));
-    expect(t.core.queued).toBe(1440);
+    for (let v = 1; v <= 10; v++) t.core.reply(frame(v));
+    expect(t.core.queued).toBe(3840);
     expect(render(t.core)[0]).toBe(3);
-    expect(t.core.queued).toBe(1440 - Q);
+    expect(t.core.queued).toBe(3840 - Q);
+  });
+});
+
+describe('DenoiseCore stats', () => {
+  const HALF_S = 188; // quanta in 0.5 s at 48 kHz: 188 * 128 >= 24000
+
+  it('counts real and empty input quanta, also before connect', () => {
+    const t = make();
+    render(t.core, blk(0.1));
+    render(t.core);
+    render(t.core);
+    expect(t.core.stats()).toMatchObject({ inputBlocks: 1, emptyInputBlocks: 2, state: 'passthrough', failure: null });
+  });
+
+  it('reports state through connect, priming, playing and failure', () => {
+    const t = make();
+    t.connect();
+    expect(t.core.stats().state).toBe('connecting');
+    t.core.reply(frame(1));
+    expect(t.core.stats().state).toBe('priming');
+    t.core.reply(frame(1));
+    t.core.reply(frame(1));
+    render(t.core);
+    expect(t.core.stats().state).toBe('playing');
+    expect(t.core.stats().queuedMs).toBeCloseTo((1440 - Q) / 48, 9);
+    t.core.fail('boom');
+    expect(t.core.stats()).toMatchObject({ state: 'failed', failure: 'boom' });
+  });
+
+  it('counts frames sent, replies and frames in flight', () => {
+    const t = make();
+    t.connect();
+    for (let i = 0; i < 20; i++) render(t.core, blk(0));
+    t.core.reply(frame(0));
+    expect(t.core.stats()).toMatchObject({ framesSent: 4, replies: 1, inflight: 3 });
+  });
+
+  it('counts an underrun when the queue runs dry while playing, and a reprime when it restarts', () => {
+    const t = make();
+    t.connect();
+    for (let v = 0; v < 3; v++) t.core.reply(frame(1));
+    for (let i = 0; i < 11; i++) render(t.core);
+    expect(t.core.stats().underruns).toBe(0);
+    render(t.core); // only 32 samples left: a partial block
+    render(t.core); // not playing any more: priming, not another underrun
+    expect(t.core.stats()).toMatchObject({ underruns: 1, reprimes: 0, state: 'priming' });
+    for (let v = 0; v < 3; v++) t.core.reply(frame(1));
+    render(t.core);
+    expect(t.core.stats()).toMatchObject({ underruns: 1, reprimes: 1, state: 'playing' });
+  });
+
+  it('counts dropped output frames and dropped input frames', () => {
+    const t = make();
+    t.connect();
+    for (let v = 0; v < 10; v++) t.core.reply(frame(v));
+    expect(t.core.stats().droppedOut).toBe(2);
+    // 4 frames go to the worker and never come back; the 4 frame ring then overflows.
+    for (let i = 0; i < 40; i++) render(t.core, blk(0)); // 5120 samples = 1920 sent + 1920 kept + 1280 dropped
+    expect(t.core.stats().droppedInput).toBe(3); // 1280 samples, rounded up to frames
+  });
+
+  it('reports last, average and max denoiser time over the last 100 replies', () => {
+    const t = make();
+    t.connect();
+    expect(t.core.stats()).toMatchObject({ lastReplyMs: 0, avgReplyMs: 0, maxReplyMs: 0 });
+    for (const ms of [1, 2, 6]) t.core.reply({ ...frame(0), ms });
+    expect(t.core.stats()).toMatchObject({ lastReplyMs: 6, avgReplyMs: 3, maxReplyMs: 6 });
+    for (let i = 0; i < 100; i++) t.core.reply({ ...frame(0), ms: 2 });
+    expect(t.core.stats()).toMatchObject({ lastReplyMs: 2, avgReplyMs: 2, maxReplyMs: 2 });
+  });
+
+  it('input and output RMS cover the last half second; missing input counts as silence', () => {
+    const t = make();
+    for (let i = 0; i < HALF_S; i++) render(t.core, blk(0.5));
+    expect(t.core.stats().inputRms).toBeCloseTo(0.5, 6);
+    expect(t.core.stats().outputRms).toBeCloseTo(0.5, 6); // passthrough
+    for (let i = 0; i < HALF_S; i++) render(t.core);
+    expect(t.core.stats().inputRms).toBe(0);
+    expect(t.core.stats().outputRms).toBe(0);
+    for (let i = 0; i < HALF_S; i++) render(t.core, i % 2 ? blk(0.6) : blk(-0.6));
+    expect(t.core.stats().inputRms).toBeCloseTo(0.6, 6);
+  });
+
+  it('stats are plain numbers and strings', () => {
+    const s = make().core.stats();
+    expect(JSON.parse(JSON.stringify(s))).toEqual(s);
   });
 });

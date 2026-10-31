@@ -26,7 +26,7 @@ It exists because the other Discord replacements sound bad. Discord's edge is it
 | **Your bitrate** | Pick 32 to 510 kbps per person. Opus at 48 kHz, in-band FEC on, optional DTX. |
 | **Voice controls** | Mute, deafen, per-person volume, a speaking ring, push to talk, a mic test with a level meter. |
 | **A Rust SFU** | One UDP port carries all audio. The server forwards each person's Opus stream and never decodes it. |
-| **Diagnostics** | Live round trip, jitter and loss, plus a "Test connection" button that tells you if UDP is blocked. |
+| **Diagnostics** | Live round trip, jitter and loss, mic and denoiser levels, plus a "Test connection" button that tells you if UDP is blocked. |
 | **Yours** | Self-hosted, no telemetry, no accounts yet (one shared join key). |
 
 ## How it fits together
