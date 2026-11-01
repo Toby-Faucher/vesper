@@ -27,6 +27,7 @@
   import Icon from '../lib/ui/c/Icon.svelte';
   import Menu from '../lib/ui/c/Menu.svelte';
   import MenuItem from '../lib/ui/c/MenuItem.svelte';
+  import PersonButton from '../lib/ui/c/PersonButton.svelte';
   import Popover from '../lib/ui/c/Popover.svelte';
   import { motion } from '../lib/ui/motion';
 
@@ -76,6 +77,7 @@
   let saving = $state(false);
   let moreEl = $state<HTMLButtonElement | null>(null);
   let reactEl = $state<HTMLButtonElement | null>(null);
+  let nameEl = $state<HTMLButtonElement>();
   let menu = $state({ mounted: false, open: false });
   let picker = $state({ mounted: false, open: false });
   let confirm = $state({ mounted: false, open: false });
@@ -172,7 +174,8 @@
   {/if}
   <div class="gutter">
     {#if head}
-      <Avatar user={author} size={32} />
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: a mouse alias of the name button, which is the Tab stop -->
+      <div class="face" onclick={() => nameEl?.click()}><Avatar user={author} size={32} /></div>
     {:else}
       <time class="gtime" datetime={iso(m.created_at)} title={full(m.created_at)}>{short(m.created_at)}</time>
     {/if}
@@ -180,7 +183,7 @@
   <div class="content min-w-0">
     {#if head}
       <p class="meta">
-        <span class="font-medium text-fg">{author.display_name}</span>
+        <PersonButton id={m.author_id} name={author.display_name} class="font-medium text-fg" bind:el={nameEl}>{author.display_name}</PersonButton>
         <time class="quiet text-xs tabular-nums" datetime={iso(m.created_at)} title={full(m.created_at)}>{hm(m.created_at)}</time>
         {#if m.pinned}<span class="quiet flex items-center gap-1 text-xs"><Icon d={I.pin} size={16} />Pinned</span>{/if}
       </p>
@@ -278,20 +281,23 @@
     /* Rows off screen skip layout and paint; the last size seen is kept (chat research item 13). */
     content-visibility: auto;
     contain-intrinsic-size: auto 56px;
-    transition: background-color var(--dur-1) var(--ease-out);
+    /* The highlight (hover, keyboard focus, editing, a mention) fades: in over --dur-2 (the rules below), out over
+       --dur-3, so moving between rows crossfades. Paint only; the focus ring itself has no transition. */
+    transition: background-color var(--dur-3) var(--ease-out);
   }
   .msg.head { margin-top: 8px; padding-top: 8px; }
   .msg:focus-visible { outline-offset: -2px; } /* inside the list, which clips the sides */
   /* A mention of me: a 2 px amber bar and a faint amber wash. */
   .msg.mentioned { background: color-mix(in oklab, var(--accent-subtle) 55%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
-  .msg:hover, .msg:focus-within, .msg.editing { background: var(--bg-hover); }
+  .msg:hover, .msg:focus-within, .msg.editing { background: var(--bg-hover); transition-duration: var(--dur-2); }
   .msg.editing { scroll-margin-bottom: 16px; } /* the list's bottom padding: an edit of the last row ends at the bottom */
   .msg.mentioned:hover, .msg.mentioned:focus-within { background: var(--accent-subtle); }
   .quote, .content { grid-column: 2; }
   .gutter { grid-column: 1; }
+  .face { display: flex; cursor: pointer; }
   .quote + .gutter { grid-row: 2; }
   /* Tertiary text: --fg-3 on the app background, --fg-2 once the row has a hover, selected or amber background. */
-  .quiet { color: var(--fg-3); }
+  .quiet { color: var(--fg-3); transition: color var(--dur-3) var(--ease-out); }
   .msg:hover .quiet, .msg:focus-within .quiet, .msg.mentioned .quiet, .msg.editing .quiet { color: var(--fg-2); }
   .quote {
     display: flex;
@@ -316,7 +322,9 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     opacity: 0;
+    transition: opacity var(--dur-3) var(--ease-out);
   }
+  .msg:hover :is(.gtime, .tools, .quiet), .msg:focus-within :is(.gtime, .tools, .quiet) { transition-duration: var(--dur-2); }
   .msg:hover .gtime, .msg:focus-within .gtime { opacity: 1; }
   .clamp {
     max-height: 400px; /* 20 lines */
@@ -354,7 +362,7 @@
     border-radius: var(--radius);
     background: var(--bg-raised);
     opacity: 0;
-    transition: opacity var(--dur-1) var(--ease-out);
+    transition: opacity var(--dur-3) var(--ease-out);
   }
   .msg.head .tools { top: 4px; }
   .msg:hover .tools, .msg:focus-within .tools, .tools:has(:global([aria-expanded='true'])) { opacity: 1; }
@@ -373,6 +381,6 @@
   .pick { width: 32px; height: 32px; border-radius: var(--radius); font-size: 16px; }
   .pick:hover, .pick[aria-pressed='true'] { background: var(--bg-hover); }
   @media (prefers-reduced-motion: reduce) {
-    .msg, .tools { transition: none; }
+    .msg, .tools, .gtime, .quiet { transition: none; }
   }
 </style>

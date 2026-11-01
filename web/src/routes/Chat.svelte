@@ -4,6 +4,7 @@
   // change keeps them). Text and links dragged around are left alone; a file dropped anywhere else in the app is
   // ignored instead of opening in the tab.
   import Composer from './Composer.svelte';
+  import { motion } from '../lib/ui/motion';
   import Timeline from './Timeline.svelte';
   import { ApiFailure, errorText } from '../lib/api';
   import type { Message } from '../lib/gen/Message';
@@ -77,13 +78,13 @@
   <Composer {roomId} bind:this={composer} bind:replyTo />
 
   {#if drag}
-    <div class="drop" aria-hidden="true"><Icon d={I.paperclip} />Drop to attach</div>
+    <div class="drop" aria-hidden="true" in:motion={'pop'} out:motion={'pop'}><Icon d={I.paperclip} />Drop to attach</div>
   {/if}
   <span class="sr-only" aria-live="polite">{drag ? UI_MESSAGES.dropFiles : ''}</span>
 </section>
 
 <style>
-  /* Plain and still: a dashed amber edge over the panel, no motion. It lets drag events through to the panel. */
+  /* A dashed amber edge over the panel. It lets drag events through to the panel. */
   .drop {
     position: absolute;
     inset: 8px 16px 16px;

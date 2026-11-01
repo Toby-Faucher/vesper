@@ -3,11 +3,11 @@
   import { api, ApiFailure, errorText } from '../../lib/api';
   import { session } from '../../lib/session.svelte';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
-  import { canModerate, togglePerson } from '../../lib/ui/person.svelte';
   import { copyText } from '../../lib/ui/clipboard';
   import { ROLE_NAMES, byRole, canReset, resetLine } from './admin';
   import Avatar from '../../lib/ui/c/Avatar.svelte';
   import Button from '../../lib/ui/c/Button.svelte';
+  import PersonButton from '../../lib/ui/c/PersonButton.svelte';
   import Dialog from '../../lib/ui/c/Dialog.svelte';
   import Field from '../../lib/ui/c/Field.svelte';
   import PasswordInput from '../../lib/ui/c/PasswordInput.svelte';
@@ -52,7 +52,6 @@
   });
   const members = $derived(Object.values(session.state.users).sort(byRole));
   const editable = (u: UserInfo) => owner && u.user_id !== me.user_id && u.role !== 'owner';
-  const inVoice = (u: UserInfo) => session.state.voice.some((p) => p.user_id === u.user_id);
 
   let error = $state('');
   let errorEl = $state<HTMLElement>();
@@ -155,15 +154,16 @@
       {#each members as u (u.user_id)}
         <tr data-user={u.username}>
           <td>
-            <div class="flex min-w-0 items-center gap-3">
+            <!-- The card has the voice actions for a moderator. -->
+            <PersonButton id={u.user_id} name={u.display_name} class="flex! max-w-full min-w-0 items-center gap-3 hover:no-underline!">
               <Avatar user={u} size={20} />
-              <div class="min-w-0">
-                <p class="truncate text-fg" title={u.display_name}>{u.display_name}</p>
-                <p class="truncate text-xs text-fg-2">@{u.username}{u.user_id === me.user_id ? ' (you)' : ''}</p>
-                {#if resets[u.user_id]}{@const line = resetLine(resets[u.user_id], resetBy(resets[u.user_id]), Date.now())}
-                  <p class="truncate text-xs text-fg-2" title={line}>{line}</p>{/if}
-              </div>
-            </div>
+              <span class="min-w-0">
+                <span class="block truncate text-fg hover:underline" title={u.display_name}>{u.display_name}</span>
+                <span class="block truncate text-xs text-fg-2">@{u.username}{u.user_id === me.user_id ? ' (you)' : ''}</span>
+              </span>
+            </PersonButton>
+            {#if resets[u.user_id]}{@const line = resetLine(resets[u.user_id], resetBy(resets[u.user_id]), Date.now())}
+              <p class="mt-0.5 truncate pl-8 text-xs text-fg-2" title={line}>{line}</p>{/if}
           </td>
           <td>
             {#if editable(u)}
@@ -178,10 +178,6 @@
           <td class="text-fg-2">{u.banned ? 'Banned' : ''}</td>
           <td>
             <div class="flex flex-wrap justify-end gap-2">
-              {#if canModerate(me, u) && inVoice(u) && !u.banned}
-                <Button size="sm" variant="ghost" aria-label="Voice actions for {u.display_name}" aria-haspopup="dialog"
-                  onclick={(e) => togglePerson(u.user_id, e.currentTarget)}>Voice actions</Button>
-              {/if}
               {#if canReset(me, u)}
                 <Button size="sm" variant="ghost" aria-label="Create reset link for {u.display_name}" aria-haspopup="dialog"
                   onclick={() => ([resetFor, resetError, resetPassword] = [u, '', ''])}>Reset link</Button>
