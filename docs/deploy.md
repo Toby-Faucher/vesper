@@ -34,6 +34,21 @@ There is no sign-up without an invite. On the host:
 
 `vesper-server help` lists the commands. They print on stdout and never log the link.
 
+## Password recovery
+
+There is no email, so a reset is a link someone hands over, like an invite.
+
+- **A forgotten password:** the owner, or a moderator for a member, opens Admin > Members and presses Reset link on that
+  person's row. The link (`<origin>/reset#<code>`) is shown once. It works once, for 24 hours. Send it to that person only.
+  On the page they set a new password; every session of that account then ends, and they sign in with the new password.
+  A new link for the same person replaces the old one. Moderators can not make one for the owner or a moderator.
+- **The owner's own password:** on the host, `docker compose exec vesper vesper-server reset-password <username>` prints
+  the same kind of link, valid 24 h. It works for any account, the owner's too. Open it on your own device.
+  For the binary install use the `systemd-run` form above with `reset-password <username>` (not verified).
+
+The database keeps only a hash of the code. The server logs that a link was made or used, with the account id, never the
+link.
+
 ## Network
 
 - **Router:** forward **UDP 40000** to the machine running the container (the Docker host). Not TCP 3000, and no TCP forward to Vesper at all: HTTPS goes through Caddy on 443.

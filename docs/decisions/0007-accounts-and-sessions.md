@@ -36,3 +36,7 @@ Consequences: A lost owner password needs a manual database edit; there is no re
 (`curl`, `vesper-loadtest`) must send the cookie and `Origin` themselves. Behind Vite dev, `VESPER_ORIGIN` must be
 `http://localhost:5173`. Each socket's outgoing queue is bounded (256 messages) and a full queue closes that socket, so a slow
 client reconnects instead of growing memory.
+
+Update, v1.3: one-use reset links (Admin > Members) and `vesper-server reset-password <username>` replace the manual database
+edit for a lost password ([deploy.md](../deploy.md#password-recovery)). The code is 32 random bytes kept as SHA-256, like an
+invite, and using it ends every session of the account.

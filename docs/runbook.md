@@ -16,7 +16,7 @@ Shape: one server (`vesper-server`). HTTP/WebSocket on TCP 8080, media on UDP 40
 | Admin CLI | `docker compose exec vesper vesper-server <command>` | see [deploy.md](deploy.md#docker--dockge) (`systemd-run`) |
 | Binary / image | image `vesper:latest`, or the tag in `VESPER_TAG` | `/opt/vesper/vesper-server`, previous one as `.prev` |
 
-CLI commands: `create-owner` (one-use owner link, only while no owner exists), `invite [--role member|moderator] [--uses N] [--hours H]`, `help`. They print the link on stdout; it is a secret, send it only to the person it is for. Details: [deploy.md](deploy.md#first-owner-and-invites).
+CLI commands: `create-owner` (one-use owner link, only while no owner exists), `invite [--role member|moderator] [--uses N] [--hours H]`, `reset-password <username>` (one-use link to set a new password, 24 h, any account), `help`. They print the link on stdout; it is a secret, send it only to the person it is for. Details: [deploy.md](deploy.md#first-owner-and-invites).
 
 Log level: set `RUST_LOG` (default `info`), for example `RUST_LOG=vesper_server=debug,info`, then recreate the container or restart the unit.
 
@@ -96,6 +96,8 @@ Start with: `ps` shows healthy? `/health` says `ok`? Logs for the last 100 lines
 | Join works, then the call drops after about 10 seconds | Proxy idle timeout | The server closes a socket only when it is silent for 2 x 25 s (the ping interval). Check the proxy does not cut idle WebSockets. |
 | Log says it cannot open or create the database (permission denied) | The `data` dir is not owned by uid 10001 | `sudo chown 10001:10001 data && chmod 700 data`, then `up -d`. |
 | Nobody can sign in after a move to a new VM | The data dir was not copied or not in the snapshot | Restore `data/` from the backup. Without it every account is gone: run `create-owner` again and send new invites. |
+| Someone forgot their password | No email reset | Owner or moderator: Admin > Members, Reset link on their row, send it to them. It works once, for 24 h, and signs them out everywhere. See [deploy.md](deploy.md#password-recovery). |
+| The owner forgot the owner password | No email reset | On the host: `docker compose exec vesper vesper-server reset-password <owner username>`, open the link on your own device, set a new password. |
 | Disk filling on the VM | Container logs or old images | Compose caps logs at 3 x 10 MB. `docker image prune` for images. |
 
 ## Before you ask for help

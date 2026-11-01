@@ -28,8 +28,10 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
   still holds. Keep Caddy's default headers ([deploy.md](deploy.md#network)).
 - **Force-mute is enforced by the client only.** The server marks the user muted and tells everyone, but the SFU still forwards their audio,
   so a modified client can keep talking. A moderator then disconnects them, or the owner bans them. A server restart lifts every force-mute.
-- **No password reset.** A user who forgets their password needs a new account from a new invite; the owner can ban the old one.
-  An owner who forgets theirs has no way back in through the app.
+- **Password reset is by hand.** There is no email. The owner (or a moderator, for a member) makes a one-use reset link
+  in Admin > Members and sends it; the owner's own way back in is `vesper-server reset-password` on the host
+  ([deploy.md](deploy.md#password-recovery)). Whoever holds the link can set the password, so it must reach the right
+  person. The reset page does not say whose account it is for.
 - **No backup command.** Back up the data dir by hand ([deploy.md](deploy.md)); nothing does it on a schedule.
 - **Uploads are not scanned for viruses.** Images are served inline only after their magic bytes match, everything else is a
   download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
