@@ -1206,7 +1206,7 @@ scene('composer-offline', async ({ alice, server, shot }) => {
   const box = alice.page.getByRole('textbox', { name: 'Message', exact: true });
   await box.fill('is the server down again?');
   await server.restart(async () => {
-    await alice.page.getByText(/You are offline/).waitFor({ timeout: 10000 });
+    await alice.page.getByText(/You are offline. Your text is kept here/).waitFor({ timeout: 10000 });
     await alice.page.mouse.move(1439, 899);
     await sleep(300);
     await shot(alice.page, 'composer-offline');
