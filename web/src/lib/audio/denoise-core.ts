@@ -44,6 +44,8 @@ export interface PipelineStats {
   maxReplyMs: number;
   inputRms: number;
   outputRms: number;
+  /** Sample peak of the boosted input before the limiter, so real clipping still shows. Linear, 0 and up. */
+  inputPeak: number;
 }
 
 /**
@@ -77,9 +79,10 @@ export class DenoiseCore {
   private cool = 0; // samples until the next trim drop
   private replyMs = new Float64Array(REPLY_WINDOW);
   // Level meters: sums over the current half second; the last full half second is what stats() reports.
-  private sq = { in: 0, out: 0, n: 0 };
-  private rms = { in: 0, out: 0 };
-  private limiter: Limiter;
+  private sq = { in: 0, out: 0, n: 0, peak: 0 };
+  private rms = { in: 0, out: 0, peak: 0 };
+  /** On when there is an input boost; capture.ts sets it. */
+  limiter: Limiter;
   private limited = new Float32Array(128); // reallocated only if the quantum size changes
   /** The noise gate on the denoised output; capture.ts sets it from the settings. */
   gate: Gate;
@@ -113,6 +116,7 @@ export class DenoiseCore {
       avgReplyMs: k ? sum / k : 0,
       maxReplyMs: max,
       inputRms: this.rms.in,
+      inputPeak: this.rms.peak,
       outputRms: this.rms.out,
     };
   }
@@ -125,7 +129,8 @@ export class DenoiseCore {
     if ((this.sq.n += o.length) < this.rate / 2) return;
     this.rms.in = Math.sqrt(this.sq.in / this.sq.n);
     this.rms.out = Math.sqrt(this.sq.out / this.sq.n);
-    this.sq.in = this.sq.out = this.sq.n = 0;
+    this.rms.peak = this.sq.peak;
+    this.sq.in = this.sq.out = this.sq.n = this.sq.peak = 0;
   }
 
   connect(send: (f: Float32Array) => void) {
@@ -158,12 +163,13 @@ export class DenoiseCore {
     if (this.mode.report(m.ms) === 'browser') this.fail('denoiser too slow for real time');
   }
 
-  /** The limiter runs first, so the denoiser, the passthrough and the input meter all see the limited boost. */
+  /** The limiter runs first, so the denoiser, the passthrough and the input RMS see the limited boost; inputPeak sees it before. */
   render(raw: Float32Array | undefined, o: Float32Array): void {
     let input: Float32Array | undefined;
     if (raw) {
       this.n.inputBlocks++;
       if (this.limited.length !== raw.length) this.limited = new Float32Array(raw.length);
+      for (let i = 0; i < raw.length; i++) this.sq.peak = Math.max(this.sq.peak, Math.abs(raw[i]));
       this.limiter.process(raw, (input = this.limited));
     } else this.n.emptyInputBlocks++;
     this.process(input, o);

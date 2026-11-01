@@ -55,7 +55,7 @@ const stopAll = (m: MediaStream) => m.getTracks().forEach((t) => t.stop());
 
 /**
  * deepfilter: mic -> gain -> AudioWorklet <-MessageChannel-> DSP worker, gain -> worklet, worklet -> MediaStreamDestination.
- * Inside the worklet (dynamics.ts): a soft limiter on the boosted input before the denoiser, and the optional noise gate
+ * Inside the worklet (dynamics.ts): a soft limiter on the boosted input (only with a boost) before the denoiser, and the optional noise gate
  * (settings.vad.gate, at the level marker) on the denoised output. Neither exists in browser or off mode.
  * The boost sits before the denoiser, so the model and the worklet's input meter (and the mic-silent banner) see the boosted signal.
  * Digital silence stays silent at any gain, so the banner means what it did.
@@ -166,10 +166,10 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       src.connect(gain).connect(node).connect(out);
       const w = (worker = d.createWorker());
       const n = node;
-      const set = () => {
-        w.postMessage({ type: 'set', atten: s.attenDb, beta: s.postFilter });
-        n.port.postMessage({ type: 'gate', on: s.vad.gate, thresholdDb: s.vad.thresholdDb });
-      };
+      const set = () => w.postMessage({ type: 'set', atten: s.attenDb, beta: s.postFilter });
+      // The limiter only with a boost: at 0 dB the default path stays bit-identical to the mic.
+      const dyn = () => n.port.postMessage({ type: 'dynamics', limit: s.inputBoostDb > 0, gate: s.vad.gate, thresholdDb: s.vad.thresholdDb });
+      dyn(); // before the model is ready too: the passthrough is limited and the boost already applies
       timer = setTimeout(() => fail(`denoiser not ready after ${d.readyTimeoutMs / 1000} s`), d.readyTimeoutMs);
       w.onmessage = ({ data }: MessageEvent<DspOut>) => {
         if (data.type === 'error') return fail(`denoiser error: ${data.message}`);
@@ -201,6 +201,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         stop,
         set: (n) => {
           gain.gain.value = 10 ** (n.inputBoostDb / 20);
+          dyn();
           if (ready) set();
         },
       };

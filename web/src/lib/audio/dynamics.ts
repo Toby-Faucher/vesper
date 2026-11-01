@@ -16,33 +16,53 @@ export function softCurve(x: number): number {
   return LIMIT_CEILING - w * Math.exp(-(x - LIMIT_KNEE) / w);
 }
 
+const LIMIT_FADE_S = 0.01; // crossfade between the dry and the limited signal when the boost turns on or off
+const LIMIT_SANE = 1e3; // a sample beyond this (or NaN) is a fault, not audio: it becomes 0 and leaves the state alone
+
 /**
  * A peak limiter for the boosted mic, before the denoiser. The envelope jumps to each new peak at once and holds it,
  * then decays, and the gain is softCurve(env) / env. Since env >= |x|, every output sample stays below the ceiling
  * without a lookahead delay; between peaks the gain is smooth, so the waveform is scaled, not clipped.
+ * Off (no boost, the default) the output is the input, bit for bit: at 0 dB nothing can pass full scale anyway.
+ * Switching crossfades over 10 ms; the envelope always runs, so it is ready when it fades in.
  */
 export class Limiter {
+  private on = false;
+  private started = false;
+  private mix = 0; // 0 dry .. 1 limited
   private env = 0;
   private hold = 0;
   private holdSamples: number;
   private rel: number;
+  private fade: number;
 
   constructor(sampleRate: number) {
     this.holdSamples = Math.round(LIMIT_HOLD_S * sampleRate);
     this.rel = Math.exp(-1 / (LIMIT_RELEASE_S * sampleRate));
+    this.fade = 1 / (LIMIT_FADE_S * sampleRate);
   }
 
-  /** Writes the limited input to out (same length). */
+  /** Before the first sample it switches at once (nothing to fade from); after that it crossfades. */
+  set(on: boolean) {
+    this.on = on;
+    if (!this.started) this.mix = on ? 1 : 0;
+  }
+
+  /** Writes the (maybe) limited input to out (same length). */
   process(input: Float32Array, out: Float32Array) {
+    this.started = true;
     for (let i = 0; i < input.length; i++) {
-      const x = input[i];
-      const a = Math.abs(x);
+      let x = input[i];
+      let a = Math.abs(x);
+      if (!(a <= LIMIT_SANE)) x = a = 0;
       if (a >= this.env) {
         this.env = a;
         this.hold = this.holdSamples;
       } else if (this.hold > 0) this.hold--;
       else this.env = Math.max(a, this.env * this.rel); // never decays below this sample
-      out[i] = this.env <= LIMIT_KNEE ? x : (x * softCurve(this.env)) / this.env;
+      const lim = this.env <= LIMIT_KNEE ? x : (x * softCurve(this.env)) / this.env;
+      this.mix = this.on ? Math.min(1, this.mix + this.fade) : Math.max(0, this.mix - this.fade);
+      out[i] = this.mix === 0 ? x : this.mix === 1 ? lim : x + this.mix * (lim - x);
     }
   }
 }
@@ -55,9 +75,11 @@ const GATE_RELEASE_S = 0.12;
 
 /**
  * Noise gate on the denoiser output. `detect` sees each denoised 10 ms frame when it arrives, and `apply` shapes the
- * samples as they play. The output queue holds about 20 to 30 ms between the two, so the gate opens before a word's
+ * samples as they play. The output queue holds about 20 to 80 ms between the two, so the gate opens before a word's
  * first sample plays: that queue is the lookahead, with no extra delay. It opens on a frame peak above the threshold
- * and closes only after GATE_HOLD_S of frames below threshold minus the hysteresis. Off, it does nothing at all.
+ * and closes after GATE_HOLD_S of frames below threshold minus the hysteresis. Hold counts from arrival, so in played
+ * time the release starts 200 ms minus the queue depth (about 120 to 180 ms) after the sound drops. Off and fully
+ * open, it does nothing at all.
  */
 export class Gate {
   on = false;
@@ -76,9 +98,9 @@ export class Gate {
     this.down = 1 / (GATE_RELEASE_S * sampleRate);
   }
 
-  /** Turning it on starts open, so the first word is never cut while the gate learns nothing. */
+  /** Turning it on starts open, so the first word is not cut. Turning it off ramps open. A repeat set (a marker move) keeps the state. */
   set(on: boolean, thresholdDb: number) {
-    if (on && !this.on) [this.quiet, this.target, this.gain] = [0, 1, 1];
+    if (on !== this.on) [this.quiet, this.target] = [0, 1];
     this.on = on;
     this.open = db(thresholdDb);
     this.close = db(thresholdDb - GATE_HYSTERESIS_DB);
@@ -94,7 +116,7 @@ export class Gate {
   }
 
   apply(o: Float32Array) {
-    if (!this.on) return;
+    if (!this.on && this.gain === 1) return;
     for (let i = 0; i < o.length; i++) {
       this.gain = this.target > this.gain ? Math.min(1, this.gain + this.up) : Math.max(this.target, this.gain - this.down);
       o[i] *= this.gain;

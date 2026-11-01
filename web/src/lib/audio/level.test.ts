@@ -6,7 +6,7 @@ import type { PipelineStats } from './denoise-core';
 const pipeline: PipelineStats = {
   state: 'playing', failure: null, inputBlocks: 900, emptyInputBlocks: 3, framesSent: 240, replies: 238, underruns: 2, reprimes: 2,
   droppedInput: 0, droppedOut: 1, queuedMs: 31.4, inflight: 2, lastReplyMs: 2, avgReplyMs: 2.14, maxReplyMs: 9.5,
-  inputRms: 0.1, outputRms: 0.01,
+  inputRms: 0.1, outputRms: 0.01, inputPeak: 0.4,
 };
 const base: CaptureStats = {
   pipeline, ageMs: 600, mic: { readyState: 'live', muted: false, enabled: true }, context: { state: 'running', sampleRate: 48000 },

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  applyBitrate, classifyMediaError, isBluetoothLabel, levelHint, missingDevice, newInputs, trackLive, watchDevices,
+  applyBitrate, classifyMediaError, hintLevelDb, isBluetoothLabel, levelHint, missingDevice, newInputs, trackLive, watchDevices,
 } from './devices';
 import { loadSettings, saveSettings, SETTINGS_KEY } from './audio/settings';
 import { DEFAULT_AUDIO_SETTINGS } from './audio/settings';
@@ -38,6 +38,22 @@ describe('levelHint', () => {
   it('is fine otherwise, and silent without data', () => {
     expect(levelHint([-60, -20])).toBe('ok');
     expect(levelHint([])).toBe('ok');
+  });
+});
+
+describe('hintLevelDb', () => {
+  const stats = (inputPeak: number, ageMs: number | null) =>
+    ({ pipeline: { inputPeak }, ageMs, mic: {}, context: {} }) as unknown as Parameters<typeof hintLevelDb>[1];
+  it('uses the pre-limiter peak in deepfilter mode, so a clipping mic still reads clipping', () => {
+    // The sent track is limited to under -1 dBFS (meter -1.5), the mic before it hits full scale.
+    expect(levelHint([hintLevelDb(-1.5, stats(1, 200))])).toBe('clipping');
+    expect(hintLevelDb(-100, stats(0.1, 200))).toBeCloseTo(-20, 9); // a gated silence is not a dead mic
+    expect(hintLevelDb(-30, stats(0, 200))).toBe(-100);
+  });
+  it('falls back to the meter without a fresh worklet report', () => {
+    expect(hintLevelDb(-0.5, null)).toBe(-0.5);
+    expect(hintLevelDb(-12, stats(1, 5000))).toBe(-12);
+    expect(hintLevelDb(-12, stats(1, null))).toBe(-12);
   });
 });
 

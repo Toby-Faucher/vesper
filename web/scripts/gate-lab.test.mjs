@@ -119,6 +119,7 @@ describe.skipIf(!LAB || !CORPUS)('limiter on real speech (audio lab)', () => {
       const x = clean.map((v) => (v / p) * 10 ** (boost / 20));
       const y = new Float32Array(x.length);
       const l = new Limiter(SR);
+      l.set(true);
       for (let i = 0; i < x.length; i += Q) l.process(x.subarray(i, i + Q), y.subarray(i, i + Q));
       const over = x.filter((v) => Math.abs(v) >= 1).length;
       expect(peak(y, 0, y.length)).toBeLessThanOrEqual(Math.fround(LIMIT_CEILING));

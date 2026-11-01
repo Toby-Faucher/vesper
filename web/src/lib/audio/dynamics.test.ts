@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { DenoiseCore } from './denoise-core';
-import { LIMIT_CEILING, LIMIT_KNEE, Limiter, softCurve } from './dynamics';
+import { Gate, LIMIT_CEILING, LIMIT_KNEE, Limiter, softCurve } from './dynamics';
 
-// Synthetic signals only: these numbers are not real-voice verified. dynamics.lab.test.ts repeats the gate checks on
+// Synthetic signals only: these numbers are not real-voice verified. web/scripts/gate-lab.test.mjs repeats the checks on
 // real denoised corpus speech when VESPER_LAB_DIR is set.
 const SR = 48000;
 const Q = 128;
@@ -32,8 +32,9 @@ function speechLike(seconds: number) {
   return x.map((v) => v / peak);
 }
 
-function limit(x: Float32Array) {
+function limit(x: Float32Array, on = true) {
   const l = new Limiter(SR);
+  l.set(on);
   const y = new Float32Array(x.length);
   for (let i = 0; i < x.length; i += Q) l.process(x.subarray(i, i + Q), y.subarray(i, i + Q));
   return y;
@@ -213,5 +214,124 @@ describe('Gate on the DenoiseCore output', () => {
     // A threshold above the signal: closes after hold (200 ms) and release (120 ms), well inside the 1 s.
     const shut = pipeline(x, { on: true, thresholdDb: -30 }, () => 2);
     expect(energy(shut, 0.5 * SR, SR)).toBe(0);
+  });
+});
+
+const maxStep = (y: Float32Array) => y.reduce((m, v, i) => (i ? Math.max(m, Math.abs(v - y[i - 1])) : 0), 0);
+
+describe('Limiter off (no boost, the default)', () => {
+  // A hot mic at 0 dB boost: what the user hears today must not change at all.
+  it.each([[-3], [0]])('speech-like peaks at %i dBFS pass bit-identical, alone and through DenoiseCore', (peakDb) => {
+    const x = speechLike(1).map((v) => v * 10 ** (peakDb / 20));
+    expect(Array.from(limit(x, false))).toEqual(Array.from(x));
+    const core = new DenoiseCore(() => {}, SR); // never told about a boost: off
+    const y = new Float32Array(x.length);
+    for (let i = 0; i < x.length; i += Q) core.render(x.subarray(i, i + Q), y.subarray(i, i + Q)); // passthrough
+    expect(Array.from(y)).toEqual(Array.from(x));
+    expect(core.stats().inputPeak).toBeGreaterThan(0); // the meter still sees it
+  });
+
+  it('turning the boost on and off live crossfades in 10 ms: no step, limited once on, bit-exact once off', () => {
+    const x = new Float32Array(SR).map((_, i) => 2 * Math.sin((2 * Math.PI * 200 * i) / SR));
+    const l = new Limiter(SR);
+    const y = new Float32Array(x.length);
+    for (let i = 0; i < x.length; i += Q) {
+      if (i === 0.3 * SR - ((0.3 * SR) % Q)) l.set(true);
+      if (i === 0.7 * SR - ((0.7 * SR) % Q)) l.set(false);
+      l.process(x.subarray(i, i + Q), y.subarray(i, i + Q));
+    }
+    console.log(`limiter switch: max step ${maxStep(y).toFixed(4)}, the sine's own ${maxStep(x).toFixed(4)}`);
+    expect(maxStep(y)).toBeLessThanOrEqual(maxStep(x));
+    expect(y.subarray(0.35 * SR, 0.65 * SR).every((v) => Math.abs(v) <= Math.fround(LIMIT_CEILING))).toBe(true);
+    expect(Array.from(y.subarray(0.75 * SR))).toEqual(Array.from(x.subarray(0.75 * SR)));
+  });
+});
+
+describe('Bad samples', () => {
+  it('a NaN or Infinity sample becomes 0 and does not latch the limiter', () => {
+    const x = new Float32Array(SR).map((_, i) => 0.3 * Math.sin(i / 9));
+    x[1000] = NaN;
+    x[30000] = Infinity;
+    x[30001] = -Infinity;
+    const y = limit(x);
+    expect([y[1000], y[30000], y[30001]]).toEqual([0, 0, 0]);
+    const good = (i: number) => i !== 1000 && i !== 30000 && i !== 30001;
+    expect(Array.from(y).filter((_, i) => good(i))).toEqual(Array.from(x).filter((_, i) => good(i)));
+  });
+
+  it('a NaN frame does not latch the gate', () => {
+    const g = new Gate(SR);
+    g.set(true, -50);
+    for (let k = 0; k < 40; k++) g.detect(new Float32Array(480)); // 400 ms quiet: closed
+    g.detect(new Float32Array(480).fill(NaN));
+    g.detect(new Float32Array(480).fill(0.1)); // loud: opens
+    const o = new Float32Array(960).fill(0.1);
+    g.apply(o);
+    expect(o[959]).toBeCloseTo(0.1, 6);
+  });
+});
+
+describe('Gate state', () => {
+  const closed = (thresholdDb = -1) => {
+    const g = new Gate(SR);
+    g.set(true, thresholdDb);
+    for (let k = 0; k < 40; k++) {
+      g.detect(new Float32Array(480).fill(0.5)); // -6 dBFS: under -1 minus 4 dB, so quiet
+      g.apply(new Float32Array(480).fill(0.5));
+    }
+    return g;
+  };
+
+  it('a marker move while closed keeps it closed', () => {
+    const g = closed();
+    const o = new Float32Array(480).fill(0.5);
+    g.apply(o);
+    expect(o.every((v) => v === 0)).toBe(true);
+    g.set(true, -2); // still above the signal
+    g.detect(new Float32Array(480).fill(0.5));
+    g.apply(o.fill(0.5));
+    expect(o.every((v) => v === 0)).toBe(true);
+  });
+
+  it('turning it off while closed ramps open in 2 ms, without a step', () => {
+    const g = closed();
+    g.set(false, -1);
+    const o = new Float32Array(480).fill(0.5);
+    g.apply(o);
+    expect(o[0]).toBeLessThan(0.01);
+    expect(maxStep(o)).toBeLessThan(0.01);
+    expect(o[479]).toBe(0.5);
+  });
+
+  it('turned on at startup, before the first reply: a word at once is kept, the silence after it closes', () => {
+    const x = new Float32Array(SR);
+    for (let i = 0; i < 0.3 * SR; i++) x[i] = 0.1 * Math.sin(i / 7);
+    const ref = pipeline(x, { on: false, thresholdDb: -50 }, () => 2);
+    const out = pipeline(x, { on: true, thresholdDb: -50 }, () => 2);
+    expect(Array.from(out)).toEqual(Array.from(ref)); // the tail is digital silence in both
+  });
+
+  it('near an underrun (under 2 ms queued when the word arrives) the first 20 ms lose under 0.5 dB', () => {
+    const core = new DenoiseCore(() => {}, SR);
+    core.connect(() => {});
+    core.gate.set(true, -50);
+    const o = new Float32Array(Q);
+    for (let q = 0; q < 300; q++) { // ~0.8 s of quiet, playing: the gate closes
+      while (core.queued < 1000) core.reply({ type: 'frame', data: new Float32Array(480).fill(1e-4), ms: 1 });
+      core.render(undefined, o);
+    }
+    while (core.queued > Q) core.render(undefined, o); // drain to under one quantum, still playing
+    const left = core.queued;
+    const word = new Float32Array(960).map((_, i) => 0.1 * Math.sin(i / 7));
+    core.reply({ type: 'frame', data: word.slice(0, 480), ms: 1 });
+    core.reply({ type: 'frame', data: word.slice(480), ms: 1 });
+    const y = new Float32Array(Math.ceil((left + 960) / Q) * Q);
+    for (let i = 0; i < y.length; i += Q) core.render(undefined, y.subarray(i, i + Q));
+    const got = y.subarray(left, left + 960);
+    const loss = dbOf(Math.sqrt(energy(got, 0, 960) / energy(word, 0, 960)));
+    const first2 = dbOf(Math.sqrt(energy(got, 0, 96) / energy(word, 0, 96)));
+    console.log(`near underrun: ${left} samples queued ahead, first 2 ms ${first2.toFixed(2)} dB, first 20 ms ${loss.toFixed(2)} dB`);
+    expect(left).toBeLessThan(96);
+    expect(loss).toBeGreaterThan(-0.5);
   });
 });

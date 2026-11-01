@@ -63,7 +63,7 @@
 <div class="sections">
   <section role="group" aria-labelledby="voice-input">
     {@render head('input')}
-    <MicCheck {settings} onchange={updateSettings} liveStream={voice.mic} bind:devices />
+    <MicCheck {settings} onchange={updateSettings} liveStream={voice.mic} liveCapture={voice.capture} bind:devices />
   </section>
 
   <section role="group" aria-labelledby="voice-noise">
@@ -84,7 +84,7 @@
         <Range min={0} max={0.05} step={0.005} value={settings.postFilter} aria-valuetext={settings.postFilter.toFixed(3)}
           oninput={(e) => set({ postFilter: +e.currentTarget.value })} />
       </Field>
-      <Field label="Input boost" value="{settings.inputBoostDb} dB" help="Boost lifts the mic before the noise filter. A limiter keeps loud peaks under -1 dBFS.">
+      <Field label="Input boost" value="{settings.inputBoostDb} dB" help="Boost lifts the mic before the noise filter. With boost on, a soft limiter keeps loud peaks from clipping the filter's input.">
         <Range min={0} max={12} value={settings.inputBoostDb} aria-valuetext="{settings.inputBoostDb} dB"
           oninput={(e) => set({ inputBoostDb: +e.currentTarget.value })} />
       </Field>
