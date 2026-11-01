@@ -22,6 +22,15 @@ describe('api', () => {
     expect(init).toMatchObject({ method: 'PATCH', credentials: 'same-origin', body: '{"display_name":"A"}' });
     expect(init.headers).toEqual({ 'content-type': 'application/json' });
   });
+  it('a Blob goes as the raw body with its own type', async () => {
+    const f = respond(200, { ok: 1 });
+    vi.stubGlobal('fetch', f);
+    const pic = new Blob([new Uint8Array([1, 2])], { type: 'image/webp' });
+    await api('PUT', '/api/me/avatar', pic);
+    const [, init] = f.mock.calls[0];
+    expect(init.body).toBe(pic);
+    expect(init.headers).toEqual({ 'content-type': 'image/webp' });
+  });
   it('204 resolves undefined; a body that is not JSON is internal', async () => {
     vi.stubGlobal('fetch', respond(204));
     expect(await api('POST', '/api/logout')).toBeUndefined();

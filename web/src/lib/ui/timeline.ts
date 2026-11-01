@@ -84,10 +84,10 @@ export function plain(nodes: Md[]): string {
         switch (n.t) {
           case 'text': case 'code': return n.v;
           case 'pre': return ` ${n.v} `;
-          case 'br': return ' ';
+          case 'br': case 'hr': return ' ';
           case 'link': return n.href;
           case 'mention': return `@${n.username}`;
-          case 'quote': return ` ${walk(n.c)} `;
+          case 'quote': case 'h': case 'li': return ` ${walk(n.c)} `;
           default: return walk(n.c);
         }
       })

@@ -47,21 +47,44 @@ The "Not verified" list at the end says what was only read.
   retries a 429 once after a second and then says search is busy until Enter, drops the hits of a room you can no longer see and asks again,
   and a result jumps to the message with `around=`. New messages from others are read out by a polite live region; paste
   takes only PNG, JPEG, GIF and WebP images.
-- **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed elements:
-  bold, italic, strike, inline code, fenced code, one level of `> ` quote, `@name` and bare `http`/`https` links. Anything else is text, so raw
-  HTML shows as typed. A link is kept only when `new URL` parses it as http or https with no user name or password, and its text is the full parsed
+- **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed
+  elements. The server stores and searches the raw text; only the client formats it. This is the whole subset:
+
+  | Written | Shown |
+  |---|---|
+  | `**bold**`, `*italic*` or `_italic_`, `~~strike~~` | bold, italic, struck out; nesting stops at 4 levels; `_` inside a word (`snake_case`) is text |
+  | `` `code` `` | inline code |
+  | a line of ```` ``` ````, lines, a line of ```` ``` ```` | a code block. One word after the opening fence (`` ```rust ``) is the language, shown as the block's label. Other text on a fence line is shown as text |
+  | `# `, `## `, `### ` at the start of a line | a heading at 20, 16 or 14 px; `####` to `######` show as `###` |
+  | `> ` at the start of lines | one level of quote |
+  | `- `, `* ` or `+ `, and `1. ` or `1) ` at the start of lines | a bullet or numbered list, flat (no nesting); a numbered list starts at its first number |
+  | `---`, `***` or `___` alone on a line | a rule |
+  | a bare `http://` or `https://` URL | a link |
+  | `@name` | a mention |
+
+  Not supported, shown as typed: raw HTML, images (`![x](y)`), `[text](url)` links (the text could hide where a link goes),
+  tables, nested lists, task lists, backslash escapes, setext (underlined) headings and indented code. An unclosed marker is text.
+  A link is kept only when `new URL` parses it as http or https with no user name or password, and its text is the full parsed
   `href` (ASCII: other characters percent-encoded, hosts punycoded) so it cannot read differently from where it goes. Links get
   `rel="noopener noreferrer nofollow"`, `target="_blank"` and `dir="ltr"`. No `{@html}`, `innerHTML` or similar sink exists in `web/src`
   (`no-raw-html.test.ts` fails on one). The parser is one pass per line with a delimiter stack; a test parses 100k-character hostile inputs under 250 ms.
+  Code blocks with a known language (rust, js and ts, json, shell, python, html and xml, css: `langOf`) are coloured by `lib/highlight.ts`,
+  a small tokenizer in its own chunk (about 1.3 kB gzip), loaded the first time such a block is shown. Each block has a Copy button.
+  The colours are the `--syn-*` tokens (no amber). Reply quotes, the reply bar, pins, search results, notifications and announcements show
+  `plain(parse(body))`: the text without the syntax, on one line. The reply excerpt is the server's first 100 characters, so a marker cut
+  in half shows as typed.
+  The composer is a live preview: the textarea's text is transparent and a layer under it draws the same characters from `decorate()`,
+  which cuts the source into styled runs by the same rules, markers dimmed. The layer changes only colour, background, stroke and
+  decoration, so its glyphs keep the textarea's widths; italic is therefore not slanted there.
 
 ## Crates
 
 | Crate | Job |
 |---|---|
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, the limit `MAX_MSG_BYTES` (64 KiB) and the close codes `CLOSE_SESSION_ENDED` (4001) and `CLOSE_DISCONNECTED` (4003). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`, `Unread`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
-| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. It stores only hashes of session tokens and invite codes. |
+| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -73,6 +96,7 @@ Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state 
 `typing { room_id }`.
 Server to client: `hello { me, users, rooms, voice, unread }`, `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
 `peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `rooms_changed { rooms }`, `user_updated { user }`,
+`user_created { user }`,
 `force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
 `read { room_id, last_read_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
 Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`.
@@ -117,7 +141,8 @@ moderator lifts it, and lifting does not unmute. It lives in memory, so a restar
 ([known-issues.md](known-issues.md#security-and-abuse)).
 
 Pushed from REST (`hub.rs`): a room change sends each socket `rooms_changed` with only the rooms its user can see; a role
-change also does, since the role decides that. A role, ban or profile change sends everyone `user_updated`.
+change also does, since the role decides that. A role, ban, profile or picture change sends everyone `user_updated`; a signup sends everyone `user_created`
+(every member sees the user list, so nobody is left out).
 
 Closing (`hub.rs`): logout, revoking a device, a login that replaces a presented cookie, and a password change (other sessions
 only) close the sockets of the ended sessions with code 4001. A ban closes all of that user's sockets with 4001, which also
@@ -202,7 +227,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 ## HTTP API
 
-JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`, `uploads.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
+JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`, `uploads.rs`, `avatars.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
 `ApiError { code, message }`, and the status follows the code: `bad_request` 400, `unauthorized` 401, `forbidden` 403,
 `not_found` and `invite_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
 `internal` 500, `quota_full` 507.
@@ -214,7 +239,10 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/login` (`LoginReq`) | Login limits by address, then by address and username | `Me` and a new session cookie |
 | `POST /api/logout` | a session | 204, the session is deleted and the cookie cleared |
 | `GET /api/me` | a session | `Me` |
-| `PATCH /api/me` (`ProfilePatch`) | a session | the new `UserInfo` |
+| `PATCH /api/me` (`ProfilePatch`) | a session | the new `UserInfo`; `bio` follows the display name rule, 0 to 160 characters |
+| `PUT /api/me/avatar` (the raw picture as the body) | a session, Upload limit by user | the new `UserInfo`; 400 unless png, jpeg or webp of at most 1024 px a side (see Profile pictures), 413 `too_large` past 512 KiB |
+| `DELETE /api/me/avatar` | a session, Change limit by user | the new `UserInfo` with `avatar: null` |
+| `GET /api/users/{id}/avatar?v=` | a session | the picture, or 404 when there is none; `ETag` is the version, and `v` equal to it makes the answer `immutable` |
 | `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
 | `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
@@ -299,6 +327,18 @@ finds `Café`. Rules:
 - `messages_fts` `integrity-check` reports a mismatch once any message is deleted, since deleted bodies are left out on purpose.
   Do not use it as a health check.
 
+Profile pictures (`avatars.rs`, store `accounts.rs`, migration `0005_profile.sql`): the web app crops and scales the file to
+a 256 px square and sends it as WebP (PNG where the browser cannot). The server does not trust the client's type: it sniffs png,
+jpeg or webp from the bytes (no svg, no gif). It reads the width and height from the header (png: IHDR must come first; jpeg:
+the segments up to the first frame header; webp: `VP8X`, `VP8 ` or `VP8L`) and refuses a header it cannot read or a side over
+1024 px, so a small file cannot unpack to gigabytes in every member's browser. A png must end at `IEND` and a webp at its RIFF
+size; a jpeg is only checked to end with `FFD9`. EXIF (jpeg APP1, png `eXIf`, the webp EXIF flag) and png text chunks are refused,
+as is a file holding `<script`, `<html`, `<svg` and similar markup. That list is easy to get round: the real guard is how the
+picture is served (below). The Upload limit is checked before the body is read. The bytes live in the `avatars` table (at most 512 KiB, one per account, deleted with it), not with the
+uploads, and are not counted in the upload quota. `UserInfo.avatar` is the first 16 hex of the SHA-256, so a new picture gets a
+new URL. It is served with the uploads' headers: the sniffed type, `nosniff`, `default-src 'none'; sandbox` and
+`Cross-Origin-Resource-Policy: same-origin`. Tests: `tests/avatars.rs`, `avatars.rs` `avatar_mime_rules`.
+
 Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the raw body (no multipart). Rules:
 
 - **Size.** At most 25 MiB (`MAX_UPLOAD`). A larger `Content-Length` is 413 before the body is read; a body with no length is
@@ -367,7 +407,7 @@ Rules every route keeps:
   is keyed on address and username, so each faked address gets that username 5 more tries, then 1 a minute.
 - **Invites.** Unknown, used up, expired, revoked and changed codes all give the same 404 body. An owner invite stops working
   once an owner exists; the store checks this in the signup transaction.
-- **Caching.** Every `/api` response has `Cache-Control: no-store`, except a served upload.
+- **Caching.** Every `/api` response has `Cache-Control: no-store`, except a served upload or profile picture.
 - Handlers never log request bodies, and the request types with a password or invite code print `***` in `Debug`. A body that does
   not parse gets a fixed "invalid request body" message. The WebSocket upgrade takes the same session cookie and Origin check.
 
@@ -413,5 +453,5 @@ else here was read from the code, not run:
   badges and the reconnect refetch are unit-tested through the pure helpers only.
 - Sign up and sign in run in headless Chromium over http only. The `Secure` `__Host-` cookie and HSTS on https are tested in process only.
 - The CSP ([decision 0008](decisions/0008-csp.md)): no violation in headless Chromium through the e2e. The denoiser under the CSP runs
-  only when `web/dist/dsp/` is built (not in CI). Not checked through Caddy and Cloudflare, which may add or change headers.
+  only when `web/dist/dsp/` is built (CI copies it from the dsp-wasm job). Not checked through Caddy and Cloudflare, which may add or change headers.
 - Upload read timeouts are unit-tested with short timers (`read_body_times_out_idle_and_total`), not with a real slow client.

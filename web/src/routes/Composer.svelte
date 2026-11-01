@@ -3,11 +3,14 @@
   // empty box edits your last message), the reply bar, attachments, the @ mention list and the formatting help. One
   // 16 px line above the box holds, in order: the offline line, a send error, the too-long line, or who is typing, so
   // nothing moves when one appears. Drafts live in chat.drafts by room, in memory only. Names are untrusted: text nodes.
+  // Live preview: the textarea's own text is transparent (only while the layer matches, see `live`) and a mirror layer under it draws the same characters, styled by
+  // decorate() (markers dimmed, content styled). The textarea stays the real control, so IME, undo, paste, the caret and
+  // selection are the browser's. The layer may only change colour, background and decoration, never glyph widths.
   import { tick, untrack } from 'svelte';
   import { ApiFailure, errorText } from '../lib/api';
   import { chat, lastOwn, send, typers } from '../lib/chat.svelte';
   import type { Message } from '../lib/gen/Message';
-  import { parse } from '../lib/markdown';
+  import { decorate, parse } from '../lib/markdown';
   import { session } from '../lib/session.svelte';
   import * as I from '../lib/ui/icons';
   import { isSendKey } from '../lib/ui/keys';
@@ -30,6 +33,7 @@
   const uid = $props.id();
 
   let el = $state<HTMLTextAreaElement>();
+  let mirror = $state<HTMLDivElement>();
   let helpEl = $state<HTMLButtonElement | null>(null);
   let help = $state({ mounted: false, open: false });
   let error = $state('');
@@ -45,6 +49,20 @@
   const room = $derived(session.state.rooms.find((r) => r.id === roomId));
   const draft = $derived(chat.drafts[roomId] ?? '');
   const name = (id: string) => session.state.users[id]?.display_name ?? 'Someone';
+  // A parse that throws leaves the layer empty, and the check below then keeps the textarea's own text visible.
+  const runs = $derived.by(() => {
+    try {
+      return decorate(draft);
+    } catch {
+      return [];
+    }
+  });
+  // The textarea's text turns transparent only while the layer is in the page and shows exactly the draft.
+  let live = $state(false);
+  $effect(() => {
+    void runs;
+    live = !!mirror?.isConnected && mirror.textContent === `${draft} `;
+  });
   const count = $derived([...draft.trim().normalize('NFC')].length);
   const over = $derived(count - MAX);
   const online = $derived(session.online);
@@ -88,7 +106,10 @@
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 10 * 20 + 12)}px`; // 20 px lines plus 12 px padding
+    sync();
   });
+
+  const sync = () => mirror && el && (mirror.scrollTop = el.scrollTop);
 
   // An edit started from here (Up) ended: focus comes back.
   $effect(() => {
@@ -252,12 +273,16 @@
         <input type="file" multiple class="sr-only"
           onchange={(e) => { attach([...(e.currentTarget.files ?? [])]); e.currentTarget.value = ''; }} />
       </label>
+      <div class="field" class:live>
+      <!-- The trailing space keeps a last empty line as tall as the textarea's. -->
+      <div class="mirror" aria-hidden="true" bind:this={mirror}>{#each runs as r}<span class={r.k}>{r.v}</span>{/each}{' '}</div>
       <textarea bind:this={el} rows="1" aria-label="Message" placeholder="Message {room?.name ?? ''}"
         aria-autocomplete="list" aria-controls={listOpen ? `${uid}-people` : undefined}
         aria-activedescendant={listOpen ? `${uid}-p${active}` : undefined}
         bind:value={() => draft, setDraft} onkeydown={onKey} oninput={onInput} onpaste={onPaste} onclick={findMention}
         onkeyup={(e) => (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') && !listOpen && findMention()}
-        onblur={() => (mention = null)}></textarea>
+        onblur={() => (mention = null)} onscroll={sync}></textarea>
+      </div>
       {#if count >= COUNT_FROM}
         <span class="count" class:over={over > 0}>{count}/{MAX}</span>
       {/if}
@@ -293,12 +318,15 @@
         <dt><code>*italic*</code></dt><dd><em>italic</em></dd>
         <dt><code>~~strike~~</code></dt><dd><s>strike</s></dd>
         <dt><code>`code`</code></dt><dd><code>code</code></dd>
-        <dt><code>```</code> lines <code>```</code></dt><dd>code block</dd>
+        <dt><code>```rust</code> lines <code>```</code></dt><dd>code block</dd>
+        <dt><code># title</code></dt><dd>heading</dd>
         <dt><code>&gt; text</code></dt><dd>quote</dd>
+        <dt><code>- item</code>, <code>1. item</code></dt><dd>list</dd>
+        <dt><code>---</code></dt><dd>rule</dd>
         <dt><code>https://...</code></dt><dd>link</dd>
         <dt><code>@name</code></dt><dd>mention</dd>
       </dl>
-      <p class="mt-2 text-fg-2">Lists and images are not formatted. Enter sends, Shift+Enter adds a line, Up edits your last message.</p>
+      <p class="mt-2 text-fg-2">HTML and images show as typed. Enter sends, Shift+Enter adds a line, Up edits your last message.</p>
     </div>
   </Popover>
 {/if}
@@ -328,16 +356,42 @@
   }
   .away { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-bottom: 1px solid var(--line-subtle); color: var(--fg-2); font-size: 12px; line-height: 16px; }
   .row { display: flex; align-items: flex-end; gap: 4px; padding: 4px; }
-  textarea {
-    flex: 1;
-    min-width: 0;
-    resize: none;
+  .field { position: relative; flex: 1; min-width: 0; }
+  textarea, .mirror {
     padding: 6px 4px;
-    background: transparent;
-    color: var(--fg);
     font-size: 14px;
     line-height: 20px;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
     overflow-y: auto;
+  }
+  textarea {
+    position: relative;
+    display: block;
+    width: 100%;
+    resize: none;
+    background: transparent;
+    color: var(--fg);
+  }
+  /* Only while the layer matches the draft (live): otherwise the textarea draws its own text and the layer hides. */
+  .live textarea { color: transparent; caret-color: var(--fg); }
+  .live textarea::selection { background: var(--bg-selected); color: transparent; }
+  .field:not(.live) .mirror { visibility: hidden; }
+  /* Same box, same scroll range, so the same lines wrap; its scrollbar is hidden under the textarea's. */
+  .mirror { position: absolute; inset: 0; color: var(--fg); pointer-events: none; scrollbar-color: transparent transparent; }
+  .mirror :global(.mk) { color: var(--fg-3); }
+  /* Bold by a stroke, not a weight: a heavier face is wider and would pull the text away from the caret. */
+  .mirror :global(.b), .mirror :global(.h) { -webkit-text-stroke: 0.04em currentColor; }
+  .mirror :global(.h) { color: var(--fg); }
+  /* shortcut: italic is not slanted here, a real italic face has other widths; it shows by its dimmed markers only. */
+  .mirror :global(.s) { text-decoration: line-through; }
+  .mirror :global(.code), .mirror :global(.pre) { border-radius: var(--radius-sm); background: var(--bg-selected); }
+  .mirror :global(.q) { color: var(--fg-2); }
+  .mirror :global(.link) { text-decoration: underline; text-underline-offset: 2px; }
+  /* Forced colours repaint the textarea's text: then it is the only layer. */
+  @media (forced-colors: active) {
+    .mirror { display: none; }
+    textarea { color: CanvasText; }
   }
   textarea::placeholder { color: var(--fg-3); }
   textarea:focus-visible { outline: none; } /* drawn on .box above */

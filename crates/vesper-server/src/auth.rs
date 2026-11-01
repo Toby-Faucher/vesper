@@ -44,9 +44,18 @@ pub(crate) fn is_hidden_format(c: char) -> bool {
 /// NFC, whitespace runs collapsed to one space, 1 to 32 chars, no control or hidden format
 /// characters. Room names use the same rule.
 pub fn valid_display_name(s: &str) -> Option<String> {
+    clean_line(s, 1..=32)
+}
+
+/// A bio: the display-name rule, 0 to 160 chars (empty clears it).
+pub fn valid_bio(s: &str) -> Option<String> {
+    clean_line(s, 0..=160)
+}
+
+fn clean_line(s: &str, len: std::ops::RangeInclusive<usize>) -> Option<String> {
     let nfc: String = s.nfc().collect();
     let s = nfc.split_whitespace().collect::<Vec<_>>().join(" ");
-    let ok = (1..=32).contains(&s.chars().count())
+    let ok = len.contains(&s.chars().count())
         && !s.chars().any(|c| c.is_control() || is_hidden_format(c));
     ok.then_some(s)
 }

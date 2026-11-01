@@ -275,3 +275,88 @@ async fn session_of_banned_user_is_none() {
     s.create_session(&u.user_id, sess(1, now)).await.unwrap();
     assert!(s.session_user(&[1; 32], now).await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn bio_and_avatar_round_trip_and_go_with_the_account() {
+    let (_tmp, s) = open().await;
+    let a = s.create_account(acct("alice")).await.unwrap();
+    assert_eq!((a.bio.as_str(), a.avatar.as_deref()), ("", None));
+    let a2 = s
+        .update_profile(&a.user_id, None, None, Some("hi there"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (a2.bio.as_str(), a2.display_name.as_str()),
+        ("hi there", "alice")
+    );
+    // The column refuses an over-long bio even if the server check were skipped.
+    let long = "é".repeat(161);
+    assert!(
+        s.update_profile(&a.user_id, None, None, Some(&long))
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        s.avatar(&a.user_id).await,
+        Err(StoreError::NotFound)
+    ));
+
+    let u = s
+        .set_avatar(&a.user_id, "image/png", b"one", "v1")
+        .await
+        .unwrap();
+    assert_eq!(u.avatar.as_deref(), Some("v1"));
+    let u = s
+        .set_avatar(&a.user_id, "image/webp", b"two", "v2")
+        .await
+        .unwrap();
+    assert_eq!(u.avatar.as_deref(), Some("v2"));
+    let got = s.avatar(&a.user_id).await.unwrap();
+    assert_eq!(got, ("image/webp".into(), b"two".to_vec(), "v2".into()));
+    // Only the three picture types, and at most 512 KiB, reach the table.
+    assert!(
+        s.set_avatar(&a.user_id, "image/svg+xml", b"x", "v3")
+            .await
+            .is_err()
+    );
+    assert!(
+        s.set_avatar(&a.user_id, "image/png", &vec![0; 524_289], "v3")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        s.user(&a.user_id).await.unwrap().avatar.as_deref(),
+        Some("v2")
+    );
+    assert!(matches!(
+        s.set_avatar(&"0".repeat(32), "image/png", b"x", "v").await,
+        Err(StoreError::NotFound)
+    ));
+
+    let u = s.clear_avatar(&a.user_id).await.unwrap();
+    assert_eq!(u.avatar, None);
+    assert!(matches!(
+        s.avatar(&a.user_id).await,
+        Err(StoreError::NotFound)
+    ));
+
+    // A deleted account takes its picture with it.
+    s.set_avatar(&a.user_id, "image/png", b"one", "v1")
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM sessions WHERE account_id = ?1")
+        .bind(&a.user_id)
+        .execute(s.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM accounts WHERE id = ?1")
+        .bind(&a.user_id)
+        .execute(s.pool())
+        .await
+        .unwrap();
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM avatars")
+        .fetch_one(s.pool())
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}

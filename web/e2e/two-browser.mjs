@@ -6,7 +6,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { browser, cli, png1x1, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, searchFor, searchHits, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, png1x1, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, searchFor, searchHits, signup, sleep, startServer } from './lib.mjs';
 
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
@@ -75,8 +75,14 @@ try {
     return (await r.json()).url;
   });
 
+  // signup_shows_live (#29): alice has Admin > Members open before bob exists; his row appears without a reload, from
+  // the server's user_created push.
+  await alice.page.goto(`${ORIGIN}/admin/members`);
+  await alice.page.locator('tr[data-user="alice"]').waitFor();
   const bob = await browser('bob', []);
   await signup(bob.page, bobLink, 'bob');
+  await alice.page.locator('tr[data-user="bob"]', { hasText: 'bob' }).waitFor({ timeout: 5000 });
+  console.log('signup_shows_live: ok');
 
   await join(alice.page);
   await sleep(2000);
@@ -116,6 +122,23 @@ try {
   await inVoice(alice.page, 'bob').waitFor({ timeout: 5000 });
   await inVoice(bob.page, 'alice').waitFor({ timeout: 5000 });
   console.log('presence_seen_by_both: ok');
+
+  // picture_shows_live (#21): alice picks a picture in Settings > Account (cropped and redrawn by a canvas); bob's sidebar
+  // shows it on her voice row without a reload, loaded under the page CSP, and the speaking ring still draws around it.
+  await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await alice.page.getByRole('link', { name: 'Account', exact: true }).click();
+  await alice.page.locator('input[type=file]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: png1x1() });
+  await alice.page.getByRole('status').filter({ hasText: 'Picture saved.' }).waitFor({ timeout: 5000 });
+  const pic = inVoice(bob.page, 'alice').locator('img[src*="/avatar?v="]');
+  await pic.waitFor({ timeout: 5000 });
+  await bob.page.waitForFunction((img) => img.complete && img.naturalWidth === 256, await pic.elementHandle(), { timeout: 5000 });
+  await bob.page.locator('li.speaking[data-speaking]', { hasText: 'alice' }).locator('img').first().waitFor({ timeout: 5000 });
+  // A bio shows on her person card for bob.
+  await alice.page.getByLabel('Bio').fill('Plays bass on Sundays');
+  await alice.page.getByRole('button', { name: 'Save', exact: true }).click();
+  await alice.page.getByRole('status').filter({ hasText: /saved/i }).first().waitFor();
+  await openRoom(alice.page, 'general');
+  console.log('picture_shows_live: ok');
 
   // welcome_keeps_the_call: Settings > Account > "Run the welcome steps again" opens in the Shell, so the call stays up
   // through the steps and after "Open Vesper".
@@ -231,6 +254,65 @@ try {
   await editBox.press('Escape');
   await editBox.waitFor({ state: 'detached', timeout: 2000 });
   assert.ok(await aBox.evaluate((el) => el === document.activeElement), 'focus did not go back to the composer after Esc');
+  // markdown_full: every construct of the subset renders, the code block is highlighted by the lazy chunk and copies, the
+  // composer styles markdown while typing, and a reply to the message quotes plain text, not the syntax.
+  const mdBox = composer(alice.page);
+  await mdBox.fill('**x** `y` # no');
+  const mirror = alice.page.locator('.mirror');
+  assert.equal(await mirror.locator('span.b').textContent(), 'x', 'the composer did not style bold');
+  assert.equal(await mirror.locator('span.code').textContent(), 'y', 'the composer did not style code');
+  assert.equal(await mirror.textContent(), (await mdBox.inputValue()) + ' ', 'the preview layer does not match the textarea');
+  assert.equal(await mdBox.evaluate((el) => getComputedStyle(el).color), 'rgba(0, 0, 0, 0)', 'the textarea text is not transparent');
+  // Long wrapped text with styled runs: the layer wraps on the same lines and follows the textarea's scroll.
+  await mdBox.fill('a **long** line with `code` and ~~struck~~ words '.repeat(60));
+  const fit = await mdBox.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+    el.dispatchEvent(new Event('scroll'));
+    const m = el.parentElement.querySelector('.mirror');
+    return { ta: el.scrollHeight, m: m.scrollHeight, top: el.scrollTop, mtop: m.scrollTop };
+  });
+  assert.ok(fit.ta > 200 && fit.ta === fit.m && fit.top > 0 && fit.top === fit.mtop, `the layer does not line up: ${JSON.stringify(fit)}`);
+  // Fail-safe: without the layer the textarea draws its own text again.
+  const typedShown = () => mdBox.evaluate((el) => getComputedStyle(el).color !== 'rgba(0, 0, 0, 0)');
+  await alice.page.evaluate(() => document.querySelector('.mirror').remove());
+  await mdBox.pressSequentially('z');
+  assert.ok(await typedShown(), 'typed text is invisible with the layer gone');
+  const md = ['# Plan', '## Details', 'Some **strong** and *soft* and ~~gone~~ with `tick`.', '> quoted line', '- one', '- two',
+    '1. first', '2. second', '---', '```rust', 'fn main() { let x = 1; }', '```'].join('\n');
+  await mdBox.fill(md);
+  await mdBox.press('Enter');
+  const full = bob.page.locator('article').filter({ has: bob.page.getByRole('heading', { name: 'Plan' }) });
+  await full.waitFor({ timeout: 5000 });
+  assert.equal(await full.getByRole('heading', { name: 'Details' }).getAttribute('aria-level'), '5');
+  for (const [sel, text] of [['strong', 'strong'], ['em', 'soft'], ['s', 'gone'], ['code', 'tick'], ['blockquote', 'quoted line'],
+    ['ul li', 'one'], ['ol li', 'second']])
+    assert.equal(await full.locator(sel, { hasText: text }).count(), 1, `${sel} "${text}" did not render`);
+  assert.equal(await full.locator('hr').count(), 1, 'the rule did not render');
+  assert.equal(await full.locator('ol').getAttribute('start'), '1');
+  assert.ok(!(await full.innerText()).includes('**'), 'raw markers are shown');
+  await full.locator('pre span.kw', { hasText: 'fn' }).waitFor({ timeout: 5000 }).catch(() => assert.fail('the code block was not highlighted'));
+  assert.equal(await full.locator('pre').textContent(), 'fn main() { let x = 1; }');
+  await full.getByRole('button', { name: 'Copy code' }).click();
+  await full.getByRole('button', { name: 'Copied' }).waitFor({ timeout: 2000 });
+  // The code is a Tab stop after Copy, named, with a focus ring, so keys can scroll a long line.
+  await bob.page.keyboard.press('Tab');
+  const code = full.getByRole('region', { name: 'Code, rust' });
+  assert.ok(await code.evaluate((el) => el === document.activeElement && getComputedStyle(el).outlineStyle !== 'none'), 'the code block is not a focusable region with a ring');
+  await full.hover();
+  await full.getByRole('button', { name: 'Reply', exact: true }).click();
+  const bar = bob.page.locator('form .bar');
+  await bar.waitFor();
+  const barText = await bar.innerText();
+  assert.match(barText, /Plan Details Some strong and soft/, `the reply bar: ${barText}`);
+  assert.ok(!/[#*`~]|^>/m.test(barText), `the reply bar shows markdown: ${barText}`);
+  await composer(bob.page).fill('noted');
+  await composer(bob.page).press('Enter');
+  const quote = alice.page.locator('article', { hasText: 'noted' }).locator('button.quote');
+  await quote.waitFor({ timeout: 5000 });
+  const quoteText = await quote.innerText();
+  assert.match(quoteText, /Reply to alice: Plan Details Some strong and soft/, `the reply quote: ${quoteText}`);
+  assert.ok(!/[#*`~]/.test(quoteText), `the reply quote shows markdown: ${quoteText}`);
+  console.log('markdown_full: ok');
   // A draft belongs to its room: it is not shown in another room and is there again on the way back.
   await call(alice.page, 'POST', '/api/rooms', { name: 'drafts' });
   await aBox.fill('only for general');

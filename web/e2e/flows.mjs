@@ -6,7 +6,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { ORIGIN, browser, cli, composer, cspViolations, inVoice, logout, openRoom, roomId, roomLink, searchFor, searchHits, signedIn, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, composer, cspViolations, inVoice, logout, openRoom, roomId, roomLink, searchFor, searchHits, signedIn, signup, sleep, startServer } from './lib.mjs';
 
 // fetch from the page, so it sends the session cookie and the Origin header as the app does.
 const call = (page, method, path, body) =>
@@ -54,6 +54,15 @@ const fakeNotifications = () => {
     close() { this.closed = true; }
   };
 };
+
+// The call sounds are the app's only oscillators: record each tone's pitch as it starts, and let it play on.
+const recordTones = () => {
+  window.__tones = [];
+  const start = OscillatorNode.prototype.start;
+  OscillatorNode.prototype.start = function (...a) { window.__tones.push(Math.round(this.frequency.value)); return start.apply(this, a); };
+};
+// The pitches of each cue, as in web/src/lib/ui/chime.ts.
+const CUE = { connect: [587, 880], disconnect: [880, 587], mute: [1319, 880], unmute: [880, 1319] };
 
 // The three welcome steps once, with Back: the step count, the heading taking focus, the colour saved, and the browser
 // asked about notifications only from the button.
@@ -158,6 +167,7 @@ try {
   const bob = await browser('bob', []);
   const b = bob.page;
   await b.addInitScript(fakeNotifications);
+  await b.addInitScript(recordTones);
   await b.goto(bobLink);
   await b.getByLabel('Username').fill('alice');
   await b.getByLabel('Display name').fill('bob');
@@ -267,6 +277,18 @@ try {
   await inVoice(a, 'bob').waitFor({ state: 'detached' });
   console.log('call survives navigation: ok');
 
+  // Call sounds, on by default for my own call: join, mute, unmute and leave each play their cue once, in order.
+  await b.evaluate(() => (window.__tones = []));
+  await join(b, 'general');
+  await b.getByRole('button', { name: 'Mute', exact: true }).click();
+  await b.getByRole('button', { name: 'Unmute' }).click();
+  await b.getByRole('button', { name: 'Mute', exact: true }).waitFor();
+  await b.getByRole('button', { name: 'Leave' }).click();
+  await inVoice(a, 'bob').waitFor({ state: 'detached' });
+  await sleep(300);
+  assert.deepEqual(await b.evaluate(() => window.__tones), [...CUE.connect, ...CUE.mute, ...CUE.unmute, ...CUE.disconnect], 'call sound sequence');
+  console.log('call sounds: ok');
+
   // A Voice setting persists over a reload. Settings opened from its address closes to the last room, in place, and Esc
   // closes it too.
   await b.goto(`${ORIGIN}/settings/voice`);
@@ -279,10 +301,22 @@ try {
   await b2.close();
   await b.getByLabel('Auto gain').uncheck();
   assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).autoGain), false);
-  // The noise gate switch saves vad.gate and keeps the level marker.
-  await b.getByLabel('Noise gate').check();
+  // The noise gate switch follows the saved mode, not whether the denoiser loaded, so this runs the same with and without
+  // dist/dsp. b saves browser mode (lib.mjs): disabled, and the help says why. In DeepFilterNet mode it saves vad.gate,
+  // keeps the level marker and persists to a new tab. b is not in a call here, so the mode change only saves.
+  const gate = b.getByRole('switch', { name: 'Noise gate' });
+  assert.ok(await gate.isDisabled(), 'the noise gate switch is enabled in browser mode');
+  assert.match(await b.getByText('Works only with DeepFilterNet noise suppression.').innerText(), /DeepFilterNet/);
+  await b.getByLabel('Noise suppression').selectOption('deepfilter');
+  await gate.check();
   assert.deepEqual(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad), { thresholdDb: -50, gate: true });
-  await b.getByLabel('Noise gate').uncheck();
+  const b3 = await b.context().newPage();
+  await b3.goto(`${ORIGIN}/settings/voice`);
+  assert.ok(await b3.getByRole('switch', { name: 'Noise gate' }).isChecked(), 'the noise gate did not persist');
+  await b3.close();
+  await gate.uncheck();
+  await b.getByLabel('Noise suppression').selectOption('browser');
+  assert.ok(await gate.isDisabled());
   assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad.gate), false);
   const depth = await b.evaluate(() => history.length);
   await b.getByRole('button', { name: 'Close' }).click();
@@ -320,7 +354,8 @@ try {
     await b.getByRole('status').filter({ hasText: 'Allowed' }).waitFor();
     await b.getByRole('button', { name: 'Send a test notification' }).waitFor();
     assert.equal(await b.evaluate(() => window.__asked), 0, 'permission asked on load');
-    assert.ok(!(await b.getByRole('switch', { name: 'Play a sound when someone joins or leaves your call' }).isChecked()), 'sounds on by default');
+    assert.ok(!(await b.getByRole('switch', { name: 'Others joining and leaving' }).isChecked()), 'join and leave sounds should be off by default');
+    assert.ok(await b.getByRole('switch', { name: 'Mute and deafen' }).isChecked(), 'mute and deafen sounds should be on by default');
     await sw.uncheck();
     assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.notify')).mentions), false);
     await post('@bob again, with the switch off');
@@ -647,27 +682,27 @@ try {
   await b.keyboard.press('Escape');
   console.log('open search drops a room that became private: ok');
 
-  // The denoiser (worklet, worker, WASM) under the server's CSP. A CSP block in the worker is not a page console
-  // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (not in CI).
+  // The denoiser (worklet, worker, WASM, model) under the server's CSP. A CSP block in the worker is not a page console
+  // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (CI downloads it from
+  // the dsp-wasm job). A new account from an invite: alice has used up her sign-in budget (5 a minute) by now.
   const pages = [alice.page, bob.page];
   if (existsSync(new URL('../dist/dsp/vesper_dsp_bg.wasm', import.meta.url))) {
-    const dsp = await browser('alice-dsp', []);
+    const dsp = await browser('dana', []);
     const d = dsp.page;
     // With the noise gate on, so its worklet message runs in a real browser too.
     await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter', vad: { thresholdDb: -50, gate: true } })));
-    await d.goto(`${ORIGIN}/login`);
-    await d.getByLabel('Username').fill('alice');
-    await d.getByLabel('Password', { exact: true }).fill('test-password-1');
-    await d.getByRole('button', { name: 'Sign in' }).click();
-    await signedIn(d);
+    await signup(d, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, 'dana');
     await join(d, 'general');
     const line = d.getByText('Noise suppression:').first();
     let status = '';
     for (let i = 0; i < 80 && (i < 8 || status.includes('loading')); i++) {
-      await new Promise((r) => setTimeout(r, 250));
+      await sleep(250);
       status = await line.innerText();
     }
     assert.equal(status, 'Noise suppression: deepfilter', 'denoiser did not start under the CSP');
+    await d.getByRole('link', { name: 'Call details' }).click();
+    const diag = d.getByRole('group', { name: 'Call numbers' }).getByText('Noise suppression:');
+    assert.equal(await diag.innerText(), 'Noise suppression: deepfilter', 'Diagnostics shows another mode');
     pages.push(d);
     alice.errors.push(...dsp.errors);
     console.log('denoiser under CSP: ok');

@@ -3,4 +3,8 @@
 /**
  * A missing field is left as it is.
  */
-export type ProfilePatch = { display_name?: string, accent?: string, };
+export type ProfilePatch = { display_name?: string, accent?: string, 
+/**
+ * 0 to 160 characters; empty clears it.
+ */
+bio?: string, };

@@ -18,7 +18,8 @@ env:
   VESPER_NO_CAP: 1
   CARGO_TERM_COLOR: always
 
-# No job waits for another (no `needs`), so the slow dsp-wasm job never holds up the rest.
+# No job waits for another (no `needs`), so the slow dsp-wasm job never holds up the rest. e2e takes dsp-wasm's
+# denoiser build as an artifact, polled once its own build is done (dsp-wasm usually finishes first).
 jobs:
   lint-rust:
     runs-on: ubuntu-24.04
@@ -75,10 +76,13 @@ jobs:
         working-directory: web
 
   # Two headless Chromium browsers join one room through the release server; web/e2e/two-browser.mjs, then flows.mjs and ui.mjs.
-  # No wasm build here (that is dsp-wasm's slow path): the test picks browser suppression.
+  # No wasm build here: flows.mjs runs its denoiser-under-CSP step with dsp-wasm's build; the other steps use browser suppression.
   e2e:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # the wait step lists this run's artifacts and jobs
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install --no-self-update
@@ -94,6 +98,25 @@ jobs:
       # playwright-core is pinned in web/package.json, so this fetches the matching Chromium.
       - run: npx playwright-core install --with-deps chromium
         working-directory: web
+      # Polled rather than `needs: dsp-wasm`, which would add its 3 to 4 minutes to this job's start.
+      - name: wait for the denoiser from dsp-wasm
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          for _ in $(seq 120); do
+            # Job state first: if it was done before the artifact check, a missing artifact is final.
+            finished=$(gh api "$api/attempts/$GITHUB_RUN_ATTEMPT/jobs" --jq '.jobs[] | select(.name == "dsp-wasm" and .status == "completed") | .name')
+            gh api "$api/artifacts" --jq '.artifacts[].name' | grep -qx dsp && exit 0
+            [ -z "$finished" ] || { echo "dsp-wasm finished without uploading dsp"; exit 1; }
+            sleep 10
+          done
+          echo "no dsp artifact after 20 minutes"; exit 1
+      # After npm run build, which empties dist/; the server reads dist/ at request time.
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: dsp
+          path: web/dist/dsp
       - run: npm run e2e
         working-directory: web
 
@@ -118,3 +141,10 @@ jobs:
       # The model is gitignored and the denoiser tests need it; fetch-model.sh checks its sha256.
       - run: scripts/fetch-model.sh
       - run: scripts/check.sh dsp
+      # The e2e job serves it for flows.mjs's denoiser-under-CSP step.
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dsp
+          path: web/public/dsp
+          if-no-files-found: error
+          retention-days: 1

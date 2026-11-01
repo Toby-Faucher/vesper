@@ -467,7 +467,7 @@ function plans({ alice, bob, api }) {
     m.push(await post('a', 'anyone up for a game tonight?'));
     m.push(await post('b', 'I can do 9'));
     m.push(await post('b', 'after dinner works better for me'));
-    m.push(await post('a', 'this is the config I use for voice:\n```\nbitrate = 64\nnoise = deepfilter\n```\nthe `deepfilter` mode helps a lot'));
+    m.push(await post('a', 'this is the config I use for voice:\n```json\n{ "bitrate": 64, "noise": "deepfilter", "ptt": false }\n```\nthe `deepfilter` mode helps a lot'));
     m.push(await post('b', 'count me in', m[5].id));
     const mic = await post('a', 'I fixed my mic, tell me if it still crackles');
     m.push(mic);
@@ -609,7 +609,7 @@ scene('composer', async (ctx) => {
   await openRoom(page, 'general');
   await rest(page);
   await ctx.shot(page, 'composer-empty');
-  await box.fill('three things for friday:\nbring the **good** cable\nsomeone check the `deepfilter` mode\n> last time it crackled\nand snacks');
+  await box.fill('## three things for friday\nbring the **good** cable, *please*\nsomeone check the `deepfilter` mode\n> last time it crackled\n- and ~~chips~~ snacks');
   await still();
   await ctx.shot(page, 'composer-multiline');
   await box.fill('');
@@ -1004,6 +1004,35 @@ scene('settings', async (ctx) => {
   await tall(page, ctx, 'settings-account');
   await page.getByRole('list', { name: 'Signed-in devices' }).getByRole('listitem').filter({ hasNotText: 'This device' }).getByRole('button', { name: 'Sign out' }).click();
   await second.getByText('Your session ended. Sign in again.').waitFor();
+});
+// Account with a profile picture (a gradient drawn in the page), a bio, then the error for a file that is not a picture.
+scene('settings-picture', async (ctx) => {
+  const page = ctx.alice.page;
+  await home(page);
+  await settingsPage(page, 'Account');
+  const data = await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    [c.width, c.height] = [600, 400];
+    const g = c.getContext('2d');
+    const grad = g.createLinearGradient(0, 0, 600, 400);
+    grad.addColorStop(0, 'teal');
+    grad.addColorStop(1, 'orange');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 600, 400);
+    return c.toDataURL('image/png').split(',')[1];
+  });
+  await page.locator('input[type=file]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: Buffer.from(data, 'base64') });
+  await page.getByText('Picture saved.').waitFor();
+  await page.getByLabel('Bio').fill('Plays bass on Sundays. Ask me about synths.');
+  await rest(page);
+  await ctx.shot(page, 'settings-picture', { fullPage: false });
+  await page.locator('input[type=file]').setInputFiles({ name: 'x.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg/>') });
+  await page.getByRole('alert').filter({ hasText: 'Pick a PNG' }).waitFor();
+  await ctx.shot(page, 'settings-picture-error', { fullPage: false });
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByText('Saved.').waitFor();
+  await home(page);
+  await ctx.shot(page, 'shell-picture', { fullPage: false });
 });
 // The meter at three levels, from the primitives gallery.
 scene('settings-meter', async ({ open }) => {

@@ -21,7 +21,7 @@ pub struct LoginRow {
 // A macro, not a const: sqlx 0.9 takes only `&'static str` SQL, and `concat!` keeps it static.
 macro_rules! user_cols {
     () => {
-        "a.id, a.username, a.display_name, a.accent, a.role, a.banned_at"
+        "a.id, a.username, a.display_name, a.accent, a.role, a.banned_at, a.bio, a.avatar"
     };
 }
 pub(crate) use user_cols;
@@ -34,6 +34,8 @@ pub(crate) struct AccountRow {
     accent: String,
     role: String,
     banned_at: Option<i64>,
+    bio: String,
+    avatar: Option<String>,
 }
 
 impl AccountRow {
@@ -45,6 +47,8 @@ impl AccountRow {
             display_name: self.display_name,
             accent: self.accent,
             banned: self.banned_at.is_some(),
+            bio: self.bio,
+            avatar: self.avatar,
         })
     }
 }
@@ -158,15 +162,18 @@ impl Store {
         id: &str,
         display_name: Option<&str>,
         accent: Option<&str>,
+        bio: Option<&str>,
     ) -> Result<UserInfo> {
         let mut c = self.pool.acquire().await?;
         let n = sqlx::query(
-            "UPDATE accounts SET display_name = coalesce(?2, display_name), accent = coalesce(?3, accent)
+            "UPDATE accounts SET display_name = coalesce(?2, display_name),
+             accent = coalesce(?3, accent), bio = coalesce(?4, bio)
              WHERE id = ?1",
         )
         .bind(id)
         .bind(display_name)
         .bind(accent)
+        .bind(bio)
         .execute(&mut *c)
         .await?
         .rows_affected();
@@ -236,6 +243,66 @@ impl Store {
         let user = user_by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok(user)
+    }
+
+    /// Replaces the user's picture. `version` names it in `UserInfo.avatar` (and the ETag).
+    pub async fn set_avatar(
+        &self,
+        id: &str,
+        mime: &str,
+        data: &[u8],
+        version: &str,
+    ) -> Result<UserInfo> {
+        let mut tx = self.pool.begin().await?;
+        let n = sqlx::query("UPDATE accounts SET avatar = ?2 WHERE id = ?1")
+            .bind(id)
+            .bind(version)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        if n == 0 {
+            return Err(StoreError::NotFound);
+        }
+        sqlx::query(
+            "INSERT INTO avatars (account_id, mime, data) VALUES (?1, ?2, ?3)
+             ON CONFLICT (account_id) DO UPDATE SET mime = excluded.mime, data = excluded.data",
+        )
+        .bind(id)
+        .bind(mime)
+        .bind(data)
+        .execute(&mut *tx)
+        .await?;
+        let user = user_by_id(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    /// Removes the user's picture (none is fine).
+    pub async fn clear_avatar(&self, id: &str) -> Result<UserInfo> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM avatars WHERE account_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE accounts SET avatar = NULL WHERE id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        let user = user_by_id(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(user)
+    }
+
+    /// The user's picture: (mime, bytes, version). `NotFound` when there is none.
+    pub async fn avatar(&self, id: &str) -> Result<(String, Vec<u8>, String)> {
+        sqlx::query_as(
+            "SELECT v.mime, v.data, a.avatar FROM avatars v JOIN accounts a ON a.id = v.account_id
+             WHERE v.account_id = ?1 AND a.avatar IS NOT NULL",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(StoreError::NotFound)
     }
 
     pub async fn owner_exists(&self) -> Result<bool> {
