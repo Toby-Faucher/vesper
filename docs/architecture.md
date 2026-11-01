@@ -159,13 +159,13 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`).
 | `POST /api/rooms` (`RoomCreate`) | owner | 201 `RoomInfo`, open, placed last |
 | `PATCH /api/rooms/{id}` (`RoomPatch`) | owner | the new `RoomInfo` |
 | `PUT /api/rooms/order` (`RoomOrder`) | owner | 204; `ids` must hold every room id once, else 409 |
-| `PUT /api/rooms/{id}/members` (`RoomMembers`) | owner | the new `RoomInfo`; the list replaces the old one, an unknown account is 404 |
+| `PUT /api/rooms/{id}/members` (`RoomMembers`) | owner | the new `RoomInfo`; the list replaces the old one, an unknown account is 404, a banned one 400 |
 
 Rooms (`api_rooms.rs`, store `rooms.rs`): every room has text and voice. A fresh database has `general` and `hangout`
 (migration `0002_rooms.sql`). Room names follow the display name rule (NFC, 1 to 32 characters, no control or hidden format
 characters, else 400) and are unique ignoring case (409). A restricted room is seen only by the owner, the moderators and the
-accounts on its member list (`can_see`); `members` is filled only while the room is restricted, and the list is kept when the
-room is opened again. Every change pushes `rooms_changed` to open sockets.
+accounts on its member list (`can_see`); `members` is filled only while the room is restricted. Opening a room clears its member list, so restricting it again
+starts empty. A banned account can not be put on a list (400). Every change pushes `rooms_changed` to open sockets.
 
 A ban ends the user's sessions but does not revoke invites they already created; the owner revokes those by hand. `InviteCreate` needs all three fields (`role`, `max_uses`, `expires_hours`), so the web client must send them.
 

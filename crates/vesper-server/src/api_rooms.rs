@@ -97,7 +97,18 @@ async fn members(
 ) -> Result<Json<RoomInfo>, ApiError> {
     require(&a.user, Role::Owner)?;
     let id = path(id)?;
-    let room = st.store.set_room_members(id, &body(req)?.user_ids).await?;
+    let ids = body(req)?.user_ids;
+    // A banned account can not be listed (unknown ids are 404 from the store).
+    if st
+        .store
+        .users()
+        .await?
+        .iter()
+        .any(|u| u.banned && ids.contains(&u.user_id))
+    {
+        return Err(bad("a banned account can not be a member"));
+    }
+    let room = st.store.set_room_members(id, &ids).await?;
     rooms_changed(&st).await;
     Ok(Json(room))
 }

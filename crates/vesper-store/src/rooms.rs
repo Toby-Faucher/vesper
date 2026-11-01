@@ -20,7 +20,7 @@ impl RoomRow {
             name: self.name,
             position: self.position,
             restricted: self.restricted,
-            // The list is kept while a room is open, but only means something when restricted.
+            // An open room has no list (opening clears it), so this only guards a list set while open.
             members: if self.restricted { members } else { Vec::new() },
         }
     }
@@ -94,7 +94,8 @@ impl Store {
         name: Option<&str>,
         restricted: Option<bool>,
     ) -> Result<RoomInfo> {
-        let mut c = self.pool.acquire().await?;
+        // IMMEDIATE: the update and the list clear commit together.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let n = sqlx::query(
             "UPDATE rooms SET name = coalesce(?2, name), restricted = coalesce(?3, restricted)
              WHERE id = ?1",
@@ -102,14 +103,23 @@ impl Store {
         .bind(id)
         .bind(name)
         .bind(restricted)
-        .execute(&mut *c)
+        .execute(&mut *tx)
         .await
         .map_err(|e| constraint(e, DUPLICATE))?
         .rows_affected();
         if n == 0 {
             return Err(StoreError::NotFound);
         }
-        room_by_id(&mut c, id).await
+        // Fail closed: opening a room forgets its list, so closing it again grants nobody.
+        if restricted == Some(false) {
+            sqlx::query("DELETE FROM room_members WHERE room_id = ?1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        let room = room_by_id(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(room)
     }
 
     /// `ids` must hold every room id exactly once, else `Conflict` and nothing changes.
@@ -137,7 +147,8 @@ impl Store {
 
     /// Replaces the member list. An unknown room or account is `NotFound` and nothing changes.
     pub async fn set_room_members(&self, id: i64, user_ids: &[String]) -> Result<RoomInfo> {
-        let mut tx = self.pool.begin().await?;
+        // IMMEDIATE: a deferred read-then-write can fail with SQLITE_BUSY_SNAPSHOT under a racing writer.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM rooms WHERE id = ?1)")
             .bind(id)
             .fetch_one(&mut *tx)
