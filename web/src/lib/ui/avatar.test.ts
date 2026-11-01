@@ -73,8 +73,10 @@ it('square_crop_takes_the_centre', () => {
   expect(squareCrop(256, 256)).toEqual([0, 0, 256]);
 });
 
-it('square_picture_refuses_svg_and_other_types', async () => {
+it('square_picture_refuses_svg_other_types_and_huge_files', async () => {
   for (const type of ['image/svg+xml', 'text/html', '']) {
     await expect(squarePicture(new Blob(['<svg/>'], { type }))).rejects.toThrow('type');
   }
+  const huge = { type: 'image/jpeg', size: 20 * 1024 * 1024 + 1 } as Blob; // checked before any decode
+  await expect(squarePicture(huge)).rejects.toThrow('large');
 });

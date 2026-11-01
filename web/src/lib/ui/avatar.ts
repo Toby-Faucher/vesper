@@ -42,6 +42,8 @@ export const avatarUrl = (u: { user_id: string; avatar?: string | null }): strin
 export const PICTURE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 export const PICTURE_PX = 256;
 export const MAX_PICTURE = 512 * 1024;
+/** A bigger file is refused before decoding: a huge photo can need gigabytes to decode. */
+export const MAX_PICTURE_FILE = 20 * 1024 * 1024;
 
 /** The centred square of a w x h picture, as [x, y, side]. */
 export function squareCrop(w: number, h: number): [number, number, number] {
@@ -50,9 +52,10 @@ export function squareCrop(w: number, h: number): [number, number, number] {
 }
 
 /** The file as a PICTURE_PX square. Rejects with 'type' for a file that is not a picture type, 'unreadable' when the
- *  browser cannot decode or encode it. */
+ *  browser cannot decode or encode it, 'large' for a file over MAX_PICTURE_FILE. */
 export async function squarePicture(file: Blob): Promise<Blob> {
   if (!PICTURE_TYPES.includes(file.type)) throw new Error('type');
+  if (file.size > MAX_PICTURE_FILE) throw new Error('large');
   const bmp = await createImageBitmap(file).catch(() => {
     throw new Error('unreadable');
   });
@@ -60,10 +63,12 @@ export async function squarePicture(file: Blob): Promise<Blob> {
   const c = document.createElement('canvas');
   c.width = c.height = PICTURE_PX;
   const g = c.getContext('2d');
-  if (!g || !side) throw new Error('unreadable');
-  g.imageSmoothingQuality = 'high';
-  g.drawImage(bmp, x, y, side, side, 0, 0, PICTURE_PX, PICTURE_PX);
+  if (g && side) {
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(bmp, x, y, side, side, 0, 0, PICTURE_PX, PICTURE_PX);
+  }
   bmp.close();
+  if (!g || !side) throw new Error('unreadable');
   const out = await new Promise<Blob | null>((done) => c.toBlob(done, 'image/webp', 0.9));
   if (!out) throw new Error('unreadable');
   return out;

@@ -1752,7 +1752,11 @@ async fn signup_and_profile_changes_reach_every_socket() {
         )
         .await;
     }
-    let png = b"\x89PNG\r\n\x1a\n\0\0\0\0IEND\0\0\0\0".to_vec();
+    let png = [
+        &b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\x01\0\0\0\x01\0\x08\x06\0\0\0\0\0\0\0"[..],
+        b"\0\0\0\0IEND\0\0\0\0",
+    ]
+    .concat();
     let req = axum::http::Request::builder()
         .method(Method::PUT)
         .uri("/api/me/avatar")

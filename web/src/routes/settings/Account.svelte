@@ -192,7 +192,7 @@
         <TextInput autocomplete="nickname" bind:value={name} oninput={() => (saved = false)} required maxlength={32} />
       </Field>
       <div onchange={() => (saved = false)}><Swatches bind:slot gap="var(--bg-app)" /></div>
-      <Field label="Bio" value="{[...bio].length} / {MAX_BIO}" help="Up to {MAX_BIO} characters, shown on your person card.">
+      <Field label="Bio" value="{bio.length} / {MAX_BIO}" help="Up to {MAX_BIO} characters, shown on your person card.">
         <TextInput bind:value={bio} oninput={() => (saved = false)} maxlength={MAX_BIO} />
       </Field>
       <div class="flex items-center gap-3">

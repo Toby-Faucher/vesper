@@ -205,7 +205,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/logout` | a session | 204, the session is deleted and the cookie cleared |
 | `GET /api/me` | a session | `Me` |
 | `PATCH /api/me` (`ProfilePatch`) | a session | the new `UserInfo`; `bio` follows the display name rule, 0 to 160 characters |
-| `PUT /api/me/avatar` (the raw picture as the body) | a session, Upload limit by user | the new `UserInfo`; 400 unless png, jpeg or webp (see Profile pictures), 413 `too_large` past 512 KiB |
+| `PUT /api/me/avatar` (the raw picture as the body) | a session, Upload limit by user | the new `UserInfo`; 400 unless png, jpeg or webp of at most 1024 px a side (see Profile pictures), 413 `too_large` past 512 KiB |
 | `DELETE /api/me/avatar` | a session, Change limit by user | the new `UserInfo` with `avatar: null` |
 | `GET /api/users/{id}/avatar?v=` | a session | the picture, or 404 when there is none; `ETag` is the version, and `v` equal to it makes the answer `immutable` |
 | `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
@@ -294,9 +294,12 @@ finds `Café`. Rules:
 
 Profile pictures (`avatars.rs`, store `accounts.rs`, migration `0005_profile.sql`): the web app crops and scales the file to
 a 256 px square and sends it as WebP (PNG where the browser cannot). The server does not trust the client's type: it sniffs png,
-jpeg or webp from the bytes (no svg, no gif), checks that the file ends where its format says (png at `IEND`, jpeg at `FFD9`, webp
-at the RIFF size), refuses png text chunks and any file holding `<script`, `<html`, `<svg` and similar markup, so a picture cannot
-also parse as a page. The bytes live in the `avatars` table (at most 512 KiB, one per account, deleted with it), not with the
+jpeg or webp from the bytes (no svg, no gif). It reads the width and height from the header (png: IHDR must come first; jpeg:
+the segments up to the first frame header; webp: `VP8X`, `VP8 ` or `VP8L`) and refuses a header it cannot read or a side over
+1024 px, so a small file cannot unpack to gigabytes in every member's browser. A png must end at `IEND` and a webp at its RIFF
+size; a jpeg is only checked to end with `FFD9`. EXIF (jpeg APP1, png `eXIf`, the webp EXIF flag) and png text chunks are refused,
+as is a file holding `<script`, `<html`, `<svg` and similar markup. That list is easy to get round: the real guard is how the
+picture is served (below). The Upload limit is checked before the body is read. The bytes live in the `avatars` table (at most 512 KiB, one per account, deleted with it), not with the
 uploads, and are not counted in the upload quota. `UserInfo.avatar` is the first 16 hex of the SHA-256, so a new picture gets a
 new URL. It is served with the uploads' headers: the sniffed type, `nosniff`, `default-src 'none'; sandbox` and
 `Cross-Origin-Resource-Policy: same-origin`. Tests: `tests/avatars.rs`, `avatars.rs` `avatar_mime_rules`.

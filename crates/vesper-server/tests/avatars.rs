@@ -8,10 +8,13 @@ use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use common::{ORIGIN, Session, TestServer, get, request};
 use serde_json::{Value, json};
 
+/// IHDR of a 256 x 256 picture.
+const IHDR_256: [u8; 13] = [0, 0, 1, 0, 0, 0, 1, 0, 8, 6, 0, 0, 0];
+
 fn png(extra: &[u8]) -> Vec<u8> {
     let mut b = b"\x89PNG\r\n\x1a\n".to_vec();
     for (kind, data) in [
-        (&b"IHDR"[..], &[1u8; 13][..]),
+        (&b"IHDR"[..], &IHDR_256[..]),
         (b"IDAT", extra),
         (b"IEND", b""),
     ] {
@@ -20,6 +23,13 @@ fn png(extra: &[u8]) -> Vec<u8> {
         b.extend(data);
         b.extend([0; 4]);
     }
+    b
+}
+
+/// A small png that says it is 20000 x 20000: it would unpack to 1.6 GB in every browser.
+fn bomb() -> Vec<u8> {
+    let mut b = png(&[0; 1000]);
+    b[16..24].copy_from_slice(&[0, 0, 0x4e, 0x20, 0, 0, 0x4e, 0x20]);
     b
 }
 
@@ -117,6 +127,7 @@ async fn non_images_svg_polyglots_and_oversize_are_refused() {
         (b"GIF89a\x01\0\x01\0\0\0\0;".to_vec(), "gif"),
         (after_iend, "html after the png"),
         (png(b"<script>alert(1)</script>"), "script inside the png"),
+        (bomb(), "png declaring 20000 x 20000"),
         (Vec::new(), "empty"),
     ] {
         let (s, v) = put(&t, bytes, &alice).await;
@@ -176,6 +187,9 @@ async fn upload_is_rate_limited() {
         (s, v["code"].as_str()),
         (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited"))
     );
+    // Limited before the body is read: an oversize body is a 429 too, not a 413.
+    let (s, _) = put(&t, png(&vec![7; 600 * 1024]), &alice).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]
