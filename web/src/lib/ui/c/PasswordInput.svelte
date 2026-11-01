@@ -40,7 +40,7 @@
     border-radius: var(--radius-sm);
     color: var(--fg-2);
     font-size: 12px;
-    font-weight: 500;
+    font-weight: var(--weight-ui);
   }
   .show:hover { background: var(--bg-hover); color: var(--fg); }
   .show[aria-pressed='true'] { background: var(--bg-selected); color: var(--fg); }

@@ -109,7 +109,7 @@
       </Field>
     {:else}
       <div class="flex flex-col gap-1.5">
-        <div class="text-sm font-medium text-fg">Speaker</div>
+        <div class="text-sm font-ui text-fg">Speaker</div>
         <p class="text-fg-2">–</p>
         <p class="text-xs text-fg-3">Your browser cannot pick a speaker. Sound plays on the system output.</p>
       </div>

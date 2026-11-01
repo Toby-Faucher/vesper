@@ -24,11 +24,11 @@
 <dl class="flex flex-col">
   {#each SHORTCUTS as d, i (i)}{@render row(d.label, keysFor(d, mac))}{/each}
 </dl>
-<h4 class="mt-4 flex h-7 items-center text-xs font-medium text-fg-3">In the switcher, start with</h4>
+<h4 class="mt-4 flex h-7 items-center text-xs text-fg-3">In the switcher, start with</h4>
 <dl class="flex flex-col">
   {#each FILTERS as [k, label] (k)}{@render row(label, [k, 'Space'])}{/each}
 </dl>
-<h4 class="mt-4 flex h-7 items-center text-xs font-medium text-fg-3">In the messages</h4>
+<h4 class="mt-4 flex h-7 items-center text-xs text-fg-3">In the messages</h4>
 <dl class="flex flex-col">
   {#each MESSAGES as [label, keys] (label)}{@render row(label, keys)}{/each}
 </dl>

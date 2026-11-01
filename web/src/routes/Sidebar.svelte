@@ -49,7 +49,7 @@
   </div>
 
   <nav aria-label="Rooms" class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-    <h2 class="flex h-7 items-center px-2 text-xs font-medium text-fg-3">Rooms</h2>
+    <h2 class="flex h-7 items-center px-2 text-xs text-fg-3">Rooms</h2>
     {#if rooms.length}
       <ul class="flex flex-col gap-px">
         {#each rooms as room (room.id)}

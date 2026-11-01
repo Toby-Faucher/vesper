@@ -24,10 +24,10 @@
 
 <div class="flex flex-col gap-1.5">
   {#if value === undefined}
-    <label for={id} class="text-sm font-medium text-fg">{label}</label>
+    <label for={id} class="text-sm font-ui text-fg">{label}</label>
   {:else}
     <div class="flex items-baseline justify-between gap-4">
-      <label for={id} class="text-sm font-medium text-fg">{label}</label>
+      <label for={id} class="text-sm font-ui text-fg">{label}</label>
       <span class="text-sm text-fg-2 tabular-nums" aria-hidden="true">{value}</span>
     </div>
   {/if}

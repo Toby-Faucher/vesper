@@ -96,7 +96,7 @@
     background: color-mix(in oklab, var(--bg-app) 88%, transparent);
     color: var(--fg);
     font-size: 14px;
-    font-weight: 500;
+    font-weight: var(--weight-ui);
     line-height: 20px;
     pointer-events: none;
   }

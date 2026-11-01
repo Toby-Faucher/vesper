@@ -157,7 +157,7 @@
 <div id="{uid}-list" role="listbox" aria-label="Results" class="min-h-0 flex-1 overflow-y-auto p-2" class:hidden={!results.length}>
   {#each groups as g, n (g.kind)}
     <div role="group" aria-labelledby="{uid}-g-{g.kind}">
-      <div id="{uid}-g-{g.kind}" role="presentation" class="flex h-7 items-center px-2 text-xs font-medium text-fg-3" class:mt-2={n > 0}>{GROUP[g.kind]}</div>
+      <div id="{uid}-g-{g.kind}" role="presentation" class="flex h-7 items-center px-2 text-xs text-fg-3" class:mt-2={n > 0}>{GROUP[g.kind]}</div>
       {#each g.rows as { it, i } (it.kind + it.id)}
         {@const u = it.kind === 'room' ? session.state.unread[Number(it.id)] : undefined}
         {@const user = it.kind === 'person' ? session.state.users[it.id] : undefined}
@@ -223,7 +223,7 @@
     background: var(--accent-subtle);
     color: var(--accent-fg);
     font-size: 14px;
-    font-weight: 500;
+    font-weight: var(--weight-ui);
   }
   .lead { display: flex; width: 20px; justify-content: center; color: var(--fg-3); }
   .meta { color: var(--fg-3); }

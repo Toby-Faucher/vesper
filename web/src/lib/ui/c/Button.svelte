@@ -50,7 +50,7 @@
     gap: 6px;
     border: 1px solid transparent;
     border-radius: var(--radius);
-    font-weight: 500;
+    font-weight: var(--weight-ui);
     white-space: nowrap;
     user-select: none;
     transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);

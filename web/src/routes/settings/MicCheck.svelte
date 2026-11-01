@@ -114,7 +114,7 @@
 {/if}
 
 <div class="flex flex-col gap-1.5">
-  <div class="text-sm font-medium text-fg" aria-hidden="true">Input level</div>
+  <div class="text-sm font-ui text-fg" aria-hidden="true">Input level</div>
   <Meter db={levelDb} marker={marker ? settings.vad.thresholdDb : undefined} />
   {#if hint === 'clipping'}<p class="text-xs text-warn">Too loud: the signal is clipping. Lower input gain.</p>{/if}
   {#if hint === 'too-quiet'}<p class="text-xs text-warn">Very quiet or silent. Speak, check the mic, or try a little input boost.</p>{/if}

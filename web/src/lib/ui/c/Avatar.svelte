@@ -46,7 +46,7 @@
     border-radius: 50%;
     background: var(--c);
     color: var(--on-avatar);
-    font-weight: 500;
+    font-weight: var(--weight-ui);
     user-select: none;
   }
   .av::before {

@@ -378,7 +378,7 @@
     margin: 16px 16px 0 68px;
     color: var(--fg-3);
     font-size: 12px;
-    font-weight: 500;
+    font-weight: var(--weight-ui);
     line-height: 16px;
   }
   .day::after { content: ''; flex: 1; height: 1px; background: var(--line-subtle); }
@@ -393,7 +393,7 @@
   }
   .new.gone { height: 0; margin-top: 0; overflow: hidden; opacity: 0; }
   .new .line { flex: 1; height: 1px; background: var(--accent-line); }
-  .new .label { color: var(--accent-fg); font-size: 12px; font-weight: 500; line-height: 16px; }
+  .new .label { color: var(--accent-fg); font-size: 12px; font-weight: var(--weight-ui); line-height: 16px; }
   .mark {
     padding: 0 8px;
     border-radius: var(--radius-sm);

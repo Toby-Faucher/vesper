@@ -45,7 +45,7 @@
 <style>
   .row { color: var(--fg-2); transition: background-color var(--dur-1) var(--ease-out); }
   .row:hover { background: var(--bg-hover); }
-  .row.unread { color: var(--fg); font-weight: 500; }
+  .row.unread { color: var(--fg); font-weight: var(--weight-strong); }
   .row.current { background: var(--bg-selected); color: var(--fg); }
   /* tertiary on the sidebar and on hover; never on the selected surface (4.26:1), where it steps up to --fg-2 */
   .meta { color: var(--fg-3); }

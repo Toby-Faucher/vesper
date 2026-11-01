@@ -141,7 +141,7 @@
     {#if created}
       <div class="created" role="group" aria-label="New invite link">
         <div class="flex flex-col gap-1.5">
-          <label for="invite-link" class="text-sm font-medium text-fg">Invite link</label>
+          <label for="invite-link" class="text-sm font-ui text-fg">Invite link</label>
           <div class="flex gap-2">
             <input id="invite-link" bind:this={linkEl} value={created.url} readonly onfocus={(e) => e.currentTarget.select()}
               aria-describedby="invite-once" class="control h-8 min-w-0 flex-1 px-2.5 font-mono text-xs" />

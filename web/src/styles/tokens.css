@@ -27,6 +27,9 @@
   --avatar-5: #31c3b5; --avatar-6: #41bae4; --avatar-7: #6db0f4; --avatar-8: #e68aaf;
   --on-avatar: var(--gray-1);
   /* type, shape, motion */
+  /* weights: names, headings and unread rooms use strong (600: Segoe UI and Liberation Sans have no 500 face, so 500
+     drew as regular and the hierarchy went flat); buttons, labels and table heads stay at ui (500, regular there) */
+  --weight-strong: 600; --weight-ui: 500;
   --font-sans: ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif,
     'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
   --font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;

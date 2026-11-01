@@ -243,7 +243,7 @@
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <div bind:this={list} role="region" aria-label="Search results" class="px-2 pb-2" onkeydown={onListKey}>
         {#each groups as g (g.day)}
-          <h3 class="flex h-7 items-center px-2 text-xs font-medium text-fg-3">{g.day}</h3>
+          <h3 class="flex h-7 items-center px-2 text-xs text-fg-3">{g.day}</h3>
           {#each g.hits as h (h.message.id)}
             {@const a = author(h.message.author_id)}
             <button type="button" class="hit" onclick={() => go(h)}>

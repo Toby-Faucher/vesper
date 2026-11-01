@@ -7,7 +7,7 @@
 </script>
 
 <fieldset>
-  <legend class="mb-2 text-sm font-medium text-fg">Colour</legend>
+  <legend class="mb-2 text-sm font-ui text-fg">Colour</legend>
   <div class="flex gap-2.5" style:--gap={gap}>
     {#each SLOT_HEX as _, i (i)}
       <label class="swatch" style:--c="var(--avatar-{i + 1})">

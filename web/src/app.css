@@ -22,6 +22,7 @@
   --text-base: 14px; --text-base--line-height: 20px; --text-lg: 16px; --text-lg--line-height: 24px;
   --text-xl: 20px; --text-xl--line-height: 28px; --text-2xl: 24px; --text-2xl--line-height: 32px;
   --radius-md: var(--radius);
+  --font-weight-medium: var(--weight-strong); --font-weight-ui: var(--weight-ui);
 }
 
 @layer base {
@@ -62,13 +63,13 @@
     transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
   }
   .mini-x { width: 24px; height: 24px; }
-  .mini-act { height: 28px; gap: 6px; padding: 0 8px; color: var(--fg); font-size: 12px; line-height: 16px; font-weight: 500; }
+  .mini-act { height: 28px; gap: 6px; padding: 0 8px; color: var(--fg); font-size: 12px; line-height: 16px; font-weight: var(--weight-ui); }
   .mini-act.lined { height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; }
   .mini-x:hover, .mini-act:hover { background: var(--bg-hover); color: var(--fg); }
   .mini-act.lined:hover { border-color: var(--line-strong); }
   /* The admin tables (Invites, Members, Rooms). In this layer, so a text colour utility on a cell wins. */
   .tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 20px; }
-  .tbl th { height: 32px; padding: 0 8px; border-bottom: 1px solid var(--line); color: var(--fg-2); font-weight: 500; text-align: left; white-space: nowrap; }
+  .tbl th { height: 32px; padding: 0 8px; border-bottom: 1px solid var(--line); color: var(--fg-2); font-weight: var(--weight-ui); text-align: left; white-space: nowrap; }
   .tbl td { height: 48px; padding: 4px 8px; border-bottom: 1px solid var(--line-subtle); color: var(--fg); }
   .tbl :is(th, td):first-child { padding-left: 12px; }
 }
