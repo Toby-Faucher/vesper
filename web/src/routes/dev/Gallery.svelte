@@ -1,5 +1,8 @@
 <script lang="ts">
   // Dev-only page at /_gallery: every role, the type scale, radii and the focus ring. The screenshot scene `tokens` shoots it.
+  // /_gallery?primitives shows the components in lib/ui/c instead (scene `gallery`).
+  import Primitives from './Primitives.svelte';
+  const primitives = new URLSearchParams(location.search).has('primitives');
   const groups: { title: string; kind: 'fill' | 'line' | 'text'; roles: string[] }[] = [
     { title: 'Surfaces', kind: 'fill', roles: ['--bg-app', '--bg-sidebar', '--bg-raised', '--bg-element', '--bg-hover', '--bg-selected'] },
     { title: 'Lines', kind: 'line', roles: ['--line-subtle', '--line', '--line-strong'] },
@@ -16,10 +19,23 @@
 </script>
 
 <main class="mx-auto max-w-6xl space-y-8 p-8">
-  <header class="space-y-1">
-    <h1 class="text-xl font-medium">Tokens</h1>
-    <p class="text-fg-2">Style <code class="font-mono text-xs">vesper</code>. Components use these roles only.</p>
+  <header class="flex items-end justify-between gap-8">
+    <div class="space-y-1">
+      <h1 class="text-xl font-medium">{primitives ? 'Primitives' : 'Tokens'}</h1>
+      <p class="text-fg-2">
+        {#if primitives}The components in <code class="font-mono text-xs">lib/ui/c</code>, in their states.
+        {:else}Style <code class="font-mono text-xs">vesper</code>. Components use these roles only.{/if}
+      </p>
+    </div>
+    <nav class="flex gap-4 text-sm">
+      <a href="/_gallery" class="text-fg underline" aria-current={!primitives ? 'page' : undefined}>Tokens</a>
+      <a href="/_gallery?primitives" class="text-fg underline" aria-current={primitives ? 'page' : undefined}>Primitives</a>
+    </nav>
   </header>
+
+  {#if primitives}
+    <Primitives />
+  {:else}
 
   {#each groups as g (g.title)}
     <section class="space-y-3">
@@ -87,4 +103,5 @@
       </div>
     </div>
   </section>
+  {/if}
 </main>

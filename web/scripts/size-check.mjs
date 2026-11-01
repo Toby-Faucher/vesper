@@ -7,7 +7,9 @@ import { gzipSync } from 'node:zlib';
 // Measured on 2026-10-30: js 29.5 kB, css 2.8 kB gzip. Budgets were those plus about 25 percent.
 // Raised on 2026-11-01 for the chat panel (js 41.4 kB, css 3.4 kB): about 10 percent headroom.
 // Raised on 2026-11-01 for the design tokens and base styles (css 4.4 kB): about 10 percent headroom.
-const BUDGET_GZIP_KB = { js: 45, css: 5 };
+// Raised on 2026-11-01 for the primitives (css 5.3 kB, of which about 0.4 kB are classes only the dev gallery uses, since
+// Tailwind scans routes/dev too): about 10 percent headroom. The components are not imported yet, so js is unchanged.
+const BUDGET_GZIP_KB = { js: 45, css: 5.8 };
 
 const dir = new URL('../dist/assets/', import.meta.url);
 const sums = { js: 0, css: 0 };

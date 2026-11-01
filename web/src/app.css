@@ -37,6 +37,21 @@
   }
 }
 
+/* The text control look shared by TextInput and Select (lib/ui/c). */
+@layer components {
+  .control {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-element);
+    color: var(--fg);
+    transition: border-color var(--dur-1) var(--ease-out);
+  }
+  .control::placeholder { color: var(--fg-3); }
+  .control:hover:enabled { border-color: var(--line-strong); }
+  .control[aria-invalid='true'] { border-color: var(--danger-fg); }
+  .control:disabled { cursor: not-allowed; border-color: var(--line-subtle); color: var(--fg-disabled); }
+}
+
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;

@@ -1,7 +1,7 @@
 // Screenshot scenes for review: node e2e/shots.mjs [names...] (npm run shots -- login room). All scenes when none are named.
 // Starts the release server like the e2e tests (needs ../target/release/vesper-server and dist/), signs up the owner alice
 // and the member bob, seeds three rooms and 40 messages, then writes e2e/shots/<name>.png at 1440x900, full page.
-// The `tokens` scene shoots /_gallery from a Vite dev server on a spare port, since the build leaves the gallery out.
+// The `tokens` and `gallery` scenes shoot /_gallery from a Vite dev server on a spare port, since the build leaves it out.
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -13,8 +13,9 @@ const out = fileURLToPath(new URL('shots/', import.meta.url));
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
 const scenes = new Map();
-// fn({ alice, bob, api, open }) returns the page to shoot. alice and bob are signed-in { page, errors }; api(page, method, path,
-// body) calls the API from that page (cookie and Origin as the app sends them); open(url) is a fresh signed-out page.
+// fn({ alice, bob, api, open, shot }) returns the page to shoot. alice and bob are signed-in { page, errors }; api(page, method,
+// path, body) calls the API from that page (cookie and Origin as the app sends them); open(url) is a fresh signed-out page.
+// A scene that takes more than one picture calls shot(page, name, { fullPage }) itself and returns nothing.
 const scene = (name, fn) => scenes.set(name, fn);
 
 async function api(page, method, path, body) {
@@ -45,16 +46,141 @@ async function joinVoice(page) {
   await page.getByRole('button', { name: 'Leave' }).waitFor();
 }
 
+// The Vite dev server for the gallery pages, started once on a spare port and stopped at the end.
+let dev;
+function devServer() {
+  dev ??= (async () => {
+    const port = await new Promise((r) => { const s = createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+    const web = fileURLToPath(new URL('..', import.meta.url));
+    const vite = spawn('node_modules/.bin/vite', ['--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: web, stdio: 'ignore' });
+    stops.push(() => vite.kill('SIGTERM'));
+    const url = `http://127.0.0.1:${port}`;
+    for (let i = 0; i < 80 && !(await fetch(url).then((r) => r.ok, () => false)); i++) await sleep(250);
+    return url;
+  })();
+  return dev;
+}
+
 scene('tokens', async ({ open }) => {
-  const port = await new Promise((r) => { const s = createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
-  const web = fileURLToPath(new URL('..', import.meta.url));
-  const vite = spawn('node_modules/.bin/vite', ['--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: web, stdio: 'ignore' });
-  stops.push(() => vite.kill('SIGTERM'));
-  const url = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 80 && !(await fetch(url).then((r) => r.ok, () => false)); i++) await sleep(250);
-  const page = await open(`${url}/_gallery`);
+  const page = await open(`${await devServer()}/_gallery`);
   await page.getByRole('heading', { name: 'Tokens' }).waitFor();
   return page;
+});
+
+// The primitives. Checks the keyboard paths first (focus ring on every Tab stop, dialog and menu focus, Esc, arrows), then
+// forces :hover and :focus-visible on the [data-force] examples and takes `gallery`, then opens a dialog with a menu inside
+// it and takes `gallery-open`.
+scene('gallery', async ({ open, shot }) => {
+  const page = await open(`${await devServer()}/_gallery?primitives`);
+  await page.getByRole('heading', { name: 'Primitives' }).waitFor();
+  const must = (ok, what) => { if (!ok) throw new Error(`gallery: ${what}`); };
+  const focused = () => page.evaluate(() => { const a = document.activeElement; return a?.getAttribute('aria-label') || a?.textContent?.trim() || a?.tagName; });
+  const expectFocus = async (name, what) => { const f = await focused(); must(f === name, `${what}: focus on ${JSON.stringify(f)}, want ${JSON.stringify(name)}`); };
+
+  // Every Tab stop shows an outline. Stops once focus comes back to the first element.
+  const tabStops = [];
+  for (let i = 0; i < 300; i++) {
+    await page.keyboard.press('Tab');
+    const s = await page.evaluate(() => {
+      const a = document.activeElement;
+      if (!a || a === document.body) return null;
+      const cs = getComputedStyle(a);
+      return { id: a.outerHTML.slice(0, 80), name: a.getAttribute('aria-label') || a.textContent?.trim().slice(0, 30) || a.tagName, outline: cs.outlineStyle !== 'none' && cs.outlineWidth !== '0px' };
+    });
+    if (!s) continue;
+    if (tabStops.length && s.id === tabStops[0].id) break;
+    tabStops.push(s);
+  }
+  const bare = tabStops.filter((s) => !s.outline).map((s) => s.name);
+  must(tabStops.length > 30, `only ${tabStops.length} Tab stops`);
+  must(!bare.length, `no focus outline on ${bare.join(', ')}`);
+  console.log(`gallery: ${tabStops.length} Tab stops, each with a focus ring`);
+
+  // Dialog: focus moves in, Esc closes, focus returns; a backdrop click closes too.
+  const opener = page.getByRole('button', { name: 'Create invite' });
+  const dialog = page.getByRole('dialog', { name: 'Create an invite' });
+  await opener.click();
+  await dialog.waitFor();
+  must(await dialog.evaluate((d) => d.contains(document.activeElement)), 'dialog did not take focus');
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'hidden' });
+  await expectFocus('Create invite', 'after Esc on the dialog');
+  await opener.click();
+  await dialog.waitFor();
+  await page.mouse.click(8, 8);
+  await dialog.waitFor({ state: 'hidden' });
+  await expectFocus('Create invite', 'after a backdrop click');
+
+  // Menu: roving focus, typeahead, Esc, Enter, Tab, and the trigger toggles it.
+  const trigger = page.getByRole('button', { name: 'Message actions' });
+  const menu = page.getByRole('menu', { name: 'Message actions' });
+  must((await trigger.getAttribute('aria-haspopup')) === 'menu', 'menu trigger has no aria-haspopup');
+  await trigger.click();
+  await menu.waitFor();
+  must((await trigger.getAttribute('aria-expanded')) === 'true', 'aria-expanded not true while open');
+  await expectFocus('Reply', 'menu open');
+  for (const [key, want] of [['ArrowDown', 'Edit'], ['End', 'Delete'], ['ArrowDown', 'Reply'], ['ArrowUp', 'Delete'], ['ArrowUp', 'Copy link'], ['Home', 'Reply'], ['p', 'Pin'], ['c', 'Copy link']]) {
+    await page.keyboard.press(key);
+    await expectFocus(want, `menu after ${key}`);
+  }
+  await page.keyboard.press('Escape');
+  await menu.waitFor({ state: 'hidden' });
+  await expectFocus('Message actions', 'after Esc on the menu');
+  // The toggle event that reports the close is async: wait for the attribute.
+  await page.waitForFunction(() => document.querySelector('[aria-label="Message actions"]')?.getAttribute('aria-expanded') === 'false', null, { timeout: 2000 })
+    .catch(() => must(false, 'aria-expanded not false after close'));
+  await page.keyboard.press('Enter');
+  await menu.waitFor();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await menu.waitFor({ state: 'hidden' });
+  await page.getByText('Last action: Edit').waitFor();
+  await expectFocus('Message actions', 'after choosing an item');
+  await page.keyboard.press('Space');
+  await menu.waitFor();
+  await page.keyboard.press('Tab');
+  await menu.waitFor({ state: 'hidden' });
+  await expectFocus('Message actions', 'after Tab in the menu');
+  await trigger.click();
+  await menu.waitFor();
+  await trigger.click();
+  await menu.waitFor({ state: 'hidden' });
+
+  // Popover: Esc closes and focus returns.
+  const card = page.getByRole('button', { name: 'Show person card' });
+  await card.click();
+  await page.getByRole('dialog', { name: 'bob' }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
+  await expectFocus('Show person card', 'after Esc on the popover');
+
+  // Closed layers, with hover and focus forced on the [data-force] examples.
+  await page.evaluate(() => { document.activeElement?.blur(); scrollTo(0, 0); });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('DOM.enable');
+  await cdp.send('CSS.enable');
+  const { root } = await cdp.send('DOM.getDocument', { depth: -1 });
+  for (const kind of ['hover', 'focus-visible']) {
+    const { nodeIds } = await cdp.send('DOM.querySelectorAll', { nodeId: root.nodeId, selector: `[data-force="${kind}"]` });
+    for (const nodeId of nodeIds) await cdp.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: [kind] });
+  }
+  await sleep(700); // the tooltip shows after 400 ms
+  await shot(page, 'gallery');
+
+  // Open layers: the dialog with its presets menu open inside it.
+  await opener.click();
+  await dialog.waitFor();
+  await page.getByRole('button', { name: 'Presets' }).click();
+  await page.getByRole('menu', { name: 'Presets' }).waitFor();
+  await sleep(300); // the enter motion
+  await shot(page, 'gallery-open', { fullPage: false }); // a full-page capture stretches the page under the fixed backdrop
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await page.getByRole('menu', { name: 'Presets' }).waitFor({ state: 'hidden' });
+  must(await dialog.isVisible(), 'choosing in the inner menu closed the dialog');
+  await expectFocus('Presets', 'after the inner menu');
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'hidden' });
 });
 
 scene('login', async ({ open }) => {
@@ -128,11 +254,14 @@ try {
     await api(from.page, 'POST', `/api/rooms/${general.id}/messages`, { body: LINES[i % LINES.length] });
   }
 
-  for (const name of run) {
-    const page = await scenes.get(name)({ alice, bob, api, open });
+  const shot = async (page, name, { fullPage = true } = {}) => {
     const path = `${out}${name}.png`;
-    await page.screenshot({ path, fullPage: true });
+    await page.screenshot({ path, fullPage });
     console.log(path);
+  };
+  for (const name of run) {
+    const page = await scenes.get(name)({ alice, bob, api, open, shot });
+    if (page) await shot(page, name);
   }
   const errors = [alice, bob, ...fresh].flatMap((b) => b.errors);
   if (errors.length) {
