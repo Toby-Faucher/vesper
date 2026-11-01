@@ -1,5 +1,6 @@
 // Every animation in the app goes through this file, as one of the named presets below. anime.js's WAAPI build plays
-// them on the compositor; only opacity and transform move. Hover and press feedback stay plain CSS on the same tokens.
+// them on the compositor; only opacity and transform move (the jump flash fades a background colour). Hover and press
+// feedback stay plain CSS on the same tokens.
 // Under prefers-reduced-motion every preset is an 80 ms opacity fade (--dur-calm) and the jump flash is an instant change.
 import { waapi } from 'animejs/waapi';
 
@@ -8,7 +9,9 @@ export type Preset = 'pop' | 'rise' | 'swap' | 'row' | 'bump';
 // Each preset's start pose, its rest pose and its enter duration. An exit runs the poses backwards in --dur-out, ease-in.
 const PRESETS: Record<Preset, { move: [string, string]; dur: string; ease?: string }> = {
   pop: { move: ['scale(0.97)', 'scale(1)'], dur: '--dur-2' }, // popovers, menus, dialogs
-  rise: { move: ['translateY(8px)', 'translateY(0)'], dur: '--dur-3' }, // the call bar, a new message, the timeline pills
+  // the call bar, a new message, the timeline pills. Under 8 px: a rising last row grows the scroll height, and the timeline
+  // still counts a gap under 8 px as at the bottom (timeline.ts follows), so it keeps following.
+  rise: { move: ['translateY(6px)', 'translateY(0)'], dur: '--dur-3' },
   swap: { move: ['translateY(4px)', 'translateY(0)'], dur: '--dur-2' }, // another room in the timeline, a settings section
   row: { move: ['translateX(-8px)', 'translateX(0)'], dur: '--dur-2' }, // a person joins or leaves voice
   bump: { move: ['scale(0.6)', 'scale(1)'], dur: '--dur-2', ease: '--ease-pop' }, // a reaction or unread count comes or changes
@@ -36,27 +39,24 @@ export function enter(el: Element, p: Preset): void {
 }
 
 export function exit(el: Element, p: Preset): Promise<void> {
+  (el as HTMLElement).inert = true; // leaving: no focus, no click, no second Enter on it
   // persist: hold the end frame until the caller removes the element.
   const a = waapi.animate(el as HTMLElement, { ...frames(p, true), persist: true });
   // anime never completes a persisted animation (its then() would wait forever): wait for the browser's own instead.
   return Promise.all(a.animations.map((x) => x.finished)).then(() => undefined, () => undefined);
 }
 
-// An exit that does not hold the element: an inert copy in the same place fades out over the page, so the real one closes
-// at once and focus moves on now (dialogs, popovers). Call it while `el` is still shown.
+// An exit that does not hold the element: the real one closes at once, so focus moves on now, and an empty box with its
+// fill, border, corners and shadow fades out in its place (dialogs, popovers). Empty, so no text or field is ever in the
+// page twice. Call it while `el` is still shown.
 export function ghost(el: HTMLElement, p: Preset): void {
   const r = el.getBoundingClientRect();
   if (!r.width) return;
-  const g = el.cloneNode(true) as HTMLElement;
-  const fields = el.querySelectorAll<HTMLInputElement>('input, textarea');
-  g.querySelectorAll<HTMLInputElement>('input, textarea').forEach((x, i) => (x.value = fields[i]?.value ?? ''));
-  for (const n of [g, ...g.querySelectorAll('[id]')]) n.removeAttribute('id');
-  // An open <dialog> that joins the page takes the next Esc (its close watcher): the copy is closed and shown by style.
-  for (const n of [g, ...g.querySelectorAll('dialog[open]')]) n.removeAttribute('open');
-  g.removeAttribute('popover');
-  g.inert = true;
+  const { backgroundColor, border, borderRadius, boxShadow } = getComputedStyle(el);
+  const g = document.createElement('div');
+  g.dataset.ghost = '';
   g.setAttribute('aria-hidden', 'true');
-  Object.assign(g.style, { display: 'block', position: 'fixed', inset: 'auto', left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, margin: '0', pointerEvents: 'none', zIndex: '50' });
+  Object.assign(g.style, { position: 'fixed', left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, boxSizing: 'border-box', backgroundColor, border, borderRadius, boxShadow, pointerEvents: 'none', zIndex: '50' });
   document.body.append(g);
   void exit(g, p).then(() => g.remove());
 }

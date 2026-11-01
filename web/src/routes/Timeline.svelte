@@ -13,7 +13,7 @@
   import * as I from '../lib/ui/icons';
   import { enter, flash, motion } from '../lib/ui/motion';
   import { UI_MESSAGES } from '../lib/ui/messages';
-  import { firstUnreadInPage, follows, plain, rows } from '../lib/ui/timeline';
+  import { arrivals, firstUnreadInPage, follows, plain, rows } from '../lib/ui/timeline';
   import { lazy } from '../lib/ui/lazy';
   import type { Attachment } from '../lib/gen/Attachment';
   import Button from '../lib/ui/c/Button.svelte';
@@ -166,8 +166,7 @@
     if (last && lastId !== null && last.id > lastId) {
       const since = lastId;
       const fresh = msgs.filter((m) => m.id > since);
-      // Live arrivals rise in; history, a room open and a page of newer messages do not.
-      if (fresh.length <= 3) for (const x of fresh) { const el = document.getElementById(`m${x.id}`); if (el) enter(el, 'rise'); }
+      for (const id of arrivals(since, fresh.map((x) => x.id))) { const el = document.getElementById(`m${id}`); if (el) enter(el, 'rise'); }
       // A live message or two, not a page loaded with "Load newer".
       const m = fresh.length <= 3 ? fresh.reverse().find((x) => x.author_id !== myId && !x.deleted) : undefined;
       // A new node each time, so the same text twice ("ok", "ok") is read twice.

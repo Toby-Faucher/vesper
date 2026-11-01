@@ -185,7 +185,8 @@ the fix the same session gave 297 against 476 ms: the speaking ring faded in and
 call bar every frame while someone talked. The ring now toggles instantly, as the plan says.
 
 Motion everywhere (issue #26, 2026-11-01), browser mode, one session: origin/main 280, 241 and 257 ms (median 257); with the motion
-presets 258, 315 and 267 ms (median 267), so about 4 percent more, inside the 25 percent. No animation runs on a speaking change.
+presets 258, 315 and 267 ms (median 267), so about 4 percent more, inside the 25 percent. The runs vary more than that difference.
+That no animation runs on a speaking change is checked in `two-browser.mjs`, which counts `Element.animate` calls while alice talks.
 
 Debug-build note: `Cargo.toml` turns off debug assertions for `tract-core` only, because tract 0.21.4 trips one on the DeepFilterNet3 model
 ("duplicate name /convt3/Conv.bias"). Release builds are fine. Remove the override when tract moves past the bug.

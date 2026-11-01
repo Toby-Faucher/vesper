@@ -63,12 +63,12 @@ To see every role, the type scale, the radii and the focus ring, run `npm --pref
 ## Motion
 
 Every animation goes through [`web/src/lib/ui/motion.ts`](../web/src/lib/ui/motion.ts) as a named preset, played by anime.js's WAAPI
-build (`waapi.animate` only). Only `opacity` and `transform` move.
+build (`waapi.animate` only). Only `opacity` and `transform` move, except the jump flash, which fades a background colour.
 
 | Preset | Pose | Used by |
 | --- | --- | --- |
-| `pop` | scale 0.97, 160 ms | popovers, menus, dialogs (open, and an inert copy fading out on close) |
-| `rise` | 8 px up, 220 ms | the call bar, a new message, the timeline pills |
+| `pop` | scale 0.97, 160 ms | popovers, menus, dialogs (open, and an empty box with their fill fading out on close) |
+| `rise` | 6 px up, 220 ms (under the timeline's 8 px bottom margin, so it keeps following) | the call bar, a new message, the timeline pills |
 | `swap` | 4 px up, 160 ms | the timeline when another room opens, a settings or admin section |
 | `row` | 8 px from the left, 160 ms | a person joining or leaving voice |
 | `bump` | scale 0.6 with a small overshoot, 160 ms | a reaction coming, going or changing its count; a sidebar unread count |
@@ -80,7 +80,8 @@ Rules: under `prefers-reduced-motion` every preset is an 80 ms opacity fade, and
 animates on a speaking change; the ring toggles instantly (a fade once cost about 60 percent more CPU in a call). History, a room open and
 "Load older" do not animate; only live arrivals do, three at most. The rooms, counts and people that come with the first hello appear
 at once (`settle()`), and at most three transitions start in one task. A dialog or popover closes at once, so focus moves on; the fading
-copy is inert and hidden from screen readers. Nothing with `role="status"` animates its text. Nothing in the composer moves.
+box is empty (no text twice in the page) and hidden from screen readers. A leaving element is inert at once, so it takes no focus,
+click or second Enter. Nothing with `role="status"` animates its text. Typing never animates: the composer's text and caret stay put.
 
 ## Components
 

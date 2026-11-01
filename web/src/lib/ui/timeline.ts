@@ -152,3 +152,13 @@ export function typingLine(names: string[]): string {
  * and the observer is about to put it back at the bottom, so it keeps what it was.
  */
 export const follows = (was: boolean, gap: number, resized: boolean) => gap < 8 || (resized && was);
+
+/**
+ * The messages that rise in after the list changed: live arrivals only, three at most. None on a room open (`since` is
+ * null), none on "Load older" (nothing newer than `since`), none for a page of newer messages (more than three).
+ */
+export function arrivals(since: number | null, ids: number[]): number[] {
+  if (since === null) return [];
+  const fresh = ids.filter((id) => id > since);
+  return fresh.length <= 3 ? fresh : [];
+}
