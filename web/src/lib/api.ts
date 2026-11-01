@@ -4,6 +4,7 @@ export class ApiFailure extends Error {
   constructor(
     public status: number,
     public code: ApiErrorCode,
+    public detail = '', // the server's English message: only for telling apart two causes of one code
   ) {
     super(`${status} ${code}`);
   }
@@ -19,8 +20,8 @@ export async function api<T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!r.ok) {
-    const code = await r.json().then((e) => e?.code, () => undefined);
-    throw new ApiFailure(r.status, typeof code === 'string' ? (code as ApiErrorCode) : 'internal');
+    const e = await r.json().catch(() => undefined);
+    throw new ApiFailure(r.status, typeof e?.code === 'string' ? (e.code as ApiErrorCode) : 'internal', typeof e?.message === 'string' ? e.message : '');
   }
   return r.status === 204 ? (undefined as T) : r.json();
 }

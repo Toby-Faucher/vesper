@@ -10,7 +10,7 @@ describe('api', () => {
     vi.stubGlobal('fetch', respond(429, { code: 'rate_limited', message: 'slow down' }));
     const e = await api('POST', '/api/login', { username: 'a', password: 'test-password-1' }).catch((x) => x);
     expect(e).toBeInstanceOf(ApiFailure);
-    expect(e).toMatchObject({ status: 429, code: 'rate_limited' });
+    expect(e).toMatchObject({ status: 429, code: 'rate_limited', detail: 'slow down' });
     expect(errorText(e)).toBe('Too many tries. Wait a minute and try again.');
   });
   it('sends JSON with same-origin credentials and parses the reply', async () => {

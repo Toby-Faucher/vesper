@@ -33,7 +33,7 @@
   {/if}
   {@render children()}
   {#if error}
-    <p id="{id}-error" role="alert" class="text-xs text-danger">{error}</p>
+    <p id="{id}-error" role="alert" tabindex="-1" class="text-xs text-danger">{error}</p>
   {:else if help}
     <p id="{id}-help" class="text-xs text-fg-2">{help}</p>
   {/if}

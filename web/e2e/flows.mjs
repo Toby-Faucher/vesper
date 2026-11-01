@@ -345,24 +345,50 @@ try {
   alice.errors.push(...alice2.errors);
   console.log('account devices sign out: ok');
 
-  // Password: a wrong current password says so and empties that field; a right one changes it and says the others are
-  // signed out.
+  // Password: a wrong current password says so, empties all three fields and takes focus. A right one changes it: the
+  // server drops bob's other sessions (his second browser lands on the sign-in page), the old password no longer signs
+  // in and the new one does. 3 sign ins and 2 changes here: the login limit is 5 a minute per ip+user.
+  const bob2 = await browser('bob-2', []);
+  const bd = bob2.page;
+  const bobSignIn = async (password) => {
+    await bd.getByLabel('Username').fill('bob');
+    await bd.getByLabel('Password', { exact: true }).fill(password);
+    await bd.getByRole('button', { name: 'Sign in' }).click();
+  };
+  await bd.goto(`${ORIGIN}/login`);
+  await bobSignIn('test-password-1');
+  await signedIn(bd);
   await b.goto(`${ORIGIN}/settings/account`);
+  const bobRows = b.getByRole('list', { name: 'Signed-in devices' }).getByRole('listitem');
+  await bobRows.nth(1).waitFor();
   const pw = (label) => b.getByLabel(label, { exact: true });
-  await pw('Current password').fill('test-password-9');
-  await pw('New password').fill('test-password-2');
-  await pw('Confirm new password').fill('test-password-2');
-  await b.getByRole('button', { name: 'Change password' }).click();
+  const fillPw = async (old, next, confirm) => {
+    await pw('Current password').fill(old);
+    await pw('New password').fill(next);
+    await pw('Confirm new password').fill(confirm);
+    await b.getByRole('button', { name: 'Change password' }).click();
+  };
+  const pwFields = () => Promise.all(['Current password', 'New password', 'Confirm new password'].map((l) => pw(l).inputValue()));
+  await fillPw('test-password-9', 'test-password-2', 'test-password-2');
   await b.getByText('Your current password is not right.').waitFor();
-  assert.equal(await pw('Current password').inputValue(), '', 'the wrong current password stayed in the field');
-  await pw('Current password').fill('test-password-1');
-  await pw('Confirm new password').fill('test-password-3');
-  await b.getByRole('button', { name: 'Change password' }).click();
+  assert.deepEqual(await pwFields(), ['', '', ''], 'a password stayed in the form after a failed change');
+  assert.equal(await focusedText(b), 'Your current password is not right.', 'focus did not move to the error');
+  await fillPw('test-password-1', 'test-password-2', 'test-password-3');
   await b.getByText('The two new passwords are not the same.').waitFor();
+  assert.equal(await focusedText(b), 'The two new passwords are not the same.', 'focus did not move to the mismatch');
   await pw('Confirm new password').fill('test-password-2');
   await b.getByRole('button', { name: 'Change password' }).click();
   await b.getByText('Password changed. Your other devices were signed out.').waitFor();
-  assert.equal(await pw('New password').inputValue(), '');
+  assert.deepEqual(await pwFields(), ['', '', '']);
+  await bd.waitForURL(/\/login/);
+  await bd.getByText('Your session ended. Sign in again.').waitFor();
+  await bobRows.nth(1).waitFor({ state: 'detached' });
+  assert.equal(await bobRows.count(), 1, 'the other device is still listed');
+  await bobSignIn('test-password-1');
+  await bd.getByText('Wrong username or password.').waitFor();
+  await bobSignIn('test-password-2');
+  await signedIn(bd);
+  bob.errors.push(...bob2.errors);
   await b.getByRole('radio', { name: 'Blue' }).check();
   await b.getByRole('button', { name: 'Save' }).click();
   await b.getByRole('status').filter({ hasText: 'Saved.' }).waitFor();

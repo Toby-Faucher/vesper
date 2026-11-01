@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { ApiFailure, api, errorText } from '../../lib/api';
+  import { onMount, tick } from 'svelte';
+  import { api, errorText } from '../../lib/api';
   import { session } from '../../lib/session.svelte';
   import { SLOT_HEX, avatarSlot, profilePatch } from '../../lib/ui/avatar';
   import { UI_MESSAGES as M, relTime } from '../../lib/ui/messages';
+  import { type PwError, pwCheck, pwFailure } from './account';
   import Avatar from '../../lib/ui/c/Avatar.svelte';
   import Button from '../../lib/ui/c/Button.svelte';
   import Field from '../../lib/ui/c/Field.svelte';
@@ -43,27 +44,29 @@
   let newPw = $state('');
   let confirmPw = $state('');
   let changing = $state(false);
-  let pwError = $state<{ at: 'old' | 'new' | 'confirm' | 'form'; text: string } | null>(null);
+  let pwError = $state<PwError | null>(null);
   let pwDone = $state(false);
+  let pwForm: HTMLFormElement;
   async function changePassword(e: Event) {
     e.preventDefault();
     if (changing) return;
     pwDone = false;
-    const n = [...newPw].length; // the server counts characters, not UTF-16 units
-    if (n < 8 || n > 128) return void (pwError = { at: 'new', text: M.passwordShort });
-    if (newPw !== confirmPw) return void (pwError = { at: 'confirm', text: M.passwordMismatch });
-    pwError = null;
-    changing = true;
-    try {
-      await api('POST', '/api/me/password', { old: oldPw, new: newPw });
-      [oldPw, newPw, confirmPw, pwDone] = ['', '', '', true];
-      void loadDevices(); // the others are gone now
-    } catch (err) {
-      oldPw = '';
-      // 403: the session is fine, only the current password is wrong.
-      pwError = err instanceof ApiFailure && err.status === 403 ? { at: 'old', text: M.passwordWrong } : { at: 'form', text: errorText(err) };
-    } finally {
-      changing = false;
+    pwError = pwCheck(newPw, confirmPw);
+    if (!pwError) {
+      changing = true;
+      try {
+        await api('POST', '/api/me/password', { old: oldPw, new: newPw });
+        pwDone = true;
+        void loadDevices(); // the others are gone now
+      } catch (err) {
+        pwError = pwFailure(err);
+      } finally {
+        [oldPw, newPw, confirmPw, changing] = ['', '', '', false]; // done or failed, no password stays in the form
+      }
+    }
+    if (pwError) {
+      await tick();
+      pwForm.querySelector<HTMLElement>('[role=alert]')?.focus();
     }
   }
   const pwErr = (at: 'old' | 'new' | 'confirm') => (pwError?.at === at ? pwError.text : undefined);
@@ -82,14 +85,19 @@
       devicesFailed = true;
     }
   }
+  let revoking = $state<number | null>(null);
   async function signOut(d: Device) {
     if (d.current) return session.logout(); // like Log out: back to the sign-in page
+    if (revoking !== null) return; // one at a time: a second click would DELETE a row that is already gone
     revokeError = '';
+    revoking = d.id;
     try {
       await api('DELETE', `/api/sessions/${d.id}`);
       devices = devices!.filter((x) => x.id !== d.id);
     } catch {
       revokeError = M.signOutFailed;
+    } finally {
+      revoking = null;
     }
   }
   const dateOf = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -120,7 +128,7 @@
 
   <section role="group" aria-labelledby="account-password">
     <h3 id="account-password" class="text-base font-medium text-fg">Password</h3>
-    <form onsubmit={changePassword} class="flex flex-col gap-4">
+    <form onsubmit={changePassword} bind:this={pwForm} class="flex flex-col gap-4">
       <input type="text" autocomplete="username" value={me.username} hidden readonly />
       <div class="flex max-w-80 flex-col gap-4">
         <Field label="Current password" error={pwErr('old')}>
@@ -137,7 +145,7 @@
         <Button type="submit" loading={changing}>Change password</Button>
         <p role="status" class="text-sm text-fg-2">{pwDone ? M.passwordChanged : ''}</p>
       </div>
-      {#if pwError?.at === 'form'}<p role="alert" class="-mt-2 text-sm text-danger">{pwError.text}</p>{/if}
+      {#if pwError?.at === 'form'}<p role="alert" tabindex="-1" class="-mt-2 text-sm text-danger">{pwError.text}</p>{/if}
     </form>
   </section>
 
@@ -166,7 +174,7 @@
                 {dateOf(d.created_at)}.
               </p>
             </div>
-            <Button size="sm" aria-describedby="device-{d.id}" onclick={() => signOut(d)}>Sign out</Button>
+            <Button size="sm" aria-describedby="device-{d.id}" loading={revoking === d.id} onclick={() => signOut(d)}>Sign out</Button>
           </li>
         {/each}
       </ul>
