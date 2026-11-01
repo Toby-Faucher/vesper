@@ -31,6 +31,19 @@ The "Not verified" list at the end says what was only read.
   starts over only after a socket stayed up for 10 s.
   It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). A `peer_left` with your
   own `user_id` ends the call in that tab; the socket stays open.
+- **The chat panel** (`web/src/routes/Chat.svelte`, store in `web/src/lib/chat.svelte.ts`) sits beside the voice controls and shows the room picked
+  in the room list. History, sends, edits, deletes, reactions, pins, read markers, uploads and search go over REST; new and changed messages and
+  typing come over the socket. A `message_updated` copy that is older than the one held (by `deleted`, then `edited_at`) is dropped, and after
+  every `hello` the shown room's newest page is fetched again and merged, so missed or reordered events heal. Reaction and pin changes carry no time,
+  so two racing ones keep the last received until that refetch. Unread counts come from `Hello.unread` and live events (`state.ts`); a room is
+  marked read when its newest message is on screen in a visible tab. Typing is sent at most every 3 s and shown for 5 s. Drafts are kept in memory
+  only. Search waits 300 ms after the last key and needs 2 characters.
+- **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed elements:
+  bold, italic, strike, inline code, fenced code, one level of `> ` quote, `@name` and bare `http`/`https` links. Anything else is text, so raw
+  HTML shows as typed. A link is kept only when `new URL` parses it as http or https with no user name or password, and its text is the full parsed
+  `href` (ASCII: other characters percent-encoded, hosts punycoded) so it cannot read differently from where it goes. Links get
+  `rel="noopener noreferrer nofollow"`, `target="_blank"` and `dir="ltr"`. No `{@html}`, `innerHTML` or similar sink exists in `web/src`
+  (`no-raw-html.test.ts` fails on one). The parser is one pass per line with a delimiter stack; a test parses 100k-character hostile inputs under 250 ms.
 
 ## Crates
 
@@ -365,6 +378,8 @@ Read from the code on 2026-10-30, not run:
 
 - Behaviour in real Chrome and Firefox, including the `ontrack` stream id and `replaceTrack` during a mode swap.
 - Everything in the SFU loop beyond its doc comments (`room.rs` forwarding, `client.rs` negotiation).
-- Text chat and rooms beyond a name: not built (spec "Build order").
+- Chat, uploads and search in the browser: verified only in headless Chromium by `npm --prefix web run e2e` (send with Markdown and raw HTML,
+  reply, edit, a PNG shown inline, search that skips a hidden room). Not run in Firefox or Safari; scroll anchoring, paste, typing, unread
+  badges and the reconnect refetch are unit-tested through the pure helpers only.
 - The accounts and admin REST API is built and tested in process only (`tests/accounts.rs`, `tests/admin.rs`). No real browser run, and no https run of the
   `Secure` `__Host-` cookie beyond the in-process test.

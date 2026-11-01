@@ -13,6 +13,7 @@
   import { MIC_QUIET, micSilence, type MicWarning } from '../lib/audio/mic-silence';
   import Settings from './Settings.svelte';
   import Diagnostics from './Diagnostics.svelte';
+  import Chat from './Chat.svelte';
   import type { DenoiseMode } from '../lib/audio/mode';
 
   let roomId = $state(session.state.rooms[0]?.id ?? 0); // the room picked in the list
@@ -201,6 +202,11 @@
 
   const myId = $derived(session.state.me?.user.user_id ?? '');
   const peers = $derived(inRoom(session.state.voice, joinedRoom ?? roomId).filter((p) => !(joined && p.user_id === myId)));
+  // The room list shows unread counts, then mentions: "general (3, 1 @)".
+  const badge = (id: number) => {
+    const u = session.state.unread[id];
+    return u?.unread ? ` (${u.unread}${u.mentions ? `, ${u.mentions} @` : ''})` : '';
+  };
   const joinedName = $derived(session.state.rooms.find((r) => r.id === joinedRoom)?.name ?? '');
 
   async function join(e: Event) {
@@ -278,7 +284,8 @@
   }
 </script>
 
-<main class="mx-auto max-w-sm space-y-4 p-6">
+<main class="mx-auto grid max-w-5xl gap-6 p-6 md:grid-cols-[20rem_1fr]">
+<div class="space-y-4">
   <div class="flex items-center gap-2 text-sm">
     <span class="flex-1">Signed in as {session.state.me?.user.display_name}</span>
     <button class="rounded bg-neutral-800 px-3 py-1" onclick={() => session.logout()}>Log out</button>
@@ -291,11 +298,11 @@
   {:else if !session.online}
     <p role="status" class="text-neutral-400">Connecting to the server...</p>
   {/if}
+  <select class="w-full rounded bg-neutral-900 p-2" aria-label="Room" bind:value={roomId}>
+    {#each session.state.rooms as r (r.id)}<option value={r.id}>{r.name}{badge(r.id)}</option>{/each}
+  </select>
   {#if !joined}
     <form onsubmit={join} class="space-y-3">
-      <select class="w-full rounded bg-neutral-900 p-2" aria-label="Room" bind:value={roomId}>
-        {#each session.state.rooms as r (r.id)}<option value={r.id}>{r.name}</option>{/each}
-      </select>
       <button class="w-full rounded bg-neutral-700 p-2" disabled={joining || !session.state.rooms.length}>
         {joining ? 'Joining...' : 'Join'}
       </button>
@@ -347,4 +354,6 @@
       </li>
     {/each}
   </ul>
+</div>
+{#if roomId}<Chat bind:roomId />{/if}
 </main>

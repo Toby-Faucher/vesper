@@ -97,7 +97,7 @@ Other test commands:
 | Command | What it covers |
 |---|---|
 | `scripts/check.sh dsp` | The denoiser tests (4 tests behind the `tract` feature, so a plain workspace run skips them) and the wasm build. Fetches the model if missing. |
-| `npm --prefix web run e2e` | Two headless Chromium browsers join one room; checks that the second one receives and hears the first one's audio. Then the UI flows test. The `e2e` CI job. See below. |
+| `npm --prefix web run e2e` | Two headless Chromium browsers join one room; checks that the second one receives and hears the first one's audio, then chat, upload and search. Then the UI flows test. The `e2e` CI job. See below. |
 | `node scripts/bench-wasm.mjs chromium` | Real-browser speed of the built denoiser (needs `web/public/dsp` and Playwright; `PW_PKG` points at a `package.json` that has it). Prints median, p95, max and RTF over 20 s. Add `firefox`, or a CPU throttle rate such as `4` (Chromium, main thread). |
 | `docs/testing/latency.md` | Load test (12 speakers), loopback delay, `tc netem` loss. Manual. |
 | `docs/testing/checkpoint.md` | The listening test against Discord. Manual, Toby signs off. |
@@ -116,7 +116,11 @@ npm --prefix web run e2e
 invite with `POST /api/invites`, signs bob up, and joins both to `general`.
 Those ports must be free. It opens two Chromium browsers with fake microphones: alice plays `web/e2e/fixtures/speech.wav`, bob uses the default fake
 device. It passes when bob's ICE is connected, his inbound audio packets and bytes rise, alice's speaking ring lights on bob's page, alice's inbound
-packets rise too (only that count: audio content is proven alice to bob through the speaking ring, not bob to alice), each page lists the other in the people list, and neither page throws. The test sets the denoise mode to `browser`, so it needs no wasm build. Its two variables are in [env.md](env.md#dev-machine-only).
+packets rise too (only that count: audio content is proven alice to bob through the speaking ring, not bob to alice), each page lists the other in the people list, and neither page throws.
+Then chat on the same pages: alice sends `hello **bob** <b>x</b>` and a link, bob sees a bold `bob`, the `<b>x</b>` as text and a link with
+`rel="noopener noreferrer nofollow"`; bob replies, alice edits, and bob sees both live. Alice attaches a 1x1 PNG built in the test (nothing committed)
+and bob's page shows it with `naturalWidth` 1. Alice makes a restricted room `secret` with a `hello` message: her search for `hello` finds 2 hits,
+bob's finds exactly his 1, and the hit jumps to the message. The test sets the denoise mode to `browser`, so it needs no wasm build. Its two variables are in [env.md](env.md#dev-machine-only).
 
 `web/e2e/flows.mjs` then starts a fresh server the same way and checks the UI in Chromium: a bad invite link, the invite code leaving the
 address bar, autocomplete attributes, an empty password field and focus on the error after a failed sign in or signup, force-mute (also

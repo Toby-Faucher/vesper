@@ -1,4 +1,5 @@
 import { ApiFailure, api } from './api';
+import { applyChatMsg, chat, resync } from './chat.svelte';
 import { Signaling } from './signaling';
 import { applyServerMsg, emptyState, type AppState } from './state';
 
@@ -61,6 +62,8 @@ function open(): void {
       session.online = true;
     }
     session.state = applyServerMsg(session.state, m);
+    chat.state = applyChatMsg(chat.state, m);
+    if (m.type === 'hello') void resync(); // events may have been missed while the socket was down
   });
   sig.onClose((byClient, code) => {
     if (session.sig !== sig) return;
@@ -107,6 +110,7 @@ function stop(): void {
 function toLogin(notice: string): void {
   stop();
   session.state = emptyState();
+  Object.assign(chat, { state: { rooms: {}, typing: {} }, active: null, drafts: {} }); // the next account sees none of it
   session.notice = notice;
   navigate('/login', true);
 }
