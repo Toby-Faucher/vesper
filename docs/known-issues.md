@@ -61,7 +61,8 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 
 - **A very slow first visit can still fall back.** The denoiser files (about 23 MB) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
 - **Not tried in real Chrome or Firefox.** Firefox may refuse a mic and AudioContext rate mismatch, which forces the browser fallback every time.
-- **The VAD threshold in Settings is display-only.** Nothing gates on it. DTX still drops silence. The UI says so. See [decision 0006](decisions/0006-quality-checkpoint-gate.md).
+- **The noise gate and the limiter work in DeepFilterNet mode only.** In browser and off mode the raw mic track is sent, so the gate switch does nothing there. With the gate on, the Settings meter shows the gated sound, so the noise under the marker is not visible; turn the gate off to set the marker.
+- **The gate and limiter are not blind-listened.** They were measured on synthetic signals and on denoised corpus speech (see [dev.md](dev.md#noise-gate-and-limiter-lab-check)), not heard by Toby.
 - **DTX applies at the next join.** The client cannot renegotiate it mid-call.
 - **A mic that ends mid-call has no "Retry microphone" button.** The status line says what happened, but you leave and rejoin to recover.
 - **Stale mode reason on unmute.** The capture watcher can replay an old fallback reason after an unmute.

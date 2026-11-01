@@ -187,6 +187,24 @@ call bar every frame while someone talked. The ring now toggles instantly, as th
 Debug-build note: `Cargo.toml` turns off debug assertions for `tract-core` only, because tract 0.21.4 trips one on the DeepFilterNet3 model
 ("duplicate name /convt3/Conv.bias"). Release builds are fine. Remove the override when tract moves past the bug.
 
+### Noise gate and limiter lab check
+
+`web/src/lib/audio/dynamics.test.ts` runs in `npm test` on synthetic signals. `web/scripts/gate-lab.test.mjs` repeats the gate and
+limiter checks on real speech and is skipped unless both variables are set. It needs the v2 corpus ([research-loop.md](research-loop.md))
+and a release `audiolab`:
+
+```bash
+touch /tmp/empty.toml   # the shipped denoiser settings
+target/release/audiolab listen --config /tmp/empty.toml --items dev-0016,dev-0022 --out /tmp/gate-lab \
+  --corpus research/corpus48/built --model crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz
+cd web && VESPER_LAB_DIR=/tmp/gate-lab VESPER_CORPUS_DIR=../research/corpus48/built/dev \
+  npx vitest run scripts/gate-lab.test.mjs --silent=false
+```
+
+It replays each denoised item through `DenoiseCore` as the worker's replies, sets the marker 6 dB over the lead-in noise peak and prints,
+per item, the speech level change, word onsets, the lead-in noise cut and the largest sample step. The limiter part boosts the clean
+speech 6 and 12 dB over full scale and compares it with a hard clip.
+
 ## Memory on a small machine
 
 A release build of `tract`, `str0m` and the wasm target is heavy. `scripts/capped.sh` runs a command in a systemd user scope with a memory cap
