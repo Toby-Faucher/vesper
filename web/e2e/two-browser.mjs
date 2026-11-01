@@ -1,6 +1,7 @@
 // Two-browser voice and chat test. Starts the release server on a throwaway data dir, makes the owner invite with the CLI, signs
 // alice up, has her invite bob through the API, and joins both into `general` with fake microphones. Checks that audio
 // flows both ways (bob to alice only as rising packets), that bob hears alice, and that each sees the other in the people list.
+// Then bob leaves and rejoins three ways while alice stays, and each must hear the other again (#45).
 // Then chat: Markdown and raw HTML shown safely, a reply, an edit, a PNG upload shown inline, the upload tray, drop, image
 // boxes and the viewer, and the search dialog, which never returns a message from a room bob cannot see. Stops the server.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
@@ -57,12 +58,47 @@ const inbound = (page) =>
     return null;
   });
 
+// Inbound audio summed over every receiver of the open connections: after a rejoin the old stopped one stays frozen.
+const inboundAll = (page) =>
+  page.evaluate(async () => {
+    const sum = { packets: 0, bytes: 0 };
+    for (const pc of window.__pcs.filter((p) => p.connectionState !== 'closed'))
+      for (const r of (await pc.getStats()).values())
+        if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+          sum.packets += r.packetsReceived;
+          sum.bytes += r.bytesReceived;
+        }
+    return sum;
+  });
+
+// Records the loudest sample of each remote track the app plays (a receiver's track), in window.__peak by track id.
+const meter = () => {
+  window.__peak = {};
+  const make = AudioContext.prototype.createMediaStreamSource;
+  AudioContext.prototype.createMediaStreamSource = function (stream) {
+    const src = make.call(this, stream);
+    const t = stream.getAudioTracks()[0];
+    if (window.__pcs.some((pc) => pc.getReceivers().some((r) => r.track === t))) {
+      const sp = this.createScriptProcessor(2048, 1, 1); // outputs silence: it only reads
+      sp.onaudioprocess = (e) => {
+        const x = e.inputBuffer.getChannelData(0);
+        let m = window.__peak[t.id] ?? 0;
+        for (let i = 0; i < x.length; i++) m = Math.max(m, Math.abs(x[i]));
+        window.__peak[t.id] = m;
+      };
+      src.connect(sp).connect(this.destination);
+    }
+    return src;
+  };
+};
+
 const stop = await startServer();
 try {
   const ownerLink = await cli(['create-owner']);
   assert.match(ownerLink, /\/invite#[0-9a-f]{64}$/, 'create-owner did not print an invite link');
 
   const alice = await browser('alice', [`--use-file-for-fake-audio-capture=${speech}`]);
+  await alice.page.addInitScript(meter);
   await signup(alice.page, ownerLink, 'alice');
   // The page's fetch sends the session cookie and the Origin header, as the app does.
   const bobLink = await alice.page.evaluate(async () => {
@@ -80,6 +116,7 @@ try {
   await alice.page.goto(`${ORIGIN}/admin/members`);
   await alice.page.locator('tr[data-user="alice"]').waitFor();
   const bob = await browser('bob', []);
+  await bob.page.addInitScript(meter);
   await signup(bob.page, bobLink, 'bob');
   await alice.page.locator('tr[data-user="bob"]', { hasText: 'bob' }).waitFor({ timeout: 5000 });
   console.log('signup_shows_live: ok');
@@ -129,6 +166,41 @@ try {
   await inVoice(alice.page, 'bob').waitFor({ timeout: 5000 });
   await inVoice(bob.page, 'alice').waitFor({ timeout: 5000 });
   console.log('presence_seen_by_both: ok');
+
+  // rejoin_audio (#45): bob leaves and joins again (after a pause, within a second, and after a reload) while alice stays.
+  // Each time both directions must flow again: packets and bytes rise, and each page rings the other's row (it is heard).
+  // "Heard" is the loudest sample of a remote stream in the app's own playback graph (the `meter` init script): the
+  // speaking ring samples 21 ms every 100 ms and misses most of the short fake beeps.
+  const flowing = async (page, what) => {
+    const a = await inboundAll(page);
+    await page.evaluate(() => (window.__peak = {}));
+    await sleep(3000);
+    const b = await inboundAll(page);
+    const peak = Math.max(0, ...Object.values(await page.evaluate(() => window.__peak)));
+    console.log(`  ${what}: ${JSON.stringify(a)} -> ${JSON.stringify(b)}, peak ${peak.toFixed(3)}`);
+    assert.ok(b.packets > a.packets && b.bytes > a.bytes, `${what}: no inbound audio after the rejoin`);
+    assert.ok(peak > 0.02, `${what}: the received audio is silent after the rejoin`);
+  };
+  const leaveCall = async (page) => {
+    await page.getByRole('button', { name: 'Leave' }).click();
+    await page.getByRole('button', { name: 'Join' }).waitFor();
+  };
+  await flowing(alice.page, 'before: alice hears bob');
+  await flowing(bob.page, 'before: bob hears alice');
+  for (const [how, pause] of [['leave, wait, join', 2000], ['leave and join within a second', 0], ['reload, join', null]]) {
+    if (pause === null) await bob.page.reload();
+    else {
+      await leaveCall(bob.page);
+      await sleep(pause);
+    }
+    if (pause !== 0) await inVoice(alice.page, 'bob').waitFor({ state: 'detached', timeout: 5000 });
+    await join(bob.page);
+    await inVoice(alice.page, 'bob').waitFor({ timeout: 5000 });
+    console.log(`rejoin_audio, ${how}:`);
+    await flowing(alice.page, 'alice hears bob');
+    await flowing(bob.page, 'bob hears alice');
+  }
+  console.log('rejoin_audio: ok');
 
   // picture_shows_live (#21): alice picks a picture in Settings > Account (cropped and redrawn by a canvas); bob's sidebar
   // shows it on her voice row without a reload, loaded under the page CSP, and the speaking ring still draws around it.

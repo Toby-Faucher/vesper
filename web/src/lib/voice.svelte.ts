@@ -289,7 +289,7 @@ export async function join(roomId: number): Promise<boolean> {
     const r = await joinRoom(sig, {
       roomId: room, stream, bitrateKbps: voice.settings.bitrateKbps, dtx: voice.settings.dtx,
       onError: (err) => (voice.error = err.message),
-      onRemoteStream: (s) => playback?.addRemote(s.id, s),
+      onRemoteStream: (id, s) => playback?.addRemote(id, s),
       onRemoteStreamEnd: (id) => playback?.remove(id),
     });
     callOff = r.off;

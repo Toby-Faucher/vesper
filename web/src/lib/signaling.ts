@@ -73,7 +73,8 @@ export async function joinRoom(
     bitrateKbps: number;
     dtx?: boolean;
     onError?: (e: Error) => void;
-    onRemoteStream?: (s: MediaStream) => void;
+    /** `id` is the sender's user_id. */
+    onRemoteStream?: (id: string, s: MediaStream) => void;
     onRemoteStreamEnd?: (id: string) => void;
   },
 ): Promise<{ pc: RTCPeerConnection; peers: Peer[]; userId: string; off: () => void }> {
@@ -85,16 +86,16 @@ export async function joinRoom(
   const pc = new RTCPeerConnection();
   opts.stream.getAudioTracks().forEach((t) => pc.addTrack(t, opts.stream));
 
-  const seen = new Set<string>();
-  const drop = (id: string) => seen.delete(id) && opts.onRemoteStreamEnd?.(id);
+  // Each sender's current track, keyed on its user_id (the SFU labels MSID with it). Every new track gets a stream of
+  // its own: after a rejoin Firefox reuses the MediaStream with that id and keeps the old, ended track in it.
+  const live = new Map<string, MediaStreamTrack>();
+  const drop = (id: string) => live.delete(id) && opts.onRemoteStreamEnd?.(id);
   pc.ontrack = (e) => {
-    const s = e.streams[0] ?? new MediaStream([e.track]);
-    if (seen.has(s.id)) return;
-    seen.add(s.id); // s.id is the sender's user_id (SFU labels MSID with it)
-    opts.onRemoteStream?.(s);
-    const check = () => s.getTracks().length === 0 && drop(s.id);
-    s.onremovetrack = check;
-    e.track.onended = check;
+    const id = e.streams[0]?.id ?? e.track.id;
+    const t = e.track;
+    live.set(id, t);
+    opts.onRemoteStream?.(id, new MediaStream([t]));
+    t.addEventListener('ended', () => live.get(id) === t && drop(id)); // a late end of the old track keeps the new one
   };
 
   let chain = Promise.resolve(); // renegotiation offers must run one at a time
@@ -114,7 +115,7 @@ export async function joinRoom(
     offs.push(sig.onClose(() => {
       pc.close();
       opts.stream.getTracks().forEach((t) => t.stop());
-      [...seen].forEach(drop);
+      [...live.keys()].forEach(drop);
       if (!settled) reject(new Error('The connection to the server closed.'));
     }));
     offs.push(sig.onMessage((m) => {
