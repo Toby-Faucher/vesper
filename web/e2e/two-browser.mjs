@@ -1,7 +1,8 @@
 // Two-browser voice and chat test. Starts the release server on a throwaway data dir, makes the owner invite with the CLI, signs
 // alice up, has her invite bob through the API, and joins both into `general` with fake microphones. Checks that audio
 // flows both ways (bob to alice only as rising packets), that bob hears alice, and that each sees the other in the people list.
-// Then chat: Markdown and raw HTML shown safely, a reply, an edit, a PNG upload shown inline, and search that never
+// Then chat: Markdown and raw HTML shown safely, a reply, an edit, a PNG upload shown inline, the upload tray, drop, image
+// boxes and the viewer, and search that never
 // returns a message from a room bob cannot see. Stops the server.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
@@ -253,6 +254,106 @@ try {
   await alice.page.getByRole('button', { name: 'Send', exact: true }).click();
   await bob.page.waitForFunction(() => document.querySelector('article img[alt="dot.png"]')?.naturalWidth === 1, null, { timeout: 5000 });
   console.log('upload_roundtrip: ok');
+
+  // uploads_ui in a room "files": the tray refuses a file over 25 MB before any upload and cancels a running one, the drop
+  // overlay shows for files only, a file card downloads by id, an image keeps its 360 x 280 box until it loads and does
+  // not move the view when it loads above it, the bottom stays the bottom when the last row grows (a late image, or
+  // anything: the ResizeObserver on the last row), and the viewer moves with the arrow keys and gives focus back.
+  const filesRoom = await call(alice.page, 'POST', '/api/rooms', { name: 'files' });
+  await roomLink(alice.page, 'files').waitFor({ timeout: 5000 });
+  await openRoom(alice.page, 'files');
+  const attach = alice.page.getByLabel('Attach a file');
+  await attach.setInputFiles({ name: 'huge.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(25 * 1024 * 1024 + 1) });
+  await alice.page.getByRole('alert').filter({ hasText: 'Files can be up to 25 MB.' }).waitFor({ timeout: 5000 });
+  assert.equal(await alice.page.getByRole('button', { name: 'Retry huge.bin' }).count(), 0, 'Retry offered for a file that is too large');
+  await alice.page.getByRole('button', { name: 'Remove huge.bin' }).click();
+  await alice.page.route('**/api/rooms/*/uploads?*', () => {}); // held: never answered
+  await attach.setInputFiles({ name: 'slow.png', mimeType: 'image/png', buffer: png1x1() });
+  await alice.page.getByRole('progressbar', { name: 'Upload progress' }).waitFor({ timeout: 5000 });
+  await alice.page.getByRole('button', { name: 'Cancel slow.png' }).click();
+  await alice.page.getByRole('list', { name: 'Files to send' }).waitFor({ state: 'detached', timeout: 5000 });
+  await alice.page.unrouteAll({ behavior: 'ignoreErrors' });
+  const chatPane = alice.page.getByRole('region', { name: 'Chat' });
+  const drag = (kind) => alice.page.evaluateHandle((kind) => {
+    const d = new DataTransfer();
+    if (kind === 'file') d.items.add(new File(['some notes'], 'notes.txt', { type: 'text/plain' }));
+    else d.setData('text/plain', 'just text');
+    return d;
+  }, kind);
+  await chatPane.dispatchEvent('dragenter', { dataTransfer: await drag('text') });
+  await sleep(200);
+  assert.equal(await alice.page.getByText('Drop to attach').count(), 0, 'a text drag showed the drop overlay');
+  const fileDrag = await drag('file');
+  await chatPane.dispatchEvent('dragenter', { dataTransfer: fileDrag });
+  await alice.page.getByText('Drop to attach').waitFor({ timeout: 2000 });
+  await chatPane.dispatchEvent('drop', { dataTransfer: fileDrag });
+  await alice.page.getByText('Drop to attach').waitFor({ state: 'detached', timeout: 2000 });
+  await alice.page.getByText('Attached: notes.txt').waitFor({ timeout: 5000 });
+  await alice.page.getByRole('button', { name: 'Send', exact: true }).click();
+  await alice.page.getByRole('list', { name: 'Files to send' }).waitFor({ state: 'detached', timeout: 5000 });
+
+  const uploadAs = (page, roomId, name) => page.evaluate(async ([roomId, name, bytes]) => {
+    const r = await fetch(`/api/rooms/${roomId}/uploads?name=${encodeURIComponent(name)}`, { method: 'POST', body: new Uint8Array(bytes) });
+    return (await r.json()).attachment.id;
+  }, [roomId, name, [...png1x1()]]);
+  let release;
+  await bob.page.route('**/api/uploads/*', async (r) => { await new Promise((ok) => (release = ok)); await r.continue(); });
+  const lateId = await uploadAs(alice.page, filesRoom.id, 'late.png');
+  await call(alice.page, 'POST', `/api/rooms/${filesRoom.id}/messages`, { body: 'a late image', reply_to: null, attachments: [lateId] });
+  for (let i = 0; i < 8; i++) await post([alice, bob][i % 2].page, filesRoom.id, `tall ${i}\n` + 'line\n'.repeat(5));
+  await openRoom(bob.page, 'files');
+  await bob.page.locator('article', { hasText: 'tall 7' }).waitFor({ timeout: 10000 });
+  const card = bob.page.getByRole('link', { name: 'Download notes.txt' });
+  assert.equal(await card.getAttribute('download'), 'notes.txt');
+  assert.match(await card.getAttribute('href'), /^\/api\/uploads\/[0-9a-f]{32}$/);
+  const lateBox = bob.page.getByRole('button', { name: 'Open image late.png' });
+  const tl = bob.page.locator('[data-timeline]');
+  // Above the view: the row ends 40 px above the top of the list. The first row whose top is in view must not move.
+  await lateBox.evaluate((el) => { const row = el.closest('article'); row.parentElement.scrollTop = row.offsetTop + row.offsetHeight + 40; });
+  await sleep(200);
+  const box = await lateBox.evaluate((el) => [el.offsetWidth, el.offsetHeight]);
+  assert.deepEqual(box, [360, 280], 'the image box was not kept before the image loaded');
+  const refTop = () => tl.evaluate((el) => {
+    const top = el.getBoundingClientRect().top;
+    return [...el.querySelectorAll(':scope > article')].map((a) => a.getBoundingClientRect().top).find((t) => t >= top);
+  });
+  const before = await refTop();
+  release();
+  await bob.page.waitForFunction(() => document.querySelector('img[alt="late.png"]')?.closest('button').offsetHeight === 48, null, { timeout: 5000 });
+  await sleep(100);
+  assert.ok(Math.abs((await refTop()) - before) < 1, `the view moved by ${(await refTop()) - before} px when the image loaded`);
+  console.log('image_no_shift: ok');
+  const atEnd = () => tl.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 8);
+  await tl.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await sleep(200);
+  const lastId = await uploadAs(alice.page, filesRoom.id, 'last.png');
+  await call(alice.page, 'POST', `/api/rooms/${filesRoom.id}/messages`, { body: 'the last image', reply_to: null, attachments: [lastId] });
+  await bob.page.getByRole('button', { name: 'Open image last.png' }).waitFor({ timeout: 5000 });
+  await sleep(200);
+  assert.ok(await atEnd(), 'not at the bottom after a new image message');
+  release();
+  await bob.page.waitForFunction(() => document.querySelector('img[alt="last.png"]')?.naturalWidth === 1, null, { timeout: 5000 });
+  await sleep(200);
+  assert.ok(await atEnd(), 'a late image in the last row left the bottom');
+  await tl.evaluate((el) => { const d = document.createElement('div'); d.id = 'grow'; d.style.height = '300px'; el.querySelector(':scope > article:last-of-type .content').append(d); });
+  await sleep(200);
+  assert.ok(await atEnd(), 'a taller last row left the bottom');
+  await tl.evaluate(() => document.getElementById('grow').remove());
+  await bob.page.unrouteAll({ behavior: 'ignoreErrors' });
+  console.log('stick_to_bottom_last_row: ok');
+  await lateBox.click();
+  const viewerBox = bob.page.getByRole('dialog', { name: 'late.png' });
+  await viewerBox.getByText('1 of 2').waitFor({ timeout: 5000 });
+  await bob.page.keyboard.press('ArrowRight');
+  await bob.page.getByRole('dialog', { name: 'last.png' }).getByText('2 of 2').waitFor({ timeout: 2000 });
+  const dl = bob.page.getByRole('dialog').getByRole('link', { name: 'Download' });
+  assert.equal(await dl.getAttribute('download'), 'last.png');
+  assert.equal(await dl.getAttribute('href'), `/api/uploads/${lastId}`);
+  await bob.page.keyboard.press('Escape');
+  await bob.page.getByRole('dialog').waitFor({ state: 'hidden', timeout: 2000 });
+  assert.equal(await bob.page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Open image late.png', 'focus did not go back to the image');
+  console.log('uploads_ui: ok');
+  for (const p of [alice.page, bob.page]) await openRoom(p, 'general');
 
   // search_roundtrip: a restricted room bob is not in holds another "hello". Alice (owner) finds both, bob only his.
   const room = roomId(bob.page); // general

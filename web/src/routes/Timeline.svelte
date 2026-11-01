@@ -14,9 +14,14 @@
   import { flash } from '../lib/ui/motion';
   import { UI_MESSAGES } from '../lib/ui/messages';
   import { firstUnreadInPage, plain, rows } from '../lib/ui/timeline';
+  import { lazy } from '../lib/ui/lazy';
+  import type { Attachment } from '../lib/gen/Attachment';
   import Button from '../lib/ui/c/Button.svelte';
   import EmptyState from '../lib/ui/c/EmptyState.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
+
+  // The image viewer loads on the first image click.
+  const viewerChunk = lazy(() => import('./ImageViewer.svelte'));
 
   let {
     roomId,
@@ -263,9 +268,13 @@
     loadingOlder = false;
   }
 
+  let lastTop = 0;
   function onScroll() {
     if (!list) return;
-    stuck = atBottom(list);
+    // Only a move up leaves the bottom. A scroll event can come after the list got shorter again (the upload tray
+    // growing row by row) and before the ResizeObserver put it back at the bottom: that must not unstick it.
+    stuck = list.scrollTop < lastTop ? atBottom(list) : stuck || atBottom(list);
+    lastTop = list.scrollTop;
     if (list.scrollTop < 40 && log?.moreBefore && ready) void older();
     maybeRead();
   }
@@ -288,6 +297,18 @@
     note = text;
     clearTimeout(noteTimer);
     noteTimer = setTimeout(() => (note = ''), 8000);
+  }
+
+  // The viewer walks the images of the loaded slice, oldest first.
+  let viewer = $state<{ images: Attachment[]; at: number; chunk: ReturnType<typeof viewerChunk> } | null>(null);
+  function view(id: string) {
+    const images = (log?.messages ?? []).filter((m) => !m.deleted).flatMap((m) => m.attachments.filter((a) => a.image));
+    const chunk = viewerChunk();
+    chunk.catch(() => {
+      viewer = null;
+      say(UI_MESSAGES.viewerFailed);
+    });
+    viewer = { images, at: Math.max(0, images.findIndex((a) => a.id === id)), chunk };
   }
 
   function showFirst() {
@@ -326,7 +347,7 @@
           <button type="button" class="mark" onclick={markAll}>Mark as read</button>
         </div>
       {:else}
-        <MessageItem m={r.m} head={r.head} {myId} {myName} {isMod} {user} {act} {onreply} onjump={jump} onsay={say} />
+        <MessageItem m={r.m} head={r.head} {myId} {myName} {isMod} {user} {act} {onreply} onjump={jump} onsay={say} onview={view} />
       {/if}
     {/each}
     {#if log?.moreAfter}
@@ -339,6 +360,11 @@
   {/if}
   {#if !stuck || log?.moreAfter}
     <button type="button" class="pill bottom" aria-label="Jump to latest" onclick={toLatest}><Icon d={I.arrowDown} />Jump to latest</button>
+  {/if}
+  {#if viewer?.images.length}
+    {#await viewer.chunk then V}
+      <V.default images={viewer.images} bind:at={viewer.at} onclose={() => (viewer = null)} />
+    {/await}
   {/if}
   <p role="status">{#if note}<span class="pill note">{note}</span>{/if}</p>
   <p class="sr-only" aria-live="polite">{#key announce.n}<span>{announce.text}</span>{/key}</p>

@@ -9,6 +9,7 @@
   // back to its own opener. The page behind does not scroll while any modal is open (the :has rule below counts them all).
   // `id` lets the opener point aria-controls at the dialog. `bare` (the switcher): the title is for screen readers only,
   // there is no Close button (Esc closes), the body has no padding, it opens without motion, wider and near the top.
+  // `wide` (the image viewer): up to 1040 px wide.
   let {
     open,
     title,
@@ -17,7 +18,8 @@
     footer,
     id: given,
     bare = false,
-  }: { open: boolean; title: string; onclose: () => void; children: Snippet; footer?: Snippet; id?: string; bare?: boolean } = $props();
+    wide = false,
+  }: { open: boolean; title: string; onclose: () => void; children: Snippet; footer?: Snippet; id?: string; bare?: boolean; wide?: boolean } = $props();
   const uid = $props.id();
   const id = $derived(given ?? uid);
   let el: HTMLDialogElement; // null once destroyed (bind:this), when a late close event can still arrive
@@ -65,6 +67,7 @@
   bind:this={el}
   {id}
   class:bare
+  class:wide
   aria-labelledby="{id}-title"
   onclose={() => el?.open || closed()}
   oncancel={(e) => { e.preventDefault(); shut(); }}
@@ -72,7 +75,7 @@
   onclick={(e) => downOnBackdrop && e.target === el && shut()}
 >
   <div class="relative flex max-h-[inherit] flex-col">
-    <h2 id="{id}-title" class={bare ? 'sr-only' : 'px-5 pt-4 pr-14 pb-2 text-lg font-medium text-fg'}>{title}</h2>
+    <h2 id="{id}-title" class={bare ? 'sr-only' : 'px-5 pt-4 pr-14 pb-2 text-lg font-medium text-fg [overflow-wrap:anywhere]'}>{title}</h2>
     <div class="min-h-0 overflow-y-auto text-sm text-fg-2 {bare ? 'flex flex-col' : 'px-5 pt-2 pb-5'}">{@render children()}</div>
     {#if footer}<div class="flex justify-end gap-2 border-t border-subtle px-5 py-3">{@render footer()}</div>{/if}
     {#if !bare}<div class="absolute top-3 right-3"><IconButton icon={I.x} label="Close" onclick={shut} /></div>{/if}
@@ -91,6 +94,7 @@
     color: var(--fg);
     box-shadow: var(--shadow-float);
   }
+  dialog.wide { width: min(1040px, calc(100vw - 64px)); }
   dialog.bare { width: min(600px, calc(100vw - 32px)); max-height: min(520px, calc(100vh - 128px)); margin-top: 96px; }
   /* A modal makes the page inert but wheel and touch still scroll it. Gone with the last open modal, also on destroy. */
   :global(html:has(dialog:modal)) { overflow: hidden; }

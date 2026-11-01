@@ -5,8 +5,7 @@
   // nothing moves when one appears. Drafts live in chat.drafts by room, in memory only. Names are untrusted: text nodes.
   import { tick, untrack } from 'svelte';
   import { ApiFailure, errorText } from '../lib/api';
-  import { chat, lastOwn, send, typers, upload } from '../lib/chat.svelte';
-  import type { Attachment } from '../lib/gen/Attachment';
+  import { chat, lastOwn, send, typers } from '../lib/chat.svelte';
   import type { Message } from '../lib/gen/Message';
   import { parse } from '../lib/markdown';
   import { session } from '../lib/session.svelte';
@@ -19,8 +18,10 @@
   import Icon from '../lib/ui/c/Icon.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
   import Popover from '../lib/ui/c/Popover.svelte';
+  import type { Tray } from '../lib/ui/tray.svelte';
+  import UploadTray from './UploadTray.svelte';
 
-  let { roomId, replyTo = $bindable(null) }: { roomId: number; replyTo?: Message | null } = $props();
+  let { roomId, tray, replyTo = $bindable(null) }: { roomId: number; tray: Tray; replyTo?: Message | null } = $props();
 
   const TYPING_EVERY_MS = 3000; // the server takes one typing event per 3 s
   const MAX = 4000; // the server's limit, in characters
@@ -32,8 +33,6 @@
   let helpEl = $state<HTMLButtonElement | null>(null);
   let help = $state({ mounted: false, open: false });
   let error = $state('');
-  let pending = $state<Attachment[]>([]);
-  let progress = $state<number | null>(null);
   let sending = $state(false);
   let lastTyping = 0;
   let now = $state(Date.now());
@@ -49,7 +48,7 @@
   const count = $derived([...draft.trim().normalize('NFC')].length);
   const over = $derived(count - MAX);
   const online = $derived(session.online);
-  const canSend = $derived(online && over <= 0 && progress === null && !sending && (!!draft.trim() || pending.length > 0));
+  const canSend = $derived(online && over <= 0 && !tray.busy && !sending && (!!draft.trim() || tray.done.length > 0));
   const people = $derived(mention && room ? mentionable(mention.q, Object.values(session.state.users), room, myId) : []);
   const listOpen = $derived(people.length > 0);
   const typingIds = $derived(typers(chat.state, roomId, now).filter((id) => id !== myId));
@@ -61,12 +60,11 @@
     return () => clearInterval(t);
   });
 
-  // A new room: reply, uploads and the mention list belong to the old one. The draft is kept by room.
+  // A new room: the reply and the mention list belong to the old one (Chat clears the uploads). The draft is kept by room.
   $effect(() => {
     void roomId;
     untrack(() => {
       replyTo = null;
-      pending = [];
       error = '';
       mention = null;
     });
@@ -107,14 +105,15 @@
     if (!canSend) return;
     const room = roomId;
     const text = draft;
-    const body = text.trim() || pending.map((a) => a.name).join(', '); // a body is required
+    const files = tray.done.map((i) => i.attachment!);
+    const body = text.trim() || files.map((a) => a.name).join(', '); // a body is required
     sending = true;
     error = '';
     try {
-      await send(room, body, replyTo?.id ?? null, pending.map((a) => a.id));
+      await send(room, body, replyTo?.id ?? null, files.map((a) => a.id));
       if (chat.drafts[room] === text) chat.drafts[room] = ''; // text typed while it was sending stays
       replyTo = null;
-      pending = [];
+      tray.sent();
       mention = null;
       chat.latest++; // follow your own message, also from an older slice after a jump
     } catch (err) {
@@ -174,7 +173,7 @@
       e.preventDefault();
       e.stopPropagation();
       replyTo = null;
-    } else if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && draft === '' && !pending.length) {
+    } else if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && draft === '' && !tray.items.length) {
       const m = lastOwn(roomId, myId);
       if (!m) return;
       e.preventDefault();
@@ -194,27 +193,15 @@
     session.sig?.send({ type: 'typing', room_id: roomId });
   }
 
-  async function attach(files: File[]) {
-    const room = roomId;
-    for (const f of files) {
-      error = '';
-      progress = 0;
-      try {
-        const a = await upload(room, f, (p) => (progress = p));
-        if (room === roomId) pending = [...pending, a];
-      } catch (e) {
-        error = e instanceof ApiFailure && e.status === 413 ? UI_MESSAGES.fileTooLarge : errorText(e);
-      } finally {
-        progress = null;
-      }
-    }
+  function attach(files: File[]) {
+    if (files.length) tray.add(roomId, files);
   }
 
   function onPaste(e: ClipboardEvent) {
     const files = [...(e.clipboardData?.files ?? [])].filter((f) => PASTE_TYPES.includes(f.type));
     if (!files.length) return;
     e.preventDefault();
-    void attach(files);
+    attach(files);
   }
 
   function cancelReply() {
@@ -243,25 +230,15 @@
         <button type="button" class="x" aria-label="Cancel reply" onclick={cancelReply}><Icon d={I.x} size={16} /></button>
       </div>
     {/if}
-    {#if pending.length || progress !== null}
-      <div class="flex flex-wrap items-center gap-1 px-2 pt-2">
-        {#each pending as a (a.id)}
-          <span class="chip">
-            <Icon d={I.paperclip} size={16} />
-            <span class="max-w-60 truncate"><span class="sr-only">{'Attached: '}</span>{a.name}</span>
-            <button type="button" class="x" aria-label="Remove {a.name}" onclick={() => (pending = pending.filter((p) => p.id !== a.id))}><Icon d={I.x} size={16} /></button>
-          </span>
-        {/each}
-        {#if progress !== null}<progress class="h-1 w-40" value={progress} max="1" aria-label="Upload progress"></progress>{/if}
-      </div>
-    {/if}
+    {#if tray.items.length}<UploadTray {tray} />{/if}
 
     <div class="row">
-      <label class="attach" title="Attach a file">
+      <!-- The native picker stays in the page for the keyboard (Tab reaches it, Space opens it), drawn as the icon. -->
+      <label class="attach" data-tip="Attach a file" data-tip-up>
         <Icon d={I.paperclip} />
         <span class="sr-only">Attach a file</span>
-        <input type="file" class="sr-only" disabled={progress !== null}
-          onchange={(e) => { void attach([...(e.currentTarget.files ?? [])]); e.currentTarget.value = ''; }} />
+        <input type="file" multiple class="sr-only"
+          onchange={(e) => { attach([...(e.currentTarget.files ?? [])]); e.currentTarget.value = ''; }} />
       </label>
       <textarea bind:this={el} rows="1" aria-label="Message" placeholder="Message {room?.name ?? ''}"
         aria-autocomplete="list" aria-controls={listOpen ? `${uid}-people` : undefined}
@@ -364,25 +341,11 @@
   .x { width: 24px; height: 24px; border-radius: var(--radius-sm); }
   .attach:hover, .x:hover { background: var(--bg-hover); color: var(--fg); }
   .attach:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
-  .attach:has(input:disabled) { cursor: not-allowed; color: var(--fg-disabled); }
   .send { color: var(--accent-fg); }
   .send:hover { background: var(--bg-hover); }
   .send[aria-disabled='true'] { cursor: default; color: var(--fg-disabled); background: none; }
   .count { padding: 0 4px; color: var(--fg-2); font-size: 12px; line-height: 32px; font-variant-numeric: tabular-nums; }
   .count.over { color: var(--danger-fg); }
-  .chip {
-    display: inline-flex;
-    height: 28px;
-    align-items: center;
-    gap: 4px;
-    padding: 0 2px 0 8px;
-    border: 1px solid var(--line-subtle);
-    border-radius: var(--radius);
-    background: var(--bg-raised);
-    color: var(--fg);
-    font-size: 12px;
-    line-height: 16px;
-  }
   .people {
     position: absolute;
     bottom: calc(100% + 4px);

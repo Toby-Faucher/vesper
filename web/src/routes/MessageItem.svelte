@@ -10,6 +10,7 @@
   // move between rows. Its menu, the reaction picker and the delete dialog mount on first use.
   // Names and bodies are untrusted: text nodes and Markdown.svelte only. User colour only on the avatar.
   import { tick } from 'svelte';
+  import Attachments from './Attachments.svelte';
   import Markdown from './Markdown.svelte';
   import { parse } from '../lib/markdown';
   import { chat, edit, pin, react, remove } from '../lib/chat.svelte';
@@ -39,6 +40,7 @@
     onreply,
     onjump,
     onsay,
+    onview,
   }: {
     m: Message;
     head: boolean;
@@ -50,6 +52,7 @@
     onreply: (m: Message) => void;
     onjump: (id: number) => void;
     onsay: (text: string) => void;
+    onview: (id: string) => void;
   } = $props();
 
   const EMOJIS = ['👍', '😂', '❤️'];
@@ -64,7 +67,6 @@
   const short = (ms: number) =>
     clock.formatToParts(ms).filter((p) => p.type !== 'dayPeriod').map((p) => p.value).join('').trim();
   const iso = (ms: number) => new Date(ms).toISOString();
-  const size = (n: number) => (n < 1024 * 1024 ? `${Math.ceil(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
   const names = (ids: string[]) => ids.map((id) => user(id).display_name).join(', ');
 
   let expanded = $state(false);
@@ -202,13 +204,7 @@
       {#if m.edited_at || (!head && m.pinned)}
         <p class="quiet text-xs">{m.edited_at ? '(edited)' : ''}{!head && m.pinned ? `${m.edited_at ? ' ' : ''}Pinned` : ''}</p>
       {/if}
-      {#each m.attachments as a (a.id)}
-        {#if a.image}
-          <img src="/api/uploads/{a.id}" alt={a.name} class="mt-1 max-h-64 rounded" />
-        {:else}
-          <a href="/api/uploads/{a.id}" download={a.name} class="block text-fg underline">{a.name} ({size(a.size)})</a>
-        {/if}
-      {/each}
+      {#if m.attachments.length}<Attachments list={m.attachments} {onview} />{/if}
       {#if m.reactions.length}
         <div class="mt-1 flex flex-wrap gap-1">
           {#each m.reactions as r (r.emoji)}

@@ -21,7 +21,7 @@ declare const icon: unique symbol;
 export type IconPath = string & { readonly [icon]: true };
 
 // Lucide names where they differ: more = ellipsis, edit = pencil, trash = trash-2, sidebar = panel-left, volume = volume-2,
-// headphonesOff = headphone-off, help = circle-help, room = message-square, warn = triangle-alert, error = circle-alert.
+// headphonesOff = headphone-off, help = circle-help, room = message-square, warn = triangle-alert, error = circle-alert, retry = rotate-ccw.
 export const mic = 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM19 10v2a7 7 0 0 1-14 0v-2M12 19L12 22' as IconPath;
 export const micOff = 'M2 2L22 22M18.89 13.23A7.12 7.12 0 0 0 19 12v-2M5 10v2a7 7 0 0 0 12 5M15 9.34V5a3 3 0 0 0-5.68-1.33M9 9v3a3 3 0 0 0 5.12 2.12M12 19L12 22' as IconPath;
 export const headphones = 'M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3' as IconPath;
@@ -56,4 +56,10 @@ export const info = 'M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0M12 16v-4M12 8h.01'
 export const warn = 'M21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4M12 17h.01' as IconPath;
 export const error = 'M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0M12 8L12 12M12 16L12.01 16' as IconPath;
 export const check = 'M20 6 9 17l-5-5' as IconPath;
+export const file = 'M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7zM14 2v4a2 2 0 0 0 2 2h4' as IconPath;
+export const image = 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2zM7 9a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M21 15l-3.086-3.086a2 2 0 0 0-2.828 0L6 21' as IconPath;
+export const download = 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3' as IconPath;
+export const externalLink = 'M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' as IconPath;
+export const chevronLeft = 'M15 18l-6-6 6-6' as IconPath;
+export const retry = 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5' as IconPath;
 export const room = 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' as IconPath;

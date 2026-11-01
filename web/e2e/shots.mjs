@@ -6,6 +6,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { crc32, deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { ORIGIN, browser, cli, inVoice, openRoom, signedIn, signup, sleep, startServer } from './lib.mjs';
 
@@ -771,6 +772,161 @@ scene('pins', async (ctx) => {
   await sleep(300);
   await ctx.shot(page, 'pins-empty');
   await page.keyboard.press('Escape');
+});
+
+// Uploads: a room "photos" with a wide and a tall image and a file card. `png(w, h)` draws a soft two-colour gradient
+// (no binary in the repo). The upload scenes swap XMLHttpRequest for a fake that holds each upload at a set point.
+function png(w, h, [r0, g0, b0], [r1, g1, b1]) {
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    const row = y * (w * 3 + 1);
+    for (let x = 0; x < w; x++) {
+      const t = (x / w + y / h) / 2;
+      raw.set([r0 + (r1 - r0) * t, g0 + (g1 - g0) * t, b0 + (b1 - b0) * t].map(Math.round), row + 1 + x * 3);
+    }
+  }
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE(crc32(body), 8 + data.length);
+    return out;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2; // RGB
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+let photos;
+function photosRoom({ alice, bob, api }) {
+  photos ??= (async () => {
+    const room = await api(alice.page, 'POST', '/api/rooms', { name: 'photos' });
+    const up = (page, name, buf) => page.evaluate(async ([room, name, b64]) => {
+      const r = await fetch(`/api/rooms/${room}/uploads?name=${encodeURIComponent(name)}`, { method: 'POST', body: Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) });
+      return (await r.json()).attachment.id;
+    }, [room.id, name, buf.toString('base64')]);
+    const post = (page, body, attachments = []) => api(page, 'POST', `/api/rooms/${room.id}/messages`, { body, reply_to: null, attachments });
+    await post(bob.page, 'who has the photos from saturday?');
+    await post(alice.page, 'here, the view from the top', [await up(alice.page, 'summit-panorama-saturday-evening.png', png(1200, 600, [40, 52, 84], [214, 140, 72]))]);
+    await post(bob.page, 'and the tower on the way down', [await up(bob.page, 'tower.png', png(420, 900, [92, 110, 96], [30, 34, 40]))]);
+    await post(alice.page, 'the route notes too', [await up(alice.page, 'route-notes.pdf', Buffer.from('%PDF-1.4\n% route notes\n'))]);
+    await post(bob.page, 'great, thanks');
+    return room;
+  })();
+  return photos;
+}
+async function openPhotos(ctx) {
+  await photosRoom(ctx);
+  const page = ctx.alice.page;
+  await page.goto(`${ORIGIN}/`);
+  await signedIn(page);
+  await openRoom(page, 'photos');
+  await page.locator('article', { hasText: 'great, thanks' }).waitFor();
+  return page;
+}
+// The timeline while the images are still on their way (the boxes are kept), then loaded (the view did not move), the
+// viewer on the panorama, then the next image with the arrow key.
+scene('message-image', async (ctx) => {
+  const page = ctx.alice.page;
+  let release;
+  const gate = new Promise((r) => (release = r));
+  await page.route('**/api/uploads/*', async (r) => { await gate; await r.continue(); });
+  await openPhotos(ctx);
+  await rest(page);
+  const top = () => page.locator('article', { hasText: 'great, thanks' }).evaluate((el) => el.getBoundingClientRect().top);
+  const before = await top();
+  await ctx.shot(page, 'message-image-loading');
+  release();
+  await page.waitForFunction(() => [...document.querySelectorAll('article button img')].every((i) => i.complete && i.naturalWidth));
+  await sleep(300);
+  await page.unrouteAll({ behavior: 'wait' });
+  console.log(`message-image: the last row moved ${(await top()) - before} px (at the bottom, so it follows the bottom)`);
+  await ctx.shot(page, 'message-image');
+  await page.getByRole('button', { name: 'Open image summit-panorama-saturday-evening.png' }).click();
+  await page.getByRole('dialog').getByText('1 of 2').waitFor();
+  await page.mouse.move(1439, 899);
+  await sleep(400);
+  await ctx.shot(page, 'image-viewer');
+  await page.keyboard.press('ArrowRight');
+  await page.getByRole('dialog').getByText('2 of 2').waitFor();
+  await sleep(300);
+  await ctx.shot(page, 'image-viewer-next');
+  await page.keyboard.press('Escape');
+});
+// Files dragged over the room.
+scene('drop-overlay', async (ctx) => {
+  const page = await openPhotos(ctx);
+  const dt = await page.evaluateHandle(() => { const d = new DataTransfer(); d.items.add(new File(['x'], 'a.png', { type: 'image/png' })); return d; });
+  await page.getByRole('region', { name: 'Chat' }).dispatchEvent('dragenter', { dataTransfer: dt });
+  await page.getByText('Drop to attach').waitFor();
+  await rest(page);
+  await ctx.shot(page, 'drop-overlay');
+  await page.getByRole('region', { name: 'Chat' }).dispatchEvent('dragleave', { dataTransfer: dt });
+});
+// The upload tray with a fake XMLHttpRequest: a 5 MB file at 40 percent alone, then the mix (one failed with Retry, three
+// uploading, one waiting), then the failures (too large, quota, rate limit, network).
+async function fakeUploads(page) {
+  await page.evaluate(() => {
+    const at = { 'clip.mp4': 0.4, 'photo.png': 0.72, 'scan.png': 0.15 };
+    const fail = { 'backup.zip': [507, 'quota_full'], 'scan-2.png': [429, 'rate_limited'] };
+    window.XMLHttpRequest = class {
+      upload = {};
+      open(_m, url) { this.name = new URL(url, location.href).searchParams.get('name'); }
+      abort() { this.onabort?.(); }
+      send() {
+        setTimeout(() => {
+          if (this.name === 'notes.txt') return this.onerror?.();
+          if (fail[this.name]) {
+            [this.status, this.responseText] = [fail[this.name][0], JSON.stringify({ code: fail[this.name][1] })];
+            return this.onload?.();
+          }
+          this.upload.onprogress?.({ lengthComputable: true, loaded: (at[this.name] ?? 0.5) * 100, total: 100 });
+        }, 30);
+      }
+    };
+  });
+}
+scene('upload-tray', async (ctx) => {
+  const page = await openPhotos(ctx);
+  await fakeUploads(page);
+  const input = page.getByLabel('Attach a file');
+  const f = (name, buffer, mimeType = 'application/octet-stream') => ({ name, mimeType, buffer });
+  await input.setInputFiles([f('clip.mp4', Buffer.alloc(5 * 1024 * 1024), 'video/mp4')]);
+  await page.getByRole('progressbar').waitFor();
+  await sleep(300);
+  await rest(page);
+  await ctx.shot(page, 'upload-progress');
+  await page.getByRole('button', { name: 'Cancel clip.mp4' }).click();
+  await input.setInputFiles([f('backup.zip', Buffer.alloc(180 * 1024))]);
+  await page.getByRole('alert').filter({ hasText: 'no room for more files' }).waitFor();
+  await input.setInputFiles([
+    f('clip.mp4', Buffer.alloc(5 * 1024 * 1024), 'video/mp4'),
+    f('photo.png', png(64, 48, [214, 140, 72], [40, 52, 84]), 'image/png'),
+    f('scan.png', png(48, 64, [92, 110, 96], [230, 230, 220]), 'image/png'),
+    f('song-with-a-rather-long-file-name-for-the-tray.flac', Buffer.alloc(2 * 1024 * 1024), 'audio/flac'),
+  ]);
+  await page.getByText('Waiting', { exact: true }).waitFor();
+  await sleep(300);
+  await rest(page);
+  await ctx.shot(page, 'upload-tray');
+  for (const name of ['backup.zip', 'clip.mp4', 'photo.png', 'scan.png', 'song-with-a-rather-long-file-name-for-the-tray.flac']) {
+    await page.getByRole('button', { name: new RegExp(`^(Cancel|Remove) ${name.replace('.', '\\.')}$`) }).click();
+  }
+  await input.setInputFiles([
+    f('raw-footage.mov', Buffer.alloc(25 * 1024 * 1024 + 1), 'video/quicktime'),
+    f('backup.zip', Buffer.alloc(180 * 1024)),
+    f('scan-2.png', png(48, 64, [92, 110, 96], [230, 230, 220]), 'image/png'),
+    f('notes.txt', Buffer.from('some notes'), 'text/plain'),
+  ]);
+  await page.getByRole('alert').filter({ hasText: 'connection' }).waitFor();
+  await sleep(300);
+  await rest(page);
+  await ctx.shot(page, 'upload-errors');
+  await page.reload(); // the real XMLHttpRequest again
+  await signedIn(page);
 });
 
 scene('room', async ({ alice, bob, seed }) => {

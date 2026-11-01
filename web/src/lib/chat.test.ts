@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CAP, anchorTop, applyChatMsg, cap, chat, lastOwn, loadLatest, marks, mergeLatest, openRoom, trimRooms, typers, type ChatState } from './chat.svelte';
+import { CAP, anchorTop, applyChatMsg, cap, chat, lastOwn, loadLatest, marks, mergeLatest, openRoom, trimRooms, typers, upload, type ChatState } from './chat.svelte';
 import type { Message } from './gen/Message';
 
 const msg = (id: number, over: Partial<Message> = {}): Message => ({
@@ -168,5 +168,48 @@ describe('lastOwn', () => {
     expect(lastOwn(1, 'me')?.id).toBe(2);
     expect(lastOwn(1, 'nobody')).toBeNull();
     expect(lastOwn(2, 'me')).toBeNull();
+  });
+});
+
+describe('upload', () => {
+  class FakeXhr {
+    static last: FakeXhr;
+    upload: { onprogress?: (e: ProgressEvent) => void } = {};
+    onload?: () => void;
+    onerror?: () => void;
+    onabort?: () => void;
+    aborted = 0;
+    sent: unknown = null;
+    constructor() {
+      FakeXhr.last = this;
+    }
+    open() {}
+    send(body: unknown) {
+      this.sent = body;
+    }
+    abort() {
+      this.aborted++;
+      this.onabort?.();
+    }
+  }
+  const file = () => new File(['x'], 'a.png', { type: 'image/png' });
+
+  it('aborts the request when the signal aborts and rejects with AbortError', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    const ctrl = new AbortController();
+    const p = upload(1, file(), undefined, ctrl.signal);
+    expect(FakeXhr.last.sent).not.toBeNull();
+    ctrl.abort();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    expect(FakeXhr.last.aborted).toBe(1);
+  });
+
+  it('rejects at once with AbortError when the signal is already aborted', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    const before = FakeXhr.last;
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(upload(1, file(), undefined, ctrl.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(FakeXhr.last).toBe(before); // nothing was sent
   });
 });

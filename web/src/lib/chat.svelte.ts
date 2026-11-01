@@ -218,14 +218,22 @@ export const pins = (roomId: number) => api<Message[]>('GET', `/api/rooms/${room
 export const markRead = (roomId: number, lastReadId: number) =>
   api<void>('PUT', `/api/rooms/${roomId}/read`, { last_read_id: lastReadId });
 
-/** Uploads one file as a raw body. XHR, because fetch has no upload progress. Rejects with ApiFailure. */
-export function upload(roomId: number, file: File, onProgress?: (done: number) => void): Promise<Attachment> {
+/**
+ * Uploads one file as a raw body. XHR, because fetch has no upload progress. Rejects with ApiFailure, a TypeError when
+ * the network fails, or a DOMException named AbortError when `signal` aborts (the server deletes the partial file).
+ */
+export function upload(roomId: number, file: File, onProgress?: (done: number) => void, signal?: AbortSignal): Promise<Attachment> {
+  if (signal?.aborted) return Promise.reject(new DOMException('Upload cancelled', 'AbortError'));
   if (file.size > MAX_UPLOAD) return Promise.reject(new ApiFailure(413, 'too_large'));
   return new Promise((resolve, reject) => {
     const x = new XMLHttpRequest();
+    const stop = () => x.abort();
+    signal?.addEventListener('abort', stop, { once: true });
+    const done = () => signal?.removeEventListener('abort', stop);
     x.open('POST', `/api/rooms/${roomId}/uploads?name=${encodeURIComponent(file.name || 'file')}`);
     x.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
     x.onload = () => {
+      done();
       let body: unknown;
       try {
         body = JSON.parse(x.responseText);
@@ -238,7 +246,14 @@ export function upload(roomId: number, file: File, onProgress?: (done: number) =
         reject(new ApiFailure(x.status, typeof code === 'string' ? (code as ApiErrorCode) : 'internal'));
       }
     };
-    x.onerror = () => reject(new TypeError('network'));
+    x.onerror = () => {
+      done();
+      reject(new TypeError('network'));
+    };
+    x.onabort = () => {
+      done();
+      reject(new DOMException('Upload cancelled', 'AbortError'));
+    };
     x.send(file);
   });
 }
