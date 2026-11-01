@@ -16,10 +16,10 @@ const NOW = T + 3 * 24 * 60 * MIN; // Friday 30 Oct
 
 describe('rows', () => {
   it('puts a day row before the first message of each local day, across midnight', () => {
-    const r = rows([msg(1), msg(2, { created_at: T + 3 * MIN })], 99, 'me', NOW, TZ);
+    const r = rows([msg(1), msg(2, { created_at: T + 3 * MIN })], 99, 'me', NOW, TZ, 'en-GB');
     expect(shape(r)).toEqual(['[Tue 27 Oct]', '1H', '[Wed 28 Oct]', '2H']);
     // The same instants in New York are both on the 27th (evening), so one day row and a group.
-    expect(shape(rows([msg(1), msg(2, { created_at: T + 3 * MIN })], 99, 'me', NOW, 'America/New_York'))).toEqual(['[Tue 27 Oct]', '1H', '2']);
+    expect(shape(rows([msg(1), msg(2, { created_at: T + 3 * MIN })], 99, 'me', NOW, 'America/New_York', 'en-GB'))).toEqual(['[Tue 27 Oct]', '1H', '2']);
   });
 
   it('groups by author within 5 minutes', () => {
@@ -59,9 +59,14 @@ describe('dayLabel', () => {
   it('says Today, Yesterday, a date, and the year when it is not this year', () => {
     expect(dayLabel(NOW, NOW, TZ)).toBe('Today');
     expect(dayLabel(NOW - 24 * 60 * MIN, NOW, TZ)).toBe('Yesterday');
-    expect(dayLabel(NOW - 2 * 24 * 60 * MIN, NOW, TZ)).toBe('Wed 28 Oct');
-    expect(dayLabel(T, NOW, TZ)).toBe('Tue 27 Oct');
-    expect(dayLabel(Date.UTC(2025, 11, 31, 12), NOW, TZ)).toBe('Wed 31 Dec 2025');
+    expect(dayLabel(NOW - 2 * 24 * 60 * MIN, NOW, TZ, 'en-GB')).toBe('Wed 28 Oct');
+    expect(dayLabel(T, NOW, TZ, 'en-GB')).toBe('Tue 27 Oct');
+    expect(dayLabel(Date.UTC(2025, 11, 31, 12), NOW, TZ, 'en-GB')).toBe('Wed 31 Dec 2025');
+  });
+
+  it('follows the locale, like the date fields the browser draws', () => {
+    expect(dayLabel(T, NOW, TZ, 'en-US')).toBe('Tue Oct 27');
+    expect(dayLabel(Date.UTC(2025, 11, 31, 12), NOW, TZ, 'en-US')).toBe('Wed Dec 31, 2025');
   });
 });
 
