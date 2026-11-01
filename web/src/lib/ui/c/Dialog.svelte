@@ -8,7 +8,7 @@
   // (the Close button comes last in the DOM, drawn top right). Dialogs stack: Esc closes the top one, and each gives focus
   // back to its own opener. The page behind does not scroll while any modal is open (the :has rule below counts them all).
   // `id` lets the opener point aria-controls at the dialog. `bare` (the switcher): the title is for screen readers only,
-  // there is no Close button (Esc closes), the body has no padding, it opens without motion, wider and near the top.
+  // there is no Close button (Esc closes), the body has no padding, it opens wider and near the top.
   // `wide` (the image viewer): as wide as the content, up to 1040 px.
   let {
     open,
@@ -31,7 +31,7 @@
       opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       el.showModal();
       shown = true;
-      if (!bare) enter(el, 'pop');
+      enter(el, 'pop');
     } else if (!open && el.open) shut();
   });
 
@@ -40,7 +40,7 @@
   // (cancel) closes the same way, so a key pressed right after it (Ctrl+K again) sees the dialog as closed.
   let shown = false;
   function shut() {
-    if (!bare) ghost(el, 'pop');
+    ghost(el, 'pop');
     el.close();
     closed();
   }

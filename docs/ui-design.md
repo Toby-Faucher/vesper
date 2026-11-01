@@ -67,16 +67,22 @@ build (`waapi.animate` only). Only `opacity` and `transform` move, except the ju
 
 | Preset | Pose | Used by |
 | --- | --- | --- |
-| `pop` | scale 0.97, 160 ms | popovers, menus, dialogs (open, and an empty box with their fill fading out on close) |
+| `pop` | scale 0.97, 160 ms | popovers, menus, dialogs including the switcher and search (open, and an empty box with their fill fading out on close), the mention list, the drop overlay; the CSS tooltip does the same pose in CSS |
 | `rise` | 6 px up, 220 ms (under the timeline's 8 px bottom margin, so it keeps following) | the call bar, a new message, the timeline pills |
-| `swap` | 4 px up, 160 ms | the timeline when another room opens, a settings or admin section |
+| `swap` | 4 px up, 160 ms | the timeline when another room opens, a settings or admin section, the connection bar |
 | `row` | 8 px from the left, 160 ms | a person joining or leaving voice |
 | `bump` | scale 0.6 with a small overshoot, 160 ms | a reaction coming, going or changing its count; a sidebar unread count |
 
 Enter eases out (`--ease-out`, `--ease-pop` for `bump`); exit runs the pose backwards in 120 ms, easing in. The selected room's fill
 glides to the next room (`glide`). Buttons sink a little while pressed and hover changes colour: both plain CSS on the same tokens.
+A message row's highlight (hover, keyboard focus, editing, a mention) is a CSS fade of its background: in over 160 ms, out over
+220 ms, so moving between rows crossfades; the focus ring itself shows at once. The jump flash fades in, holds and fades out
+(`flash`). Hiding the sidebar slides it out to the left and the main pane follows its edge; showing it slides both back
+(`slide`). The grid takes its final columns once at the start and only transforms move after that; the leaving sidebar is
+inert at once and hidden when the slide ends. The saved hidden state at load does not slide.
 
-Rules: under `prefers-reduced-motion` every preset is an 80 ms opacity fade, and the glide and the jump flash are instant. Nothing
+Rules: under `prefers-reduced-motion` every preset is an 80 ms opacity fade, and the glide, the jump flash, the row highlight and
+the sidebar are instant. Nothing
 animates on a speaking change; the ring toggles instantly (a fade once cost about 60 percent more CPU in a call). History, a room open and
 "Load older" do not animate; only live arrivals do, three at most. The rooms, counts and people that come with the first hello appear
 at once (`settle()`), and at most three transitions start in one task. A dialog or popover closes at once, so focus moves on; the fading
