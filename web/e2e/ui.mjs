@@ -172,6 +172,8 @@ try {
 
   await a.getByRole('button', { name: 'Move music room up' }).click();
   await order(b, ['general', 'music room', 'hangout']);
+  // bob's event can land before alice's PUT answers, and a move is ignored while one is in flight: wait for her row.
+  await order(a, ['general', 'music room', 'hangout']);
   // Alt+Up from the Move up button: at the top it is disabled, so focus must move to Move down in the same row.
   await a.getByRole('button', { name: 'Move music room up' }).focus();
   await a.keyboard.press('Alt+ArrowUp');
