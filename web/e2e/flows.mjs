@@ -307,7 +307,7 @@ try {
   const gate = b.getByRole('switch', { name: 'Noise gate' });
   assert.ok(await gate.isDisabled(), 'the noise gate switch is enabled in browser mode');
   assert.match(await b.getByText('Works only with DeepFilterNet noise suppression.').innerText(), /DeepFilterNet/);
-  await b.getByLabel('Noise suppression').selectOption('deepfilter');
+  await b.getByLabel('Noise suppression', { exact: true }).selectOption('deepfilter');
   await gate.check();
   assert.deepEqual(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad), { thresholdDb: -50, gate: true });
   const b3 = await b.context().newPage();
@@ -315,7 +315,7 @@ try {
   assert.ok(await b3.getByRole('switch', { name: 'Noise gate' }).isChecked(), 'the noise gate did not persist');
   await b3.close();
   await gate.uncheck();
-  await b.getByLabel('Noise suppression').selectOption('browser');
+  await b.getByLabel('Noise suppression', { exact: true }).selectOption('browser');
   assert.ok(await gate.isDisabled());
   assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad.gate), false);
   const depth = await b.evaluate(() => history.length);
