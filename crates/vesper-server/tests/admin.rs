@@ -235,6 +235,58 @@ async fn revoked_invite_preview_is_404() {
     );
 }
 
+/// Creates an invite as `by` and returns its id and code.
+async fn new_invite(t: &TestServer, by: &Session, role: &str) -> (i64, String) {
+    let (s, _, v) = t.call(post("/api/invites", invite_body(role), by)).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let code = v["url"].as_str().unwrap().split_once('#').unwrap().1;
+    (v["info"]["id"].as_i64().unwrap(), code.to_string())
+}
+
+#[tokio::test]
+async fn moderator_revokes_member_invites_only() {
+    let t = TestServer::new().await;
+    let o = t.owner().await;
+    let md = moderator(&t, "mod").await;
+    let del = |id: i64| format!("/api/invites/{id}");
+
+    let (member_inv, _) = new_invite(&t, &o, "member").await;
+    assert_eq!(
+        status(&t, Method::DELETE, &del(member_inv), None, Some(&md)).await,
+        StatusCode::NO_CONTENT
+    );
+
+    let (mod_inv, code) = new_invite(&t, &o, "moderator").await;
+    let (s, _, v) = t
+        .call(request(
+            Method::DELETE,
+            &del(mod_inv),
+            None,
+            Some(&md.cookie),
+        ))
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    assert_eq!(v["code"], "forbidden", "{v}");
+    // Still valid: it signs up a new moderator.
+    let bob = t.signup(&code, "bob").await;
+    assert_eq!(bob.user.role, Role::Moderator);
+
+    // The owner revokes either kind.
+    for role in ["member", "moderator"] {
+        let (id, _) = new_invite(&t, &o, role).await;
+        assert_eq!(
+            status(&t, Method::DELETE, &del(id), None, Some(&o)).await,
+            StatusCode::NO_CONTENT,
+            "{role}"
+        );
+    }
+    // Unknown ids stay 404 for a moderator.
+    assert_eq!(
+        status(&t, Method::DELETE, &del(999), None, Some(&md)).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
 #[tokio::test]
 async fn unknown_user_is_404() {
     let t = TestServer::new().await;
@@ -308,18 +360,24 @@ async fn every_route_for_every_role() {
             let grew = if want == S::CREATED { 1 } else { 0 };
             assert_eq!(n_invites().await, before + grew, "create {role} {who:?}");
         }
-        // A fresh invite, made by the owner, for each revoke.
-        let (_, _, v) = t
-            .call(post("/api/invites", invite_body("moderator"), &owner))
-            .await;
-        let inv_id = v["info"]["id"].as_i64().unwrap();
-        let path = format!("/api/invites/{inv_id}");
-        let got = status(&t, Method::DELETE, &path, None, s).await;
-        let want = pick(who, S::NO_CONTENT, S::NO_CONTENT, S::FORBIDDEN);
-        assert_eq!(got, want, "revoke {who:?}");
-        let invites = t.state.store.invites().await.unwrap();
-        let revoked = invites.iter().find(|i| i.id == inv_id).unwrap().revoked;
-        assert_eq!(revoked, want == S::NO_CONTENT, "revoked flag {who:?}");
+        // A fresh invite, made by the owner, for each revoke. Moderators revoke member invites only.
+        for (role, want_mod) in [("member", S::NO_CONTENT), ("moderator", S::FORBIDDEN)] {
+            let (_, _, v) = t
+                .call(post("/api/invites", invite_body(role), &owner))
+                .await;
+            let inv_id = v["info"]["id"].as_i64().unwrap();
+            let path = format!("/api/invites/{inv_id}");
+            let got = status(&t, Method::DELETE, &path, None, s).await;
+            let want = pick(who, want_mod, S::NO_CONTENT, S::FORBIDDEN);
+            assert_eq!(got, want, "revoke {role} {who:?}");
+            let invites = t.state.store.invites().await.unwrap();
+            let revoked = invites.iter().find(|i| i.id == inv_id).unwrap().revoked;
+            assert_eq!(
+                revoked,
+                want == S::NO_CONTENT,
+                "revoked flag {role} {who:?}"
+            );
+        }
 
         for target in [Target::Member, Target::Mod, Target::Owner, Target::Me] {
             let target_session = match target {

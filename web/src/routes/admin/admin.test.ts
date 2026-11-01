@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { InviteInfo } from '../../lib/gen/InviteInfo';
-import { byRole, bytes, inviteStatus, moveRoom, untilText } from './admin';
+import { byRole, bytes, canRevoke, inviteStatus, moveRoom, untilText } from './admin';
 
 const NOW = 1_800_000_000_000;
 const inv = (o: Partial<InviteInfo> = {}): InviteInfo =>
@@ -17,6 +17,17 @@ describe('inviteStatus', () => {
   it('revoked, then used up, win over expired', () => {
     expect(inviteStatus(inv({ revoked: true, uses: 1, expires_at: NOW - 1 }), NOW)).toBe('revoked');
     expect(inviteStatus(inv({ uses: 1, expires_at: NOW - 1 }), NOW)).toBe('used');
+  });
+});
+
+describe('canRevoke', () => {
+  it('owner on any active invite, a moderator on active member invites only', () => {
+    expect(canRevoke(inv({ role: 'moderator' }), 'owner', NOW)).toBe(true);
+    expect(canRevoke(inv(), 'owner', NOW)).toBe(true);
+    expect(canRevoke(inv(), 'moderator', NOW)).toBe(true);
+    expect(canRevoke(inv({ role: 'moderator' }), 'moderator', NOW)).toBe(false);
+    expect(canRevoke(inv({ role: 'owner' }), 'moderator', NOW)).toBe(false);
+    expect(canRevoke(inv({ revoked: true }), 'owner', NOW)).toBe(false);
   });
 });
 

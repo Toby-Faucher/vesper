@@ -5,7 +5,7 @@
   import { copyText } from '../../lib/ui/clipboard';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
   import { loadUsers } from '../../lib/ui/users';
-  import { EXPIRES, ROLE_NAMES, STATUS_NAMES, inviteStatus, untilText } from './admin';
+  import { EXPIRES, ROLE_NAMES, STATUS_NAMES, canRevoke, inviteStatus, untilText } from './admin';
   import Button from '../../lib/ui/c/Button.svelte';
   import Dialog from '../../lib/ui/c/Dialog.svelte';
   import Field from '../../lib/ui/c/Field.svelte';
@@ -169,7 +169,7 @@
               <td class="who" title={creator(i.created_by)}>{creator(i.created_by)}</td>
               <td class:dim={st !== 'active'}>{STATUS_NAMES[st]}</td>
               <td class="text-right">
-                {#if st === 'active'}<Button size="sm" variant="ghost" onclick={() => ([revoking, revokeError] = [i, ''])}>Revoke</Button>{/if}
+                {#if canRevoke(i, session.state.me!.user.role, now)}<Button size="sm" variant="ghost" onclick={() => ([revoking, revokeError] = [i, ''])}>Revoke</Button>{/if}
               </td>
             </tr>
           {/each}

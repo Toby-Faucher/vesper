@@ -21,6 +21,10 @@ export function inviteStatus(i: InviteInfo, now: number): InviteStatus {
   return 'active';
 }
 
+/** Revoke shows on active invites; a moderator only gets it on member invites, as the server allows. */
+export const canRevoke = (i: InviteInfo, viewer: Role, now: number) =>
+  inviteStatus(i, now) === 'active' && (viewer === 'owner' || i.role === 'member');
+
 /** When `ms` is: "in 7 days", "in 3 h", "in 20 min", "in less than a minute"; past times as relTime ("2 days ago"). */
 export function untilText(ms: number, now: number): string {
   if (ms <= now) return relTime(ms, now);

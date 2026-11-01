@@ -322,7 +322,8 @@ Roles (`require`, `api_admin.rs`; owner > moderator > member):
 | Action | Member | Moderator | Owner |
 |---|---|---|---|
 | List users | yes | yes | yes |
-| List and revoke invites | no | yes | yes |
+| List invites, revoke a member invite | no | yes | yes |
+| Revoke a moderator invite | no | no | yes |
 | Mint a member invite | no | yes | yes |
 | Mint a moderator invite | no | no | yes |
 | Change a role, ban, unban | no | no | yes, not on themselves or an owner |

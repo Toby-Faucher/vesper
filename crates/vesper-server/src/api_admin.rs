@@ -111,7 +111,15 @@ async fn revoke_invite(
     id: Result<Path<i64>, PathRejection>,
 ) -> Result<StatusCode, ApiError> {
     require(&a.user, Role::Moderator)?;
-    st.store.revoke_invite(path(id)?, now_ms()).await?;
+    let id = path(id)?;
+    // Moderators revoke member invites only. An unknown id falls through to the store's 404.
+    if a.user.role != Role::Owner {
+        let invites = st.store.invites().await?;
+        if invites.iter().any(|i| i.id == id && i.role != Role::Member) {
+            return Err(ApiError::new(ApiErrorCode::Forbidden, "not allowed"));
+        }
+    }
+    st.store.revoke_invite(id, now_ms()).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -1,7 +1,8 @@
 // UI flows for the admin pages, in real Chromium against the release server: alice (owner) creates an invite in the UI,
 // copies the link, and bob signs up with it; a revoked link shows the bad-link text; making bob a moderator gives him the
-// Admin menu entry and the moderator view; a member who opens /admin sees the not-allowed page; a ban of carol ends her
-// session. Invite links are never printed. Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
+// Admin menu entry and the moderator view (no Revoke on a moderator invite); a member who opens /admin sees the not-allowed
+// page; a ban of carol ends her session. Invite links are never printed. Needs ../target/release/vesper-server and dist/
+// (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { ORIGIN, browser, cli, cspViolations, signedIn, signup, sleep, startServer } from './lib.mjs';
 
@@ -196,6 +197,14 @@ try {
   assert.equal(await b.getByRole('navigation', { name: 'Admin sections' }).getByRole('link', { name: 'Rooms' }).count(), 0);
   await b.goto(`${ORIGIN}/admin/rooms`);
   await b.getByText('Only the owner can open this page.').waitFor();
+  // A moderator revokes member invites only: no Revoke on the owner's moderator invite, Revoke on his own member invite.
+  await a.evaluate(() => fetch('/api/invites', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: 'moderator', max_uses: 1, expires_hours: 1 }) }));
+  await b.goto(`${ORIGIN}/admin/invites`);
+  await createInvite(b);
+  const active = b.locator('tr[data-invite]').filter({ hasText: 'Active' });
+  await active.filter({ hasText: 'Moderator' }).waitFor();
+  assert.equal(await active.filter({ hasText: 'Moderator' }).getByRole('button', { name: 'Revoke' }).count(), 0, 'a moderator can revoke a moderator invite');
+  await active.filter({ hasText: 'Member' }).getByRole('button', { name: 'Revoke' }).waitFor();
   console.log('role change confirm, moderator view: ok');
 
   // A ban asks first and names carol; her open session ends; the row says Banned with Unban.
