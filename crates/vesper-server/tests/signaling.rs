@@ -1055,6 +1055,58 @@ async fn ban_closes_socket_and_voice() {
 }
 
 #[tokio::test]
+async fn ban_between_upgrade_and_hub_add_closes_with_4001() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let alice = server.account("alice", Role::Member).await;
+    // The upgrade passes, then the socket waits before it joins the hub.
+    let gate = server.state.hub.hold_adds().await;
+    let mut ws = connect(server.addr, Some(&alice.cookie), Some(ORIGIN), false)
+        .await
+        .expect("upgrade passes before the ban");
+    let path = format!("/api/users/{}/ban", alice.user.user_id);
+    let (status, _, v) = server.call(post(&path, json!({}), &owner)).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    drop(gate);
+    // A push right after: it must not reach the dead socket either.
+    let (status, _, _) = server
+        .call(request(
+            Method::PATCH,
+            "/api/me",
+            Some(&json!({ "display_name": "Owner" })),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    match tokio::time::timeout(WAIT, ws.next())
+        .await
+        .expect("frame in time")
+    {
+        Some(Ok(Message::Close(Some(f)))) => assert_eq!(u16::from(f.code), CLOSE_SESSION_ENDED),
+        other => panic!("expected close 4001 before any message, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn message_flood_is_rate_limited_then_closed() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let mut a = Conn::open(&server, &alice).await;
+    // A burst of 20 passes; `typing` gets no reply, so the first reply is the refusal.
+    for _ in 0..21 {
+        a.send(&ClientMsg::Typing { room_id: 1 });
+    }
+    a.expect_error(ErrorCode::RateLimited).await;
+    for _ in 0..40 {
+        a.send(&ClientMsg::Typing { room_id: 1 });
+    }
+    assert_eq!(
+        a.expect_closed().await,
+        Some(vesper_server::ws::CLOSE_RATE_LIMITED)
+    );
+}
+
+#[tokio::test]
 async fn restricted_room_changes_reach_only_members() {
     let server = TestServer::new().await;
     let owner = server.account("owner", Role::Owner).await;
@@ -1154,6 +1206,10 @@ async fn full_queue_closes_only_that_socket() {
         got += 1;
     }
     assert!(got < N, "the stalled socket was not closed: got all {got}");
+    assert_eq!(
+        *slow.close_code.lock().unwrap(),
+        Some(vesper_server::hub::CLOSE_TOO_SLOW)
+    );
     // The other socket still works.
     let (status, _, _) = server
         .call(request(

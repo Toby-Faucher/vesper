@@ -52,6 +52,8 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`.
    cookie names a live session, and 503 past `VESPER_MAX_SOCKETS` (`ws.rs` `upgrade`).
 2. The server writes `hello` first: the user and session, every user, the rooms this user can see, and who is in voice in them.
    The socket joins the hub before `hello` is read, so no change in between is lost; changes queued meanwhile follow `hello`.
+   Right after it joins the hub, the server checks the session again: a logout, ban or expiry that landed after the upgrade
+   closes the socket with 4001 before `hello`. If `hello` cannot be built (a store error), it is logged and the socket closes with 1011.
 3. The client builds an SDP offer, then sends `join` with a room id. The server reads the user and the room again, so a role,
    ban or member list change counts (`bad_message` if the room is unknown). `Voice::join` (`voice.rs`) refuses a banned user or
    one who cannot see the room (`forbidden`).
@@ -62,6 +64,9 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`.
 6. When tracks are added or stopped, the SFU makes a new offer. It arrives as `offer`; the client answers with `answer`, one at a time.
 7. `set_voice_state` updates presence. `leave`, a closed socket, a kick, a lost room or the SFU ending the session removes the user.
 8. The server pings every 25 s and drops a socket silent for two periods (`ws.rs`).
+
+Each socket may send a burst of 20 messages, then 5 a second (`answer` does not count, since the server asks for it). A message
+over the limit is dropped with `error { code: rate_limited }`. Past 20 such refusals (then 1 a second) the socket closes with 1008.
 
 Presence goes to every socket whose user can see the room (`Hub::broadcast_room`), in voice or not, so the room list shows who
 is talking. `peer_joined` and `peer_state` skip the session's own socket. `peer_left` also reaches the session's own socket: that

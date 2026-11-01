@@ -29,7 +29,8 @@ database from being a key ring. One cookie for REST and the socket means one way
 
 Removed from 0003: `VESPER_DEV_KEY`, the key in the join message and its check, the user id from a hash of the display name,
 the `shortcut:` comment in `config.rs`, the join deadline (`VESPER_JOIN_DEADLINE_SECS`) and the cap of five failed messages before
-a join. Sockets are now authenticated before the upgrade, so neither limit is needed.
+a join. Sockets are now authenticated before the upgrade, so those two limits are gone. A signed-in user can still flood
+their socket, so each socket has its own message rate limit instead (`ws.rs`, see `docs/architecture.md`).
 
 Consequences: A lost owner password needs a manual database edit; there is no reset command. Clients that are not browsers
 (`curl`, `vesper-loadtest`) must send the cookie and `Origin` themselves. Behind Vite dev, `VESPER_ORIGIN` must be

@@ -19,7 +19,7 @@ Last updated 2026-11-01. Nothing here was run in a real browser or a real deploy
 
 ## Server behaviour
 
-- **One lock serialises joins.** It is held while the SFU joins and while an old session closes (up to 2 s), for every room at once. Fine for 12 people. A signed-in user can slow others by rejoining in a loop.
+- **One lock serialises joins.** It is held while the SFU joins and while an old session closes (up to 2 s), for every room at once. Fine for 12 people. A signed-in user can slow others by rejoining in a loop, up to the socket limit of 5 messages a second.
 - **A voice join that races a member list or role change can keep access until the next change.** The join reads the room and role before it takes the join lock, and the change takes the user out of voice only if they were in it by then. The window is a few milliseconds.
 - **A display name change does not reach voice presence** until the user joins again (`peer_joined` carries the name from the join).
 - **An open socket outlives a session that expires.** A session unused for 90 days stops working for requests, but a socket opened on it stays until it closes. Logout, revoke, password change and ban do close it.

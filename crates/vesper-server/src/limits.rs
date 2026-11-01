@@ -39,9 +39,32 @@ const PRUNE_ABOVE: usize = 10_000;
 /// Past the cap, prune at most this often, so the O(n) sweep does not run on every call.
 const PRUNE_EVERY: Duration = Duration::from_secs(60);
 
-struct Bucket {
+/// One token bucket. [`Limiter`] keeps one per key; a socket keeps its own (`ws.rs`).
+pub struct Bucket {
     tokens: f64,
     at: Instant,
+}
+
+impl Bucket {
+    pub fn full(burst: f64, now: Instant) -> Bucket {
+        Bucket {
+            tokens: burst,
+            at: now,
+        }
+    }
+
+    /// Takes one token, refilling one per `per` up to `burst`, or returns how long until one is free.
+    pub fn take(&mut self, burst: f64, per: Duration, now: Instant) -> Result<(), Duration> {
+        let elapsed = now.saturating_duration_since(self.at);
+        self.tokens = (self.tokens + elapsed.as_secs_f64() / per.as_secs_f64()).min(burst);
+        self.at = now.max(self.at);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            Ok(())
+        } else {
+            Err(per.mul_f64(1.0 - self.tokens))
+        }
+    }
 }
 
 #[derive(Default)]
@@ -68,19 +91,9 @@ impl Limiter {
             });
             *pruned = Some(now);
         }
-        let b = map.entry((kind, key.to_string())).or_insert(Bucket {
-            tokens: burst,
-            at: now,
-        });
-        let elapsed = now.saturating_duration_since(b.at);
-        b.tokens = (b.tokens + elapsed.as_secs_f64() / per.as_secs_f64()).min(burst);
-        b.at = now.max(b.at);
-        if b.tokens >= 1.0 {
-            b.tokens -= 1.0;
-            Ok(())
-        } else {
-            Err(per.mul_f64(1.0 - b.tokens))
-        }
+        map.entry((kind, key.to_string()))
+            .or_insert(Bucket::full(burst, now))
+            .take(burst, per, now)
     }
 }
 

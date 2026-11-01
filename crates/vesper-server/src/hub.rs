@@ -75,8 +75,9 @@ struct Conn {
     tx: Outbox,
 }
 
+/// The open sockets, plus a gate that a test can hold to pause sockets before [`Hub::add`].
 #[derive(Clone, Default)]
-pub struct Hub(Arc<Mutex<Inner>>);
+pub struct Hub(Arc<Mutex<Inner>>, Arc<tokio::sync::RwLock<()>>);
 
 #[derive(Default)]
 struct Inner {
@@ -87,6 +88,18 @@ struct Inner {
 impl Hub {
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.0.lock().expect("hub lock poisoned")
+    }
+
+    /// Test seam: while the guard lives, upgraded sockets wait in [`Hub::wait_gate`], which is
+    /// the gap between the upgrade's session check and `add`.
+    #[doc(hidden)]
+    pub async fn hold_adds(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        self.1.clone().write_owned().await
+    }
+
+    /// Returns at once unless a test holds [`Hub::hold_adds`].
+    pub async fn wait_gate(&self) {
+        drop(self.1.read().await);
     }
 
     pub fn add(&self, user: UserInfo, session_id: i64, tx: Outbox) -> ConnId {

@@ -19,4 +19,6 @@ expect fail "Cookie: vesper_session=$tok"
 expect fail "Set-Cookie: __Host-vesper_session=$tok; Secure"
 expect pass 'Cookie: vesper_session=<token>'
 expect pass "vesper_session=${tok:0:63}"
+expect fail "https://vesper.example/invite#$tok"
+expect pass 'https://vesper.example/invite#<code>'
 [ $fails = 0 ] && echo "all ok" || { echo "$fails failed"; exit 1; }

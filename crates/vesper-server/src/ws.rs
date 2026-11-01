@@ -10,16 +10,66 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Instant;
-use vesper_protocol::{ClientMsg, ErrorCode, MAX_MSG_BYTES, Me, ServerMsg, UserInfo};
+use vesper_protocol::{
+    CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Me, ServerMsg, UserInfo,
+};
+use vesper_store::{StoreError, now_ms};
 
 use crate::AppState;
-use crate::api_accounts::session_of;
+use crate::api_accounts::ApiError;
 use crate::api_rooms::can_see;
+use crate::auth::{cookie_token, hash_token};
 use crate::hub::{Inbox, Outbox, outbox};
+use crate::limits::Bucket;
 use crate::voice::JoinResult;
 
 /// Close code when the server cannot build `Hello` (1011, "internal error").
 const CLOSE_INTERNAL: u16 = 1011;
+/// Close code for a socket that keeps sending past its rate limit (1008, "policy violation").
+pub const CLOSE_RATE_LIMITED: u16 = 1008;
+
+/// Inbound budget of one socket: a burst of 20 messages, then 5 a second. `answer` is exempt,
+/// since the server asks for it.
+const MSG_BURST: f64 = 20.0;
+const MSG_REFILL: Duration = Duration::from_millis(200);
+/// Refused messages a socket may send (20, then 1 a second) before it is closed.
+const REFUSED_BURST: f64 = 20.0;
+const REFUSED_REFILL: Duration = Duration::from_secs(1);
+
+struct Budget {
+    msgs: Bucket,
+    refused: Bucket,
+}
+
+#[derive(Debug, PartialEq)]
+enum Admit {
+    Yes,
+    RateLimited,
+    Close,
+}
+
+impl Budget {
+    fn new(now: std::time::Instant) -> Budget {
+        Budget {
+            msgs: Bucket::full(MSG_BURST, now),
+            refused: Bucket::full(REFUSED_BURST, now),
+        }
+    }
+
+    fn admit(&mut self, now: std::time::Instant) -> Admit {
+        if self.msgs.take(MSG_BURST, MSG_REFILL, now).is_ok() {
+            Admit::Yes
+        } else if self
+            .refused
+            .take(REFUSED_BURST, REFUSED_REFILL, now)
+            .is_ok()
+        {
+            Admit::RateLimited
+        } else {
+            Admit::Close
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct WsState {
@@ -33,10 +83,14 @@ pub async fn upgrade(ws: WebSocketUpgrade, State(st): State<WsState>, h: HeaderM
     if !crate::auth::origin_ok(&h, &st.app.cfg.origin) {
         return (StatusCode::FORBIDDEN, "request from another origin").into_response();
     }
-    let (session_id, user) = match session_of(&h, &st.app).await {
+    let Some(hash) = cookie_token(&h, st.app.cfg.secure_cookies).and_then(|t| hash_token(&t))
+    else {
+        return (StatusCode::UNAUTHORIZED, "not signed in").into_response();
+    };
+    let (session_id, user) = match st.app.store.session_user(&hash, now_ms()).await {
         Ok(Some(s)) => s,
         Ok(None) => return (StatusCode::UNAUTHORIZED, "not signed in").into_response(),
-        Err(e) => return e.into_response(),
+        Err(e) => return ApiError::from(e).into_response(),
     };
     let Ok(permit) = st.sockets.clone().try_acquire_owned() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "too many connections").into_response();
@@ -44,16 +98,16 @@ pub async fn upgrade(ws: WebSocketUpgrade, State(st): State<WsState>, h: HeaderM
     // Bigger messages make recv() fail, which ends (and closes) this socket only.
     ws.max_message_size(MAX_MSG_BYTES)
         .max_frame_size(MAX_MSG_BYTES)
-        .on_upgrade(move |socket| handle(socket, st, user, session_id, permit))
+        .on_upgrade(move |socket| handle(socket, st, user, session_id, hash, permit))
 }
 
 /// `Hello` for `user`: everyone, and the rooms and voice presence this user can see.
-async fn hello(st: &WsState, user: &UserInfo, session_id: i64) -> Option<ServerMsg> {
-    let users = st.app.store.users().await.ok()?;
-    let mut rooms = st.app.store.rooms().await.ok()?;
+async fn hello(st: &WsState, user: &UserInfo, session_id: i64) -> Result<ServerMsg, StoreError> {
+    let users = st.app.store.users().await?;
+    let mut rooms = st.app.store.rooms().await?;
     rooms.retain(|r| can_see(user, r));
     let voice = st.app.voice.peers(|id| rooms.iter().any(|r| r.id == id));
-    Some(ServerMsg::Hello {
+    Ok(ServerMsg::Hello {
         me: Me {
             user: user.clone(),
             session_id,
@@ -82,6 +136,7 @@ async fn handle(
     st: WsState,
     user: UserInfo,
     session_id: i64,
+    token_hash: [u8; 32],
     _permit: OwnedSemaphorePermit,
 ) {
     let (
@@ -93,22 +148,36 @@ async fn handle(
     ) = outbox();
     // Added before Hello is read, so no event in between is lost. Events queued meanwhile go
     // out after Hello, which is written straight to the socket.
+    st.app.hub.wait_gate().await;
     let conn = st.app.hub.add(user.clone(), session_id, tx.clone());
     let user_id = user.user_id.clone();
     let voice = st.app.voice.clone();
     let mut joined: Option<JoinResult> = None;
     // The SFU id of this socket's connection check, if one runs.
     let mut check: Option<String> = None;
-    match hello(&st, &user, session_id).await {
-        Some(h) => {
-            let text = serde_json::to_string(&h).expect("ServerMsg serialises");
-            if !send(&mut socket, &mut close, Message::text(text)).await {
-                st.app.hub.remove(conn);
-                return;
+    // A logout or ban between the upgrade's check and `add` found no socket to close, so check
+    // again now that later ones will. Nothing queued meanwhile is sent: the close wins.
+    match st.app.store.session_user(&token_hash, now_ms()).await {
+        Ok(Some((id, _))) if id == session_id => match hello(&st, &user, session_id).await {
+            Ok(h) => {
+                let text = serde_json::to_string(&h).expect("ServerMsg serialises");
+                if !send(&mut socket, &mut close, Message::text(text)).await {
+                    st.app.hub.remove(conn);
+                    return;
+                }
             }
+            Err(e) => {
+                tracing::error!("hello: store: {e}");
+                tx.close(CLOSE_INTERNAL);
+            }
+        },
+        Ok(_) => tx.close(CLOSE_SESSION_ENDED),
+        Err(e) => {
+            tracing::error!("socket session check: store: {e}");
+            tx.close(CLOSE_INTERNAL);
         }
-        None => tx.close(CLOSE_INTERNAL),
     }
+    let mut budget = Budget::new(std::time::Instant::now());
     let mut ping = tokio::time::interval(st.ping_interval);
     let mut last_seen = Instant::now();
     loop {
@@ -139,7 +208,22 @@ async fn handle(
                     }
                 };
                 last_seen = Instant::now();
-                let error = match (serde_json::from_str::<ClientMsg>(&text), &joined) {
+                let parsed = serde_json::from_str::<ClientMsg>(&text);
+                if !matches!(parsed, Ok(ClientMsg::Answer { .. })) {
+                    match budget.admit(std::time::Instant::now()) {
+                        Admit::Yes => {}
+                        Admit::RateLimited => {
+                            let message = describe(ErrorCode::RateLimited).into();
+                            tx.send(ServerMsg::Error { code: ErrorCode::RateLimited, message });
+                            continue;
+                        }
+                        Admit::Close => {
+                            tx.close(CLOSE_RATE_LIMITED);
+                            continue;
+                        }
+                    }
+                }
+                let error = match (parsed, &joined) {
                     (Err(e), _) => Some((ErrorCode::BadMessage, format!("bad message: {e}"))),
                     (Ok(ClientMsg::Join { .. }), Some(j)) if voice.is_current(&j.user_id, j.session) => {
                         Some((ErrorCode::BadMessage, "already joined: leave first".into()))
@@ -266,5 +350,29 @@ fn describe(code: ErrorCode) -> &'static str {
         ErrorCode::BadMessage => "invalid offer",
         ErrorCode::Forbidden => "not allowed",
         ErrorCode::RateLimited => "too many requests",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budget_limits_then_closes() {
+        let now = std::time::Instant::now();
+        let mut b = Budget::new(now);
+        for _ in 0..20 {
+            assert_eq!(b.admit(now), Admit::Yes);
+        }
+        for _ in 0..20 {
+            assert_eq!(b.admit(now), Admit::RateLimited);
+        }
+        assert_eq!(b.admit(now), Admit::Close);
+        // 5 a second once the burst is spent.
+        let later = now + Duration::from_secs(1);
+        for _ in 0..5 {
+            assert_eq!(b.admit(later), Admit::Yes);
+        }
+        assert_eq!(b.admit(later), Admit::RateLimited);
     }
 }
