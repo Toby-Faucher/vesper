@@ -21,8 +21,8 @@ use vesper_store::{NewAccount, NewSession, StoreError, now_ms};
 use crate::AppState;
 use crate::auth::{
     clear_cookie, client_ip, cookie_token, device_label, hash_password, hash_token, new_token,
-    session_cookie, valid_accent, valid_bio, valid_display_name, valid_password, valid_username,
-    verify_password,
+    session_cookie, valid_accent, valid_bio, valid_display_name, valid_password, valid_ui_accent,
+    valid_username, verify_password,
 };
 use crate::limits::Kind;
 
@@ -358,6 +358,13 @@ async fn patch_me(
         ),
         None => None,
     };
+    let ui_accent = match req.ui_accent {
+        Some(c) => Some(
+            valid_ui_accent(&c)
+                .ok_or_else(|| bad("ui_accent: a preset name or a colour like #f0b010"))?,
+        ),
+        None => None,
+    };
     let user = st
         .store
         .update_profile(
@@ -365,6 +372,7 @@ async fn patch_me(
             display_name.as_deref(),
             accent.as_deref(),
             bio.as_deref(),
+            ui_accent.as_deref(),
         )
         .await?;
     st.hub.update_user(user.clone());

@@ -132,6 +132,7 @@ mod tests {
             banned: false,
             bio: String::new(),
             avatar: None,
+            ui_accent: None,
         };
         let room = |restricted, members: &[&str]| RoomInfo {
             id: 1,
