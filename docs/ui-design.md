@@ -24,7 +24,7 @@ Anything that hides a failure. A spinner with no cause. Sound or visual effects 
 Written 2026-11-01, after the visual check of every screen.
 
 **The shell.** One left sidebar, the main pane, and nothing on the right. The sidebar is 248 px wide. Its header holds the
-mark, the word Vesper and the switcher button (Ctrl+K). Under it is the Rooms list. Each row is 28 px and shows the room name,
+logo and the switcher button (Ctrl+K). Under it is the Rooms list. Each row is 28 px and shows the room name,
 an unread count and an amber `@n` pill for mentions. People in voice are listed under their room, with avatar, name, a mute or
 deafen icon and the speaking cue. Your own row with Settings sits at the bottom. The sidebar hides fully with `Ctrl+\`. It never
 shrinks to a row of icons. The main pane has a 48 px header with the room name, Pins, Search and Join voice. Join voice is the amber primary only when you are in no call. While you are in a
@@ -64,7 +64,8 @@ To see every role, the type scale, the radii and the focus ring, run `npm --pref
 
 The primitives live in [`web/src/lib/ui/c/`](../web/src/lib/ui/c/): buttons, fields, switch, range, dialog, popover, menu, avatar,
 badge, status line, empty state. Dialogs are native `<dialog>` with `showModal()`; popovers and menus use the Popover API and
-`place()` in `web/src/lib/ui/place.ts`. Per-user colour is an avatar slot from `web/src/lib/ui/avatar.ts`. An avatar shows the person's picture when they set one (Settings > Account), else their initials on the slot colour; the speaking ring and the mute glyph draw the same around either. Icons are Lucide paths in
+`place()` in `web/src/lib/ui/place.ts`. The CSS tooltip (`data-tip`) goes through `place()` too
+(`web/src/lib/ui/tip.ts`), so it flips or shifts to stay on screen. Per-user colour is an avatar slot from `web/src/lib/ui/avatar.ts`. An avatar shows the person's picture when they set one (Settings > Account), else their initials on the slot colour; the speaking ring and the mute glyph draw the same around either. Icons are Lucide paths in
 `web/src/lib/ui/icons.ts`. `/_gallery?primitives` shows each one in its states.
 
 ## Checked

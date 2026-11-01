@@ -211,8 +211,8 @@
       </div>
       <div class="flex items-center gap-8">
         <span class="flex items-center gap-1 text-xs text-fg-3"><Kbd>Ctrl</Kbd><Kbd>K</Kbd> to switch rooms</span>
-        <span class="flex items-center gap-2 text-sm font-medium"><Mark /> Vesper</span>
-        <Mark size={32} />
+        <Mark />
+        <Mark size={56} />
       </div>
     </div>
   </section>

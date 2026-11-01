@@ -130,6 +130,29 @@ try {
   await b.waitForURL(/\/r\/\d+$/);
   console.log('member at /admin: not allowed: ok');
 
+  // Popups stay inside the viewport at 1024x640: the Settings tooltip at the bottom of the sidebar (it went under the edge)
+  // flips above, the account menu opens upward. The gear turns on hover (a transform transition).
+  await b.setViewportSize({ width: 1024, height: 640 });
+  const cog = b.getByRole('button', { name: 'Settings', exact: true });
+  await cog.hover();
+  assert.ok((await b.evaluate(() => document.getAnimations().map((x) => JSON.stringify(x.effect?.getKeyframes?.() ?? [])))).some((f) => f.includes('"transform"')),
+    'the Settings gear does not turn on hover');
+  await sleep(500);
+  const inside = (r) => r.left >= 0 && r.top >= 0 && r.right <= 1024 && r.bottom <= 640;
+  const tip = await cog.evaluate((el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el, '::after'), m = new DOMMatrix(s.transform);
+    const left = r.left + parseFloat(s.left) + m.e, top = r.top + parseFloat(s.top) + m.f;
+    return { left, top, right: left + parseFloat(s.width), bottom: top + parseFloat(s.height), shown: s.opacity === '1' };
+  });
+  assert.ok(tip.shown && inside(tip), `the Settings tooltip is not inside the viewport: ${JSON.stringify(tip)}`);
+  await b.mouse.move(600, 300);
+  await b.getByRole('button', { name: /^Account, / }).click();
+  const menu = await b.getByRole('menu', { name: 'Account' }).evaluate((el) => el.getBoundingClientRect().toJSON());
+  assert.ok(inside(menu), `the account menu is not inside the viewport: ${JSON.stringify(menu)}`);
+  await b.keyboard.press('Escape');
+  await b.setViewportSize({ width: 1280, height: 720 });
+  console.log('popups inside the viewport, gear turns: ok');
+
   // carol, a member, so the moderator view below has a lower row that must still show no controls.
   const { url: carolLink } = await a.evaluate(async () =>
     (await fetch('/api/invites', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: 'member', max_uses: 1, expires_hours: 1 }) })).json());
@@ -323,6 +346,8 @@ try {
   await searchHits(r).first().click();
   await r.getByRole('dialog', { name: 'Search' }).waitFor({ state: 'hidden' });
   const jumpMotion = await motionSince(r);
+  await r.getByRole('button', { name: 'Settings', exact: true }).hover();
+  jumpMotion.push(...(await motionSince(r)));
   assert.ok(dialogMotion.length && barMotion.length, 'no motion recorded: the hook missed the animations');
   assert.deepEqual(moves([...dialogMotion, ...barMotion, ...jumpMotion]), [], 'something moves under reduced motion');
   await r.getByRole('button', { name: 'Leave' }).click();
