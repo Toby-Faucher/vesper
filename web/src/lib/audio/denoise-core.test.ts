@@ -210,6 +210,17 @@ describe('DenoiseCore stats', () => {
     expect(t.core.stats().inputRms).toBeCloseTo(0.45, 6);
   });
 
+  it('inputPeak is the boosted input before the limiter, over the last half second', () => {
+    const t = make();
+    t.core.limiter.set(true);
+    let top = 0;
+    for (let i = 0; i < HALF_S; i++) top = Math.max(top, ...render(t.core, blk(i === 5 ? 2 : 0.1)));
+    expect(t.core.stats().inputPeak).toBe(2);
+    expect(top).toBeLessThan(1); // what passed on (the passthrough here) was limited
+    for (let i = 0; i < HALF_S; i++) render(t.core, blk(0.1));
+    expect(t.core.stats().inputPeak).toBeCloseTo(0.1, 6);
+  });
+
   it('stats are plain numbers and strings', () => {
     const s = make().core.stats();
     expect(JSON.parse(JSON.stringify(s))).toEqual(s);

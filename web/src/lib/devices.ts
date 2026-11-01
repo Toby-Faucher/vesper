@@ -1,3 +1,5 @@
+import type { CaptureStats } from './audio/capture';
+
 export type DeviceError = 'denied' | 'no-device' | 'in-use' | 'unplugged' | 'ended' | 'muted' | 'unknown';
 
 /** Accepts an Error/DOMException, or a capture "microphone lost: <Name>: ..." reason string. */
@@ -24,6 +26,17 @@ export const DEVICE_MESSAGES: Record<DeviceError, string> = {
 
 /** Headset profiles (HFP) drop to 8 to 16 kHz mono, which wrecks the denoiser input. */
 export const isBluetoothLabel = (label: string) => /bluetooth|hands-free|\bhfp\b|airpods|\bbuds/i.test(label);
+
+/**
+ * The level the hint judges, in dBFS. The meter taps the sent track, which in deepfilter mode is limited and maybe
+ * gated, so a clipping mic would never read over -1 and a gated silence would read as a dead mic. With a fresh worklet
+ * report (every 500 ms), use its pre-limiter input peak instead.
+ */
+export function hintLevelDb(meterDb: number, s: CaptureStats | null | undefined): number {
+  const p = s?.pipeline;
+  if (!p || s!.ageMs === null || s!.ageMs > 1500) return meterDb;
+  return p.inputPeak > 0 ? Math.max(-100, 20 * Math.log10(p.inputPeak)) : -100;
+}
 
 /** Peak levels in dBFS over a recent window. */
 export function levelHint(peaksDb: number[]): 'clipping' | 'too-quiet' | 'ok' {
