@@ -252,6 +252,77 @@ scene('shell-collapsed', async (ctx) => {
   await page.getByRole('button', { name: 'Show sidebar' }).click();
 });
 
+// Motion poses: each animation is frozen half way (Web Animations API) and shot, then let go. A message arriving, a room
+// switch with the sidebar glide, a reaction popping in, the account menu opening, and a person leaving voice.
+scene('motion', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  const rooms = await ctx.api(page, 'GET', '/api/rooms');
+  const id = (name) => rooms.find((r) => r.name === name).id;
+  await rest(page);
+  const freeze = () => page.evaluate(() => {
+    window.__half = true;
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (k, o) {
+      const a = animate.call(this, k, o);
+      const d = Number(a.effect?.getTiming().duration);
+      if (window.__half && d > 0) { a.pause(); a.currentTime = d / 2; }
+      return a;
+    };
+  });
+  const thaw = () => page.evaluate(() => { window.__half = false; for (const a of document.getAnimations()) a.play(); });
+  const pose = async (name, act) => {
+    await freeze();
+    await act();
+    await sleep(150);
+    await ctx.shot(page, name);
+    await thaw();
+    await sleep(400);
+  };
+  let msg;
+  await pose('motion-arrive', async () => {
+    msg = await ctx.api(ctx.bob.page, 'POST', `/api/rooms/${id('general')}/messages`, { body: 'the new message, half way in', reply_to: null, attachments: [] });
+    await page.locator('article').filter({ hasText: 'the new message, half way in' }).waitFor();
+  });
+  await pose('motion-react', async () => {
+    await ctx.api(ctx.bob.page, 'PUT', `/api/messages/${msg.id}/reaction`, { emoji: '👍', on: true });
+    await page.getByRole('button', { name: /^React 👍/ }).first().waitFor({ timeout: 3000 }).catch(() => console.warn('motion: no reaction seen'));
+  });
+  await pose('motion-room-switch', async () => {
+    await page.getByRole('navigation', { name: 'Rooms' }).getByRole('link', { name: /^music/ }).click();
+    await page.getByRole('heading', { level: 1, name: 'music' }).waitFor();
+  });
+  await pose('motion-menu', async () => {
+    await page.getByRole('button', { name: /^Account/ }).click();
+    await page.getByRole('menu', { name: 'Account' }).waitFor();
+  });
+  await page.keyboard.press('Escape');
+  await sleep(400);
+  await pose('motion-leave', async () => {
+    await extra[2].page.getByRole('button', { name: 'Leave' }).click();
+    await sleep(300);
+  });
+  // Frame timing in the busiest case: five in the call, a room switch, two arrivals and a reaction, unfrozen. rAF gaps over
+  // 1.5 s, printed (headless Chromium paces frames itself, so read it as a rough check, not a measure of a real screen).
+  await openRoom(page, 'general');
+  await sleep(500);
+  await page.evaluate(() => {
+    window.__frames = [];
+    let last = performance.now();
+    const tick = (t) => { window.__frames.push(t - last); last = t; if (window.__frames.length < 600) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+  await page.getByRole('navigation', { name: 'Rooms' }).getByRole('link', { name: /^music/ }).click();
+  for (const body of ['one more', 'and another']) await ctx.api(ctx.bob.page, 'POST', `/api/rooms/${id('music')}/messages`, { body, reply_to: null, attachments: [] });
+  const last = await ctx.api(ctx.bob.page, 'POST', `/api/rooms/${id('music')}/messages`, { body: 'react to this', reply_to: null, attachments: [] });
+  await ctx.api(ctx.bob.page, 'PUT', `/api/messages/${last.id}/reaction`, { emoji: '👍', on: true });
+  await sleep(1500);
+  const f = (await page.evaluate(() => window.__frames)).slice(1).sort((a, b) => a - b);
+  const at = (q) => f[Math.min(f.length - 1, Math.floor(q * f.length))].toFixed(1);
+  console.log(`motion frames: ${f.length} in 1.5 s, p50 ${at(0.5)} ms, p95 ${at(0.95)} ms, max ${f.at(-1).toFixed(1)} ms, over 25 ms: ${f.filter((x) => x > 25).length}`);
+  await openRoom(page, 'general');
+});
+
 // The call bar: alice reads general while in the music call with four others (two muted or deafened, one speaking).
 const bar = (page) => page.getByRole('region', { name: 'Call' });
 scene('call-bar', async (ctx) => {
