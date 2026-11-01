@@ -126,7 +126,7 @@
       oninput={(e) => set({ vad: { ...settings.vad, thresholdDb: +e.currentTarget.value } })} />
   </Field>
   <Switch label="Noise gate" checked={settings.vad.gate}
-    help="Mutes the hiss between your words when your level stays under the marker. DeepFilterNet mode only. The meter shows the gated sound, so turn it off to set the marker."
+    help="Mutes sound under the marker, like fan hiss between words. DeepFilterNet mode only. Turn it off while you set the marker: the meter shows the gated sound."
     onchange={(e) => set({ vad: { ...settings.vad, gate: e.currentTarget.checked } })} />
 {/if}
 
