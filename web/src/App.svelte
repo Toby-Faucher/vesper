@@ -19,7 +19,7 @@
     return () => window.removeEventListener('popstate', pop);
   });
 
-  // Every page but sign in and invite needs a session: ask the server who we are, else go to sign in.
+  // Every page but sign in, invite and reset needs a session: ask the server who we are, else go to sign in.
   async function load() {
     error = '';
     try {
@@ -32,7 +32,7 @@
   }
   const r = $derived(parse(route.path));
   const gallery = $derived(import.meta.env.DEV && r.name === 'gallery');
-  const inShell = $derived(r.name !== 'login' && r.name !== 'invite' && !gallery);
+  const inShell = $derived(r.name !== 'login' && r.name !== 'invite' && r.name !== 'reset' && !gallery);
   $effect(() => {
     if (!inShell) return;
     const signedIn = !!session.state.me;
@@ -47,6 +47,8 @@
   <Login />
 {:else if r.name === 'invite'}
   {#await import('./routes/Signup.svelte') then m}<m.default />{:catch}{@render failed()}{/await}
+{:else if r.name === 'reset'}
+  {#await import('./routes/Reset.svelte') then m}<m.default />{:catch}{@render failed()}{/await}
 {:else if session.state.me}
   <Shell />
 {:else if error}

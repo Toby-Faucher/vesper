@@ -53,5 +53,6 @@
   {#if error}<p role="alert" class="mt-4 text-danger" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
   {#snippet below()}
     <p class="mt-4 text-center text-fg-3">Need an account? Ask for an invite link.</p>
+    <p class="mt-1 text-center text-fg-3">Forgot your password? Ask the owner for a reset link.</p>
   {/snippet}
 </AuthCard>

@@ -55,6 +55,8 @@ export const UI_MESSAGES = {
   membersFailed: 'Could not load the members. Check your connection and try again.',
   membersOwnerOnly: 'Only the owner can change roles and ban people.',
   banBody: 'They are signed out everywhere and cannot sign in.',
+  resetBody: 'You get a link to send them. It works once, for 24 hours. When they use it, they set a new password and are signed out everywhere. An older reset link for them stops working.',
+  resetOnce: (until: string) => `This link is shown only now. It works once, until ${until}.`,
   roomNameBad: 'Room names are 1 to 32 characters, with no hidden characters.',
   roomOrderChanged: 'The room list changed. Try again.',
   roomRestricted: 'Only listed people, moderators and the owner can see a restricted room.',

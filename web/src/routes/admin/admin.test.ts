@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { InviteInfo } from '../../lib/gen/InviteInfo';
-import { byRole, bytes, canRevoke, inviteStatus, moveRoom, untilText } from './admin';
+import { byRole, bytes, canReset, canRevoke, inviteStatus, moveRoom, untilText } from './admin';
 
 const NOW = 1_800_000_000_000;
 const inv = (o: Partial<InviteInfo> = {}): InviteInfo =>
@@ -71,5 +71,16 @@ describe('bytes', () => {
     expect(bytes(10240 * 1024 ** 2)).toBe('10 GB');
     expect(bytes(9.99 * 1024 ** 2)).toBe('10 MB');
     expect(bytes(3 * 1024 ** 4)).toBe('3 TB');
+  });
+});
+
+describe('canReset', () => {
+  const u = (user_id: string, role: 'owner' | 'moderator' | 'member') => ({ user_id, role });
+  it('owner for anyone else, a moderator for members only, nobody for themself', () => {
+    const [o, m1, m2, a, b] = [u('o', 'owner'), u('m1', 'moderator'), u('m2', 'moderator'), u('a', 'member'), u('b', 'member')];
+    expect([m1, a].map((t) => canReset(o, t))).toEqual([true, true]);
+    expect(canReset(o, o)).toBe(false);
+    expect([o, m1, m2, a].map((t) => canReset(m1, t))).toEqual([false, false, false, true]);
+    expect([o, m1, a, b].map((t) => canReset(a, t))).toEqual([false, false, false, false]);
   });
 });

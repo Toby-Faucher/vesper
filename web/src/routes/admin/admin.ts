@@ -25,6 +25,10 @@ export function inviteStatus(i: InviteInfo, now: number): InviteStatus {
 export const canRevoke = (i: InviteInfo, viewer: Role, now: number) =>
   inviteStatus(i, now) === 'active' && (viewer === 'owner' || i.role === 'member');
 
+/** Reset links: the owner for anyone else, a moderator for members only, as the server allows (the owner's own way back is the CLI). */
+export const canReset = (me: { user_id: string; role: Role }, them: { user_id: string; role: Role }) =>
+  me.user_id !== them.user_id && (me.role === 'owner' || (me.role === 'moderator' && them.role === 'member'));
+
 /** When `ms` is: "in 7 days", "in 3 h", "in 20 min", "in less than a minute"; past times as relTime ("2 days ago"). */
 export function untilText(ms: number, now: number): string {
   if (ms <= now) return relTime(ms, now);
