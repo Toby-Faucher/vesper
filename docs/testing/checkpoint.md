@@ -218,7 +218,7 @@ Run the 4 scenarios in each cell (at least `fan` and `quiet` on the laptop).
 
 Last updated 2026-10-30. Tick as you check. Use two tabs (or two machines) where a second participant is needed.
 
-- [ ] Two-tab join: a second tab joins; you hear yourself from the other tab; tab names show; leaving removes the entry.
+- [ ] Two-account join: a second account joins from a private window; you hear yourself from the other window; names show; leaving removes the entry. A second tab of the same account takes the call over instead.
 - [ ] Mute: the other side sees `(muted)` and hears nothing; unmute restores.
 - [ ] Deafen: you hear nobody; undeafen restores; your own mute state is unaffected.
 - [ ] Per-peer volume slider changes loudness and survives a reload and rejoin.

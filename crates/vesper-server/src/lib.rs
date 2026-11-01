@@ -10,7 +10,7 @@ pub mod config;
 pub mod hub;
 pub mod limits;
 pub mod public_addr;
-pub mod rooms;
+pub mod voice;
 pub mod ws;
 
 use std::net::SocketAddr;
@@ -40,7 +40,7 @@ pub use crate::api_accounts::{ApiError, Authed};
 use crate::config::Config;
 use crate::hub::Hub;
 use crate::limits::Limiter;
-use crate::rooms::Rooms;
+use crate::voice::Voice;
 
 /// Largest JSON body any `/api` route reads.
 pub const API_BODY_LIMIT: usize = 32 * 1024;
@@ -52,6 +52,7 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     pub limits: Limiter,
     pub hub: Hub,
+    pub voice: Voice,
 }
 
 /// The `/api` routes, with the Origin check and the body cap.
@@ -116,11 +117,14 @@ pub async fn start_with_sfu(
     let store = Store::open(&db)
         .await
         .map_err(|e| std::io::Error::other(format!("open {}: {e}", db.display())))?;
+    let hub = Hub::default();
+    let voice = Voice::new(sfu.clone(), hub.clone(), cfg.max_room_size);
     let state = AppState {
         store,
         cfg: Arc::new(cfg),
         limits: Limiter::default(),
-        hub: Hub::default(),
+        hub,
+        voice,
     };
     serve(state, sfu).await
 }
@@ -152,7 +156,6 @@ pub async fn serve(
             cfg.web_dir.display()
         );
     }
-    let rooms = Rooms::new(sfu, cfg.max_room_size);
     let api = router(state.clone());
     let app = Router::new()
         .route("/health", get(health))
@@ -161,7 +164,6 @@ pub async fn serve(
         .fallback_service(ServeDir::new(&cfg.web_dir))
         .with_state(ws::WsState {
             app: state,
-            rooms,
             sockets: Arc::new(Semaphore::new(cfg.max_sockets)),
             ping_interval: cfg.ping_interval,
         })
@@ -188,7 +190,7 @@ pub async fn serve(
 /// 503 once the SFU thread has died, for external monitors and load balancers. (Docker does not
 /// restart an unhealthy container; `start` also exits the process so restart policies recover.)
 async fn health(State(st): State<ws::WsState>) -> (StatusCode, &'static str) {
-    if st.rooms.sfu_alive() {
+    if st.app.voice.sfu_alive() {
         (StatusCode::OK, "ok")
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, "sfu down")

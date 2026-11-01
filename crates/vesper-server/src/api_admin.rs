@@ -1,7 +1,8 @@
-//! Admin routes: the user list, invites, roles and bans.
+//! Admin routes: the user list, invites, roles, bans and the voice actions.
 //! Owner > moderator > member. Moderators mint and revoke member invites; only the owner mints
 //! moderator invites, changes roles and bans. The owner role only comes from the CLI, so it can
-//! never be granted, taken away or banned here.
+//! never be granted, taken away or banned here. Kick from voice, force-mute and disconnect need
+//! moderator, and only work on a lower role (a moderator on members, the owner on anyone else).
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{Path, State};
@@ -9,8 +10,8 @@ use axum::http::StatusCode;
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use vesper_protocol::{
-    ApiErrorCode, CLOSE_SESSION_ENDED, InviteCreate, InviteCreated, InviteInfo, Role, RolePatch,
-    UserInfo,
+    ApiErrorCode, CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ForceMute, InviteCreate, InviteCreated,
+    InviteInfo, Role, RolePatch, UserInfo,
 };
 use vesper_store::now_ms;
 
@@ -54,6 +55,9 @@ pub fn routes() -> Router<AppState> {
         .route("/users/{id}/role", patch(set_role))
         .route("/users/{id}/ban", post(ban))
         .route("/users/{id}/unban", post(unban))
+        .route("/users/{id}/kick", post(kick))
+        .route("/users/{id}/force-mute", post(force_mute))
+        .route("/users/{id}/disconnect", post(disconnect))
 }
 
 async fn users(State(st): State<AppState>, _a: Authed) -> Result<Json<Vec<UserInfo>>, ApiError> {
@@ -167,9 +171,62 @@ async fn unban(
     Ok(Json(user))
 }
 
+/// Moderator or owner, acting on a strictly lower role (so never on themselves, the owner or a
+/// fellow moderator). The role is read fresh on every call by `Authed`. Unknown id: 404.
+async fn voice_target(st: &AppState, a: &Authed, id: &str) -> Result<(), ApiError> {
+    require(&a.user, Role::Moderator)?;
+    if rank(st.store.user(id).await?.role) >= rank(a.user.role) {
+        return Err(ApiError::new(ApiErrorCode::Forbidden, "not allowed"));
+    }
+    Ok(())
+}
+
+/// Take the user out of voice. 404 if they are not in voice.
+async fn kick(
+    State(st): State<AppState>,
+    a: Authed,
+    id: Result<Path<String>, PathRejection>,
+) -> Result<StatusCode, ApiError> {
+    let id = path(id)?;
+    voice_target(&st, &a, &id).await?;
+    if !st.voice.kick(&id) {
+        return Err(ApiError::new(ApiErrorCode::NotFound, "not in voice"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Works whether or not the user is in voice now: it holds until lifted.
+async fn force_mute(
+    State(st): State<AppState>,
+    a: Authed,
+    id: Result<Path<String>, PathRejection>,
+    req: Result<Json<ForceMute>, JsonRejection>,
+) -> Result<StatusCode, ApiError> {
+    let id = path(id)?;
+    voice_target(&st, &a, &id).await?;
+    st.voice.force_mute(&id, body(req)?.muted);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Close every socket of the user with 4003. The sessions stay valid, so they can reconnect;
+/// a ban is the way to keep someone out.
+async fn disconnect(
+    State(st): State<AppState>,
+    a: Authed,
+    id: Result<Path<String>, PathRejection>,
+) -> Result<StatusCode, ApiError> {
+    let id = path(id)?;
+    voice_target(&st, &a, &id).await?;
+    st.voice.kick(&id);
+    st.hub.close_user(&id, CLOSE_DISCONNECTED);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Closes the banned user's live sockets, which also takes them out of voice. Sessions are
 /// already gone, so new requests get 401.
 fn after_ban(st: &AppState, user: &UserInfo) {
+    // At once, not when the socket task gets to it.
+    st.voice.kick(&user.user_id);
     st.hub.close_user(&user.user_id, CLOSE_SESSION_ENDED);
     st.hub.update_user(user.clone());
 }

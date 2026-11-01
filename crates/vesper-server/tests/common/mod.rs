@@ -17,6 +17,7 @@ use vesper_protocol::{Role, UserInfo};
 use vesper_server::config::Config;
 use vesper_server::hub::Hub;
 use vesper_server::limits::Limiter;
+use vesper_server::voice::Voice;
 use vesper_server::{AppState, cli, router};
 use vesper_sfu::{Sfu, SfuConfig, SfuHandle};
 use vesper_store::{NewAccount, NewSession, Store, now_ms};
@@ -64,11 +65,13 @@ impl TestServer {
         let mut cfg = config(&data);
         edit(&mut cfg);
         let store = Store::open(&cfg.data_dir.join("vesper.db")).await.unwrap();
+        let hub = Hub::default();
         let state = AppState {
             store,
+            voice: Voice::new(sfu.clone(), hub.clone(), cfg.max_room_size),
             cfg: Arc::new(cfg),
             limits: Limiter::default(),
-            hub: Hub::default(),
+            hub,
         };
         let (addr, _serving) = vesper_server::serve(state.clone(), sfu).await.unwrap();
         TestServer { addr, state, data }

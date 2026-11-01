@@ -13,10 +13,15 @@ Last updated 2026-11-01. Nothing here was run in a real browser or a real deploy
   Cloudflare overwrites `CF-Connecting-IP`. If the app is ever reached on a private network without Cloudflare (the HTTP port open on the LAN, or
   Caddy without the tunnel), a LAN client can set `CF-Connecting-IP` itself and dodge or spend another address's login and invite limits. The
   login limit per username still allows each address only 5 tries for one name, then 1 a minute. Unit-tested (`client_ip` in `auth.rs`); not verified on the deploy.
+- **Force-mute is enforced by the client only.** The server marks the user muted and tells everyone, but the SFU still forwards their audio,
+  so a modified client can keep talking. A moderator then disconnects them, or the owner bans them. A server restart lifts every force-mute.
+- **A moderator disconnect does not keep anyone out.** The sessions stay valid and the client may reconnect at once; a ban is the way to keep someone out.
 
 ## Server behaviour
 
-- **One lock serialises joins.** It is held while the SFU joins and while an old session closes (up to 2 s). Fine for 12 people. A signed-in user can slow others by rejoining in a loop.
+- **One lock serialises joins.** It is held while the SFU joins and while an old session closes (up to 2 s), for every room at once. Fine for 12 people. A signed-in user can slow others by rejoining in a loop.
+- **A voice join that races a member list or role change can keep access until the next change.** The join reads the room and role before it takes the join lock, and the change takes the user out of voice only if they were in it by then. The window is a few milliseconds.
+- **A display name change does not reach voice presence** until the user joins again (`peer_joined` carries the name from the join).
 - **An open socket outlives a session that expires.** A session unused for 90 days stops working for requests, but a socket opened on it stays until it closes. Logout, revoke, password change and ban do close it.
 - **A changed public IP needs a rejoin.** The name is re-resolved every 60 s, but only new sessions use the new address. A failed lookup at start advertises nothing until the next refresh, with a warning every 60 s.
 - **Without `VESPER_PUBLIC_HOST`, `VESPER_UDP_PORT_PUBLIC` is ignored**, and a `0.0.0.0` bind is advertised as is, with a warning.

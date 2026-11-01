@@ -124,8 +124,13 @@ impl Hub {
 
     /// Only to sockets whose user can see `room`.
     pub fn broadcast_room(&self, room: &RoomInfo, msg: ServerMsg) {
+        self.broadcast_room_except(room, msg, &[]);
+    }
+
+    /// [`Hub::broadcast_room`], but not to the sockets `skip` feeds.
+    pub fn broadcast_room_except(&self, room: &RoomInfo, msg: ServerMsg, skip: &[&Outbox]) {
         for c in self.lock().conns.values() {
-            if can_see(&c.user, room) {
+            if can_see(&c.user, room) && !skip.iter().any(|s| s.queue.same_channel(&c.tx.queue)) {
                 c.tx.send(msg.clone());
             }
         }

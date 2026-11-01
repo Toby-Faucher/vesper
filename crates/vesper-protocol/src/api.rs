@@ -188,6 +188,13 @@ pub struct RolePatch {
     pub role: Role,
 }
 
+/// `POST /api/users/{id}/force-mute`. `muted: false` lifts it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ForceMute {
+    pub muted: bool,
+}
+
 /// A room has text and voice. `members` is filled only when `restricted`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

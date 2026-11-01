@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use axum::http::{Method, StatusCode};
 use common::{ORIGIN, PASSWORD, Session, TestServer, get, post, request, spawn_sfu};
 use futures_util::{SinkExt, StreamExt};
+use serde_json::Value;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
@@ -19,7 +20,8 @@ use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use vesper_protocol::{
-    CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Peer, Role, RoomInfo, ServerMsg,
+    CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Peer, Role,
+    RoomInfo, ServerMsg,
 };
 use vesper_sfu::testing::FakeClient;
 
@@ -217,11 +219,18 @@ impl Conn {
         Conn::open(server, s).await.join_as(room_id).await
     }
 
+    /// Join; presence events that were already on the way (this socket hears every room it
+    /// can see) are skipped.
     async fn join_as(mut self, room_id: i64) -> (Conn, String, Vec<Peer>) {
         self.join(room_id);
-        match self.next().await {
-            ServerMsg::Joined { user_id, peers, .. } => (self, user_id, peers),
-            other => panic!("expected Joined, got {other:?}"),
+        loop {
+            match self.next().await {
+                ServerMsg::Joined { user_id, peers, .. } => return (self, user_id, peers),
+                ServerMsg::PeerJoined { .. }
+                | ServerMsg::PeerLeft { .. }
+                | ServerMsg::PeerState { .. } => {}
+                other => panic!("expected Joined, got {other:?}"),
+            }
         }
     }
 
@@ -405,9 +414,10 @@ async fn voice_state_reaches_the_room() {
     );
 }
 
-/// A second tab of the same account joining voice replaces the first tab's voice session.
+/// A second tab of the same account joining voice takes the call over. The first tab's socket
+/// stays open for chat and gets `PeerLeft` for itself.
 #[tokio::test]
-async fn second_session_for_same_user_replaces_first() {
+async fn second_tab_join_replaces_first_voice_session() {
     let server = TestServer::new().await;
     let room = general(&server).await;
     let alice = server.account("alice", Role::Member).await;
@@ -419,7 +429,17 @@ async fn second_session_for_same_user_replaces_first() {
     let (a2, a2_id, peers) = Conn::joined(&server, &alice, room).await;
     assert_eq!(a2_id, a_id);
     assert_eq!(peers.len(), 1, "only bob: {peers:?}");
-    a1.expect_closed().await;
+    assert_eq!(
+        a1.next().await,
+        ServerMsg::PeerLeft {
+            user_id: a_id.clone()
+        }
+    );
+    // Still open: it sees the new session's presence like any other socket.
+    match a1.next().await {
+        ServerMsg::PeerJoined { peer } => assert_eq!(peer.user_id, a_id),
+        other => panic!("expected PeerJoined, got {other:?}"),
+    }
 
     a2.mute(true);
     let seen = b.until_state(&a_id).await;
@@ -428,42 +448,433 @@ async fn second_session_for_same_user_replaces_first() {
             if *l == a_id && peer.user_id == a_id),
         "{seen:?}"
     );
-
     let carol = server.account("carol", Role::Member).await;
-    let (_c, _, peers) = Conn::joined(&server, &carol, room).await;
-    assert_eq!(peers.iter().filter(|p| p.user_id == a_id).count(), 1);
-    assert_eq!(peers.len(), 2);
+    let ServerMsg::Hello { voice, .. } = Conn::open(&server, &carol).await.hello else {
+        unreachable!()
+    };
+    assert_eq!(voice.iter().filter(|p| p.user_id == a_id).count(), 1);
+    assert_eq!(voice.len(), 2, "{voice:?}");
+
+    // The first tab may join again: its old session is gone, so this is not an "already
+    // joined" refusal (the offer is junk so the fake client is not reused).
+    a1.send(&ClientMsg::Join {
+        room_id: room,
+        offer: "v=0 not an sdp".into(),
+    });
+    match a1
+        .until("Error", |m| matches!(m, ServerMsg::Error { .. }))
+        .await
+    {
+        ServerMsg::Error { message, .. } => assert_eq!(message, "invalid offer"),
+        _ => unreachable!(),
+    }
 }
 
 #[tokio::test]
-async fn room_full_rejects_thirteenth() {
+async fn presence_reaches_sockets_outside_the_room() {
     let server = TestServer::new().await;
     let room = general(&server).await;
-    let mut members = vec![];
-    for i in 0..12 {
-        let s = server.account(&format!("user{i}"), Role::Member).await;
-        let (c, id, peers) = Conn::joined(&server, &s, room).await;
-        assert_eq!(peers.len(), i);
-        members.push((c, id));
-    }
-    let late = server.account("user12", Role::Member).await;
-    let mut late = Conn::open(&server, &late).await;
-    late.join(room);
-    late.expect_error(ErrorCode::RoomFull).await;
+    let alice = server.account("alice", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let mut c = Conn::open(&server, &carol).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    assert_eq!(
+        c.next().await,
+        ServerMsg::PeerJoined {
+            peer: peer(&alice, room)
+        }
+    );
+    a.send(&ClientMsg::Leave);
+    assert_eq!(c.next().await, ServerMsg::PeerLeft { user_id: a_id });
+}
 
-    let (first, first_id) = &members[0];
-    first.mute(true);
-    let first_id = first_id.clone();
-    for (i, (c, _)) in members.iter_mut().enumerate().skip(1) {
-        let seen = c.until_state(&first_id).await;
-        // Only the PeerJoined of later members; nothing about user12, nobody left.
-        assert_eq!(seen.len(), 11 - i, "{seen:?}");
+#[tokio::test]
+async fn voice_state_broadcasts_deafened() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let mut c = Conn::open(&server, &carol).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    a.send(&ClientMsg::SetVoiceState {
+        muted: false,
+        deafened: true,
+    });
+    let m = c
+        .until("PeerState", |m| matches!(m, ServerMsg::PeerState { .. }))
+        .await;
+    assert_eq!(
+        m,
+        ServerMsg::PeerState {
+            user_id: a_id,
+            muted: false,
+            deafened: true,
+            force_muted: false
+        }
+    );
+}
+
+/// The owner makes a restricted room listing `members`; returns its id.
+async fn restricted_room(server: &TestServer, owner: &Session, members: &[&Session]) -> i64 {
+    let (status, _, room) = server
+        .call(post("/api/rooms", json!({ "name": "secret" }), owner))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = room["id"].as_i64().unwrap();
+    let path = format!("/api/rooms/{id}");
+    let body = json!({ "restricted": true });
+    let (status, _, _) = server
+        .call(request(
+            Method::PATCH,
+            &path,
+            Some(&body),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    set_members(server, owner, id, members).await;
+    id
+}
+
+async fn set_members(server: &TestServer, owner: &Session, room: i64, members: &[&Session]) {
+    let ids: Vec<&str> = members.iter().map(|s| s.user.user_id.as_str()).collect();
+    let path = format!("/api/rooms/{room}/members");
+    let body = json!({ "user_ids": ids });
+    let (status, _, v) = server
+        .call(request(
+            Method::PUT,
+            &path,
+            Some(&body),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+}
+
+fn is_rooms_changed(m: &ServerMsg) -> bool {
+    matches!(m, ServerMsg::RoomsChanged { .. })
+}
+
+#[tokio::test]
+async fn restricted_room_presence_is_private() {
+    let server = TestServer::new().await;
+    let open = general(&server).await;
+    let owner = server.account("owner", Role::Owner).await;
+    let bob = server.account("bob", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let alice = server.account("alice", Role::Member).await;
+    let secret = restricted_room(&server, &owner, &[&bob]).await;
+    let mut c = Conn::open(&server, &carol).await;
+    let mut o = Conn::open(&server, &owner).await;
+    let (_b, b_id, _) = Conn::joined(&server, &bob, secret).await;
+    // Staff see it.
+    match o.next().await {
+        ServerMsg::PeerJoined { peer } => assert_eq!(peer.user_id, b_id),
+        other => panic!("expected PeerJoined, got {other:?}"),
+    }
+    // Barrier: alice's join in the open room is the first thing carol hears.
+    let (_a, a_id, _) = Conn::joined(&server, &alice, open).await;
+    match c.next().await {
+        ServerMsg::PeerJoined { peer } => assert_eq!(peer.user_id, a_id),
+        other => panic!("expected alice's PeerJoined, got {other:?}"),
+    }
+    let ServerMsg::Hello { voice, .. } = Conn::open(&server, &carol).await.hello else {
+        unreachable!()
+    };
+    assert_eq!(voice.len(), 1, "only alice: {voice:?}");
+    c.join(secret);
+    c.expect_error(ErrorCode::Forbidden).await;
+}
+
+/// Losing sight of a room (member list or demotion) takes you out of its voice.
+#[tokio::test]
+async fn losing_access_leaves_voice() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let bob = server.account("bob", Role::Member).await;
+    let moder = server.account("moder", Role::Moderator).await;
+    let secret = restricted_room(&server, &owner, &[&bob]).await;
+    let mut o = Conn::open(&server, &owner).await;
+    let (mut b, b_id, _) = Conn::joined(&server, &bob, secret).await;
+    let (mut m, m_id, _) = Conn::joined(&server, &moder, secret).await;
+    assert!(matches!(b.next().await, ServerMsg::PeerJoined { .. }));
+
+    set_members(&server, &owner, secret, &[]).await;
+    assert_eq!(
+        b.next().await,
+        ServerMsg::PeerLeft {
+            user_id: b_id.clone()
+        }
+    );
+    assert!(is_rooms_changed(&b.next().await));
+    assert_eq!(m.next().await, ServerMsg::PeerLeft { user_id: b_id });
+
+    let path = format!("/api/users/{m_id}/role");
+    let body = json!({ "role": "member" });
+    let (status, _, v) = server
+        .call(request(
+            Method::PATCH,
+            &path,
+            Some(&body),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    m.until(
+        "own PeerLeft",
+        |x| matches!(x, ServerMsg::PeerLeft { user_id } if *user_id == m_id),
+    )
+    .await;
+    o.until(
+        "PeerLeft",
+        |x| matches!(x, ServerMsg::PeerLeft { user_id } if *user_id == m_id),
+    )
+    .await;
+    assert!(server.state.voice.peers(|_| true).is_empty());
+}
+
+#[tokio::test]
+async fn banned_user_cannot_join() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let alice = server.account("alice", Role::Member).await;
+    let path = format!("/api/users/{}/ban", alice.user.user_id);
+    let (status, _, _) = server.call(post(&path, json!({}), &owner)).await;
+    assert_eq!(status, StatusCode::OK);
+    // As if the socket had been accepted just before the ban.
+    let user = server.state.store.user(&alice.user.user_id).await.unwrap();
+    let room = rooms(&server).await.remove(0);
+    let (tx, _rx) = vesper_server::hub::outbox();
+    let client = FakeClient::new().unwrap();
+    let r = server
+        .state
+        .voice
+        .join(&user, &room, client.offer().into(), tx)
+        .await;
+    assert_eq!(r, Err(ErrorCode::Forbidden));
+    assert!(server.state.voice.peers(|_| true).is_empty());
+}
+
+#[tokio::test]
+async fn force_mute_holds_until_lifted() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let moder = server.account("moder", Role::Moderator).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (mut a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (mut b, _, _) = Conn::joined(&server, &bob, room).await;
+    assert!(matches!(a.next().await, ServerMsg::PeerJoined { .. }));
+    let path = format!("/api/users/{a_id}/force-mute");
+    let state = |muted, deafened, force_muted| ServerMsg::PeerState {
+        user_id: a_id.clone(),
+        muted,
+        deafened,
+        force_muted,
+    };
+
+    let (status, _, v) = server
+        .call(post(&path, json!({ "muted": true }), &moder))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{v}");
+    assert_eq!(a.next().await, ServerMsg::ForceMuted { muted: true });
+    assert_eq!(b.next().await, state(true, false, true));
+    a.send(&ClientMsg::SetVoiceState {
+        muted: false,
+        deafened: true,
+    });
+    assert_eq!(b.next().await, state(true, true, true));
+
+    // Leaving and rejoining does not shake it off.
+    a.send(&ClientMsg::Leave);
+    let left = ServerMsg::PeerLeft {
+        user_id: a_id.clone(),
+    };
+    assert_eq!(a.next().await, left);
+    assert_eq!(b.next().await, left);
+    // From a new tab (a fake client cannot negotiate twice).
+    let (mut a, _, _) = Conn::joined(&server, &alice, room).await;
+    assert_eq!(a.next().await, ServerMsg::ForceMuted { muted: true });
+    match b.next().await {
+        ServerMsg::PeerJoined { peer } => assert!(peer.muted && peer.force_muted, "{peer:?}"),
+        other => panic!("expected PeerJoined, got {other:?}"),
+    }
+
+    let (status, _, _) = server
+        .call(post(&path, json!({ "muted": false }), &moder))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(a.next().await, ServerMsg::ForceMuted { muted: false });
+    // Lifting does not unmute; the user does.
+    assert_eq!(b.next().await, state(true, false, false));
+    a.mute(false);
+    assert_eq!(b.next().await, state(false, false, false));
+}
+
+#[tokio::test]
+async fn moderator_cannot_kick_owner() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let owner = server.account("owner", Role::Owner).await;
+    let moder = server.account("moder", Role::Moderator).await;
+    let (_o, o_id, _) = Conn::joined(&server, &owner, room).await;
+    let (status, _, _) = server
+        .call(post(&format!("/api/users/{o_id}/kick"), json!({}), &moder))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(server.state.voice.peers(|_| true).len(), 1);
+}
+
+/// Every caller role against every target role, for all three voice actions. A refusal changes
+/// nothing: the target stays in voice, not force-muted, socket open.
+#[tokio::test]
+async fn voice_actions_check_roles() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let owner = server.account("owner", Role::Owner).await;
+    let mod1 = server.account("mod1", Role::Moderator).await;
+    let mod2 = server.account("mod2", Role::Moderator).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let mut conns = vec![];
+    for s in [&owner, &mod1, &mod2, &alice, &bob] {
+        conns.push(Conn::joined(&server, s, room).await.0);
+    }
+    let actions: [(&str, Value); 3] = [
+        ("kick", json!({})),
+        ("force-mute", json!({ "muted": true })),
+        ("disconnect", json!({})),
+    ];
+    let untouched = |who: &str| {
+        let peers = server.state.voice.peers(|_| true);
         assert!(
-            seen.iter()
-                .all(|m| matches!(m, ServerMsg::PeerJoined { peer } if peer.name != "user12")),
-            "{seen:?}"
+            peers.len() == 5 && peers.iter().all(|p| !p.force_muted),
+            "after {who}: {peers:?}"
+        );
+    };
+    let refused = [
+        (&alice, &bob),
+        (&alice, &mod1),
+        (&alice, &owner),
+        (&alice, &alice),
+        (&mod1, &mod2),
+        (&mod1, &owner),
+        (&mod1, &mod1),
+        (&owner, &owner),
+    ];
+    for (actor, target) in refused {
+        for (action, body) in &actions {
+            let path = format!("/api/users/{}/{action}", target.user.user_id);
+            let (status, _, _) = server.call(post(&path, body.clone(), actor)).await;
+            let who = format!("{} {action} {}", actor.user.username, target.user.username);
+            assert_eq!(status, StatusCode::FORBIDDEN, "{who}");
+            untouched(&who);
+        }
+    }
+    // Unknown id and wrong body.
+    let path = format!("/api/users/{}/kick", "f".repeat(32));
+    assert_eq!(
+        server.call(post(&path, json!({}), &owner)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let path = format!("/api/users/{}/force-mute", bob.user.user_id);
+    let (status, _, _) = server.call(post(&path, json!({}), &owner)).await;
+    assert!(status.is_client_error(), "{status}");
+    untouched("bad requests");
+    // Nobody's socket was closed: everyone still hears a new state.
+    conns[4].mute(true);
+    for c in &mut conns[..4] {
+        c.until_state(&bob.user.user_id).await;
+    }
+
+    // Allowed: a moderator on a member, the owner on a moderator.
+    for (actor, target) in [(&mod1, &bob), (&owner, &mod2)] {
+        let id = &target.user.user_id;
+        let call = |action: &str, body: Value| {
+            let path = format!("/api/users/{id}/{action}");
+            server.call(post(&path, body, actor))
+        };
+        assert_eq!(
+            call("force-mute", json!({ "muted": true })).await.0,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(call("kick", json!({})).await.0, StatusCode::NO_CONTENT);
+        assert!(
+            !server
+                .state
+                .voice
+                .peers(|_| true)
+                .iter()
+                .any(|p| p.user_id == *id)
+        );
+        // Not in voice any more.
+        assert_eq!(call("kick", json!({})).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            call("disconnect", json!({})).await.0,
+            StatusCode::NO_CONTENT
         );
     }
+    let bob_conn = &mut conns[4];
+    assert_eq!(bob_conn.expect_closed().await, Some(CLOSE_DISCONNECTED));
+    assert_eq!(conns[2].expect_closed().await, Some(CLOSE_DISCONNECTED));
+}
+
+#[tokio::test]
+async fn disconnect_closes_with_4003_and_leaves_voice() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let moder = server.account("moder", Role::Moderator).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (mut a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let mut a_chat = Conn::open(&server, &alice).await;
+    let (mut b, _, _) = Conn::joined(&server, &bob, room).await;
+    let path = format!("/api/users/{a_id}/disconnect");
+    let (status, _, _) = server.call(post(&path, json!({}), &moder)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let wait = Duration::from_secs(1);
+    assert_eq!(a.expect_closed_within(wait).await, Some(CLOSE_DISCONNECTED));
+    assert_eq!(
+        a_chat.expect_closed_within(wait).await,
+        Some(CLOSE_DISCONNECTED)
+    );
+    b.until(
+        "PeerLeft",
+        |m| matches!(m, ServerMsg::PeerLeft { user_id } if *user_id == a_id),
+    )
+    .await;
+    // The session still works: a reconnect is allowed (a ban is what keeps someone out).
+    Conn::open(&server, &alice).await;
+}
+
+/// The connection check runs on its own SFU session: the user's call in another tab stays up
+/// and nobody sees a peer event.
+#[tokio::test]
+async fn check_does_not_touch_presence_or_own_call() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (mut a1, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (b, b_id, _) = Conn::joined(&server, &bob, room).await;
+    assert!(matches!(a1.next().await, ServerMsg::PeerJoined { .. }));
+    let mut a2 = Conn::open(&server, &alice).await;
+    a2.send(&ClientMsg::Check {
+        offer: a2.client.offer().into(),
+    });
+    match a2.next().await {
+        ServerMsg::Joined { user_id, peers, .. } => {
+            assert!(peers.is_empty(), "{peers:?}");
+            assert_ne!(user_id, a_id);
+            assert_eq!(user_id.len(), 32);
+        }
+        other => panic!("expected Joined, got {other:?}"),
+    }
+    wait_until("check media", || a2.client.is_connected()).await;
+    // Barrier: nothing reached a1 between bob's PeerJoined and his mute.
+    b.mute(true);
+    assert!(a1.until_state(&b_id).await.is_empty());
+    assert_eq!(server.state.voice.peers(|_| true).len(), 2);
 }
 
 #[tokio::test]

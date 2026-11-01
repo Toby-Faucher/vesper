@@ -34,10 +34,14 @@ fn room_name(s: &str) -> Result<String, ApiError> {
     valid_display_name(s).ok_or_else(|| bad("room name: 1 to 32 characters, no hidden characters"))
 }
 
-/// Tells connected clients the room list changed, each with only the rooms they can see.
+/// Tells connected clients the room list changed, each with only the rooms they can see, and
+/// takes out of voice anyone who lost sight of their room (member list or role change).
 pub(crate) async fn rooms_changed(st: &AppState) {
-    match st.store.rooms().await {
-        Ok(rooms) => st.hub.rooms_changed(&rooms),
+    match tokio::try_join!(st.store.rooms(), st.store.users()) {
+        Ok((rooms, users)) => {
+            st.voice.refresh(&rooms, &users);
+            st.hub.rooms_changed(&rooms);
+        }
         Err(e) => tracing::error!("store: {e}"),
     }
 }

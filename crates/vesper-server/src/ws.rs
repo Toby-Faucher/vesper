@@ -15,8 +15,8 @@ use vesper_protocol::{ClientMsg, ErrorCode, MAX_MSG_BYTES, Me, ServerMsg, UserIn
 use crate::AppState;
 use crate::api_accounts::session_of;
 use crate::api_rooms::can_see;
-use crate::hub::{Inbox, outbox};
-use crate::rooms::{JoinReq, JoinResult, Rooms};
+use crate::hub::{Inbox, Outbox, outbox};
+use crate::voice::JoinResult;
 
 /// Close code when the server cannot build `Hello` (1011, "internal error").
 const CLOSE_INTERNAL: u16 = 1011;
@@ -24,7 +24,6 @@ const CLOSE_INTERNAL: u16 = 1011;
 #[derive(Clone)]
 pub struct WsState {
     pub app: AppState,
-    pub rooms: Rooms,
     pub sockets: Arc<Semaphore>,
     pub ping_interval: Duration,
 }
@@ -53,7 +52,7 @@ async fn hello(st: &WsState, user: &UserInfo, session_id: i64) -> Option<ServerM
     let users = st.app.store.users().await.ok()?;
     let mut rooms = st.app.store.rooms().await.ok()?;
     rooms.retain(|r| can_see(user, r));
-    let voice = st.rooms.peers(|id| rooms.iter().any(|r| r.id == id));
+    let voice = st.app.voice.peers(|id| rooms.iter().any(|r| r.id == id));
     Some(ServerMsg::Hello {
         me: Me {
             user: user.clone(),
@@ -96,7 +95,10 @@ async fn handle(
     // out after Hello, which is written straight to the socket.
     let conn = st.app.hub.add(user.clone(), session_id, tx.clone());
     let user_id = user.user_id.clone();
+    let voice = st.app.voice.clone();
     let mut joined: Option<JoinResult> = None;
+    // The SFU id of this socket's connection check, if one runs.
+    let mut check: Option<String> = None;
     match hello(&st, &user, session_id).await {
         Some(h) => {
             let text = serde_json::to_string(&h).expect("ServerMsg serialises");
@@ -139,7 +141,11 @@ async fn handle(
                 last_seen = Instant::now();
                 let error = match (serde_json::from_str::<ClientMsg>(&text), &joined) {
                     (Err(e), _) => Some((ErrorCode::BadMessage, format!("bad message: {e}"))),
-                    (Ok(ClientMsg::Join { room_id, offer }), None) => {
+                    (Ok(ClientMsg::Join { .. }), Some(j)) if voice.is_current(&j.user_id, j.session) => {
+                        Some((ErrorCode::BadMessage, "already joined: leave first".into()))
+                    }
+                    // Not joined, or the session ended under us (kick, other tab, SFU).
+                    (Ok(ClientMsg::Join { room_id, offer }), _) => {
                         match join(&st, &user_id, room_id, offer, &tx).await {
                             Ok(j) => {
                                 joined = Some(j);
@@ -148,35 +154,54 @@ async fn handle(
                             Err(e) => Some(e),
                         }
                     }
-                    (Ok(ClientMsg::Join { .. }), Some(_)) => {
-                        Some((ErrorCode::BadMessage, "already joined: leave first".into()))
-                    }
-                    // shortcut: no connectivity check yet; Task 9 adds it (a hidden SFU session).
-                    (Ok(ClientMsg::Check { .. }), _) => {
-                        Some((ErrorCode::BadMessage, "connection check is not available yet".into()))
+                    (Ok(ClientMsg::Check { offer }), _) => {
+                        if let Some(old) = check.take() {
+                            voice.end_check(&old);
+                        }
+                        match voice.check(offer, tx.clone()).await {
+                            Ok(j) => {
+                                check = Some(j.user_id);
+                                None
+                            }
+                            Err(code) => Some(voice_error(&st, code)),
+                        }
                     }
                     // Typing goes out with text chat (Task 13).
                     (Ok(ClientMsg::Typing { .. }), _) => None,
                     (Ok(ClientMsg::Answer { sdp }), Some(j)) => {
-                        st.rooms.answer(&j.user_id, j.session, sdp);
+                        voice.answer(&j.user_id, j.session, sdp);
                         None
                     }
                     (Ok(ClientMsg::SetVoiceState { muted, deafened }), Some(j)) => {
-                        st.rooms.set_state(&j.user_id, j.session, muted, deafened);
+                        voice.set_state(&j.user_id, j.session, muted, deafened);
                         None
                     }
-                    (Ok(ClientMsg::Leave), Some(j)) => {
-                        st.rooms.leave(&j.user_id, j.session);
+                    // Ends the call and the connection check, whichever runs.
+                    (Ok(ClientMsg::Leave), j) if j.is_some() || check.is_some() => {
+                        if let Some(j) = j {
+                            voice.leave(&j.user_id, j.session);
+                        }
+                        if let Some(c) = check.take() {
+                            voice.end_check(&c);
+                        }
                         joined = None;
                         None
                     }
-                    (Ok(_), None) => Some((ErrorCode::BadMessage, "join first".into())),
+                    (Ok(_), _) => Some((ErrorCode::BadMessage, "join first".into())),
                 };
                 if let Some((code, message)) = error {
                     tx.send(ServerMsg::Error { code, message });
                 }
             }
         }
+    }
+    // Leave first, so the room sees PeerLeft now, not after the close handshake below.
+    st.app.hub.remove(conn);
+    if let Some(j) = joined {
+        voice.leave(&j.user_id, j.session);
+    }
+    if let Some(c) = check {
+        voice.end_check(&c);
     }
     let code = *close.borrow();
     if let Some(code) = code {
@@ -197,20 +222,16 @@ async fn handle(
         })
         .await;
     }
-    st.app.hub.remove(conn);
-    if let Some(j) = joined {
-        st.rooms.leave(&j.user_id, j.session);
-    }
 }
 
-/// Look the room up and check the user may see it, with their current role (not the one at
-/// connect), then join voice.
+/// Look the user and the room up, so the access check in `Voice::join` uses the current role,
+/// ban and member list (not the ones at connect), then join voice.
 async fn join(
     st: &WsState,
     user_id: &str,
     room_id: i64,
     offer: String,
-    tx: &crate::hub::Outbox,
+    tx: &Outbox,
 ) -> Result<JoinResult, (ErrorCode, String)> {
     let internal = |e: vesper_store::StoreError| {
         tracing::error!("store: {e}");
@@ -221,24 +242,22 @@ async fn join(
     let Some(room) = rooms.iter().find(|r| r.id == room_id) else {
         return Err((ErrorCode::BadMessage, "no such room".into()));
     };
-    if !can_see(&user, room) {
-        return Err((ErrorCode::Forbidden, describe(ErrorCode::Forbidden).into()));
-    }
-    let req = JoinReq {
-        room_id,
-        user_id: user.user_id,
-        name: user.display_name,
-        offer,
-        tx: tx.clone(),
-    };
-    st.rooms.join(req).await.map_err(|code| match code {
+    st.app
+        .voice
+        .join(&user, room, offer, tx.clone())
+        .await
+        .map_err(|code| voice_error(st, code))
+}
+
+fn voice_error(st: &WsState, code: ErrorCode) -> (ErrorCode, String) {
+    match code {
         // Same wire code (the enum is shared with the client), clearer text: that is what a dead
         // SFU produces.
-        ErrorCode::BadMessage if !st.rooms.sfu_alive() => {
+        ErrorCode::BadMessage if !st.app.voice.sfu_alive() => {
             (code, "server voice engine unavailable".into())
         }
         code => (code, describe(code).into()),
-    })
+    }
 }
 
 fn describe(code: ErrorCode) -> &'static str {
