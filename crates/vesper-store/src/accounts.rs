@@ -22,7 +22,7 @@ pub struct LoginRow {
 // A macro, not a const: sqlx 0.9 takes only `&'static str` SQL, and `concat!` keeps it static.
 macro_rules! user_cols {
     () => {
-        "a.id, a.username, a.display_name, a.accent, a.role, a.banned_at, a.bio, a.avatar"
+        "a.id, a.username, a.display_name, a.accent, a.role, a.banned_at, a.bio, a.avatar, a.ui_accent"
     };
 }
 pub(crate) use user_cols;
@@ -37,6 +37,7 @@ pub(crate) struct AccountRow {
     banned_at: Option<i64>,
     bio: String,
     avatar: Option<String>,
+    ui_accent: Option<String>,
 }
 
 impl AccountRow {
@@ -50,6 +51,7 @@ impl AccountRow {
             banned: self.banned_at.is_some(),
             bio: self.bio,
             avatar: self.avatar,
+            ui_accent: self.ui_accent,
         })
     }
 }
@@ -164,17 +166,19 @@ impl Store {
         display_name: Option<&str>,
         accent: Option<&str>,
         bio: Option<&str>,
+        ui_accent: Option<&str>,
     ) -> Result<UserInfo> {
         let mut c = self.pool.acquire().await?;
         let n = sqlx::query(
             "UPDATE accounts SET display_name = coalesce(?2, display_name),
-             accent = coalesce(?3, accent), bio = coalesce(?4, bio)
-             WHERE id = ?1",
+             accent = coalesce(?3, accent), bio = coalesce(?4, bio),
+             ui_accent = coalesce(?5, ui_accent) WHERE id = ?1",
         )
         .bind(id)
         .bind(display_name)
         .bind(accent)
         .bind(bio)
+        .bind(ui_accent)
         .execute(&mut *c)
         .await?
         .rows_affected();

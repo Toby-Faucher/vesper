@@ -3,6 +3,7 @@
   import { api, ApiFailure, errorText } from './lib/api';
   import { loginHref, parse } from './lib/route';
   import { navigate, route, session } from './lib/session.svelte';
+  import { applyAccent } from './lib/ui/accent';
   import Login from './routes/Login.svelte';
   import Shell from './routes/Shell.svelte';
   import type { Me } from './lib/gen/Me';
@@ -30,6 +31,11 @@
       else error = errorText(e);
     }
   }
+  // The accent follows the account: painted before the shell renders, and again when another device changes it.
+  $effect.pre(() => {
+    const me = session.state.me;
+    if (me) applyAccent(me.user.ui_accent);
+  });
   const r = $derived(parse(route.path));
   const gallery = $derived(import.meta.env.DEV && r.name === 'gallery');
   const inShell = $derived(r.name !== 'login' && r.name !== 'invite' && r.name !== 'reset' && !gallery);

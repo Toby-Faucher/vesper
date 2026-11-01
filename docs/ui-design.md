@@ -38,6 +38,8 @@ table heads use 500, which Segoe UI and Liberation Sans draw as regular. The res
 tabular figures.
 
 **The colour rules.**
+- The accent is amber (the logo colour) unless the person picks another in Settings > Appearance. Below, "amber" means
+  the accent.
 - Amber means one of five things: the primary action, focus, a selection marker, a mention, or the unread line. A view has
   one amber fill at most. Text on an amber fill is near-black.
 - Warnings use their own orange plus an icon and words. They never use amber.
@@ -45,6 +47,16 @@ tabular figures.
   There are no role colours.
 - Room names have no `#` in front.
 - Colour is never the only cue. Speaking also shows a static bar icon, and muted shows an icon.
+
+**The accent choice.** Per account: `accounts.ui_accent`, sent in `UserInfo`, so it follows the person to every device and
+paints from `/api/me` before the shell renders (the last value is kept in `vesper.accent` for the sign in page). It is one
+of 8 presets (amber, rose, orchid, violet, indigo, sky, teal, lime) or a custom `#rrggbb`. The server checks only the form; a
+custom colour must pass the contrast rules in `web/src/lib/ui/accent.ts` (near-black text on the fill and on its hover 4.5:1,
+the fill 3:1 on the page, sidebar and panels, link text 4.5:1 on the page and on the soft fill). Settings refuses one that does not,
+shows the ratio and offers the nearest allowed colour, and a stored one that fails paints amber. `roles()` in `accent.ts` derives every
+accent role (`--accent`, `--accent-hover`, `--accent-fg`, `--accent-subtle`, `--accent-line`, `--focus`) from the one fill and
+sets them on `<html>`; `accent.test.ts` checks each preset. The logo, the favicon, the avatar colours and the speaking ring do
+not change. There is no coral: it sat between the danger red and the warning orange.
 
 **The switch point.** The look is chosen in one place: `data-style` on `<html>`, set by `web/src/lib/ui/style.ts` before the app
 mounts. A new style is a new block in `tokens.css` with the same role names, plus one entry in `STYLES`. Components never read

@@ -2,7 +2,8 @@ import { expect, it } from 'vitest';
 
 // Colours come only from the roles in styles/tokens.css. Hex, rgb(), hsl(), oklch() and Tailwind palette classes elsewhere fail.
 // avatar.ts is the one exception: SLOT_HEX holds the vesper swatch hexes that UserInfo.accent stores, and avatar.test.ts
-// checks they equal --avatar-1..8 in tokens.css.
+// checks they equal --avatar-1..8 in tokens.css. accent.ts is the other: the accent presets and the surfaces their contrast
+// is checked on, which accent.test.ts checks against tokens.css.
 const RULES = [
   /#[0-9a-fA-F]{3,8}\b/,
   /\brgba?\(/,
@@ -10,7 +11,7 @@ const RULES = [
   /\boklch\(/,
   /\b(neutral|zinc|gray|slate|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|pink|rose)-\d{2,3}\b/,
 ];
-const files = import.meta.glob(['../../**/*.svelte', '../../**/*.ts', '../../app.css', '!../../**/*.test.ts', '!../../styles/**', '!../gen/**', '!./avatar.ts'], {
+const files = import.meta.glob(['../../**/*.svelte', '../../**/*.ts', '../../app.css', '!../../**/*.test.ts', '!../../styles/**', '!../gen/**', '!./avatar.ts', '!./accent.ts'], {
   query: '?raw', import: 'default', eager: true,
 }) as Record<string, string>;
 

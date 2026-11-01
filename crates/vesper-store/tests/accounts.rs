@@ -277,12 +277,38 @@ async fn session_of_banned_user_is_none() {
 }
 
 #[tokio::test]
+async fn ui_accent_starts_null_and_persists() {
+    let (_tmp, s) = open().await;
+    let a = s.create_account(acct("alice")).await.unwrap();
+    assert_eq!(a.ui_accent, None);
+    let a2 = s
+        .update_profile(&a.user_id, None, None, None, Some("teal"))
+        .await
+        .unwrap();
+    assert_eq!(a2.ui_accent.as_deref(), Some("teal"));
+    // A patch without it keeps it; the avatar colour is a different column.
+    let a3 = s
+        .update_profile(&a.user_id, Some("Al"), None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        (a3.ui_accent.as_deref(), a3.accent.as_str()),
+        (Some("teal"), "#7c8cff")
+    );
+    // The column refuses anything longer than #rrggbb even if the server check were skipped.
+    let long = s
+        .update_profile(&a.user_id, None, None, None, Some("#7c8cff0"))
+        .await;
+    assert!(long.is_err());
+}
+
+#[tokio::test]
 async fn bio_and_avatar_round_trip_and_go_with_the_account() {
     let (_tmp, s) = open().await;
     let a = s.create_account(acct("alice")).await.unwrap();
     assert_eq!((a.bio.as_str(), a.avatar.as_deref()), ("", None));
     let a2 = s
-        .update_profile(&a.user_id, None, None, Some("hi there"))
+        .update_profile(&a.user_id, None, None, Some("hi there"), None)
         .await
         .unwrap();
     assert_eq!(
@@ -292,7 +318,7 @@ async fn bio_and_avatar_round_trip_and_go_with_the_account() {
     // The column refuses an over-long bio even if the server check were skipped.
     let long = "é".repeat(161);
     assert!(
-        s.update_profile(&a.user_id, None, None, Some(&long))
+        s.update_profile(&a.user_id, None, None, Some(&long), None)
             .await
             .is_err()
     );
