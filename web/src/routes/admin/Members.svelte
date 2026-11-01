@@ -12,19 +12,18 @@
   import type { Role } from '../../lib/gen/Role';
   import type { RolePatch } from '../../lib/gen/RolePatch';
   import type { UserInfo } from '../../lib/gen/UserInfo';
-  // Admin > Members. Rows come from the session's user map, which user_updated keeps current (a role change or a ban
-  // made in another tab shows here too); the fetch on open adds people who signed up after this tab connected.
+  // Admin > Members. Rows come from the session's user map, which user_created and user_updated keep current (a signup,
+  // a role change or a ban made elsewhere shows here live); the fetch on open is for the loaded and failed states.
   // Role and ban are the owner's, on anyone but themself; the server checks the same (owner_target).
   const me = $derived(session.state.me!.user);
   const owner = $derived(me.role === 'owner');
   let loaded = $state(false);
   let failed = $state(false);
   let loading = $state(false);
-  let loadedAt = 0;
   let tableEl = $state<HTMLElement>();
   async function load() {
     if (loading) return;
-    [loading, loadedAt] = [true, Date.now()];
+    loading = true;
     try {
       const list = await api<UserInfo[]>('GET', '/api/users');
       session.state.users = { ...session.state.users, ...Object.fromEntries(list.map((u) => [u.user_id, u])) };
@@ -41,13 +40,7 @@
     await tick();
     if (!failed) tableEl?.focus();
   }
-  // Again when the tab comes back (no event announces a signup), at most every 5 s.
-  const back = () => document.visibilityState === 'visible' && Date.now() - loadedAt > 5000 && void load();
-  onMount(() => {
-    void load();
-    document.addEventListener('visibilitychange', back);
-    return () => document.removeEventListener('visibilitychange', back);
-  });
+  onMount(() => void load());
   const members = $derived(Object.values(session.state.users).sort(byRole));
   const editable = (u: UserInfo) => owner && u.user_id !== me.user_id && u.role !== 'owner';
   const inVoice = (u: UserInfo) => session.state.voice.some((p) => p.user_id === u.user_id);

@@ -74,6 +74,7 @@
         <p class="truncate text-xs text-fg-2">{#if user}@{user.username} · {ROLE[user.role]}{/if}</p>
       </div>
     </div>
+    {#if user?.bio}<p class="bio text-fg">{user.bio}</p>{/if}
     <p class="flex items-center gap-2 text-fg-2"><Icon d={roomId === null ? I.headphonesOff : I.headphones} />{where}</p>
 
     {#if inCall}
@@ -136,6 +137,7 @@
   .act.danger, .act.danger :global(svg) { color: var(--danger-fg); }
   .act[aria-busy] { cursor: progress; }
   .act:focus-visible { outline-offset: -2px; }
+  .bio { overflow-wrap: anywhere; }
   .link { color: var(--fg-2); text-decoration: underline; text-underline-offset: 2px; }
   .link:hover { color: var(--fg); }
 </style>

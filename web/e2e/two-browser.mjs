@@ -6,7 +6,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { browser, cli, png1x1, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, searchFor, searchHits, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, png1x1, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, searchFor, searchHits, signup, sleep, startServer } from './lib.mjs';
 
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
@@ -75,8 +75,14 @@ try {
     return (await r.json()).url;
   });
 
+  // signup_shows_live (#29): alice has Admin > Members open before bob exists; his row appears without a reload, from
+  // the server's user_created push.
+  await alice.page.goto(`${ORIGIN}/admin/members`);
+  await alice.page.locator('tr[data-user="alice"]').waitFor();
   const bob = await browser('bob', []);
   await signup(bob.page, bobLink, 'bob');
+  await alice.page.locator('tr[data-user="bob"]', { hasText: 'bob' }).waitFor({ timeout: 5000 });
+  console.log('signup_shows_live: ok');
 
   await join(alice.page);
   await sleep(2000);
@@ -116,6 +122,23 @@ try {
   await inVoice(alice.page, 'bob').waitFor({ timeout: 5000 });
   await inVoice(bob.page, 'alice').waitFor({ timeout: 5000 });
   console.log('presence_seen_by_both: ok');
+
+  // picture_shows_live (#21): alice picks a picture in Settings > Account (cropped and redrawn by a canvas); bob's sidebar
+  // shows it on her voice row without a reload, loaded under the page CSP, and the speaking ring still draws around it.
+  await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await alice.page.getByRole('link', { name: 'Account', exact: true }).click();
+  await alice.page.locator('input[type=file]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: png1x1() });
+  await alice.page.getByRole('status').filter({ hasText: 'Picture saved.' }).waitFor({ timeout: 5000 });
+  const pic = inVoice(bob.page, 'alice').locator('img[src*="/avatar?v="]');
+  await pic.waitFor({ timeout: 5000 });
+  await bob.page.waitForFunction((img) => img.complete && img.naturalWidth === 256, await pic.elementHandle(), { timeout: 5000 });
+  await bob.page.locator('li.speaking[data-speaking]', { hasText: 'alice' }).locator('img').first().waitFor({ timeout: 5000 });
+  // A bio shows on her person card for bob.
+  await alice.page.getByLabel('Bio').fill('Plays bass on Sundays');
+  await alice.page.getByRole('button', { name: 'Save', exact: true }).click();
+  await alice.page.getByRole('status').filter({ hasText: /saved/i }).first().waitFor();
+  await openRoom(alice.page, 'general');
+  console.log('picture_shows_live: ok');
 
   // welcome_keeps_the_call: Settings > Account > "Run the welcome steps again" opens in the Shell, so the call stays up
   // through the steps and after "Open Vesper".

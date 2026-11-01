@@ -103,6 +103,10 @@ pub enum ServerMsg {
     UserUpdated {
         user: UserInfo,
     },
+    /// Someone signed up. Sent to every socket: every member sees the user list.
+    UserCreated {
+        user: UserInfo,
+    },
     ForceMuted {
         muted: bool,
     },

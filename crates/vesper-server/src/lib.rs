@@ -6,6 +6,7 @@ pub mod api_admin;
 pub mod api_messages;
 pub mod api_rooms;
 pub mod auth;
+pub mod avatars;
 pub mod cli;
 pub mod config;
 pub mod hub;
@@ -64,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api_rooms::routes())
         .merge(api_messages::routes())
         .merge(uploads::routes())
+        .merge(avatars::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_origin,

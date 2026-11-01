@@ -14,14 +14,14 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use vesper_protocol::{
     ApiErrorCode, CLOSE_SESSION_ENDED, Device, InvitePreview, LoginReq, Me, PasswordChange,
-    ProfilePatch, Role, SignupReq, UserInfo,
+    ProfilePatch, Role, ServerMsg, SignupReq, UserInfo,
 };
 use vesper_store::{NewAccount, NewSession, StoreError, now_ms};
 
 use crate::AppState;
 use crate::auth::{
     clear_cookie, client_ip, cookie_token, device_label, hash_password, hash_token, new_token,
-    session_cookie, valid_accent, valid_display_name, valid_password, valid_username,
+    session_cookie, valid_accent, valid_bio, valid_display_name, valid_password, valid_username,
     verify_password,
 };
 use crate::limits::Kind;
@@ -275,6 +275,8 @@ async fn signup(
     };
     let (user, session_id) = st.store.signup(&invite_hash, account, s).await?;
     drop_presented_session(&h, &st).await?;
+    st.hub
+        .broadcast(ServerMsg::UserCreated { user: user.clone() });
     let cookie = session_cookie(&token, st.cfg.secure_cookies);
     Ok((
         StatusCode::CREATED,
@@ -349,9 +351,21 @@ async fn patch_me(
         Some(c) => Some(valid_accent(&c).ok_or_else(|| bad("accent: a colour like #7c8cff"))?),
         None => None,
     };
+    let bio = match req.bio {
+        Some(b) => Some(
+            valid_bio(&b)
+                .ok_or_else(|| bad("bio: at most 160 characters, no hidden characters"))?,
+        ),
+        None => None,
+    };
     let user = st
         .store
-        .update_profile(&a.user.user_id, display_name.as_deref(), accent.as_deref())
+        .update_profile(
+            &a.user.user_id,
+            display_name.as_deref(),
+            accent.as_deref(),
+            bio.as_deref(),
+        )
         .await?;
     st.hub.update_user(user.clone());
     Ok(Json(user))

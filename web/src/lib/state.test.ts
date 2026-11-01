@@ -6,7 +6,7 @@ import type { UserInfo } from './gen/UserInfo';
 import type { Message } from './gen/Message';
 
 const user = (user_id: string, display_name = user_id): UserInfo => ({
-  user_id, username: user_id, display_name, accent: '#888888', role: 'member', banned: false,
+  user_id, username: user_id, display_name, accent: '#888888', role: 'member', banned: false, bio: '', avatar: null,
 });
 const room = (id: number): RoomInfo => ({ id, name: `room${id}`, position: id, restricted: false, members: [] });
 const peer = (user_id: string, room_id: number): Peer => ({
@@ -41,6 +41,12 @@ describe('applyServerMsg', () => {
     const self = applyServerMsg(s, { type: 'user_updated', user: user('a', 'Ay') });
     expect(self.me).toEqual({ user: user('a', 'Ay'), session_id: 1 });
     expect(applyServerMsg(s, { type: 'user_updated', user: user('c') }).users.c).toEqual(user('c'));
+  });
+  it('user_created adds the new person', () => {
+    const s: AppState = { ...emptyState(), me, users: { a: user('a') } };
+    const next = applyServerMsg(s, { type: 'user_created', user: user('n', 'Newbie') });
+    expect(next.users).toEqual({ a: user('a'), n: user('n', 'Newbie') });
+    expect(next.me).toBe(me);
   });
   it('voice messages go through applyPeerMsg; others keep the state', () => {
     const s: AppState = { ...emptyState(), voice: [peer('a', 1)] };

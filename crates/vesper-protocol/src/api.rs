@@ -21,6 +21,11 @@ pub struct UserInfo {
     pub accent: String,
     pub role: Role,
     pub banned: bool,
+    /// At most 160 characters, one line. Empty when unset.
+    pub bio: String,
+    /// The picture's version, or null for the letter avatar. Fetch
+    /// `/api/users/{user_id}/avatar?v={avatar}`; a new picture gets a new version.
+    pub avatar: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -122,6 +127,10 @@ pub struct ProfilePatch {
     #[serde(default)]
     #[ts(optional)]
     pub accent: Option<String>,
+    /// 0 to 160 characters; empty clears it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub bio: Option<String>,
 }
 
 // `Debug` is written by hand so the password and invite code never reach a log.
