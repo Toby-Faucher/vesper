@@ -11,6 +11,7 @@
   import { isMac, isTyping, nextUnread, shortcut, stepRoom } from '../lib/ui/keys';
   import { loadRecent, pushRecent } from '../lib/ui/recent';
   import { UI_MESSAGES } from '../lib/ui/messages';
+  import { mentionCount, titleFor } from '../lib/ui/notify';
   import Button from '../lib/ui/c/Button.svelte';
   import EmptyState from '../lib/ui/c/EmptyState.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
@@ -25,6 +26,11 @@
   // The signed-in app: the sidebar and the routed page. It lives as long as the sign-in, so the call does too: startVoice()
   // runs once here, and its cleanup (sign out) ends the call and resets its state.
   onMount(startVoice);
+  // The tab title carries the mention count; it drops as rooms are read.
+  $effect(() => {
+    document.title = titleFor(mentionCount(session.state));
+    return () => (document.title = titleFor(0));
+  });
 
   const LAST = $derived(lastRoomKey(session.state.me?.user.user_id ?? ''));
   const storage = (() => { try { return localStorage; } catch { return null; } })();

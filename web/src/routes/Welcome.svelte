@@ -3,6 +3,7 @@
   import { api, errorText } from '../lib/api';
   import { navigate, session } from '../lib/session.svelte';
   import { updateSettings, voice } from '../lib/voice.svelte';
+  import { loadPrefs, permission, requestMentions } from '../lib/ui/notify';
   import { SLOT_HEX, avatarSlot, profilePatch } from '../lib/ui/avatar';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
@@ -23,9 +24,9 @@
   let saving = $state(false);
   let saveError = $state('');
   let heading = $state<HTMLElement>();
-  const supported = typeof Notification !== 'undefined';
-  // Read, never asked, on load: the browser asks only from the button below.
-  let permission = $state<NotificationPermission | 'unsupported'>(supported ? Notification.permission : 'unsupported');
+  // Read, never asked, on load: the browser asks only from the button below. `granted` here also means mentions are on.
+  const current = () => (permission() === 'granted' && !loadPrefs().mentions ? 'default' : permission());
+  let perm = $state(current());
   const PERMISSION_TEXT: Record<NotificationPermission | 'unsupported', string> = {
     default: '',
     granted: 'Notifications are on. You get one when someone mentions you.',
@@ -59,8 +60,8 @@
     await go(2);
   }
   async function askNotifications() {
-    // shortcut: a plain permission request; Task 14's requestMentions() takes this over.
-    permission = await Notification.requestPermission();
+    await requestMentions(); // turns mentions on when allowed
+    perm = current();
   }
 
   onMount(() => heading?.focus());
@@ -111,8 +112,8 @@
       </div>
       <!-- The live region stays rendered (empty while not asked), so its first text is announced. -->
       <div>
-        {#if permission === 'default'}<Button onclick={askNotifications}>Turn on notifications</Button>{/if}
-        <p role="status" class="text-fg-2">{PERMISSION_TEXT[permission]}</p>
+        {#if perm === 'default'}<Button onclick={askNotifications}>Turn on notifications</Button>{/if}
+        <p role="status" class="text-fg-2">{PERMISSION_TEXT[perm]}</p>
       </div>
       <div class="flex items-center gap-2 pt-1">
         <span class="-ml-3"><Button variant="ghost" onclick={finish}>Skip for now</Button></span>

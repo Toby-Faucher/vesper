@@ -1105,11 +1105,28 @@ scene('settings', async (ctx) => {
   await ctx.shot(page, 'settings-reset-confirm', { fullPage: false });
   await page.getByRole('button', { name: 'Cancel' }).click();
   await page.getByLabel('Push to talk').uncheck();
+  // Headless Chromium answers 'denied' without asking: show the not-asked state with the getter overridden on this page.
+  await page.evaluate(() => Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true }));
   for (const [name, file] of [['Notifications', 'settings-notifications'], ['Appearance', 'settings-appearance']]) {
     await settingsPage(page, name);
     await rest(page);
     await ctx.shot(page, file);
   }
+  // Notifications allowed (the browser grants here without a prompt), then a mention from bob for the title count.
+  await page.evaluate(() => delete Notification.permission);
+  await page.context().grantPermissions(['notifications'], { origin: ORIGIN });
+  await settingsPage(page, 'Notifications');
+  await page.getByRole('switch', { name: 'Notify me when someone mentions me' }).check();
+  await page.getByRole('status').filter({ hasText: 'Allowed' }).waitFor();
+  await rest(page);
+  await ctx.shot(page, 'settings-notifications-allowed');
+  const general = (await ctx.api(page, 'GET', '/api/rooms')).find((r) => r.name === 'general');
+  await ctx.api(ctx.bob.page, 'POST', `/api/rooms/${general.id}/messages`, { body: '@alice can you check this' });
+  await ctx.api(ctx.bob.page, 'POST', `/api/rooms/${general.id}/messages`, { body: '@alice and this one' });
+  await page.waitForFunction(() => document.title === '(2) Vesper');
+  console.log(`title-count: document.title is "${await page.evaluate(() => document.title)}"`);
+  await page.getByRole('switch', { name: 'Notify me when someone mentions me' }).uncheck();
+  await page.context().clearPermissions();
   // Account, whole page, with a second device (a fresh browser signed in as alice) and a wrong current password.
   const second = await ctx.open(`${ORIGIN}/login`);
   await second.getByLabel('Username').fill('alice');

@@ -1,6 +1,7 @@
 import { ApiFailure, api } from './api';
 import { applyChatMsg, chat, resync } from './chat.svelte';
 import { loginHref } from './route';
+import { onServerMsg } from './ui/notify';
 import { recentKey } from './ui/recent';
 import { tray } from './ui/tray.svelte';
 import { Signaling } from './signaling';
@@ -94,8 +95,10 @@ function open(): void {
       upAt = Date.now();
       session.online = true;
     }
-    session.state = applyServerMsg(session.state, m);
+    const prev = session.state;
+    session.state = applyServerMsg(prev, m);
     chat.state = applyChatMsg(chat.state, m);
+    onServerMsg(m, prev); // mention notifications and the join and leave sounds
     if (m.type === 'hello') void resync(); // events may have been missed while the socket was down
   });
   sig.onClose((byClient, code) => {

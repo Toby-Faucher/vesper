@@ -35,13 +35,23 @@ const mutedNotice = (page) => page.getByRole('region', { name: 'Call' }).getByTe
 
 const BAD_LINK = 'This invite link does not work. Ask the person who sent it for a new one.';
 
-// Headless Chromium answers 'denied' without asking, so the page gets a stand-in that starts at 'default', counts the
-// asks and grants. Add it before the page loads.
+// Headless Chromium answers 'denied' without asking and shows nothing, so the page gets a stand-in Notification that
+// starts at 'default', counts the asks, grants, and records each notification. The grant lasts the tab (sessionStorage),
+// as a real one would over a reload. Add it before the page loads.
 const fakeNotifications = () => {
-  let p = 'default';
+  let p = sessionStorage.getItem('fake-permission') ?? 'default';
   window.__asked = 0;
-  Object.defineProperty(Notification, 'permission', { get: () => p });
-  Notification.requestPermission = async () => (window.__asked++, (p = 'granted'));
+  window.__shown = [];
+  window.Notification = class {
+    static get permission() { return p; }
+    static async requestPermission() {
+      window.__asked++;
+      sessionStorage.setItem('fake-permission', (p = 'granted'));
+      return p;
+    }
+    constructor(title, o = {}) { window.__shown.push({ title, body: o.body, tag: o.tag }); }
+    close() {}
+  };
 };
 
 // The three welcome steps once, with Back: the step count, the heading taking focus, the colour saved, and the browser
@@ -277,6 +287,39 @@ try {
   await b.keyboard.press('Escape');
   await b.waitForURL(`${ORIGIN}/r/${general}`);
   console.log('settings persist, close and Esc: ok');
+
+  // Mentions: bob turned notifications on in the welcome steps. A mention while he reads another room shows one
+  // notification and puts the count in the title; a message without a mention shows none; with the switch off, none. No
+  // page load asks for permission: only turning the switch on does.
+  {
+    const post = (body) => call(a, 'POST', `/api/rooms/${general}/messages`, { body, reply_to: null, attachments: [] });
+    await openRoom(b, 'music');
+    const shown = () => b.evaluate(() => window.__shown);
+    await post('no mention in this one');
+    await post('hey @bob can you look at this');
+    await b.waitForFunction(() => window.__shown.length > 0);
+    await sleep(500);
+    assert.deepEqual(await shown(), [{ title: 'alice mentioned you in general', body: 'hey @bob can you look at this', tag: String(general) }]);
+    await b.waitForFunction(() => document.title === '(1) Vesper');
+    await b.goto(`${ORIGIN}/settings/notifications`);
+    const sw = b.getByRole('switch', { name: 'Notify me when someone mentions me' });
+    await sw.waitFor();
+    assert.ok(await sw.isChecked(), 'the mention switch is off after the welcome turned it on');
+    await b.getByRole('status').filter({ hasText: 'Allowed' }).waitFor();
+    await b.getByRole('button', { name: 'Send a test notification' }).waitFor();
+    assert.equal(await b.evaluate(() => window.__asked), 0, 'permission asked on load');
+    assert.ok(!(await b.getByRole('switch', { name: 'Play a sound when someone joins or leaves your call' }).isChecked()), 'sounds on by default');
+    await sw.uncheck();
+    assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.notify')).mentions), false);
+    await post('@bob again, with the switch off');
+    await sleep(1000);
+    assert.deepEqual(await shown(), [], 'a notification with the switch off');
+    await sw.check();
+    assert.equal(await b.evaluate(() => window.__asked), 1, 'turning the switch on did not ask');
+    await b.goto(`${ORIGIN}/r/${general}`);
+    await b.waitForFunction(() => document.title === 'Vesper'); // general read at the bottom: the count clears
+    console.log('mention notifications and title count: ok');
+  }
 
   // Settings > Account, devices: alice signs in on a second browser, the first lists both and signs the other out, and
   // the second lands on the sign-in page with the session notice.
