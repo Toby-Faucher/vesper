@@ -139,6 +139,10 @@ pub(crate) enum Command {
     Leave {
         user: String,
     },
+    SetMuted {
+        user: String,
+        muted: bool,
+    },
     SetAdvertised(Vec<SocketAddr>),
     #[cfg(feature = "test-support")]
     Panic,
@@ -182,6 +186,15 @@ impl SfuHandle {
     /// End `user`'s session; the other room members are offered SDP without its track.
     pub fn leave(&self, user: &str) {
         self.send(Command::Leave { user: user.into() });
+    }
+
+    /// Force-mute `user` or lift it: while muted, the SFU forwards none of their audio. Keyed by
+    /// user, not session, so it holds across leave and rejoin until lifted here.
+    pub fn set_muted(&self, user: &str, muted: bool) {
+        self.send(Command::SetMuted {
+            user: user.into(),
+            muted,
+        });
     }
 
     /// Replace the advertised candidate addresses. Applies to sessions created by later
