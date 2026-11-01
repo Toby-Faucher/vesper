@@ -12,6 +12,26 @@ const VIEWPORT = { width: 1440, height: 900 };
 const out = fileURLToPath(new URL('shots/', import.meta.url));
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
+// Every clock time in the pictures reads 7:41 PM, so two runs give the same pixels (the seeded messages carry the real
+// time). Dates and relative times ("in 7 days") are left alone.
+const fixedTimes = () => {
+  const Real = Intl.DateTimeFormat;
+  const at = new Date(2026, 10, 1, 19, 41);
+  function Fixed(locale, o = {}) {
+    const f = new Real(locale, o);
+    if (!('hour' in o) || 'day' in o || 'dateStyle' in o) return f;
+    return Object.create(f, { format: { value: () => f.format(at) }, formatToParts: { value: () => f.formatToParts(at) } }); // format is a getter: define, not assign
+  }
+  Fixed.prototype = Real.prototype;
+  Fixed.supportedLocalesOf = Real.supportedLocalesOf;
+  Intl.DateTimeFormat = Fixed;
+};
+const shotBrowser = async (...args) => {
+  const b = await browser(...args);
+  await b.page.addInitScript(fixedTimes);
+  return b;
+};
+
 const scenes = new Map();
 // fn({ alice, bob, api, open, shot, seed, server }) returns the page to shoot. alice and bob are signed-in { page, errors }; api(page, method,
 // path, body) calls the API from that page (cookie and Origin as the app sends them); open(url) is a fresh signed-out page.
@@ -141,7 +161,7 @@ scene('signup', async ({ alice, open, shot }) => {
 // The welcome steps of a new account whose fake mic plays speech: step 2 runs the mic test so the meter moves.
 scene('welcome', async ({ alice, shot }) => {
   const { url } = await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 });
-  const { page } = await browser('welcome', [`--use-file-for-fake-audio-capture=${speech}`], { viewport: VIEWPORT });
+  const { page } = await shotBrowser('welcome', [`--use-file-for-fake-audio-capture=${speech}`], { viewport: VIEWPORT });
   await page.addInitScript(() => Object.defineProperty(Notification, 'permission', { get: () => 'default' })); // headless says 'denied'
   await page.goto(url);
   await page.getByLabel('Username').fill('wren');
@@ -186,7 +206,7 @@ function fullHouse({ alice, bob, api, seed }) {
     const id = (name) => rooms.find((r) => r.name === name).id;
     for (const [name, display] of [['carol', 'carol'], ['dave', 'dave'], ['bart', 'Bartholomew Featherstonehaugh']]) {
       const { url } = await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 });
-      const b = await browser(name, [], { viewport: VIEWPORT });
+      const b = await shotBrowser(name, [], { viewport: VIEWPORT });
       await signup(b.page, url, name, display);
       extra.push(b);
     }
@@ -365,7 +385,7 @@ for (const [name, fail] of [['switcher-loading', false], ['switcher-failed', tru
     const chunk = '**/assets/switcher-chunk-*.js';
     let release;
     const held = new Promise((r) => (release = r));
-    await page.route(chunk, async (r) => (fail ? r.abort() : (await held, r.continue())));
+    await page.route(chunk, async (r) => (fail ? r.abort() : (await held, r.continue().catch(() => {})))); // the unroute below can win the race
     await page.reload();
     await rest(page);
     await page.keyboard.press('Control+k');
@@ -408,10 +428,12 @@ scene('not-found', async ({ alice }) => {
   return alice.page;
 });
 
-// The first Tab stop on a fresh load is the skip link, shown over the sidebar; Enter moves focus to the main pane.
+// The first Tab stop from the top of the page is the skip link, shown over the sidebar; Enter moves focus to the main pane.
+// A room open puts focus in the composer, so the scene moves the start of Tab to the body first.
 scene('skip-link', async ({ alice, shot }) => {
   await home(alice.page);
   await alice.page.mouse.move(1439, 899);
+  await alice.page.evaluate(() => { const b = document.body; b.tabIndex = -1; b.focus(); b.removeAttribute('tabindex'); }); // start at the top
   await alice.page.keyboard.press('Tab');
   const link = alice.page.getByRole('link', { name: 'Skip to main content' });
   if (!(await link.evaluate((el) => el === document.activeElement))) throw new Error('skip-link: not the first Tab stop');
@@ -1226,15 +1248,15 @@ try {
   await mkdir(out, { recursive: true });
   const fresh = [];
   const open = async (url) => {
-    const b = await browser(`fresh${fresh.length}`, [], { viewport: VIEWPORT });
+    const b = await shotBrowser(`fresh${fresh.length}`, [], { viewport: VIEWPORT });
     fresh.push(b);
     await b.page.goto(url);
     return b.page;
   };
-  const alice = await browser('alice', [`--use-file-for-fake-audio-capture=${speech}`], { viewport: VIEWPORT });
+  const alice = await shotBrowser('alice', [`--use-file-for-fake-audio-capture=${speech}`], { viewport: VIEWPORT });
   await signup(alice.page, await cli(['create-owner']), 'alice');
   const bobLink = (await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url;
-  const bob = await browser('bob', [], { viewport: VIEWPORT });
+  const bob = await shotBrowser('bob', [], { viewport: VIEWPORT });
   await signup(bob.page, bobLink, 'bob');
   let seeded;
   const seed = () => (seeded ??= (async () => {
