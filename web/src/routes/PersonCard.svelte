@@ -18,9 +18,10 @@
     userId,
     anchor,
     side = 'right',
+    above = null,
     asDialog = false,
     onclose,
-  }: { userId: string; anchor: HTMLElement | null; side?: 'right' | 'top'; asDialog?: boolean; onclose: () => void } = $props();
+  }: { userId: string; anchor: HTMLElement | null; side?: 'right' | 'top'; above?: Element | null; asDialog?: boolean; onclose: () => void } = $props();
 
   const ROLE = { member: 'Member', moderator: 'Moderator', owner: 'Owner' } as const;
   const me = $derived(session.state.me?.user);
@@ -74,6 +75,7 @@
         <p class="truncate text-xs text-fg-2">{#if user}@{user.username} · {ROLE[user.role]}{/if}</p>
       </div>
     </div>
+    {#if user?.bio}<p class="bio text-fg">{user.bio}</p>{/if}
     <p class="flex items-center gap-2 text-fg-2"><Icon d={roomId === null ? I.headphonesOff : I.headphones} />{where}</p>
 
     {#if inCall}
@@ -115,7 +117,7 @@
 {#if asDialog}
   <Dialog open title={name} {onclose}>{@render body()}</Dialog>
 {:else}
-  <Popover {anchor} open label={name} {onclose} {side}>{@render body()}</Popover>
+  <Popover {anchor} open label={name} {onclose} {side} {above}>{@render body()}</Popover>
 {/if}
 
 <style>
@@ -136,6 +138,7 @@
   .act.danger, .act.danger :global(svg) { color: var(--danger-fg); }
   .act[aria-busy] { cursor: progress; }
   .act:focus-visible { outline-offset: -2px; }
+  .bio { overflow-wrap: anywhere; }
   .link { color: var(--fg-2); text-decoration: underline; text-underline-offset: 2px; }
   .link:hover { color: var(--fg); }
 </style>

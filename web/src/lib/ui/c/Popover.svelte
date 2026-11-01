@@ -5,12 +5,14 @@
   // A popover="auto" layer next to `anchor`: light dismiss (outside click, Esc) by the platform, placed by place().
   // On open it focuses itself (or what `onopen` picks); on close focus goes back to the anchor when it was inside.
   // It sets aria-haspopup (the role), aria-controls and aria-expanded on the anchor. Arrow keys are left to the children.
+  // `above`: opening upwards, it also stays above this element (a card from the call bar clears the composer).
   let {
     anchor,
     open,
     onclose,
     label,
     side = 'bottom',
+    above = null,
     role = 'dialog',
     onkeydown,
     onopen,
@@ -21,6 +23,7 @@
     onclose: () => void;
     label: string;
     side?: 'bottom' | 'top' | 'right';
+    above?: Element | null;
     role?: 'dialog' | 'menu';
     onkeydown?: (e: KeyboardEvent) => void;
     onopen?: (el: HTMLElement) => void;
@@ -52,7 +55,9 @@
       el.showPopover({ source: anchor });
       // shortcut: placed once on open; a scroll or resize while open does not move it. Fine for menus and cards.
       const r = el.getBoundingClientRect();
-      const p = place(anchor.getBoundingClientRect(), { w: r.width, h: r.height }, { w: innerWidth, h: innerHeight }, side);
+      const a = anchor.getBoundingClientRect();
+      const box = above && side === 'top' ? { left: a.left, right: a.right, bottom: a.bottom, top: Math.min(a.top, above.getBoundingClientRect().top) } : a;
+      const p = place(box, { w: r.width, h: r.height }, { w: innerWidth, h: innerHeight }, side);
       el.style.left = `${p.x}px`;
       el.style.top = `${p.y}px`;
       enter(el, 'pop');

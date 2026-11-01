@@ -191,7 +191,7 @@
 {#if person.id}
   {#await import('./PersonCard.svelte') then m}
     {#key person.anchor}
-      <m.default userId={person.id} anchor={person.anchor} side={person.side} asDialog={!person.anchor} onclose={closePerson} />
+      <m.default userId={person.id} anchor={person.anchor} side={person.side} above={person.side === 'top' ? document.querySelector('[data-composer]') : null} asDialog={!person.anchor} onclose={closePerson} />
     {/key}
   {/await}
 {/if}

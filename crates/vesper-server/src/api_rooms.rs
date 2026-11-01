@@ -130,6 +130,8 @@ mod tests {
             accent: String::new(),
             role,
             banned: false,
+            bio: String::new(),
+            avatar: None,
         };
         let room = |restricted, members: &[&str]| RoomInfo {
             id: 1,

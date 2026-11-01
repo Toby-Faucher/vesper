@@ -56,12 +56,19 @@
 </ul>
 
 <style>
-  .tray { padding: 4px; border-bottom: 1px solid var(--line-subtle); }
-  .item {
+  /* The rows share the list's columns (subgrid), so every bar starts at the same x. */
+  .tray {
     display: grid;
     grid-template-columns: 24px minmax(0, auto) auto minmax(0, 1fr) auto;
-    align-items: center;
     column-gap: 8px;
+    padding: 4px;
+    border-bottom: 1px solid var(--line-subtle);
+  }
+  .item {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: center;
     min-height: 32px;
     padding: 4px 4px 4px 8px;
     border-radius: var(--radius);

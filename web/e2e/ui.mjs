@@ -395,7 +395,7 @@ try {
         probe.style.color = 'var(--focus)';
         const focus = getComputedStyle(probe).color;
         probe.remove();
-        const parents = [e.parentElement, e.parentElement?.parentElement].filter(Boolean);
+        const parents = [e.parentElement, e.parentElement?.parentElement, e.parentElement?.parentElement?.parentElement].filter(Boolean); // the composer's box is three up
         return { name, ring: (cs.outlineStyle !== 'none' && cs.outlineWidth !== '0px') || parents.some((p) => getComputedStyle(p).borderTopColor === focus) };
       });
       if (!at) continue;

@@ -25,14 +25,17 @@ function prevKey(key: string): string {
   return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
 }
 
-/** "Today", "Yesterday", "Mon 27 Oct", or "Wed 31 Dec 2025" for another year. */
-export function dayLabel(ms: number, now: number, tz?: string): string {
+/**
+ * "Today", "Yesterday", "Mon 27 Oct", or "Wed 31 Dec 2025" for another year, in the browser's locale (`locale` for tests),
+ * so the order matches the search dialog's date fields, which the browser draws ("Mon Oct 27" in en-US).
+ */
+export function dayLabel(ms: number, now: number, tz?: string, locale?: string): string {
   const k = dayKey(ms, tz);
   const today = dayKey(now, tz);
   if (k === today) return 'Today';
   if (k === prevKey(today)) return 'Yesterday';
   const year = k.slice(0, 4) !== today.slice(0, 4);
-  return new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: year ? 'numeric' : undefined, timeZone: tz })
+  return new Intl.DateTimeFormat(locale, { weekday: 'short', day: 'numeric', month: 'short', year: year ? 'numeric' : undefined, timeZone: tz })
     .format(ms)
     .replace(',', '');
 }
@@ -42,7 +45,7 @@ export function dayLabel(ms: number, now: number, tz?: string): string {
  * is not mine. A message heads a group unless the one before it has the same author, is less than 5 minutes older,
  * and neither is deleted. A reply, a new day and the New row always start a group.
  */
-export function rows(messages: Message[], lastReadId: number, myId: string, now: number, tz?: string): Row[] {
+export function rows(messages: Message[], lastReadId: number, myId: string, now: number, tz?: string, locale?: string): Row[] {
   const out: Row[] = [];
   let prev: Message | null = null;
   let day = '';
@@ -52,7 +55,7 @@ export function rows(messages: Message[], lastReadId: number, myId: string, now:
     const k = dayKey(m.created_at, tz);
     if (k !== day) {
       day = k;
-      out.push({ kind: 'day', label: dayLabel(m.created_at, now, tz), key: `d${k}` });
+      out.push({ kind: 'day', label: dayLabel(m.created_at, now, tz, locale), key: `d${k}` });
       head = true;
     }
     if (!newDone && m.id > lastReadId && m.author_id !== myId) {
@@ -84,10 +87,10 @@ export function plain(nodes: Md[]): string {
         switch (n.t) {
           case 'text': case 'code': return n.v;
           case 'pre': return ` ${n.v} `;
-          case 'br': return ' ';
+          case 'br': case 'hr': return ' ';
           case 'link': return n.href;
           case 'mention': return `@${n.username}`;
-          case 'quote': return ` ${walk(n.c)} `;
+          case 'quote': case 'h': case 'li': return ` ${walk(n.c)} `;
           default: return walk(n.c);
         }
       })

@@ -251,6 +251,8 @@ mod tests {
             accent: String::new(),
             role,
             banned: false,
+            bio: String::new(),
+            avatar: None,
         }
     }
 

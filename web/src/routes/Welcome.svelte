@@ -68,8 +68,8 @@
 </script>
 
 <AuthCard wide pane>
-  {#snippet aside()}<span class="text-fg-3">Step {step} of 3</span>{/snippet}
-
+  <!-- The step count heads the card, so it reads with the step rather than floating outside it. -->
+  <p class="mb-2 text-sm text-fg-3 tabular-nums">Step {step} of 3</p>
   {#if step === 1}
     <form onsubmit={saveProfile} class="flex flex-col gap-5">
       <div>
