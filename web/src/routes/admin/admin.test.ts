@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { InviteInfo } from '../../lib/gen/InviteInfo';
-import { byRole, bytes, canReset, canRevoke, inviteStatus, moveRoom, untilText } from './admin';
+import type { ResetInfo } from '../../lib/gen/ResetInfo';
+import { byRole, bytes, canReset, canRevoke, resetLine, resetStatus, inviteStatus, moveRoom, untilText } from './admin';
 
 const NOW = 1_800_000_000_000;
 const inv = (o: Partial<InviteInfo> = {}): InviteInfo =>
@@ -82,5 +83,20 @@ describe('canReset', () => {
     expect(canReset(o, o)).toBe(false);
     expect([o, m1, m2, a].map((t) => canReset(m1, t))).toEqual([false, false, false, true]);
     expect([o, m1, a, b].map((t) => canReset(a, t))).toEqual([false, false, false, false]);
+  });
+});
+
+describe('resetStatus and resetLine', () => {
+  const r = (o: Partial<ResetInfo> = {}): ResetInfo =>
+    ({ user_id: 'b', created_by: 'a', created_at: NOW - 1000, expires_at: NOW + 1000, used_at: null, used_from: null, cancelled: false, ...o });
+  it('used, then cancelled, then expired, else unused', () => {
+    expect(resetStatus(r(), NOW)).toBe('unused');
+    expect(resetStatus(r({ expires_at: NOW }), NOW)).toBe('expired');
+    expect(resetStatus(r({ cancelled: true, expires_at: NOW - 1 }), NOW)).toBe('cancelled');
+    expect(resetStatus(r({ used_at: NOW - 5, expires_at: NOW - 1 }), NOW)).toBe('used');
+  });
+  it('names who made it, or the command line', () => {
+    expect(resetLine(r({ used_at: NOW }), 'alice', NOW)).toMatch(/^Password reset by alice on .+ \(used\)$/);
+    expect(resetLine(r(), null, NOW)).toMatch(/^Password reset from the command line on .+ \(unused\)$/);
   });
 });

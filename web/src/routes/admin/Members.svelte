@@ -1,16 +1,20 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { api, errorText } from '../../lib/api';
+  import { api, ApiFailure, errorText } from '../../lib/api';
   import { session } from '../../lib/session.svelte';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
   import { canModerate, togglePerson } from '../../lib/ui/person.svelte';
   import { copyText } from '../../lib/ui/clipboard';
-  import { ROLE_NAMES, byRole, canReset } from './admin';
+  import { ROLE_NAMES, byRole, canReset, resetLine } from './admin';
   import Avatar from '../../lib/ui/c/Avatar.svelte';
   import Button from '../../lib/ui/c/Button.svelte';
   import Dialog from '../../lib/ui/c/Dialog.svelte';
+  import Field from '../../lib/ui/c/Field.svelte';
+  import PasswordInput from '../../lib/ui/c/PasswordInput.svelte';
   import Select from '../../lib/ui/c/Select.svelte';
+  import type { ResetCreate } from '../../lib/gen/ResetCreate';
   import type { ResetCreated } from '../../lib/gen/ResetCreated';
+  import type { ResetInfo } from '../../lib/gen/ResetInfo';
   import type { Role } from '../../lib/gen/Role';
   import type { RolePatch } from '../../lib/gen/RolePatch';
   import type { UserInfo } from '../../lib/gen/UserInfo';
@@ -42,7 +46,10 @@
     await tick();
     if (!failed) tableEl?.focus();
   }
-  onMount(() => void load());
+  onMount(() => {
+    void load();
+    void loadResets();
+  });
   const members = $derived(Object.values(session.state.users).sort(byRole));
   const editable = (u: UserInfo) => owner && u.user_id !== me.user_id && u.role !== 'owner';
   const inVoice = (u: UserInfo) => session.state.voice.some((p) => p.user_id === u.user_id);
@@ -86,7 +93,19 @@
     if (ok) confirm = null;
   }
 
-  // Reset links: confirm naming the person, then the link once, like a new invite (only in this state, never stored).
+  // Reset links: confirm naming the person and asking for your own password, then the link once, like a new invite
+  // (only in this state, never stored). The owner also sees each person's latest reset: who made it and if it was used.
+  let resets = $state<Record<string, ResetInfo>>({});
+  async function loadResets() {
+    if (!owner) return;
+    try {
+      resets = Object.fromEntries((await api<ResetInfo[]>('GET', '/api/resets')).map((r) => [r.user_id, r]));
+    } catch {
+      // only the audit line; the table works without it
+    }
+  }
+  const resetBy = (r: ResetInfo) => (r.created_by === null ? null : (session.state.users[r.created_by]?.display_name ?? 'someone'));
+  let resetPassword = $state('');
   let resetFor = $state<UserInfo | null>(null);
   let resetError = $state('');
   let resetBusy = $state(false);
@@ -99,13 +118,16 @@
     resetError = '';
     const u = resetFor;
     try {
-      made = { ...(await api<ResetCreated>('POST', `/api/users/${u.user_id}/reset`)), name: u.display_name };
+      const body: ResetCreate = { password: resetPassword };
+      made = { ...(await api<ResetCreated>('POST', `/api/users/${u.user_id}/reset`, body)), name: u.display_name };
       [copied, resetFor] = ['', null];
+      void loadResets();
       await tick();
       linkEl?.focus();
     } catch (e) {
-      resetError = errorText(e);
+      resetError = e instanceof ApiFailure && e.code === 'forbidden' && e.detail === 'wrong password' ? M.resetWrongPassword : errorText(e);
     } finally {
+      resetPassword = '';
       resetBusy = false;
     }
   }
@@ -138,6 +160,8 @@
               <div class="min-w-0">
                 <p class="truncate text-fg" title={u.display_name}>{u.display_name}</p>
                 <p class="truncate text-xs text-fg-2">@{u.username}{u.user_id === me.user_id ? ' (you)' : ''}</p>
+                {#if resets[u.user_id]}{@const line = resetLine(resets[u.user_id], resetBy(resets[u.user_id]), Date.now())}
+                  <p class="truncate text-xs text-fg-2" title={line}>{line}</p>{/if}
               </div>
             </div>
           </td>
@@ -160,7 +184,7 @@
               {/if}
               {#if canReset(me, u)}
                 <Button size="sm" variant="ghost" aria-label="Create reset link for {u.display_name}" aria-haspopup="dialog"
-                  onclick={() => ([resetFor, resetError] = [u, ''])}>Reset link</Button>
+                  onclick={() => ([resetFor, resetError, resetPassword] = [u, '', ''])}>Reset link</Button>
               {/if}
               {#if editable(u)}
                 {#if u.banned}
@@ -217,10 +241,17 @@
 
 <Dialog open={!!resetFor} title={resetFor ? `Create a reset link for ${resetFor.display_name}?` : ''} onclose={() => (resetFor = null)}>
   {M.resetBody}
+  {#if resetFor}
+    <form id="reset-form" class="mt-4" onsubmit={(e) => (e.preventDefault(), void makeReset())}>
+      <Field label="Your password" help="To check it is you.">
+        <PasswordInput autocomplete="current-password" bind:value={resetPassword} required />
+      </Field>
+    </form>
+  {/if}
   {#if resetError}<p role="alert" tabindex="-1" class="mt-3 text-danger">{resetError}</p>{/if}
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (resetFor = null)}>Cancel</Button>
-    <Button variant="primary" loading={resetBusy} onclick={makeReset}>Create link</Button>
+    <Button variant="primary" type="submit" form="reset-form" loading={resetBusy}>Create link</Button>
   {/snippet}
 </Dialog>
 

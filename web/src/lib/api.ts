@@ -38,7 +38,7 @@ export const API_MESSAGES: Record<ApiErrorCode, string> = {
   too_large: 'That is too large.',
   quota_full: 'The server is out of space for uploads.',
   invite_invalid: 'This invite link does not work. Ask the person who sent it for a new one.',
-  reset_invalid: 'This reset link does not work. It may be used, replaced or more than a day old. Ask the owner for a new one.',
+  reset_invalid: 'This reset link does not work. It may be used, replaced or more than a day old. Ask the owner or a moderator for a new one.',
   internal: 'Something went wrong on the server. Try again.',
 };
 

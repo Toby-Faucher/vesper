@@ -496,13 +496,19 @@ try {
 
   // Reset link. Moderator bob gets it on members (carol) only, not on the owner. Alice makes one for bob: the dialog names
   // him, the link shows once and takes focus. Bob sets a new password on /reset in another browser: the code leaves the
-  // address bar, his open session lands on sign in, the old password fails, the new one works, and the link fails twice.
+  // address bar, his open session lands on sign in, the old password fails, the new one works and tells him once who
+  // reset it, the owner's table shows the reset as used, and the link fails twice. Alice must type her own password.
   await openAdmin(b, 'Members');
   await b.getByRole('button', { name: 'Create reset link for carol' }).waitFor();
   assert.equal(await b.getByRole('button', { name: 'Create reset link for alice' }).count(), 0, 'a moderator can reset the owner');
   await openAdmin(a, 'Members');
   await a.getByRole('button', { name: 'Create reset link for bob' }).click();
   const confirmReset = a.getByRole('dialog', { name: 'Create a reset link for bob?' });
+  await confirmReset.getByLabel('Your password', { exact: true }).fill('test-password-9');
+  await confirmReset.getByRole('button', { name: 'Create link' }).click();
+  await confirmReset.getByRole('alert').getByText('Your password is not right.').waitFor();
+  assert.equal(await confirmReset.getByLabel('Your password', { exact: true }).inputValue(), '', 'the password stayed after a failed try');
+  await confirmReset.getByLabel('Your password', { exact: true }).fill('test-password-1');
   await confirmReset.getByRole('button', { name: 'Create link' }).click();
   await confirmReset.waitFor({ state: 'hidden' });
   const resetBox = a.getByRole('textbox', { name: 'Reset link for bob', exact: true });
@@ -529,7 +535,13 @@ try {
   await bobSignIn('test-password-1');
   await bn.getByText('Wrong username or password.').waitFor();
   await bobSignIn('test-password-4');
+  // Told once who reset it, then the app; the owner's table says it was used.
+  await bn.getByText('Your password was reset by alice on', { exact: false }).waitFor();
+  await bn.getByRole('button', { name: 'Continue' }).click();
   await signedIn(bn);
+  await openAdmin(a, 'Invites');
+  await openAdmin(a, 'Members');
+  await a.locator('tr[data-user="bob"]').getByText(/^Password reset by alice on .+ \(used\)$/).waitFor();
   await bn.goto(resetLink);
   await bn.getByLabel('New password', { exact: true }).fill('test-password-5');
   await bn.getByRole('button', { name: 'Set password' }).click();

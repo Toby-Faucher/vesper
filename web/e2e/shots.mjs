@@ -1214,6 +1214,7 @@ scene('admin-reset', async (ctx) => {
   });
   await page.getByRole('button', { name: 'Create reset link for bob' }).click();
   await page.getByRole('dialog', { name: 'Create a reset link for bob?' }).waitFor();
+  await page.getByLabel('Your password', { exact: true }).fill('test-password-1');
   await sleep(300);
   await ctx.shot(page, 'admin-reset-confirm', { fullPage: false });
   await page.getByRole('button', { name: 'Create link' }).click();
@@ -1223,6 +1224,17 @@ scene('admin-reset', async (ctx) => {
   await ctx.shot(page, 'admin-reset-created');
   await narrow(page, ctx, 'admin-reset-created-narrow');
   await page.getByRole('button', { name: 'Done' }).click();
+  // The notice on bob's next sign in (sign in and notices faked, so no real reset is used).
+  const me = await ctx.api(ctx.bob.page, 'GET', '/api/me');
+  const login = await ctx.open(`${ORIGIN}/login`);
+  await login.route('**/api/login', (r) => r.fulfill({ json: me }));
+  await login.route('**/api/me/reset-notices', (r) => r.fulfill({ json: [{ by: 'alice', at: Date.now() - 3_600_000 }] }));
+  await login.getByLabel('Username').fill('bob');
+  await login.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await login.getByRole('button', { name: 'Sign in' }).click();
+  await login.getByRole('button', { name: 'Continue' }).waitFor();
+  await rest(login);
+  await ctx.shot(login, 'login-reset-notice');
 });
 // The reset page with a made-up code, its done state (the answer is faked) and a bad link.
 scene('reset', async ({ open, shot }) => {
