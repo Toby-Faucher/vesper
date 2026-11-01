@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import { enter } from '../motion';
+  import { enter, ghost } from '../motion';
   import { place } from '../place';
   // A popover="auto" layer next to `anchor`: light dismiss (outside click, Esc) by the platform, placed by place().
   // On open it focuses itself (or what `onopen` picks); on close focus goes back to the anchor when it was inside.
@@ -96,7 +96,7 @@
   }
 </script>
 
-<div bind:this={el} {id} popover="auto" {role} aria-label={label} tabindex="-1" ontoggle={toggle} {onkeydown}>
+<div bind:this={el} {id} popover="auto" {role} aria-label={label} tabindex="-1" ontoggle={toggle} onbeforetoggle={(e) => e.newState === 'closed' && ghost(el, 'pop')} {onkeydown}>
   {@render children()}
 </div>
 

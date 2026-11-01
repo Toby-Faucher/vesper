@@ -53,8 +53,10 @@
     font-weight: var(--weight-ui);
     white-space: nowrap;
     user-select: none;
-    transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+    transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
   }
+  /* Press feedback, plain CSS like hover: the button sinks a little while held. */
+  @media (prefers-reduced-motion: no-preference) { .btn:active:enabled:not([aria-disabled='true']) { transform: scale(0.97); } }
   .md { height: 32px; padding: 0 12px; }
   .sm { height: 28px; padding: 0 8px; }
   .primary { background: var(--accent); color: var(--on-accent); }

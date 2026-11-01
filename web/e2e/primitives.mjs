@@ -13,7 +13,15 @@ export async function checkPrimitives(open, url) {
     addEventListener('beforetoggle', (e) => e.newState === 'closed' && e.target.contains(document.activeElement) && blur(), true);
     const close = HTMLDialogElement.prototype.close;
     HTMLDialogElement.prototype.close = function (...a) { close.apply(this, a); blur(); };
+    // Closing a dialog or a popover leaves a fading empty box (motion.ts ghost): count them, and any text in them.
+    window.__ghosts = { n: 0, text: 0 };
+    new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => {
+      if (n.dataset?.ghost === undefined) return;
+      window.__ghosts.n++;
+      window.__ghosts.text += n.textContent.length;
+    }))).observe(document, { childList: true, subtree: true });
   });
+  const ghosts = () => page.evaluate(() => ({ ...window.__ghosts }));
   await page.reload();
   await page.getByRole('heading', { name: 'Primitives' }).waitFor();
   const must = (ok, what) => { if (!ok) throw new Error(`gallery: ${what}`); };
@@ -50,9 +58,11 @@ export async function checkPrimitives(open, url) {
   await opener.click();
   await dialog.waitFor();
   must(await dialog.evaluate((d) => d.contains(document.activeElement)), 'dialog did not take focus');
+  const g0 = (await ghosts()).n;
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'hidden' });
   await expectFocus('Create invite', 'after Esc on the dialog');
+  must((await ghosts()).n === g0 + 1, 'closing the dialog left no fading box');
   await opener.click();
   await dialog.waitFor();
   await page.mouse.click(8, 8);
@@ -117,9 +127,13 @@ export async function checkPrimitives(open, url) {
   const card = page.getByRole('button', { name: 'Show person card' });
   await card.click();
   await page.getByRole('dialog', { name: 'bob' }).waitFor();
+  const g1 = (await ghosts()).n;
   await page.keyboard.press('Escape');
   await page.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
   await expectFocus('Show person card', 'after Esc on the popover');
+  const g = await ghosts();
+  must(g.n === g1 + 1, 'closing the popover left no fading box');
+  must(g.text === 0, 'a fading box holds text: getByText would find it twice');
 
   // aria: each trigger names its popup kind and points aria-controls at the layer it opens.
   for (const [name, popup, role] of [['Message actions', 'menu', 'menu'], ['Show person card', 'dialog', 'dialog'], ['Create invite', 'dialog', 'dialog']]) {

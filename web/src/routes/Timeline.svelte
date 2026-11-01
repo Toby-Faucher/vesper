@@ -11,9 +11,9 @@
   import { parse } from '../lib/markdown';
   import { session } from '../lib/session.svelte';
   import * as I from '../lib/ui/icons';
-  import { flash } from '../lib/ui/motion';
+  import { enter, flash, motion } from '../lib/ui/motion';
   import { UI_MESSAGES } from '../lib/ui/messages';
-  import { firstUnreadInPage, follows, plain, rows } from '../lib/ui/timeline';
+  import { arrivals, firstUnreadInPage, follows, plain, rows } from '../lib/ui/timeline';
   import { lazy } from '../lib/ui/lazy';
   import type { Attachment } from '../lib/gen/Attachment';
   import Button from '../lib/ui/c/Button.svelte';
@@ -51,6 +51,7 @@
   let announce = $state({ n: 0, text: '' }); // the newest message from someone else, for screen readers
   let note = $state(''); // a short visible status, such as a failed copy (polite)
   let lastId: number | null = null; // newest id seen; null right after a room switch, so history is not announced
+  let shown: number | null = null; // the room placed last: a new one fades in, the first does not
   let seenLatest = chat.latest;
   let now = $state(Date.now());
   const readSent: Record<number, number> = {};
@@ -123,6 +124,8 @@
   function place() {
     if (!list || !log) return;
     ready = true;
+    if (shown !== null && shown !== roomId) enter(list, 'swap');
+    shown = roomId;
     if (chat.jump === null) {
       // A New row in the last screenful would only scroll to the bottom anyway: be at the bottom and follow it.
       if (newFrom !== Infinity && newEl && !log.moreAfter && newEl.offsetTop - 48 < list.scrollHeight - list.clientHeight - 8) {
@@ -163,6 +166,7 @@
     if (last && lastId !== null && last.id > lastId) {
       const since = lastId;
       const fresh = msgs.filter((m) => m.id > since);
+      for (const id of arrivals(since, fresh.map((x) => x.id))) { const el = document.getElementById(`m${id}`); if (el) enter(el, 'rise'); }
       // A live message or two, not a page loaded with "Load newer".
       const m = fresh.length <= 3 ? fresh.reverse().find((x) => x.author_id !== myId && !x.deleted) : undefined;
       // A new node each time, so the same text twice ("ok", "ok") is read twice.
@@ -356,10 +360,10 @@
   </div>
 
   {#if firstPill}
-    <button type="button" class="pill top" onclick={showFirst}>{firstPill} new {firstPill === 1 ? 'message' : 'messages'}. Show the first</button>
+    <button type="button" class="pill top" onclick={showFirst} in:motion={'rise'} out:motion={'rise'}>{firstPill} new {firstPill === 1 ? 'message' : 'messages'}. Show the first</button>
   {/if}
   {#if !stuck || log?.moreAfter}
-    <button type="button" class="pill bottom" aria-label="Jump to latest" onclick={toLatest}><Icon d={I.arrowDown} />Jump to latest</button>
+    <button type="button" class="pill bottom" aria-label="Jump to latest" onclick={toLatest} in:motion={'rise'} out:motion={'rise'}><Icon d={I.arrowDown} />Jump to latest</button>
   {/if}
   {#if viewer?.images.length}
     {#await viewer.chunk then V}

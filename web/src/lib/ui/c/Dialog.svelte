@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as I from '../icons';
   import { onMount, type Snippet } from 'svelte';
-  import { enter } from '../motion';
+  import { enter, ghost } from '../motion';
   import IconButton from './IconButton.svelte';
   // A modal on native <dialog>: showModal() traps focus and makes the page inert, Esc closes. A click on the backdrop closes
   // too. Focus goes back to the element that had it when the dialog opened. Initial focus is the first control in the body
@@ -40,6 +40,7 @@
   // (cancel) closes the same way, so a key pressed right after it (Ctrl+K again) sees the dialog as closed.
   let shown = false;
   function shut() {
+    if (!bare) ghost(el, 'pop');
     el.close();
     closed();
   }

@@ -100,6 +100,12 @@ try {
   let rings = 0;
   let last = first;
   const N = 20;
+  // Speaking changes toggle the ring at once: count every Element.animate and running animation while alice talks.
+  await bob.page.evaluate(() => {
+    window.__anims = 0;
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (k, o) { window.__anims++; return animate.call(this, k, o); };
+  });
   for (let i = 0; i < N; i++) {
     await sleep(250);
     last = await inbound(bob.page);
@@ -110,6 +116,7 @@ try {
   assert.ok(last.packets > first.packets, 'packetsReceived did not rise');
   assert.ok(last.bytes > first.bytes, 'bytesReceived did not rise');
   assert.ok(rings > 0, 'bob never saw alice speaking: received audio is silent');
+  assert.equal(await bob.page.evaluate(() => window.__anims + document.getAnimations().length), 0, 'a speaking change started an animation');
 
   // The other direction: bob's default fake device sends a beep, so alice's packets rise too.
   const a1 = await inbound(alice.page);

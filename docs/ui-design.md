@@ -60,6 +60,29 @@ Tailwind palette off, so a class like `bg-neutral-800` does not exist. `web/src/
 
 To see every role, the type scale, the radii and the focus ring, run `npm --prefix web run dev` and open `/_gallery` (dev server only).
 
+## Motion
+
+Every animation goes through [`web/src/lib/ui/motion.ts`](../web/src/lib/ui/motion.ts) as a named preset, played by anime.js's WAAPI
+build (`waapi.animate` only). Only `opacity` and `transform` move, except the jump flash, which fades a background colour.
+
+| Preset | Pose | Used by |
+| --- | --- | --- |
+| `pop` | scale 0.97, 160 ms | popovers, menus, dialogs (open, and an empty box with their fill fading out on close) |
+| `rise` | 6 px up, 220 ms (under the timeline's 8 px bottom margin, so it keeps following) | the call bar, a new message, the timeline pills |
+| `swap` | 4 px up, 160 ms | the timeline when another room opens, a settings or admin section |
+| `row` | 8 px from the left, 160 ms | a person joining or leaving voice |
+| `bump` | scale 0.6 with a small overshoot, 160 ms | a reaction coming, going or changing its count; a sidebar unread count |
+
+Enter eases out (`--ease-out`, `--ease-pop` for `bump`); exit runs the pose backwards in 120 ms, easing in. The selected room's fill
+glides to the next room (`glide`). Buttons sink a little while pressed and hover changes colour: both plain CSS on the same tokens.
+
+Rules: under `prefers-reduced-motion` every preset is an 80 ms opacity fade, and the glide and the jump flash are instant. Nothing
+animates on a speaking change; the ring toggles instantly (a fade once cost about 60 percent more CPU in a call). History, a room open and
+"Load older" do not animate; only live arrivals do, three at most. The rooms, counts and people that come with the first hello appear
+at once (`settle()`), and at most three transitions start in one task. A dialog or popover closes at once, so focus moves on; the fading
+box is empty (no text twice in the page) and hidden from screen readers. A leaving element is inert at once, so it takes no focus,
+click or second Enter. Nothing with `role="status"` animates its text. Typing never animates: the composer's text and caret stay put.
+
 ## Components
 
 The primitives live in [`web/src/lib/ui/c/`](../web/src/lib/ui/c/): buttons, fields, switch, range, dialog, popover, menu, avatar,

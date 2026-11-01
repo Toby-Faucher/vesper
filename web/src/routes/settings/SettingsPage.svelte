@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { motion } from '../../lib/ui/motion';
   import { SETTINGS_NAMES as NAMES, SETTINGS_SECTIONS, href, type SettingsSection } from '../../lib/route';
   import { wsUrl } from '../../lib/session.svelte';
   import { voice } from '../../lib/voice.svelte';
@@ -23,7 +24,8 @@
       {/each}
     </ul>
   </nav>
-  <div class="min-w-0 max-w-160 flex-1 pb-12">
+  {#key section}
+  <div class="min-w-0 max-w-160 flex-1 pb-12" in:motion={'swap'}>
     <h2 class="mb-6 text-lg font-medium text-fg">{NAMES[section]}</h2>
     {#if section === 'voice'}
       <Voice />
@@ -38,4 +40,5 @@
       <Account />
     {/if}
   </div>
+  {/key}
 </div>

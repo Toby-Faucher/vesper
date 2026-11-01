@@ -28,6 +28,7 @@
   import Menu from '../lib/ui/c/Menu.svelte';
   import MenuItem from '../lib/ui/c/MenuItem.svelte';
   import Popover from '../lib/ui/c/Popover.svelte';
+  import { motion } from '../lib/ui/motion';
 
   let {
     m,
@@ -205,17 +206,16 @@
         <button type="button" class="more-link" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>{expanded ? 'Show less' : 'Show more'}</button>
       {/if}
       {#if m.attachments.length}<Attachments list={m.attachments} {onview} />{/if}
-      {#if m.reactions.length}
-        <div class="mt-1 flex flex-wrap gap-1">
+      <!-- Always there (no height when empty), so the first reaction pops in too. -->
+      <div class="flex flex-wrap gap-1" class:mt-1={m.reactions.length}>
           {#each m.reactions as r (r.emoji)}
             {@const on = r.user_ids.includes(myId)}
             <button type="button" class="pill" class:on aria-pressed={on} aria-label="React {r.emoji}, {r.user_ids.length}"
-              title={names(r.user_ids)} onclick={() => toggle(r.emoji, !on)}>
-              <span>{r.emoji}</span><span class="tabular-nums">{r.user_ids.length}</span>
+              title={names(r.user_ids)} onclick={() => toggle(r.emoji, !on)} in:motion={'bump'} out:motion={'bump'}>
+              <span>{r.emoji}</span>{#key r.user_ids.length}<span class="inline-block tabular-nums" in:motion={'bump'}>{r.user_ids.length}</span>{/key}
             </button>
           {/each}
-        </div>
-      {/if}
+      </div>
     {/if}
   </div>
 

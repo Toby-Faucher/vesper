@@ -28,8 +28,8 @@
       <span class="name min-w-0 truncate">{room.name}</span>
       {#if room.restricted}<span class="meta flex shrink-0"><Icon d={I.shield} /></span>{/if}
       <span class="ml-auto flex shrink-0 items-center gap-1 pl-1">
-        {#if u?.unread}<Badge kind="count" n={u.unread} />{/if}
-        {#if u?.mentions}<Badge kind="mention" n={u.mentions} />{/if}
+        {#if u?.unread}<Badge kind="count" n={u.unread} pop />{/if}
+        {#if u?.mentions}<Badge kind="mention" n={u.mentions} pop />{/if}
       </span>
     </a>
     {#if peers.length}
@@ -39,7 +39,7 @@
       </button>
     {/if}
   </div>
-  {#if peers.length}<PresenceList roomId={room.id} roomName={room.name} {peers} {folded} />{/if}
+  <PresenceList roomId={room.id} roomName={room.name} {peers} {folded} />
 </li>
 
 <style>

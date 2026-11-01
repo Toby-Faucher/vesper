@@ -36,8 +36,9 @@
     height: 32px;
     border-radius: var(--radius);
     color: var(--fg-2);
-    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
   }
+  @media (prefers-reduced-motion: no-preference) { .ib:active:enabled { transform: scale(0.95); } } /* press feedback */
   .ib:hover:enabled { background: var(--bg-hover); color: var(--fg); }
   .ib[aria-pressed='true'] { background: var(--bg-selected); color: var(--fg); }
   .ib.danger:enabled { color: var(--danger-fg); }

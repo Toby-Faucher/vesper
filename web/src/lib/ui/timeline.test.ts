@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../gen/Message';
 import { parse } from '../markdown';
-import { canSee, dayLabel, firstUnreadInPage, follows, isLong, mentionQuery, mentionable, plain, rows, typingLine } from './timeline';
+import { arrivals, canSee, dayLabel, firstUnreadInPage, follows, isLong, mentionQuery, mentionable, plain, rows, typingLine } from './timeline';
 
 const TZ = 'Europe/London';
 // 2026-10-27 is a Tuesday. 23:58 London time (GMT, after the October change) is 23:58 UTC.
@@ -165,5 +165,15 @@ describe('follows', () => {
   it('keeps following while the list changed height and its ResizeObserver has not run yet', () => {
     expect(follows(true, 64, true)).toBe(true);
     expect(follows(false, 64, true)).toBe(false);
+  });
+});
+
+describe('arrivals', () => {
+  it('animates live arrivals only, three at most', () => {
+    expect(arrivals(null, [1, 2, 3])).toEqual([]); // a room open: the history appears at once
+    expect(arrivals(10, [4, 5, 6, 7, 8, 9, 10])).toEqual([]); // Load older: nothing newer than before
+    expect(arrivals(10, [9, 10, 11])).toEqual([11]);
+    expect(arrivals(10, [10, 11, 12, 13])).toEqual([11, 12, 13]);
+    expect(arrivals(10, [10, 11, 12, 13, 14])).toEqual([]); // Load newer: a page, not a live burst
   });
 });

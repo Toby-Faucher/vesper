@@ -27,9 +27,15 @@ async function createInvite(page) {
 // Records the keyframes of every Element.animate call (anime's WAAPI build uses it), for the motion checks.
 const recordMotion = () => {
   window.__motion = [];
+  window.__targets = []; // what each call animated, for the "does not animate" checks
   const animate = Element.prototype.animate;
-  Element.prototype.animate = function (k, o) { window.__motion.push(JSON.stringify(k)); return animate.call(this, k, o); };
+  Element.prototype.animate = function (k, o) {
+    window.__motion.push(JSON.stringify(k));
+    window.__targets.push(this.tagName.toLowerCase());
+    return animate.call(this, k, o);
+  };
 };
+const animatedSince = (page) => page.evaluate(() => window.__targets.splice(0));
 // The keyframes animated since the last call: the recorded ones plus the CSS animations and transitions running now.
 const motionSince = (page) => page.evaluate(() => {
   const all = [...window.__motion, ...document.getAnimations().map((a) => JSON.stringify(a.effect?.getKeyframes?.() ?? []))];
@@ -324,7 +330,8 @@ try {
   await b.getByRole('button', { name: 'Leave' }).click();
   console.log('layout shift: ok');
 
-  // Reduced motion: opening a dialog, the call bar and a jump move nothing (opacity only).
+  // Reduced motion: opening a dialog, the call bar, a jump, a new message, a room switch (the sidebar glide too) and a
+  // settings section move nothing (opacity only).
   const calm = await browser('calm');
   const r = calm.page;
   await r.emulateMedia({ reducedMotion: 'reduce' });
@@ -348,8 +355,18 @@ try {
   const jumpMotion = await motionSince(r);
   await r.getByRole('button', { name: 'Settings', exact: true }).hover();
   jumpMotion.push(...(await motionSince(r)));
-  assert.ok(dialogMotion.length && barMotion.length, 'no motion recorded: the hook missed the animations');
-  assert.deepEqual(moves([...dialogMotion, ...barMotion, ...jumpMotion]), [], 'something moves under reduced motion');
+  await composer(r).fill('calm hello');
+  await composer(r).press('Enter');
+  await r.locator('article').filter({ hasText: 'calm hello' }).waitFor();
+  await openRoom(r, 'hangout');
+  await openRoom(r, 'general');
+  await r.getByRole('button', { name: 'Settings', exact: true }).click();
+  await r.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Appearance' }).click();
+  await sleep(300);
+  const chatMotion = await motionSince(r);
+  assert.ok(dialogMotion.length && barMotion.length && chatMotion.length, 'no motion recorded: the hook missed the animations');
+  assert.deepEqual(moves([...dialogMotion, ...barMotion, ...jumpMotion, ...chatMotion]), [], 'something moves under reduced motion');
+  await r.keyboard.press('Escape');
   await r.getByRole('button', { name: 'Leave' }).click();
   console.log('reduced motion: ok');
 
@@ -405,8 +422,12 @@ try {
   await k.keyboard.press('Control+k');
   await k.getByRole('combobox', { name: 'Switch to' }).waitFor();
   await k.keyboard.type('general');
+  await animatedSince(k);
   await k.keyboard.press('Enter');
   await k.getByRole('heading', { level: 1, name: 'general', exact: true }).waitFor();
+  await k.locator('article').first().waitFor();
+  await sleep(300);
+  assert.deepEqual((await animatedSince(k)).filter((t) => t === 'article'), [], 'the history of a room animated on open');
   await tabTo('Join voice');
   // Offline: Join voice keeps focus, says why (aria-describedby; the tip shows on focus) and Enter does nothing.
   const join = k.getByRole('button', { name: 'Join voice' });
@@ -428,9 +449,27 @@ try {
   await k.keyboard.press('Control+Shift+M');
   await k.getByRole('button', { name: 'Unmute' }).waitFor();
   await tabTo('Message');
+  await sleep(200);
+  await animatedSince(k);
   await k.keyboard.type('kiwi from the keyboard');
+  assert.deepEqual(await animatedSince(k), [], 'typing in the composer animated something');
+  // While the new message rises, scroll events must still read the list as at the bottom (no Jump to latest pill).
+  await k.evaluate(() => {
+    const list = document.querySelector('[data-timeline]');
+    const end = performance.now() + 1500;
+    window.__jumped = false;
+    const tick = () => {
+      list.dispatchEvent(new Event('scroll'));
+      window.__jumped ||= !!document.querySelector('[aria-label="Jump to latest"]');
+      if (performance.now() < end) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
   await k.keyboard.press('Enter');
   await k.locator('article').filter({ hasText: 'kiwi from the keyboard' }).waitFor();
+  await sleep(1600);
+  assert.equal(await k.evaluate(() => window.__jumped), false, 'a rising message made the list leave the bottom (Jump to latest showed)');
+  assert.ok(moves(await motionSince(k)).length > 0, 'a new message did not rise in: the reduced motion check proves nothing');
   await k.keyboard.press('ArrowUp');
   const edit = k.getByRole('textbox', { name: 'Edit message' });
   await edit.waitFor();
