@@ -37,8 +37,8 @@ pub struct UserInfo {
 #[ts(export)]
 pub enum AccentPreset {
     Amber,
-    Coral,
     Rose,
+    Orchid,
     Violet,
     Indigo,
     Sky,

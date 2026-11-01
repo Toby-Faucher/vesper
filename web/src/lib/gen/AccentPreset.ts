@@ -3,4 +3,4 @@
 /**
  * The accent presets of Settings > Appearance. `web/src/lib/ui/accent.ts` holds their colours.
  */
-export type AccentPreset = "amber" | "coral" | "rose" | "violet" | "indigo" | "sky" | "teal" | "lime";
+export type AccentPreset = "amber" | "rose" | "orchid" | "violet" | "indigo" | "sky" | "teal" | "lime";
