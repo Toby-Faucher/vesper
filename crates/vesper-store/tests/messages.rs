@@ -518,3 +518,46 @@ async fn attachments_must_be_own_unattached_same_room() {
     assert_eq!(removed, [img, doc]);
     assert!(d.attachments.is_empty());
 }
+
+#[tokio::test]
+async fn upload_rows_sum_sweep_and_skip_attached() {
+    let (_tmp, s) = open().await;
+    let a = user(&s, "alice").await;
+    let room = general(&s).await;
+    let row = |id: &str, size: i64, created_at: i64| vesper_store::UploadRow {
+        id: id.into(),
+        room_id: room,
+        uploader_id: a.clone(),
+        message_id: None,
+        name: "f.bin".into(),
+        mime: "application/octet-stream".into(),
+        size,
+        created_at,
+    };
+    let (old, new, attached) = ("a".repeat(32), "b".repeat(32), "c".repeat(32));
+    s.insert_upload(&row(&old, 10, 1)).await.unwrap();
+    s.insert_upload(&row(&new, 20, 500)).await.unwrap();
+    s.insert_upload(&row(&attached, 30, 1)).await.unwrap();
+    assert!(matches!(
+        s.insert_upload(&row(&old, 1, 1)).await,
+        Err(StoreError::Conflict(_))
+    ));
+    assert_eq!(s.upload_bytes().await.unwrap(), 60);
+    assert_eq!(s.upload(&new).await.unwrap(), row(&new, 20, 500));
+    assert!(matches!(
+        s.upload(&"d".repeat(32)).await,
+        Err(StoreError::NotFound)
+    ));
+    let stale = s.stale_uploads(100).await.unwrap();
+    assert_eq!(stale, [old.clone(), attached.clone()]);
+    // Attached between the listing and the delete: the row must stay.
+    s.post_message(NewMessage {
+        attachments: std::slice::from_ref(&attached),
+        ..msg(room, &a, "late")
+    })
+    .await
+    .unwrap();
+    assert_eq!(s.delete_uploads(&stale).await.unwrap(), [old]);
+    assert_eq!(s.upload_bytes().await.unwrap(), 50);
+    assert!(s.upload(&attached).await.unwrap().message_id.is_some());
+}

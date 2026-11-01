@@ -11,6 +11,7 @@ pub mod config;
 pub mod hub;
 pub mod limits;
 pub mod public_addr;
+pub mod uploads;
 pub mod voice;
 pub mod ws;
 
@@ -62,6 +63,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api_admin::routes())
         .merge(api_rooms::routes())
         .merge(api_messages::routes())
+        .merge(uploads::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_origin,
@@ -138,6 +140,8 @@ pub async fn serve(
     sfu: SfuHandle,
 ) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
     let cfg = state.cfg.clone();
+    uploads::clean_tmp(&cfg.data_dir)?;
+    uploads::spawn_sweep(state.clone());
     match cfg.public_host.clone() {
         Some(host) => {
             public_addr::spawn_refresh(sfu.clone(), host, cfg.udp_port_public, public_addr::REFRESH)
@@ -204,7 +208,7 @@ async fn health(State(st): State<ws::WsState>) -> (StatusCode, &'static str) {
 /// - a 404 on an extensionless path gets `index.html` (SPA routes); a 404 on a path with an
 ///   extension (`/assets/old.js`) or under `/api/` stays a 404 so it fails loudly, not as HTML;
 /// - `/assets/*` (content-hashed by Vite) is immutable, `/api/*` is `no-store` (per-user data),
-///   everything else is `no-cache`;
+///   everything else is `no-cache`, unless the handler set its own (uploads);
 /// - `nosniff` on every response.
 async fn guard(State(dir): State<Arc<PathBuf>>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_ascii_lowercase();
@@ -224,15 +228,15 @@ async fn guard(State(dir): State<Arc<PathBuf>>, req: Request, next: Next) -> Res
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    h.insert(
-        header::CACHE_CONTROL,
+    // Kept when the handler set it (`/api/uploads/*`).
+    h.entry(header::CACHE_CONTROL).or_insert_with(|| {
         HeaderValue::from_static(if immutable {
             "public, max-age=31536000, immutable"
         } else if path.starts_with("/api/") {
             "no-store"
         } else {
             "no-cache"
-        }),
-    );
+        })
+    });
     res
 }

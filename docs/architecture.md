@@ -37,9 +37,9 @@ The "Not verified" list at the end says what was only read.
 | Crate | Job |
 |---|---|
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, the limit `MAX_MSG_BYTES` (64 KiB) and the close codes `CLOSE_SESSION_ENDED` (4001) and `CLOSE_DISCONNECTED` (4003). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`, `Unread`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
-| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms and messages (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). It stores only hashes of session tokens and invite codes. |
+| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `api_messages.rs` (chat routes, body, mention and reaction rules), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -168,7 +168,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 ## HTTP API
 
-JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
+JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`, `uploads.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
 `ApiError { code, message }`, and the status follows the code: `bad_request` 400, `unauthorized` 401, `forbidden` 403,
 `not_found` and `invite_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
 `internal` 500, `quota_full` 507.
@@ -207,6 +207,9 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `PUT /api/messages/{id}/reaction` (`ReactionReq`) | sees the room | the new `Message`; pushes `message_updated` |
 | `PUT /api/messages/{id}/pin` (`PinReq`) | sees the room | the new `Message`; pushes `message_updated` |
 | `PUT /api/rooms/{id}/read` (`ReadReq`) | sees the room | 204; sends `read` to every socket of the user |
+| `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past 25 MiB, 507 `quota_full` |
+| `GET /api/uploads/{id}` | sees the room; an upload not attached yet needs the uploader | the file (Range works), else 404 |
+| `GET /api/admin/disk` | owner | `DiskUse` |
 
 Rooms (`api_rooms.rs`, store `rooms.rs`): every room has text and voice. A fresh database has `general` and `hangout`
 (migration `0002_rooms.sql`). Room names follow the display name rule (NFC, 1 to 32 characters, no control or hidden format
@@ -233,6 +236,31 @@ an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets th
   socket). Per user and room at most one every 3 s; more, an unknown room or a hidden one is dropped without an answer. It is never
   stored and has no stop event: the client shows it for 5 s after the last one.
 - A banned user's messages stay. They cannot post, since their sessions are gone.
+
+Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the raw body (no multipart). Rules:
+
+- **Size.** At most 25 MiB (`MAX_UPLOAD`). A larger `Content-Length` is 413 before the body is read; a body with no length is
+  counted while it streams to `uploads/tmp/<id>` and is cut off with 413 once it passes the cap. The partial file is deleted, also
+  when the client goes away mid-body. The Upload limit is 10, then 1 every 30 s, per user.
+- **Quota.** Uploads together stay under `VESPER_UPLOAD_QUOTA_MB` ([env.md](env.md)). The check, the move into place and the row
+  insert run under one lock, so uploads racing each other cannot pass it (507 `quota_full`).
+- **On disk.** The file name is the id (32 random hex), under `uploads/<first 2>/`, dirs 0700 and files 0600. A request id that is
+  not 32 lowercase hex is 404 before any path is built, so no client text ever reaches a path.
+- **Type.** Decided from the first bytes, never from the name or the request's `Content-Type`. Only png, jpeg, gif and webp count
+  as images (`Attachment.image`) and are served inline with their type. Everything else, SVG and HTML included, is
+  `application/octet-stream` with `Content-Disposition: attachment`.
+- **Name.** Display text only: control, bidi and hidden format characters dropped, `/` and `\` turned into `_`, at most 200
+  characters, `file` when empty. `Content-Disposition` carries an ASCII `filename` and the exact name as `filename*` (RFC 6266 and
+  5987), so a name can not add a header.
+- **Served headers.** `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`,
+  `Cross-Origin-Resource-Policy: same-origin`, `Cache-Control: private, max-age=31536000, immutable` (the file behind an id never changes).
+- **Who.** Attaching (`SendMessage.attachments`) needs your own upload, not attached yet, in the same room (else 409). An attached
+  file is served to anyone who can see the room; one not attached yet only to its uploader. Everything else is the same 404 as an
+  unknown id.
+- **Removal.** Deleting a message deletes its files. Uploads still not attached after 24 h are swept every hour (and at start). A
+  file whose delete fails stays on disk with no row; nothing sweeps it.
+- **Disk use.** `DiskUse` holds the database plus WAL size, the sum of upload sizes, the quota, and the filesystem total and free
+  space of the data dir (`statvfs`). `warn` is set when uploads pass 80% of the quota or the filesystem is over 80% full.
 
 A ban ends the user's sessions but does not revoke invites they already created; the owner revokes those by hand. `InviteCreate` needs all three fields (`role`, `max_uses`, `expires_hours`), so the web client must send them.
 
@@ -273,17 +301,17 @@ Rules every route keeps:
   is keyed on address and username, so each faked address gets that username 5 more tries, then 1 a minute.
 - **Invites.** Unknown, used up, expired, revoked and changed codes all give the same 404 body. An owner invite stops working
   once an owner exists; the store checks this in the signup transaction.
-- **Caching.** Every `/api` response has `Cache-Control: no-store`.
+- **Caching.** Every `/api` response has `Cache-Control: no-store`, except a served upload.
 - Handlers never log request bodies, and the request types with a password or invite code print `***` in `Debug`. A body that does
   not parse gets a fixed "invalid request body" message. The WebSocket upgrade takes the same session cookie and Origin check.
 
-Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs`, `tests/rooms.rs` (every route for every caller and target role) and `tests/chat.rs` (chat routes, pushes, typing, unread), through
+Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs`, `tests/rooms.rs` (every route for every caller and target role) `tests/chat.rs` (chat routes, pushes, typing, unread) and `tests/uploads.rs` (limits, quota race, served headers, the access matrix, sweep), through
 `tests/common/mod.rs`; the voice actions in `tests/signaling.rs` (`voice_actions_check_roles`).
 
 ## Static serving
 
 `guard` in `vesper-server/src/lib.rs`: dotfiles and `%2e` are 404; an extensionless 404 gets `index.html` (SPA routes); a missing file with
-an extension or under `/api/` stays 404; `/assets/*` is `immutable`, `/api/*` `no-store`, everything else `no-cache`; `nosniff` on all. Tests: `crates/vesper-server/tests/static_files.rs`.
+an extension or under `/api/` stays 404; `/assets/*` is `immutable`, `/api/*` `no-store` (unless the handler set its own, as uploads do), everything else `no-cache`; `nosniff` on all. Tests: `crates/vesper-server/tests/static_files.rs`.
 
 ## Not verified
 

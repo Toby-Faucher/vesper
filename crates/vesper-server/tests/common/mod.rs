@@ -50,7 +50,7 @@ pub fn config(data: &TempDir) -> Config {
         data_dir: data.path().to_path_buf(),
         origin: ORIGIN.into(),
         secure_cookies: false,
-        upload_quota_bytes: 0,
+        upload_quota_bytes: 1 << 30,
     }
 }
 

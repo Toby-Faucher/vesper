@@ -35,7 +35,7 @@ pub fn valid_username(s: &str) -> Option<String> {
 }
 
 /// Format characters that hide or reorder text (soft hyphen, zero-width, bidi controls, BOM).
-fn is_hidden_format(c: char) -> bool {
+pub(crate) fn is_hidden_format(c: char) -> bool {
     matches!(c,
         '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
         | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')

@@ -274,6 +274,32 @@ pub struct Attachment {
     pub image: bool,
 }
 
+/// `POST /api/rooms/{id}/uploads`: the stored file, not attached yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct UploadDone {
+    pub attachment: Attachment,
+}
+
+/// `GET /api/admin/disk`, in bytes. `warn` when uploads pass 80% of the quota or the
+/// filesystem is over 80% full.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DiskUse {
+    /// The database file plus its WAL.
+    #[ts(type = "number")]
+    pub db_bytes: i64,
+    #[ts(type = "number")]
+    pub upload_bytes: i64,
+    #[ts(type = "number")]
+    pub quota_bytes: i64,
+    #[ts(type = "number")]
+    pub fs_total: i64,
+    #[ts(type = "number")]
+    pub fs_free: i64,
+    pub warn: bool,
+}
+
 /// A slice of a room's history, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

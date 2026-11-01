@@ -16,9 +16,9 @@ Fixed, not configurable: the room size cap (12, `max_room_size`) and the WebSock
 | `VESPER_UDP_PORT_PUBLIC` | UDP port clients reach from outside. Set it only if the router maps a different external port. | the `VESPER_UDP_BIND` port | `config.rs` |
 | `VESPER_WEB_DIR` | Directory with the built web app, served at `/`. Empty counts as unset. The server warns at start if `index.html` is missing. Serving rules (SPA fallback, cache headers, dotfiles hidden): `lib.rs` `guard`. | `web/dist` | `config.rs`, `lib.rs` |
 | `VESPER_MAX_SOCKETS` | Concurrent WebSockets. More get HTTP 503. | `256` | `config.rs`, `ws.rs` |
-| `VESPER_DATA_DIR` | Directory for the database (`vesper.db`, with its WAL files). Created if missing (new dir 0700, `vesper.db` 0600). Empty counts as unset. | `data` | `config.rs`, `cli.rs`, `lib.rs` |
+| `VESPER_DATA_DIR` | Directory for the database (`vesper.db`, with its WAL files) and uploads (`uploads/<first 2 of id>/<id>`, plus `uploads/tmp/` for uploads in progress, emptied at start). Created if missing (new dirs 0700, `vesper.db` and upload files 0600). Empty counts as unset. | `data` | `config.rs`, `cli.rs`, `lib.rs`, `uploads.rs` |
 | `VESPER_ORIGIN` | The address people open in the browser: `http://` or `https://`, a host and an optional port, no path. Stored lowercase with no trailing slash and no default port, so it matches the browser's `Origin` header byte for byte. It is the base of every printed invite link. `https` turns on `Secure` cookies with the `__Host-` name. With Vite dev set it to `http://localhost:5173`. | `http://localhost:8080` | `config.rs`, `cli.rs`, `lib.rs`, `ws.rs` |
-| `VESPER_UPLOAD_QUOTA_MB` | Total size of all uploads, in MiB. Empty counts as unset. | `10240` | `config.rs` |
+| `VESPER_UPLOAD_QUOTA_MB` | Total size of all uploads, in MiB. An upload that would pass it gets 507 `quota_full`. Empty counts as unset. | `10240` | `config.rs`, `uploads.rs` |
 | `RUST_LOG` | Logs go to stderr. Log filter in `tracing_subscriber` `EnvFilter` syntax, for example `info,vesper_sfu=debug`. | `info` | `main.rs` |
 
 The Origin check applies to `/api` requests that change something (not GET or HEAD) and to the `/ws` upgrade; a missing or

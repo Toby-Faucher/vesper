@@ -85,7 +85,11 @@ fn not_found() -> ApiError {
 }
 
 /// The room, if `user` can see it; unknown and hidden look the same.
-async fn visible_room(st: &AppState, user: &UserInfo, id: i64) -> Result<RoomInfo, ApiError> {
+pub(crate) async fn visible_room(
+    st: &AppState,
+    user: &UserInfo,
+    id: i64,
+) -> Result<RoomInfo, ApiError> {
     st.store
         .rooms()
         .await?
@@ -242,11 +246,11 @@ async fn remove(
     if msg.author_id != a.user.user_id {
         require(&a.user, Role::Moderator)?;
     }
-    // The upload rows are gone; removing their files is Task 14's part of this route.
-    let (msg, _uploads) = st
+    let (msg, uploads) = st
         .store
         .delete_message(id, now_ms(), &a.user.user_id)
         .await?;
+    crate::uploads::remove_files(&st.cfg.data_dir, &uploads);
     updated(&st, &room, msg);
     Ok(StatusCode::NO_CONTENT)
 }
