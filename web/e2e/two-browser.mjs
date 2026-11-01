@@ -147,6 +147,16 @@ try {
   assert.equal(await got.locator('b').count(), 0, 'raw HTML became an element');
   // The screen reader hears the rendered text, not the Markdown.
   await bob.page.waitForFunction(() => document.querySelector('p.sr-only[aria-live="polite"]')?.textContent === 'alice: hello bob <b>x</b> https://example.test/a', null, { timeout: 5000 });
+  // The same text twice ("ok", "ok") is read twice: every announcement changes the live region.
+  await alice.page.evaluate(() => {
+    window.__said = 0;
+    const region = document.querySelector('p.sr-only[aria-live="polite"]');
+    new MutationObserver((rs) => (window.__said += rs.filter((x) => x.addedNodes.length || x.type === 'characterData').length)).observe(region, { childList: true, characterData: true, subtree: true });
+  });
+  for (let i = 0; i < 2; i++) await post(bob.page, roomId(bob.page), 'ok');
+  await alice.page.waitForFunction(() => window.__said >= 2, null, { timeout: 5000 }).catch(() => assert.fail('the second "ok" was not announced'));
+  // The name is not checked: alice's page loaded its people before bob signed up, so it says "Someone" (a known gap).
+  assert.match(await alice.page.locator('p.sr-only[aria-live="polite"]').textContent(), /: ok$/);
   const link = got.getByRole('link', { name: 'https://example.test/a' });
   assert.equal(await link.getAttribute('href'), 'https://example.test/a');
   assert.equal(await link.getAttribute('rel'), 'noopener noreferrer nofollow');
@@ -168,6 +178,27 @@ try {
   await editBox.press('Enter');
   await boldBob(bob.page).filter({ hasText: 'bob edited' }).filter({ hasText: '(edited)' }).waitFor({ timeout: 5000 });
   console.log('chat_roundtrip: ok');
+
+  // The toolbar is one Tab stop per row (roving): Left and Right move along it, Up and Down go to the next or previous
+  // row, Esc goes back to the composer. Each action is described by whose message it is.
+  const row = boldBob(alice.page);
+  const stops = () => row.getByRole('toolbar').getByRole('button').evaluateAll((bs) => bs.map((b) => b.tabIndex));
+  const focused = () => alice.page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName);
+  await row.getByRole('button', { name: 'More', exact: true }).focus();
+  assert.deepEqual(await stops(), [-1, -1, -1, 0], 'the toolbar is not one Tab stop on More');
+  await alice.page.keyboard.press('ArrowRight');
+  assert.equal(await focused(), 'Add reaction', 'Right did not wrap to the first action');
+  await alice.page.keyboard.press('ArrowRight');
+  assert.equal(await focused(), 'Reply', 'Right did not move to Reply');
+  assert.deepEqual(await stops(), [-1, 0, -1, -1], 'the Tab stop did not move with the focus');
+  assert.match(await alice.page.evaluate(() => document.getElementById(document.activeElement.getAttribute('aria-describedby'))?.textContent), /^alice, \d/, 'Reply is not described by its author and time');
+  await alice.page.keyboard.press('ArrowDown');
+  assert.ok(await row.evaluate((el) => document.activeElement.tagName === 'ARTICLE' && document.activeElement !== el), 'Down did not go to the next row');
+  await alice.page.keyboard.press('ArrowUp');
+  assert.ok(await row.evaluate((el) => document.activeElement === el), 'Up did not come back to the row');
+  await alice.page.keyboard.press('Escape');
+  await alice.page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Message', null, { timeout: 2000 }).catch(() => assert.fail('Esc in a row did not go to the composer'));
+  console.log('roving_toolbar: ok');
 
   // composer: bob's typing shows for alice; an Enter during IME composition does not send; @ offers people and Enter
   // inserts the username; Esc cancels a reply; Up in an empty box edits your last message and Esc gives focus back.
@@ -273,6 +304,15 @@ try {
   await list.evaluate((el) => (el.scrollTop = 0));
   const latest = bob.page.getByRole('button', { name: 'Jump to latest' });
   await latest.waitFor({ timeout: 5000 });
+  // Esc with a message menu open closes the menu only: the list stays where it is.
+  await bob.page.locator('[data-timeline] > article').first().getByRole('button', { name: 'More', exact: true }).click();
+  const menu = bob.page.getByRole('menu', { name: 'Message actions' });
+  await menu.waitFor({ timeout: 2000 });
+  const top = await list.evaluate((el) => el.scrollTop);
+  await bob.page.keyboard.press('Escape');
+  await menu.waitFor({ state: 'hidden', timeout: 2000 });
+  assert.equal(await list.evaluate((el) => el.scrollTop), top, 'Esc in the menu also moved the list');
+  assert.ok(await latest.isVisible(), 'Esc in the menu also went to the newest message');
   await list.focus();
   await bob.page.keyboard.press('Escape');
   await latest.waitFor({ state: 'detached', timeout: 5000 });

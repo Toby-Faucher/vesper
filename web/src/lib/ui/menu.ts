@@ -15,3 +15,13 @@ export function menuMove(key: string, i: number, labels: string[]): number | nul
   }
   return null;
 }
+
+// Roving focus in a message toolbar: Left and Right wrap, Home and End jump; null for any other key.
+export function toolMove(key: string, i: number, n: number): number | null {
+  if (!n) return null;
+  if (key === 'ArrowRight') return (i + 1) % n;
+  if (key === 'ArrowLeft') return (i - 1 + n) % n;
+  if (key === 'Home') return 0;
+  if (key === 'End') return n - 1;
+  return null;
+}

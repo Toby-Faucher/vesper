@@ -1,4 +1,4 @@
-// Enter and exit motion for popovers, dialogs and the call bar, the unread line fade and the jump flash.
+// Enter and exit motion for popovers, dialogs and the call bar, and the jump flash.
 // Durations and easing come from the tokens. Only opacity and transform move; hover and focus stay plain CSS.
 import { waapi } from 'animejs/waapi';
 
@@ -46,9 +46,4 @@ export function flash(el: Element): void {
     return;
   }
   waapi.animate(h, { backgroundColor: ['var(--accent-subtle)', 'transparent'], duration: 600 + ms('--dur-3'), ease: token('--ease-out') });
-}
-
-// The unread line fading away once read.
-export function fadeOut(el: Element): void {
-  waapi.animate(el as HTMLElement, { opacity: [1, 0], duration: ms(reduced() ? '--dur-1' : '--dur-3'), ease: token('--ease-out'), persist: true });
 }

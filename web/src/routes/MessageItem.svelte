@@ -1,7 +1,13 @@
+<script lang="ts" module>
+  // One clock for the head and the gutter: "7:41 AM", no leading zero. Made once, not per row.
+  const clock = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+</script>
+
 <script lang="ts">
   // One message row. A head row has the avatar, the name and the time; a continuation row shows its time in the gutter
   // on hover. The toolbar overlays the top right and shows on hover and on keyboard focus inside the row (opacity only,
-  // so nothing moves and it stays clickable). Its menu, the reaction picker and the delete dialog mount on first use.
+  // so nothing moves and it stays clickable). It is one Tab stop (roving: Left and Right move inside it), and Up and Down
+  // move between rows. Its menu, the reaction picker and the delete dialog mount on first use.
   // Names and bodies are untrusted: text nodes and Markdown.svelte only. User colour only on the avatar.
   import { tick } from 'svelte';
   import Markdown from './Markdown.svelte';
@@ -11,6 +17,8 @@
   import * as I from '../lib/ui/icons';
   import { isLong } from '../lib/ui/timeline';
   import { isSendKey } from '../lib/ui/keys';
+  import { copyText } from '../lib/ui/clipboard';
+  import { toolMove } from '../lib/ui/menu';
   import { UI_MESSAGES } from '../lib/ui/messages';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
@@ -30,6 +38,7 @@
     act,
     onreply,
     onjump,
+    onsay,
   }: {
     m: Message;
     head: boolean;
@@ -40,6 +49,7 @@
     act: (f: () => Promise<unknown>, conflict?: string) => Promise<boolean>;
     onreply: (m: Message) => void;
     onjump: (id: number) => void;
+    onsay: (text: string) => void;
   } = $props();
 
   const EMOJIS = ['👍', '😂', '❤️'];
@@ -48,11 +58,11 @@
   const mentioned = $derived(!m.deleted && m.mentions.includes(myId));
   const nodes = $derived(parse(m.body));
   const long = $derived(isLong(m.body));
-  const hm = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const hm = (ms: number) => clock.format(ms);
   const full = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'full', timeStyle: 'short' });
   // The gutter has room for "7:26", not "07:26 AM": the hour and minute only (the title has the full date).
   const short = (ms: number) =>
-    new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' }).formatToParts(ms).filter((p) => p.type !== 'dayPeriod').map((p) => p.value).join('').trim();
+    clock.formatToParts(ms).filter((p) => p.type !== 'dayPeriod').map((p) => p.value).join('').trim();
   const iso = (ms: number) => new Date(ms).toISOString();
   const size = (n: number) => (n < 1024 * 1024 ? `${Math.ceil(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
   const names = (ids: string[]) => ids.map((id) => user(id).display_name).join(', ');
@@ -117,10 +127,39 @@
     symbol = '';
     pick([...new Intl.Segmenter().segment(s)][0].segment); // one symbol, as typed
   }
-  const copy = (text: string) => navigator.clipboard?.writeText(text).catch(() => {});
+  const copy = (text: string) => copyText(text).then((ok) => ok || onsay(UI_MESSAGES.copyFailed));
+
+  // Keys in the row (Ruling in the Task 7 fix report): Left, Right, Home and End move along the toolbar; Up and Down go
+  // to the previous or next message row. Not while typing in the edit box.
+  let tool = $state(0); // the toolbar button that is the row's Tab stop
+  let toolsEl = $state<HTMLElement>();
+  const tbs = () => [...(toolsEl?.querySelectorAll<HTMLButtonElement>('.tb') ?? [])];
+  function onRowKey(e: KeyboardEvent) {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.isComposing) return;
+    const t = e.target as HTMLElement;
+    if (t.closest('textarea, input')) return;
+    const row = e.currentTarget as HTMLElement;
+    if (toolsEl?.contains(t)) {
+      const i = toolMove(e.key, tool, tbs().length);
+      if (i !== null) {
+        e.preventDefault();
+        tool = i;
+        tbs()[i].focus();
+        return;
+      }
+    }
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    let next = row[e.key === 'ArrowUp' ? 'previousElementSibling' : 'nextElementSibling'];
+    while (next && next.tagName !== 'ARTICLE') next = next[e.key === 'ArrowUp' ? 'previousElementSibling' : 'nextElementSibling'];
+    if (!(next instanceof HTMLElement)) return; // the first or last row: the list scrolls as usual
+    e.preventDefault();
+    next.focus({ preventScroll: true });
+    next.scrollIntoView({ block: 'nearest' });
+  }
 </script>
 
-<article id="m{m.id}" class="msg" class:head class:mentioned class:editing>
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions: a row takes focus from Up and Down -->
+<article id="m{m.id}" class="msg" class:head class:mentioned class:editing tabindex="-1" onkeydown={onRowKey}>
   {#if m.reply_to}
     {@const r = m.reply_to}
     <button type="button" class="quote quiet" onclick={() => onjump(r.id)}>
@@ -185,11 +224,14 @@
   </div>
 
   {#if !m.deleted && !editing}
-    <div class="tools" role="toolbar" aria-label="Message actions">
-      <button type="button" class="tb" aria-label="Add reaction" bind:this={reactEl} onclick={() => (picker = { mounted: true, open: !picker.open })}><Icon d={I.smile} /></button>
-      <button type="button" class="tb" aria-label="Reply" onclick={() => onreply(m)}><Icon d={I.reply} /></button>
-      <button type="button" class="tb" aria-label={m.pinned ? 'Unpin' : 'Pin'} onclick={() => act(() => pin(m.id, !m.pinned), UI_MESSAGES.pinsFull)}><Icon d={I.pin} /></button>
-      <button type="button" class="tb" aria-label="More" aria-haspopup="menu" bind:this={moreEl} onclick={() => (menu = { mounted: true, open: !menu.open })}><Icon d={I.more} /></button>
+    <!-- Each button is described by whose message it acts on: "Reply", then "bob, 7:41 AM". -->
+    <span id="m{m.id}-by" hidden>{author.display_name}, {hm(m.created_at)}</span>
+    <div class="tools" role="toolbar" aria-label="Message actions" bind:this={toolsEl}
+      onfocusin={(e) => { const i = tbs().indexOf(e.target as HTMLButtonElement); if (i >= 0) tool = i; }}>
+      <button type="button" class="tb" aria-label="Add reaction" aria-describedby="m{m.id}-by" tabindex={tool === 0 ? 0 : -1} bind:this={reactEl} onclick={() => (picker = { mounted: true, open: !picker.open })}><Icon d={I.smile} /></button>
+      <button type="button" class="tb" aria-label="Reply" aria-describedby="m{m.id}-by" tabindex={tool === 1 ? 0 : -1} onclick={() => onreply(m)}><Icon d={I.reply} /></button>
+      <button type="button" class="tb" aria-label={m.pinned ? 'Unpin' : 'Pin'} aria-describedby="m{m.id}-by" tabindex={tool === 2 ? 0 : -1} onclick={() => act(() => pin(m.id, !m.pinned), UI_MESSAGES.pinsFull)}><Icon d={I.pin} /></button>
+      <button type="button" class="tb" aria-label="More" aria-describedby="m{m.id}-by" tabindex={tool === 3 ? 0 : -1} aria-haspopup="menu" bind:this={moreEl} onclick={() => (menu = { mounted: true, open: !menu.open })}><Icon d={I.more} /></button>
     </div>
   {/if}
 </article>
@@ -243,6 +285,7 @@
     transition: background-color var(--dur-1) var(--ease-out);
   }
   .msg.head { margin-top: 8px; padding-top: 8px; }
+  .msg:focus-visible { outline-offset: -2px; } /* inside the list, which clips the sides */
   /* A mention of me: a 2 px amber bar and a faint amber wash. */
   .msg.mentioned { background: color-mix(in oklab, var(--accent-subtle) 55%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
   .msg:hover, .msg:focus-within, .msg.editing { background: var(--bg-hover); }

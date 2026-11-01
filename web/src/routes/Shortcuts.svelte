@@ -6,6 +6,12 @@
   let { open, onclose }: { open: boolean; onclose: () => void } = $props();
   const mac = isMac();
   const FILTERS = [['r', 'Only rooms'], ['p', 'Only people'], ['>', 'Only actions']];
+  // The message list: a row and its actions (MessageItem), and Esc back to the composer (Timeline).
+  const MESSAGES: [string, string[]][] = [
+    ['Previous or next message', ['↑', '↓']],
+    ['Move along the message actions', ['←', '→']],
+    ['Newest message and the message box', ['Esc']],
+  ];
 </script>
 
 {#snippet row(label: string, keys: string[])}
@@ -22,6 +28,10 @@
   <h3 class="mt-4 flex h-7 items-center text-xs font-medium text-fg-3">In the switcher, start with</h3>
   <dl class="flex flex-col">
     {#each FILTERS as [k, label] (k)}{@render row(label, [k, 'Space'])}{/each}
+  </dl>
+  <h3 class="mt-4 flex h-7 items-center text-xs font-medium text-fg-3">In the messages</h3>
+  <dl class="flex flex-col">
+    {#each MESSAGES as [label, keys] (label)}{@render row(label, keys)}{/each}
   </dl>
   <p class="mt-4 text-xs text-fg-3">Mute and deafen keys work only in a call.</p>
 </Dialog>

@@ -606,6 +606,14 @@ scene('timeline', async (ctx) => {
   await page.mouse.move(1439, 899);
   await sleep(400);
   await ctx.shot(page, 'timeline');
+  // The New row is in the last screenful, so the room opens at the bottom: no "Jump to latest".
+  if (await page.getByRole('button', { name: 'Jump to latest' }).count()) throw new Error('timeline: "Jump to latest" shows at the bottom');
+  // Read: the New row fades, then folds away with no gap left, and the view stays at the bottom.
+  await page.waitForFunction(() => document.querySelector('[data-timeline] > .new')?.getBoundingClientRect().height === 0, null, { timeout: 10_000 });
+  await sleep(400);
+  const gap = await page.locator('[data-timeline]').evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  if (gap >= 8) throw new Error(`timeline-read: ${gap} px from the bottom after the New row folded`);
+  await ctx.shot(page, 'timeline-read');
   // The toolbar on hover over a grouped message, and on keyboard focus (Tab into the row) with its More menu open.
   await page.locator('article', { hasText: 'after dinner works better' }).hover();
   await sleep(200);
@@ -618,6 +626,21 @@ scene('timeline', async (ctx) => {
   await sleep(300);
   await ctx.shot(page, 'timeline-menu');
   await page.keyboard.press('Escape');
+  // Down from the toolbar: the next row takes focus (its ring and its toolbar show).
+  await page.keyboard.press('ArrowDown');
+  await sleep(300);
+  await ctx.shot(page, 'timeline-row-focus');
+  // A copy with no clipboard at all: the plain note at the bottom left.
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined });
+    document.execCommand = () => false;
+  });
+  await own.getByRole('button', { name: 'More', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Copy text', exact: true }).click();
+  await page.getByText('Could not copy.', { exact: false }).waitFor();
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'timeline-copy-failed');
   // The long message expanded, scrolled into view.
   const long = page.locator('article', { hasText: 'packing list' });
   await long.evaluate((el) => (el.parentElement.scrollTop = el.offsetTop - 8)); // the list only, not the page

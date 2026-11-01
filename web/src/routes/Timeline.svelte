@@ -11,7 +11,7 @@
   import { parse } from '../lib/markdown';
   import { session } from '../lib/session.svelte';
   import * as I from '../lib/ui/icons';
-  import { fadeOut, flash } from '../lib/ui/motion';
+  import { flash } from '../lib/ui/motion';
   import { UI_MESSAGES } from '../lib/ui/messages';
   import { firstUnreadInPage, plain, rows } from '../lib/ui/timeline';
   import Button from '../lib/ui/c/Button.svelte';
@@ -41,8 +41,10 @@
   let unreadAt = 0;
   let firstPill = $state(0); // "N new messages. Show the first" when the first unread is older than the page
   let toNew = false; // after "Show the first": scroll to the New row once it is loaded
-  let faded = $state(false);
-  let announce = $state(''); // the newest message from someone else, for screen readers
+  let faded = $state(false); // the room was read: the New row goes after FADE_AFTER_MS
+  let gone = $state(false); // the New row fades, then folds to no height
+  let announce = $state({ n: 0, text: '' }); // the newest message from someone else, for screen readers
+  let note = $state(''); // a short visible status, such as a failed copy (polite)
   let lastId: number | null = null; // newest id seen; null right after a room switch, so history is not announced
   let seenLatest = chat.latest;
   let now = $state(Date.now());
@@ -64,6 +66,7 @@
     return () => {
       clearInterval(t);
       clearTimeout(fadeTimer);
+      clearTimeout(noteTimer);
       chat.active = null;
     };
   });
@@ -82,6 +85,7 @@
     firstPill = 0;
     toNew = false;
     faded = false;
+    gone = false;
     clearTimeout(fadeTimer);
     lastId = null;
     const u = session.state.unread[room];
@@ -115,7 +119,8 @@
     if (!list || !log) return;
     ready = true;
     if (chat.jump === null) {
-      if (newFrom !== Infinity && newEl && !log.moreAfter) {
+      // A New row in the last screenful would only scroll to the bottom anyway: be at the bottom and follow it.
+      if (newFrom !== Infinity && newEl && !log.moreAfter && newEl.offsetTop - 48 < list.scrollHeight - list.clientHeight - 8) {
         reveal(newEl, 'start');
         stuck = atBottom(list);
       } else {
@@ -155,20 +160,38 @@
       const fresh = msgs.filter((m) => m.id > since);
       // A live message or two, not a page loaded with "Load newer".
       const m = fresh.length <= 3 ? fresh.reverse().find((x) => x.author_id !== myId && !x.deleted) : undefined;
-      if (m) announce = `${user(m.author_id).display_name}: ${plain(parse(m.body))}`;
+      // A new node each time, so the same text twice ("ok", "ok") is read twice.
+      if (m) announce = { n: announce.n + 1, text: `${user(m.author_id).display_name}: ${plain(parse(m.body))}` };
     }
     lastId = last?.id ?? 0;
+    const hadNew = newFrom !== Infinity;
     trimRooms(roomId, stuck && !loadingOlder);
+    // The first unread message was trimmed away with the New row: offer it again through the pill.
+    if (hadNew && newFrom === Infinity && !faded) firstPill = Math.max(unreadAt, 1);
+    watchLast();
     maybeRead();
   }
 
   // The list fills the pane, so it shrinks when the call bar or the connection banner appear: keep the bottom in view.
+  // The last row too: a reaction, an edit or a late image makes it taller.
+  let ro: ResizeObserver | undefined;
+  let lastRow: Element | null = null;
   $effect(() => {
     if (!list) return;
-    const ro = new ResizeObserver(() => stuck && toBottom());
+    ro = new ResizeObserver(() => stuck && toBottom());
     ro.observe(list);
-    return () => ro.disconnect();
+    return () => {
+      ro?.disconnect();
+      lastRow = null;
+    };
   });
+  function watchLast() {
+    const el = list?.querySelector(':scope > article:last-of-type') ?? null;
+    if (!ro || el === lastRow) return;
+    if (lastRow) ro.unobserve(lastRow);
+    if (el) ro.observe(el);
+    lastRow = el;
+  }
 
   // Esc (the shell raises chat.latest): go to the newest message.
   $effect(() => {
@@ -176,12 +199,14 @@
     untrack(() => {
       if (n === seenLatest) return;
       seenLatest = n;
-      void toLatest();
+      // Esc from inside the list (a row or its toolbar) also goes back to the composer.
+      const inList = !!list?.contains(document.activeElement);
+      void toLatest().then(() => inList && chat.refocus++);
     });
   });
 
   // The New row fades a few seconds after the room is marked read (a room that fits on screen is read the moment it
-  // opens, and the line should still be seen). It keeps its height, so nothing below moves.
+  // opens, and the line should still be seen), then folds to no height (CSS). Scroll anchoring keeps the view still.
   let fadeTimer: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
     const read = session.state.unread[roomId]?.last_read_id ?? 0;
@@ -189,8 +214,7 @@
     untrack(() => {
       if (!newEl || faded || !last || read < last || read <= readAt) return;
       faded = true;
-      const el = newEl;
-      fadeTimer = setTimeout(() => fadeOut(el), FADE_AFTER_MS);
+      fadeTimer = setTimeout(() => (gone = true), FADE_AFTER_MS);
     });
   });
 
@@ -259,6 +283,13 @@
     void act(() => jumpTo(roomId, id)).then((ok) => ok || (chat.jump = null));
   }
 
+  let noteTimer: ReturnType<typeof setTimeout> | undefined;
+  function say(text: string) {
+    note = text;
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(() => (note = ''), 8000);
+  }
+
   function showFirst() {
     firstPill = 0;
     toNew = true;
@@ -270,7 +301,7 @@
 
 <div class="relative flex min-h-0 flex-1 flex-col">
   <!-- svelte-ignore a11y_no_noninteractive_tabindex: the scroll region takes focus so the keyboard can scroll it -->
-  <div bind:this={list} onscroll={onScroll} data-timeline class="relative min-h-0 flex-1 overflow-y-auto pt-2 pb-4" tabindex="0" role="region" aria-label="Messages">
+  <div bind:this={list} onscroll={onScroll} data-timeline class="relative min-h-0 flex-1 overflow-y-auto pt-2 pb-4" style:padding-top={firstPill ? '48px' : null} tabindex="0" role="region" aria-label="Messages">
     {#if loadError}
       <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
         <p class="text-sm text-danger" role="alert">{loadError}</p>
@@ -289,13 +320,13 @@
         <div class="day" role="separator" aria-label={r.label}><span aria-hidden="true">{r.label}</span></div>
       {:else if r.kind === 'new'}
         <!-- Not one role=separator: its children would be hidden from screen readers, and the button must stay. -->
-        <div class="new" bind:this={newEl} inert={faded}>
+        <div class="new" class:gone bind:this={newEl} inert={faded}>
           <span class="line" role="separator" aria-label="New messages"></span>
           <span class="label" aria-hidden="true">New</span>
           <button type="button" class="mark" onclick={markAll}>Mark as read</button>
         </div>
       {:else}
-        <MessageItem m={r.m} head={r.head} {myId} {myName} {isMod} {user} {act} {onreply} onjump={jump} />
+        <MessageItem m={r.m} head={r.head} {myId} {myName} {isMod} {user} {act} {onreply} onjump={jump} onsay={say} />
       {/if}
     {/each}
     {#if log?.moreAfter}
@@ -309,7 +340,8 @@
   {#if !stuck || log?.moreAfter}
     <button type="button" class="pill bottom" aria-label="Jump to latest" onclick={toLatest}><Icon d={I.arrowDown} />Jump to latest</button>
   {/if}
-  <p class="sr-only" aria-live="polite">{announce}</p>
+  <p role="status">{#if note}<span class="pill note">{note}</span>{/if}</p>
+  <p class="sr-only" aria-live="polite">{#key announce.n}<span>{announce.text}</span>{/key}</p>
 </div>
 
 <style>
@@ -330,7 +362,10 @@
     gap: 8px;
     height: 24px;
     margin: 8px 16px 0 68px;
+    /* Read: fade, then fold the 24 px row and its margin away, so no gap stays in the list. */
+    transition: opacity var(--dur-3) var(--ease-out), height var(--dur-3) var(--ease-out) var(--dur-3), margin-top var(--dur-3) var(--ease-out) var(--dur-3);
   }
+  .new.gone { height: 0; margin-top: 0; overflow: hidden; opacity: 0; }
   .new .line { flex: 1; height: 1px; background: var(--accent-line); }
   .new .label { color: var(--accent-fg); font-size: 12px; font-weight: 500; line-height: 16px; }
   .mark {
@@ -358,4 +393,8 @@
   .pill:hover { border-color: var(--line-strong); background: var(--bg-hover); }
   .pill.top { top: 8px; left: 50%; translate: -50% 0; border-color: var(--accent-line); color: var(--accent-fg); }
   .pill.bottom { right: 24px; bottom: 12px; }
+  .pill.note { bottom: 12px; left: 68px; pointer-events: none; color: var(--fg-2); }
+  @media (prefers-reduced-motion: reduce) {
+    .new { transition: none; }
+  }
 </style>

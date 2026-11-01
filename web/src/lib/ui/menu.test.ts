@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { menuMove } from './menu';
+import { menuMove, toolMove } from './menu';
 
 const labels = ['Copy link', 'Edit', 'Pin', 'Delete', 'Copy text'];
 
@@ -27,4 +27,13 @@ it('typeahead_by_first_letter_cycles', () => {
 it('other_keys_are_left_alone', () => {
   for (const k of [' ', 'Enter', 'Escape', 'Tab', 'ArrowLeft', 'F1']) expect(menuMove(k, 1, labels)).toBe(null);
   expect(menuMove('ArrowDown', -1, [])).toBe(null);
+});
+
+it('toolbar_left_right_wrap_home_end', () => {
+  expect(toolMove('ArrowRight', 0, 4)).toBe(1);
+  expect(toolMove('ArrowRight', 3, 4)).toBe(0);
+  expect(toolMove('ArrowLeft', 0, 4)).toBe(3);
+  expect(toolMove('Home', 2, 4)).toBe(0);
+  expect(toolMove('End', 0, 4)).toBe(3);
+  for (const k of ['ArrowUp', 'ArrowDown', 'Enter', ' ', 'Escape', 'Tab', 'a']) expect(toolMove(k, 1, 4)).toBe(null);
 });

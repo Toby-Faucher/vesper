@@ -24,6 +24,7 @@ export const UI_MESSAGES = {
   fileTooLarge: 'Files can be up to 25 MB.',
   pinsFull: 'This room has 50 pins, the most it can hold. Unpin one first.',
   pinsFailed: 'The pins did not load.',
+  copyFailed: 'Could not copy. Select the text and copy it yourself.',
   adminLater: 'The admin pages are not built yet.',
   sectionLater: 'Nothing to set here yet.',
 } as const;
