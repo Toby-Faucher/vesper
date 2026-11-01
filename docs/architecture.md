@@ -32,7 +32,7 @@ The "Not verified" list at the end says what was only read.
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, and the limits `MAX_NAME_CHARS` (32) and `MAX_MSG_BYTES` (64 KiB). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
 | `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions and invites (`accounts.rs`, `sessions.rs`, `invites.rs`). It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `rooms.rs` (presence and session numbers), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `rooms.rs` (presence and session numbers), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -113,7 +113,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 ## HTTP API
 
-JSON over HTTP under `/api` (`api_accounts.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
+JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
 `ApiError { code, message }`, and the status follows the code: `bad_request` 400, `unauthorized` 401, `forbidden` 403,
 `not_found` and `invite_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
 `internal` 500, `quota_full` 507.
@@ -129,6 +129,28 @@ JSON over HTTP under `/api` (`api_accounts.rs`). Bodies are the `vesper-protocol
 | `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
 | `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
+| `GET /api/users` | a session | `UserInfo[]` |
+| `GET /api/invites` | moderator or owner | `InviteInfo[]`, newest first |
+| `POST /api/invites` (`InviteCreate`) | moderator or owner; a moderator invite needs the owner | 201 `InviteCreated` with the link `<origin>/invite#<code>` |
+| `DELETE /api/invites/{id}` | moderator or owner | 204, or 404 for an unknown id |
+| `PATCH /api/users/{id}/role` (`RolePatch`) | owner | the new `UserInfo` |
+| `POST /api/users/{id}/ban` | owner | the new `UserInfo`; every session of that user is deleted |
+| `POST /api/users/{id}/unban` | owner | the new `UserInfo` |
+
+Roles (`require`, `api_admin.rs`; owner > moderator > member):
+
+| Action | Member | Moderator | Owner |
+|---|---|---|---|
+| List users | yes | yes | yes |
+| List and revoke invites | no | yes | yes |
+| Mint a member invite | no | yes | yes |
+| Mint a moderator invite | no | no | yes |
+| Change a role, ban, unban | no | no | yes, not on themselves or an owner |
+| Mint or grant the owner role | no | no | no, only `vesper-server create-owner` |
+
+A refused role is 403. An `owner` role in `InviteCreate` or `RolePatch`, the owner acting on their own account, `max_uses` outside
+1 to 50 and `expires_hours` outside 1 to 720 are 400. A role change counts from the user's next request. A banned user's cookie
+gets 401 at once and login fails until an unban; the unban does not bring old sessions back.
 
 Rules every route keeps:
 
@@ -153,7 +175,8 @@ Rules every route keeps:
 - Handlers never log request bodies, and the request types with a password or invite code print `***` in `Debug`. A body that does
   not parse gets a fixed "invalid request body" message. The WebSocket does not use the session yet; it still takes the join key.
 
-Tests: `crates/vesper-server/tests/accounts.rs`, through `tests/common/mod.rs`.
+Tests: `crates/vesper-server/tests/accounts.rs` and `tests/admin.rs` (every route for every caller and target role), through
+`tests/common/mod.rs`.
 
 ## Static serving
 
@@ -167,5 +190,5 @@ Read from the code on 2026-10-30, not run:
 - Behaviour in real Chrome and Firefox, including the `ontrack` stream id and `replaceTrack` during a mode swap.
 - Everything in the SFU loop beyond its doc comments (`room.rs` forwarding, `client.rs` negotiation).
 - Text chat and rooms beyond a name: not built (spec "Build order").
-- The accounts REST API is built and tested in process only (`tests/accounts.rs`). No real browser run, and no https run of the
+- The accounts and admin REST API is built and tested in process only (`tests/accounts.rs`, `tests/admin.rs`). No real browser run, and no https run of the
   `Secure` `__Host-` cookie beyond the in-process test.

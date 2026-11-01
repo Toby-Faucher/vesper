@@ -155,6 +155,39 @@ pub struct InvitePreview {
     pub role: Role,
 }
 
+/// `POST /api/invites`. `max_uses` 1 to 50, `expires_hours` 1 to 720, `role` not `owner`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct InviteCreate {
+    pub role: Role,
+    pub max_uses: u32,
+    pub expires_hours: u32,
+}
+
+// `Debug` is written by hand so the invite code in `url` never reaches a log.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct InviteCreated {
+    pub info: InviteInfo,
+    pub url: String,
+}
+
+impl std::fmt::Debug for InviteCreated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InviteCreated")
+            .field("info", &self.info)
+            .field("url", &"***")
+            .finish()
+    }
+}
+
+/// `PATCH /api/users/{id}/role`. `role` not `owner`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RolePatch {
+    pub role: Role,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +217,21 @@ mod tests {
                 PasswordChange {
                     old: secret.into(),
                     new: secret.into(),
+                }
+            ),
+            format!(
+                "{:?}",
+                InviteCreated {
+                    info: InviteInfo {
+                        id: 1,
+                        role: Role::Member,
+                        uses: 0,
+                        max_uses: 1,
+                        expires_at: 0,
+                        created_by: None,
+                        revoked: false,
+                    },
+                    url: format!("http://x/invite#{secret}"),
                 }
             ),
         ];
