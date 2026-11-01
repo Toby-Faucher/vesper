@@ -16,7 +16,7 @@ const files = import.meta.glob(['../../**/*.svelte', '../../**/*.ts', '!../../**
 
 it('no_raw_colours', () => {
   const names = Object.keys(files);
-  expect(names).toContain('../../routes/Room.svelte');
+  expect(names).toContain('../../routes/Shell.svelte');
   expect(names).toContain('../../main.ts');
   const hits = names.flatMap((f) =>
     files[f].split('\n').flatMap((line, i) => RULES.filter((r) => r.test(line)).map((r) => `${f}:${i + 1}: ${line.match(r)![0]}`)),

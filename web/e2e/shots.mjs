@@ -1,19 +1,20 @@
 // Screenshot scenes for review: node e2e/shots.mjs [names...] (npm run shots -- login room). All scenes when none are named.
 // Starts the release server like the e2e tests (needs ../target/release/vesper-server and dist/), signs up the owner alice
-// and the member bob, seeds three rooms and 40 messages, then writes e2e/shots/<name>.png at 1440x900, full page.
+// and the member bob, then writes e2e/shots/<name>.png at 1440x900, full page. Scenes that need content call seed() (two more
+// rooms and 40 messages in general), so shell-empty runs before it; reconnecting restarts the server, so it runs last.
 // The `tokens` and `gallery` scenes shoot /_gallery from a Vite dev server on a spare port, since the build leaves it out.
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { ORIGIN, browser, cli, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, inVoice, openRoom, signedIn, signup, sleep, startServer } from './lib.mjs';
 
 const VIEWPORT = { width: 1440, height: 900 };
 const out = fileURLToPath(new URL('shots/', import.meta.url));
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
 const scenes = new Map();
-// fn({ alice, bob, api, open, shot }) returns the page to shoot. alice and bob are signed-in { page, errors }; api(page, method,
+// fn({ alice, bob, api, open, shot, seed, server }) returns the page to shoot. alice and bob are signed-in { page, errors }; api(page, method,
 // path, body) calls the API from that page (cookie and Origin as the app sends them); open(url) is a fresh signed-out page.
 // A scene that takes more than one picture calls shot(page, name, { fullPage }) itself and returns nothing.
 const scene = (name, fn) => scenes.set(name, fn);
@@ -39,11 +40,18 @@ async function api(page, method, path, body) {
 
 async function home(page) {
   await page.goto(`${ORIGIN}/`);
-  await page.getByText('Signed in as').waitFor();
+  await signedIn(page);
+  await page.waitForURL(/\/r\/\d+$/);
 }
 async function joinVoice(page) {
   await page.getByRole('button', { name: 'Join' }).click();
   await page.getByRole('button', { name: 'Leave' }).waitFor();
+}
+// Shows the page with nothing focused and the pointer out of the way, so no hover or focus ring is in the picture.
+async function rest(page) {
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.mouse.move(1439, 899);
+  await sleep(300);
 }
 
 // The Vite dev server for the gallery pages, started once on a spare port and stopped at the end.
@@ -256,27 +264,114 @@ scene('signup', async ({ alice, open }) => {
   return page;
 });
 
-scene('room', async ({ alice, bob }) => {
+// One room, nobody in voice, no messages: what a new owner sees first.
+scene('shell-empty', async ({ alice }) => {
   await home(alice.page);
-  await home(bob.page);
-  await joinVoice(alice.page);
-  await joinVoice(bob.page);
-  await alice.page.locator('li', { hasText: 'bob' }).waitFor();
+  await rest(alice.page);
+  return alice.page;
+});
+
+// Five people in voice in music (two speaking, one muted, one deafened, one with a long name), unread and mention pills
+// on the other rooms, and a long room name. Alice is in the call and reads general.
+let house;
+const LONG_ROOM = 'weekend plans and the games list'; // 32 characters, the server's limit
+function fullHouse({ alice, bob, api, seed }) {
+  house ??= (async () => {
+    await seed();
+    const rooms = await api(alice.page, 'GET', '/api/rooms');
+    const id = (name) => rooms.find((r) => r.name === name).id;
+    const extra = [];
+    for (const [name, display] of [['carol', 'carol'], ['dave', 'dave'], ['bart', 'Bartholomew Featherstonehaugh']]) {
+      const { url } = await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 });
+      const b = await browser(name, [], { viewport: VIEWPORT });
+      await signup(b.page, url, name, display);
+      extra.push(b);
+    }
+    await home(alice.page);
+    for (const p of [alice.page, bob.page, ...extra.map((b) => b.page)]) {
+      if (p !== alice.page) await home(p);
+      await openRoom(p, 'music');
+      await joinVoice(p);
+    }
+    await extra[0].page.getByRole('button', { name: 'Mute', exact: true }).click();
+    await extra[1].page.getByRole('button', { name: 'Deafen', exact: true }).click();
+    await openRoom(alice.page, 'general');
+    for (const body of ['set list for friday is up', 'who has the good speaker cable']) await api(bob.page, 'POST', `/api/rooms/${id('music')}/messages`, { body });
+    for (const body of ['saturday works for me', '@alice can you book the room?', 'I will bring snacks'])
+      await api(bob.page, 'POST', `/api/rooms/${id(LONG_ROOM)}/messages`, { body });
+    for (const n of ['carol', 'dave', 'Bartholomew']) await inVoice(alice.page, n).waitFor();
+    await alice.page.locator('li.speaking[data-speaking]').first().waitFor({ timeout: 10000 }).catch(() => console.warn('shell: nobody seen speaking'));
+  })();
+  return house;
+}
+scene('shell', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  await rest(page);
+  await ctx.shot(page, 'shell');
+  // Folded into the avatar stack (automatic above five people, or with the chevron).
+  await page.getByRole('button', { name: 'Hide people in voice in music' }).click();
+  await rest(page);
+  await ctx.shot(page, 'shell-folded');
+  await page.getByRole('button', { name: 'Show people in voice in music' }).click();
+});
+scene('shell-collapsed', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  await page.getByRole('button', { name: 'Hide sidebar' }).click();
+  await rest(page);
+  await ctx.shot(page, 'shell-collapsed');
+  await page.getByRole('button', { name: 'Show sidebar' }).click();
+});
+
+// A restricted room: alice (owner) sees it with its label; bob (member) opening its address gets the plain missing state.
+scene('hidden-room', async ({ alice, bob, api, seed, shot }) => {
+  await seed();
+  const staff = await api(alice.page, 'POST', '/api/rooms', { name: 'staff' });
+  await api(alice.page, 'PATCH', `/api/rooms/${staff.id}`, { restricted: true });
+  await home(alice.page);
+  await openRoom(alice.page, 'staff');
+  await alice.page.getByText('Restricted').waitFor();
+  await rest(alice.page);
+  await shot(alice.page, 'room-restricted');
+  await bob.page.goto(`${ORIGIN}/r/${staff.id}`);
+  await bob.page.getByText('This room is not here.').waitFor();
+  await rest(bob.page);
+  await shot(bob.page, 'hidden-room');
+});
+
+scene('not-found', async ({ alice }) => {
+  await alice.page.goto(`${ORIGIN}/no/such/page`);
+  await alice.page.getByText('There is no page at this address.').waitFor();
+  await rest(alice.page);
+  return alice.page;
+});
+
+scene('room', async ({ alice, bob, seed }) => {
+  await seed();
+  for (const p of [alice.page, bob.page]) {
+    await home(p);
+    await openRoom(p, 'general'); // `/` opens the last room, which an earlier scene may have changed
+    await joinVoice(p);
+  }
+  await inVoice(alice.page, 'bob').waitFor();
   await sleep(1000);
   return alice.page;
 });
 
 scene('settings', async ({ alice }) => {
   await home(alice.page);
-  await alice.page.getByRole('button', { name: 'Audio settings' }).click();
+  await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
   await alice.page.getByLabel('Audio settings').waitFor();
+  await rest(alice.page);
   return alice.page;
 });
 
 scene('diagnostics', async ({ alice }) => {
   await home(alice.page);
   await joinVoice(alice.page);
-  await alice.page.getByRole('button', { name: 'Diagnostics' }).click();
+  await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await alice.page.getByRole('link', { name: 'Diagnostics' }).click();
   await sleep(2500); // the stats refresh
   return alice.page;
 });
@@ -284,11 +379,12 @@ scene('diagnostics', async ({ alice }) => {
 // Main-thread CPU on bob's page in a two-person call: CDP TaskDuration over 10 s, printed, no picture. Run it three times
 // and take the median (docs/dev.md has the baseline).
 scene('cpu-baseline', async ({ alice, bob }) => {
-  await home(alice.page);
-  await home(bob.page);
-  await joinVoice(alice.page);
-  await joinVoice(bob.page);
-  await bob.page.locator('li', { hasText: 'alice' }).waitFor();
+  for (const p of [alice.page, bob.page]) {
+    await home(p);
+    await openRoom(p, 'general'); // `/` opens the last room, which an earlier scene may have changed
+    await joinVoice(p);
+  }
+  await inVoice(bob.page, 'alice').waitFor();
   await sleep(2000); // let the call settle
   const cdp = await bob.page.context().newCDPSession(bob.page);
   await cdp.send('Performance.enable');
@@ -296,6 +392,18 @@ scene('cpu-baseline', async ({ alice, bob }) => {
   const t0 = await task();
   await sleep(10000);
   console.log(`cpu-baseline: ${Math.round((await task() - t0) * 1000)} ms per 10 s`);
+});
+
+// The server goes away: the banner counts down to the next try; it comes back and the banner goes. Runs last.
+scene('reconnecting', async ({ alice, server, shot }) => {
+  await home(alice.page);
+  await server.restart(async () => {
+    await alice.page.getByText(/Connection lost\. Trying again in \d+ s\./).waitFor({ timeout: 10000 });
+    await rest(alice.page);
+    await shot(alice.page, 'reconnecting');
+  });
+  await alice.page.getByRole('button', { name: 'Try now' }).click().catch(() => {}); // it may have reconnected already
+  await alice.page.getByText('Connection lost').waitFor({ state: 'detached', timeout: 30000 });
 });
 
 const LINES = [
@@ -324,12 +432,15 @@ try {
   const bobLink = (await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url;
   const bob = await browser('bob', [], { viewport: VIEWPORT });
   await signup(bob.page, bobLink, 'bob');
-  for (const name of ['music', 'lobby']) await api(alice.page, 'POST', '/api/rooms', { name });
-  const general = (await api(alice.page, 'GET', '/api/rooms')).find((r) => r.name === 'general');
-  for (let i = 0; i < 40; i++) {
-    const from = i % 3 === 2 ? bob : alice;
-    await api(from.page, 'POST', `/api/rooms/${general.id}/messages`, { body: LINES[i % LINES.length] });
-  }
+  let seeded;
+  const seed = () => (seeded ??= (async () => {
+    for (const name of ['music', LONG_ROOM]) await api(alice.page, 'POST', '/api/rooms', { name });
+    const general = (await api(alice.page, 'GET', '/api/rooms')).find((r) => r.name === 'general');
+    for (let i = 0; i < 40; i++) {
+      const from = i % 3 === 2 ? bob : alice;
+      await api(from.page, 'POST', `/api/rooms/${general.id}/messages`, { body: LINES[i % LINES.length] });
+    }
+  })());
 
   const shot = async (page, name, { fullPage = true } = {}) => {
     const path = `${out}${name}.png`;
@@ -337,7 +448,7 @@ try {
     console.log(path);
   };
   for (const name of run) {
-    const page = await scenes.get(name)({ alice, bob, api, open, shot });
+    const page = await scenes.get(name)({ alice, bob, api, open, shot, seed, server: stop });
     if (page) await shot(page, name);
   }
   const errors = [alice, bob, ...fresh].flatMap((b) => b.errors);

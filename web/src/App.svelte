@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { api, ApiFailure, errorText } from './lib/api';
+  import { parse } from './lib/route';
   import { navigate, route, session } from './lib/session.svelte';
   import Login from './routes/Login.svelte';
   import Signup from './routes/Signup.svelte';
-  import Room from './routes/Room.svelte';
+  import Shell from './routes/Shell.svelte';
   import type { Me } from './lib/gen/Me';
   import type { Component } from 'svelte';
 
@@ -19,7 +20,7 @@
     return () => window.removeEventListener('popstate', pop);
   });
 
-  // `/` needs a session: ask the server who we are, else go to sign in.
+  // Every page but sign in and invite needs a session: ask the server who we are, else go to sign in.
   async function load() {
     error = '';
     try {
@@ -30,28 +31,25 @@
       else error = errorText(e);
     }
   }
-  const home = $derived(route.path !== '/login' && route.path !== '/invite' && !(import.meta.env.DEV && route.path === '/_gallery'));
+  const r = $derived(parse(route.path));
+  const gallery = $derived(import.meta.env.DEV && r.name === 'gallery');
+  const inShell = $derived(r.name !== 'login' && r.name !== 'invite' && !gallery);
   $effect(() => {
-    const path = route.path;
-    if (!home) return;
+    if (!inShell) return;
     const signedIn = !!session.state.me;
     // untrack: connect() reads the socket state, and a closed socket must not reconnect from here.
-    untrack(() => {
-      if (path !== '/') navigate('/', true);
-      else if (!signedIn) void load();
-      else session.connect();
-    });
+    untrack(() => (signedIn ? session.connect() : void load()));
   });
 </script>
 
-{#if import.meta.env.DEV && route.path === '/_gallery'}
+{#if gallery}
   {#if Gallery}<Gallery />{/if}
-{:else if route.path === '/login'}
+{:else if r.name === 'login'}
   <Login />
-{:else if route.path === '/invite'}
+{:else if r.name === 'invite'}
   <Signup />
 {:else if session.state.me}
-  <Room />
+  <Shell />
 {:else if error}
   <main class="mx-auto max-w-sm space-y-3 p-6">
     <p role="alert" class="text-danger">{error}</p>

@@ -25,14 +25,16 @@ The "Not verified" list at the end says what was only read.
   `SfuHandle`. If the thread dies, `/health` returns 503 and the process exits with code 1 so Docker or systemd restarts it
   (`watch_sfu` in `lib.rs`).
 - **The browser** captures the mic, cleans it with DeepFilterNet in WASM, and sends Opus over WebRTC (`web/src/lib/audio/`, `signaling.ts`).
-- **The web app** has three pages (`web/src/App.svelte`): `/login`, `/invite` (signup; the code is read from the part after `#`, then removed from the URL) and
-  `/`, the voice screen, which needs a session (`GET /api/me`, else `/login`). `web/src/lib/session.svelte.ts` keeps one socket per
+- **The web app** (`web/src/App.svelte`, paths in `web/src/lib/route.ts`) has `/login`, `/invite` (signup; the code is read from the part after `#`, then removed from the URL)
+  and the app shell (`web/src/routes/Shell.svelte`) for every other path, which needs a session (`GET /api/me`, else `/login`): `/r/<id>` (a room),
+  `/settings/<section>`, `/admin/<section>`, and `/`, which opens the last room (`localStorage['vesper.lastRoom']`) or the first. Any other path
+  shows a plain not-found page. The shell starts the call store once, so a call stays up while you move between pages. `web/src/lib/session.svelte.ts` keeps one socket per
   page and the state it pushes (`state.ts`). After a close it reconnects after a random wait that doubles from 1 to 2 s up to 15 to 30 s, asking `/api/me` first; the wait
   starts over only after a socket stayed up for 10 s.
   It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). A `peer_left` with your
   own `user_id` ends the call in that tab; the socket stays open.
-- **The chat panel** (`web/src/routes/Chat.svelte`, store in `web/src/lib/chat.svelte.ts`) sits beside the voice controls and shows the room picked
-  in the room list. History, sends, edits, deletes, reactions, pins, read markers, uploads and search go over REST; new and changed messages and
+- **The chat panel** (`web/src/routes/Chat.svelte`, store in `web/src/lib/chat.svelte.ts`) fills the open room's page (`RoomView.svelte`) under its
+  header. History, sends, edits, deletes, reactions, pins, read markers, uploads and search go over REST; new and changed messages and
   typing come over the socket. A `message_updated` copy with a smaller `updated_at` than the one held is dropped, and after
   every `hello` the shown room's newest page is fetched again and merged, so missed or reordered events heal. A message pushed while that
   page is in flight (also on a room's first open) is held and kept. Re-entering a room left on an older slice after a search jump shows its newest page. Unread counts come from `Hello.unread` and live events (`state.ts`); a room is

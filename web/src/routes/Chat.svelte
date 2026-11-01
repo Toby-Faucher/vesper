@@ -4,7 +4,8 @@
   import Markdown from './Markdown.svelte';
   import { parse } from '../lib/markdown';
   import { ApiFailure, errorText } from '../lib/api';
-  import { session } from '../lib/session.svelte';
+  import { href } from '../lib/route';
+  import { navigate, session } from '../lib/session.svelte';
   import {
     anchorTop, chat, edit, jumpTo, loadNewer, loadOlder, markRead, marks, openRoom, pin, react, remove, search, send, typers, upload,
   } from '../lib/chat.svelte';
@@ -12,7 +13,7 @@
   import type { Message } from '../lib/gen/Message';
   import type { SearchHit } from '../lib/gen/SearchHit';
 
-  let { roomId = $bindable() }: { roomId: number } = $props();
+  let { roomId }: { roomId: number } = $props();
 
   const EMOJIS = ['👍', '😂', '❤️'];
   const TYPING_EVERY_MS = 3000; // the server takes one typing event per 3 s
@@ -93,6 +94,14 @@
       if (last) lastId = last.id;
       maybeRead();
     });
+  });
+
+  // The list fills the pane, so it shrinks when the call controls or the connection banner appear: keep the bottom in view.
+  $effect(() => {
+    if (!list) return;
+    const ro = new ResizeObserver(() => stick && toBottom());
+    ro.observe(list);
+    return () => ro.disconnect();
   });
 
   function toBottom() {
@@ -249,7 +258,7 @@
     jumpTarget = id; // before the load: the list effect runs as soon as the page lands
     await act(async () => {
       await jumpTo(room_id, id);
-      roomId = room_id;
+      navigate(href({ name: 'room', id: room_id })); // the shell passes the new room back in as roomId
     });
     if (error) jumpTarget = null;
   }
@@ -257,7 +266,7 @@
 
 <svelte:document onvisibilitychange={maybeRead} />
 
-<section class="space-y-2" aria-label="Chat">
+<section class="flex min-h-0 flex-1 flex-col gap-2 px-4 pt-3 pb-4" aria-label="Chat">
   <input type="search" class="w-full rounded bg-element p-2" aria-label="Search messages" placeholder="Search messages"
     bind:value={query} oninput={onSearchInput} />
   {#if searchError}<p class="text-warn" role="alert">{searchError}</p>{/if}
@@ -265,7 +274,7 @@
     <div class="max-h-48 space-y-1 overflow-y-auto rounded bg-element p-2 text-sm" aria-label="Search results">
       {#each hits as h (h.message.id)}
         <button class="block w-full rounded p-1 text-left hover:bg-hover" onclick={() => jump(h)}>
-          <span class="text-fg-2">{name(h.message.author_id)} in #{roomName(h.message.room_id)}:</span>
+          <span class="text-fg-2">{name(h.message.author_id)} in {roomName(h.message.room_id)}:</span>
           {#each marks(h.snippet) as part}{#if part.mark}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}
         </button>
       {:else}
@@ -277,7 +286,7 @@
     </div>
   {/if}
 
-  <div bind:this={list} onscroll={onScroll} class="h-[28rem] space-y-2 overflow-y-auto rounded bg-element p-2">
+  <div bind:this={list} onscroll={onScroll} class="min-h-0 flex-1 space-y-2 overflow-y-auto">
     {#if log?.moreBefore}
       <button class="rounded bg-hover px-2 text-sm" onclick={older}>Load older messages</button>
     {/if}
@@ -350,7 +359,7 @@
       </p>
     {/each}
     {#if progress !== null}<progress class="w-full" value={progress} max="1" aria-label="Upload progress"></progress>{/if}
-    <textarea class="w-full rounded bg-element p-2" rows="2" aria-label="Message" placeholder="Message #{roomName(roomId)}"
+    <textarea class="w-full rounded bg-element p-2" rows="2" aria-label="Message" placeholder="Message {roomName(roomId)}"
       bind:value={chat.drafts[roomId]} onkeydown={onKey} oninput={onInput} onpaste={onPaste}></textarea>
     <div class="flex items-center gap-2">
       <label class="flex-1 text-sm">

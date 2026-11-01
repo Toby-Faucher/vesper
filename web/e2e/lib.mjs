@@ -15,7 +15,8 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let env = null;
 const browsers = [];
 
-// Starts the server on 127.0.0.1:18090 (UDP 18091) with a new data dir and waits for /health. Returns stop().
+// Starts the server on 127.0.0.1:18090 (UDP 18091) with a new data dir and waits for /health. Returns stop(), which also
+// has stop.restart(during): it stops the server, awaits during() while it is down, then starts it again on the same data.
 export async function startServer() {
   const dataDir = await mkdtemp(join(tmpdir(), 'vesper-e2e-'));
   env = {
@@ -26,28 +27,44 @@ export async function startServer() {
     VESPER_UDP_BIND: '127.0.0.1:18091',
     VESPER_WEB_DIR: 'dist',
   };
-  const server = spawn(bin, [], { cwd: web, stdio: ['ignore', 'inherit', 'inherit'], env });
-  let spawnError = null;
-  server.once('error', (e) => (spawnError = e)); // ENOENT etc.: without a listener this would crash the process
-  const exited = new Promise((r) => server.once('exit', r).once('error', r));
+  let server, spawnError, exited;
+  const launch = () => {
+    server = spawn(bin, [], { cwd: web, stdio: ['ignore', 'inherit', 'inherit'], env });
+    spawnError = null;
+    server.once('error', (e) => (spawnError = e)); // ENOENT etc.: without a listener this would crash the process
+    exited = new Promise((r) => server.once('exit', r).once('error', r));
+  };
+  const kill = async () => {
+    if (server.exitCode === null && !spawnError) server.kill('SIGTERM');
+    await exited;
+  };
   const stop = async () => {
     process.off('SIGINT', onSigint);
     await Promise.all(browsers.map((b) => b.close()));
-    if (server.exitCode === null && !spawnError) server.kill('SIGTERM');
-    await exited;
+    await kill();
     await rm(dataDir, { recursive: true, force: true });
   };
   const onSigint = () => stop().finally(() => process.exit(130));
   process.on('SIGINT', onSigint);
-  let up = false;
-  for (let i = 0; i < 40 && !up && server.exitCode === null && !spawnError; i++) {
-    up = await fetch(ORIGIN + '/health').then((r) => r.ok, () => false);
-    if (!up) await sleep(250);
-  }
-  if (!up) {
-    await stop();
-    throw new Error(spawnError ? `cannot start ${bin}: ${spawnError.message}` : 'server did not answer /health');
-  }
+  const healthy = async () => {
+    let up = false;
+    for (let i = 0; i < 40 && !up && server.exitCode === null && !spawnError; i++) {
+      up = await fetch(ORIGIN + '/health').then((r) => r.ok, () => false);
+      if (!up) await sleep(250);
+    }
+    if (!up) {
+      await stop();
+      throw new Error(spawnError ? `cannot start ${bin}: ${spawnError.message}` : 'server did not answer /health');
+    }
+  };
+  launch();
+  await healthy();
+  stop.restart = async (during) => {
+    await kill();
+    await during();
+    launch();
+    await healthy();
+  };
   return stop;
 }
 
@@ -93,14 +110,40 @@ export async function browser(name, args = [], { viewport } = {}) {
   return { page, errors };
 }
 
-// Opens an invite link and creates the account `name` (display name `name` too). Waits for the voice screen.
-export async function signup(page, link, name) {
+// Opens an invite link and creates the account `name` (display name `display`, default `name`). Waits for the app shell.
+export async function signup(page, link, name, display = name) {
   await page.goto(link);
   await page.getByLabel('Username').fill(name);
-  await page.getByLabel('Display name').fill(name);
+  await page.getByLabel('Display name').fill(display);
   await page.getByLabel('Password').fill('test-password-1');
   await page.getByRole('button', { name: 'Create account' }).click();
-  await page.getByText(`Signed in as`).waitFor();
+  await signedIn(page);
+}
+
+// Waits for the signed-in shell: the Rooms navigation in the sidebar.
+export const signedIn = (page) => page.getByRole('navigation', { name: 'Rooms' }).waitFor();
+
+// The sidebar link of a room. Its accessible name starts with the room name ("general, 3 unread").
+export const roomLink = (page, name) =>
+  page.getByRole('navigation', { name: 'Rooms' }).getByRole('link', { name: new RegExp('^' + name + '\\b') });
+
+// Opens a room from the sidebar and waits for its address.
+export async function openRoom(page, name) {
+  await roomLink(page, name).click();
+  await page.waitForURL(/\/r\/\d+$/);
+  await page.getByRole('heading', { level: 1, name, exact: true }).waitFor();
+}
+
+// The id of the open room, from /r/<id>.
+export const roomId = (page) => Number(new URL(page.url()).pathname.match(/^\/r\/(\d+)/)?.[1]);
+
+// A person in voice in the sidebar (a PresenceList item; the room row around it is an li too).
+export const inVoice = (page, name) => page.locator('li[data-speaking]', { hasText: name });
+
+// Opens the Account menu at the bottom of the sidebar and signs out.
+export async function logout(page) {
+  await page.getByRole('button', { name: 'Account' }).click();
+  await page.getByRole('menuitem', { name: 'Log out' }).click();
 }
 
 // The securitypolicyviolation events the page saw since it loaded; must be [].

@@ -36,6 +36,8 @@ export const session = $state({
   online: false,
   /** Why the socket is not coming back, shown to the user. */
   notice: '',
+  /** When the next reconnect try starts (ms since epoch), while one waits. */
+  retryAt: null as number | null,
 
   /** Opens the one socket for this page. Reconnects after a drop, except on 4001 (go to sign in) and 4003. */
   connect(): void {
@@ -43,6 +45,13 @@ export const session = $state({
     session.notice = '';
     tries = 0;
     open();
+  },
+
+  /** Skips the wait before the next reconnect try. */
+  retryNow(): void {
+    if (session.retryAt === null) return;
+    clearTimeout(timer);
+    attempt();
   },
 
   async logout(): Promise<void> {
@@ -79,28 +88,35 @@ function open(): void {
 
 // A refused upgrade (signed out) looks like a network drop, so ask /api/me before each new socket.
 function retry(): void {
+  const ms = backoffMs(tries++);
+  session.retryAt = Date.now() + ms;
+  timer = setTimeout(attempt, ms);
+}
+
+// `timer` stays set until the answer, so connect() does not open a second socket meanwhile.
+function attempt(): void {
   const g = gen;
-  timer = setTimeout(() => {
-    api('GET', '/api/me').then(
-      () => {
-        if (g !== gen) return;
-        timer = undefined;
-        open();
-      },
-      (e) => {
-        if (g !== gen) return;
-        timer = undefined;
-        if (e instanceof ApiFailure && e.status === 401) toLogin('Your session ended. Sign in again.');
-        else retry();
-      },
-    );
-  }, backoffMs(tries++));
+  session.retryAt = null;
+  api('GET', '/api/me').then(
+    () => {
+      if (g !== gen) return;
+      timer = undefined;
+      open();
+    },
+    (e) => {
+      if (g !== gen) return;
+      timer = undefined;
+      if (e instanceof ApiFailure && e.status === 401) toLogin('Your session ended. Sign in again.');
+      else retry();
+    },
+  );
 }
 
 function stop(): void {
   gen++;
   clearTimeout(timer);
   timer = undefined;
+  session.retryAt = null;
   const sig = session.sig;
   session.sig = null;
   session.online = false;

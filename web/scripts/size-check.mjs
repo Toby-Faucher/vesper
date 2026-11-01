@@ -9,7 +9,9 @@ import { gzipSync } from 'node:zlib';
 // Raised on 2026-11-01 for the design tokens and base styles (css 4.4 kB): about 10 percent headroom.
 // Raised on 2026-11-01 for the primitives (css 5.3 kB, of which about 0.4 kB are classes only the dev gallery uses, since
 // Tailwind scans routes/dev too): about 10 percent headroom. The components are not imported yet, so js is unchanged.
-const BUDGET_GZIP_KB = { js: 45, css: 5.8 };
+// Raised on 2026-11-01 for the app shell, sidebar, routes and the first primitives in use (js 59.9 kB, of which about 5 kB
+// are animejs waapi and 6 kB the lazy Settings chunk; css 6.4 kB): about 10 percent headroom.
+const BUDGET_GZIP_KB = { js: 66, css: 7.1 };
 
 const dir = new URL('../dist/assets/', import.meta.url);
 const sums = { js: 0, css: 0 };

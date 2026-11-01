@@ -18,7 +18,7 @@
 export type IconName =
   | 'mic' | 'mic-off' | 'headphones' | 'headphones-off' | 'phone-off' | 'settings' | 'search' | 'pin' | 'reply' | 'smile'
   | 'more' | 'edit' | 'trash' | 'copy' | 'paperclip' | 'x' | 'chevron-down' | 'chevron-right' | 'arrow-down' | 'signal'
-  | 'bell' | 'shield' | 'users' | 'link' | 'sidebar' | 'command' | 'volume' | 'info' | 'warn' | 'error' | 'check';
+  | 'bell' | 'shield' | 'users' | 'link' | 'sidebar' | 'command' | 'volume' | 'info' | 'warn' | 'error' | 'check' | 'log-out';
 
 // Lucide names where they differ: more = ellipsis, edit = pencil, trash = trash-2, sidebar = panel-left, volume = volume-2,
 // headphones-off = headphone-off, warn = triangle-alert, error = circle-alert.
@@ -47,6 +47,7 @@ export const ICONS: Record<IconName, string> = {
   'shield': 'M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z',
   'users': 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M5 7a4 4 0 1 0 8 0a4 4 0 1 0 -8 0M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
   'link': 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
+  'log-out': 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
   'sidebar': 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2zM9 3v18',
   'command': 'M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3',
   'volume': 'M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298zM16 9a5 5 0 0 1 0 6M19.364 18.364a9 9 0 0 0 0-12.728',

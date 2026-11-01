@@ -145,6 +145,27 @@ describe('session', () => {
     expect(route.path).toBe('/login');
     expect(FakeWS.all).toHaveLength(1);
   });
+  it('retryAt says when the next try starts; retryNow skips the wait once', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    vi.setSystemTime(100000);
+    const { session } = await load();
+    session.connect();
+    expect(session.retryAt).toBeNull();
+    FakeWS.all[0].drop(1006);
+    expect(session.retryAt).toBe(101000);
+    session.retryNow();
+    expect(session.retryAt).toBeNull();
+    session.retryNow(); // the try is already running: no second /api/me
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeWS.all).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(30000); // the cleared timer does not fire a second socket
+    expect(FakeWS.all).toHaveLength(2);
+    FakeWS.all[1].drop(1006);
+    expect(session.retryAt).toBe(Date.now() + 2000);
+    await session.logout();
+    expect(session.retryAt).toBeNull();
+  });
   it('logout posts, closes the socket and stops reconnecting', async () => {
     const { session, route } = await load();
     session.connect();

@@ -7,12 +7,12 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
-import { browser, cli, cspViolations, signup, sleep, startServer } from './lib.mjs';
+import { browser, cli, cspViolations, inVoice, openRoom, roomId, roomLink, signup, sleep, startServer } from './lib.mjs';
 
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
 async function join(page) {
-  await page.getByLabel('Room').selectOption({ label: 'general' });
+  await openRoom(page, 'general');
   await page.getByRole('button', { name: 'Join' }).click();
   await page.getByRole('button', { name: 'Leave' }).waitFor();
 }
@@ -63,7 +63,7 @@ async function post(page, room, body) {
   }
 }
 
-const composer = (page) => page.getByPlaceholder('Message #general');
+const composer = (page) => page.getByPlaceholder('Message general');
 // The message whose Markdown has a bold "bob" (a reply's quoted excerpt is plain text).
 const boldBob = (page) => page.locator('article').filter({ has: page.locator('strong', { hasText: 'bob' }) });
 
@@ -111,14 +111,14 @@ try {
   assert.ok(first?.packets > 0, 'bob never received audio packets');
   // inbound-rtp audioLevel stays 0 here: the app plays remote audio through Web Audio and keeps the <audio> element
   // muted, and Chrome measures that muted element. So "bob hears alice" is the speaking ring on alice's row, which
-  // comes from an analyser on the received stream (Playback.speaking).
+  // comes from an analyser on the received stream (Playback.speaking). Bob's own row can ring from his beep, so count alice's.
   let rings = 0;
   let last = first;
   const N = 20;
   for (let i = 0; i < N; i++) {
     await sleep(250);
     last = await inbound(bob.page);
-    rings += await bob.page.locator('li.speaking').count();
+    rings += await bob.page.locator('li.speaking[data-speaking]', { hasText: 'alice' }).count();
   }
   console.log('bob inbound audio: first', JSON.stringify(first), 'last', JSON.stringify(last), `speaking ring on ${rings}/${N} samples`);
   assert.match(last.ice, /^(connected|completed)$/, 'ICE not connected');
@@ -133,9 +133,9 @@ try {
   console.log('alice inbound audio:', JSON.stringify(a1), '->', JSON.stringify(a2));
   assert.ok(a1?.packets > 0 && a2.packets > a1.packets, 'alice did not receive bob\'s audio');
 
-  // presence_seen_by_both: each page lists the other in the people list.
-  await alice.page.locator('li', { hasText: 'bob' }).waitFor({ timeout: 5000 });
-  await bob.page.locator('li', { hasText: 'alice' }).waitFor({ timeout: 5000 });
+  // presence_seen_by_both: each page lists the other under general in the sidebar.
+  await inVoice(alice.page, 'bob').waitFor({ timeout: 5000 });
+  await inVoice(bob.page, 'alice').waitFor({ timeout: 5000 });
   console.log('presence_seen_by_both: ok');
 
   // chat_roundtrip: Markdown renders, raw HTML stays text, the link is safe, a reply and an edit arrive live.
@@ -174,7 +174,7 @@ try {
   console.log('upload_roundtrip: ok');
 
   // search_roundtrip: a restricted room bob is not in holds another "hello". Alice (owner) finds both, bob only his.
-  const room = Number(await bob.page.getByLabel('Room').inputValue()); // general
+  const room = roomId(bob.page); // general
   const secret = await call(alice.page, 'POST', '/api/rooms', { name: 'secret' });
   await call(alice.page, 'PATCH', `/api/rooms/${secret.id}`, { restricted: true });
   await call(alice.page, 'POST', `/api/rooms/${secret.id}/messages`, { body: 'hello from the secret room', reply_to: null, attachments: [] });
@@ -187,8 +187,8 @@ try {
   assert.equal(await results(bob.page).count(), 1, 'bob should see exactly one hit');
   assert.ok(!(await results(bob.page).first().innerText()).includes('secret'), 'bob found a message from a hidden room');
   assert.equal(await results(bob.page).locator('mark').first().innerText(), 'hello');
-  const options = await bob.page.getByLabel('Room').locator('option').allInnerTexts();
-  assert.ok(!options.some((o) => o.includes('secret')), 'bob sees the hidden room');
+  const links = await bob.page.getByRole('navigation', { name: 'Rooms' }).getByRole('link').allInnerTexts();
+  assert.ok(links.length && !links.some((o) => o.includes('secret')), 'bob sees the hidden room');
   // The jump: enough newer messages that the hit is out of view and outside the newest page's newer half.
   for (let i = 0; i < 30; i++) await post([alice, bob][i % 2].page, room, `filler ${i}`);
   await bob.page.locator('article', { hasText: 'filler 29' }).waitFor({ timeout: 5000 });
@@ -209,10 +209,10 @@ try {
 
   // rejoin_after_jump: leaving and re-entering the room shows the newest page again, with live messages.
   const lobby = await call(alice.page, 'POST', '/api/rooms', { name: 'lobby' });
-  const roomSelect = bob.page.getByLabel('Room');
-  await roomSelect.locator(`option[value="${lobby.id}"]`).waitFor({ state: 'attached', timeout: 5000 });
-  await roomSelect.selectOption(String(lobby.id));
-  await roomSelect.selectOption(String(room));
+  await roomLink(bob.page, 'lobby').waitFor({ timeout: 5000 });
+  await openRoom(bob.page, 'lobby');
+  assert.equal(roomId(bob.page), lobby.id);
+  await openRoom(bob.page, 'general');
   await newer.waitFor({ state: 'detached', timeout: 5000 });
   await post(alice.page, room, 'after the jump');
   await bob.page.locator('article', { hasText: 'after the jump' }).waitFor({ timeout: 5000 });
