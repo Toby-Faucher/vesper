@@ -21,7 +21,7 @@
   <ul class="flex h-7 items-center pr-2 pl-7" aria-label="In voice in {roomName}">
     {#each peers.slice(0, STACK) as p (p.user_id)}
       {@const s = speaking(p)}
-      <li class="stacked -mr-0.5" class:speaking={s} data-speaking={s ? 'true' : 'false'}>
+      <li class="stacked mr-1" class:speaking={s} data-speaking={s ? 'true' : 'false'}>
         <button type="button" class="flex rounded-full" title={p.name} onclick={(e) => togglePerson(p.user_id, e.currentTarget)}>
           <Avatar user={user(p)} size={20} speaking={s} />
           <span class="sr-only">{p.name}{s ? ', speaking' : ''}{state(p) ? `, ${state(p)}` : ''}</span>
@@ -53,9 +53,8 @@
 {/if}
 
 <style>
-  /* The stack's overlap: each avatar sits on a 2 px ring of the sidebar so the edges read. */
+  /* Folded avatars sit 4 px apart, not overlapped: an overlap cut the speaking ring (4 px outside the avatar) in half. */
   .stacked { position: relative; display: flex; }
-  .stacked :global(.av) { box-shadow: 0 0 0 2px var(--bg-sidebar); }
   .stacked.speaking { z-index: 1; }
   /* Folded: hover lifts the avatar over its neighbours and draws its ring in the border colour; focus lifts it too, so
      the global focus ring is not cut by the next avatar. */
