@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parse, safeUrl, type Md } from './markdown';
+import { decorate, langOf, parse, safeUrl, type Md } from './markdown';
 
 const text = (v: string): Md => ({ t: 'text', v });
 const links = (nodes: Md[]): string[] =>
@@ -42,7 +42,8 @@ describe('markdown', () => {
     expect(parse('```js hi @bob\nx\n```after\nnext')).toEqual([
       text('js hi '), { t: 'mention', username: 'bob' }, { t: 'pre', v: 'x' }, text('after'), { t: 'br' }, text('next'),
     ]);
-    expect(parse('a\n```js\nx\n```')).toEqual([text('a'), { t: 'br' }, text('js'), { t: 'pre', v: 'x' }]);
+    // One word is the language: the block's label, not text.
+    expect(parse('a\n```js\nx\n```')).toEqual([text('a'), { t: 'pre', v: 'x', lang: 'js' }]);
   });
 
   it('markdown_basic', () => {
@@ -71,7 +72,8 @@ describe('markdown', () => {
     expect(parse('`a')).toEqual([text('`a')]);
     expect(parse('```\nx')).toEqual([text('```'), { t: 'br' }, text('x')]);
     expect(parse('2 * 3 * 4')).toEqual([text('2 * 3 * 4')]);
-    expect(parse('****')).toEqual([text('****')]);
+    expect(parse('a ****')).toEqual([text('a ****')]);
+    expect(parse('****')).toEqual([{ t: 'hr' }]); // a line of three or more is a rule, as CommonMark
     expect(parse('>no space')).toEqual([text('>no space')]);
   });
 
@@ -87,9 +89,61 @@ describe('markdown', () => {
       '*'.repeat(big), '_'.repeat(big), '~'.repeat(big), '`'.repeat(big), '**a'.repeat(big / 3), '*a '.repeat(big / 3),
       '> '.repeat(big / 2), '>\n'.repeat(big / 2), '```\n'.repeat(big / 4), 'https://'.repeat(big / 8), 'http://a.test/'.repeat(big / 14),
       '@'.repeat(big), '@abc'.repeat(big / 4), '<script>'.repeat(big / 8), '**a *b ~~c _d '.repeat(big / 14), 'a'.repeat(big),
+      '#'.repeat(big), '# a\n'.repeat(big / 4), '- '.repeat(big / 2), '- a\n'.repeat(big / 4), '1. a\n- b\n'.repeat(big / 10),
+      '-'.repeat(big), '- - '.repeat(big / 4) + 'x', '1'.repeat(big) + '. a', '```js\n'.repeat(big / 6),
     ]) {
       expect(timed(() => parse(s)), s.slice(0, 16)).toBeLessThan(250);
+      expect(timed(() => decorate(s)), s.slice(0, 16)).toBeLessThan(250);
       expect(parse(s).length).toBeGreaterThan(0);
     }
+  });
+
+  it('markdown_blocks', () => {
+    expect(parse('# One\n## Two **b**\n#### Four\n#no')).toEqual([
+      { t: 'h', n: 1, c: [text('One')] }, { t: 'h', n: 2, c: [text('Two '), { t: 'b', c: [text('b')] }] },
+      { t: 'h', n: 3, c: [text('Four')] }, text('#no'),
+    ]);
+    expect(parse('- a\n* b\n+ c\n3. x\n4) y\nafter')).toEqual([
+      { t: 'ul', c: [{ t: 'li', c: [text('a')] }, { t: 'li', c: [text('b')] }, { t: 'li', c: [text('c')] }] },
+      { t: 'ol', start: 3, c: [{ t: 'li', c: [text('x')] }, { t: 'li', c: [text('y')] }] }, text('after'),
+    ]);
+    expect(parse('a\n---\n* * *\nb')).toEqual([text('a'), { t: 'hr' }, { t: 'hr' }, text('b')]);
+    expect(parse('- - -')).toEqual([{ t: 'hr' }]); // as CommonMark: dashes and spaces only
+    for (const s of ['-a', '- ', '#', '# ', '1.a', '--', '2 * 3']) expect(parse(s), s).toEqual([text(s)]);
+    expect(parse('```RusT\nfn a() {}\n```')).toEqual([{ t: 'pre', v: 'fn a() {}', lang: 'RusT' }]);
+    expect(langOf('RusT')).toBe('rust');
+    expect(langOf('tsx')).toBe('js');
+    expect(langOf('cobol')).toBeNull();
+    expect(langOf(undefined)).toBeNull();
+    expect(langOf('constructor')).toBeNull(); // not an Object.prototype key
+  });
+
+  it('hostile input in blocks stays text', () => {
+    expect(parse('# <img src=x onerror=alert(1)>')).toEqual([{ t: 'h', n: 1, c: [text('<img src=x onerror=alert(1)>')] }]);
+    expect(parse('- [x](javascript:alert(1))')).toEqual([{ t: 'ul', c: [{ t: 'li', c: [text('[x](javascript:alert(1))')] }] }]);
+    expect(parse('```<script>\nx\n```')).toEqual([text('<script>'), { t: 'pre', v: 'x' }]); // not one word: shown as text
+    expect(parse('```js"onload=x\n</code>\n```')).toEqual([text('js"onload=x'), { t: 'pre', v: '</code>' }]);
+    expect(parse('![img](https://x.test/a.png)')).toEqual([text('![img]('), { t: 'link', href: 'https://x.test/a.png' }, text(')')]);
+  });
+
+  it('decorate joins back to the source and marks what parse formats', () => {
+    const alphabet = ['*', '**', '_', '~~', '`', '```', '> ', '# ', '- ', '1. ', '---', '\n', ' ', 'a', 'b', '@abc', 'https://x.test/a.', '<', 'é'];
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    for (let n = 0; n < 2000; n++) {
+      const s = Array.from({ length: 1 + Math.floor(rnd() * 24) }, () => alphabet[Math.floor(rnd() * alphabet.length)]).join('');
+      expect(decorate(s).map((r) => r.v).join(''), JSON.stringify(s)).toBe(s);
+    }
+    expect(decorate('**b** _i_ `c`')).toEqual([
+      { v: '**', k: 'mk' }, { v: 'b', k: 'b' }, { v: '**', k: 'mk' }, { v: ' ', k: '' }, { v: '_', k: 'mk' }, { v: 'i', k: 'i' },
+      { v: '_', k: 'mk' }, { v: ' ', k: '' }, { v: '`', k: 'mk' }, { v: 'c', k: 'code' }, { v: '`', k: 'mk' },
+    ]);
+    expect(decorate('# Hi\n> q *x*\n- li')).toEqual([
+      { v: '# ', k: 'mk' }, { v: 'Hi', k: 'h' }, { v: '\n', k: '' }, { v: '> ', k: 'mk' }, { v: 'q ', k: 'q' },
+      { v: '*', k: 'q mk' }, { v: 'x', k: 'q i' }, { v: '*', k: 'q mk' }, { v: '\n', k: '' }, { v: '- ', k: 'mk' }, { v: 'li', k: '' },
+    ]);
+    expect(decorate('```js\nlet a\n```')).toEqual([{ v: '```js', k: 'mk' }, { v: '\nlet a', k: 'pre' }, { v: '\n```', k: 'mk' }]);
+    expect(decorate('**open')).toEqual([{ v: '**open', k: '' }]); // unclosed is text, as when sent
+    expect(decorate('see https://a.test/x).')).toEqual([{ v: 'see ', k: '' }, { v: 'https://a.test/x', k: 'link' }, { v: ').', k: '' }]);
   });
 });
