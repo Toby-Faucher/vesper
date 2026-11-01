@@ -19,6 +19,7 @@ export const UI_MESSAGES = {
   switcherLoading: 'Loading...',
   switcherFailed: 'Could not load the switcher. Check your connection and try again.',
   searchFailed: 'Could not load search. Check your connection and try again.',
+  offlineAction: 'You are offline. This works again once the connection is back.',
   composerOffline: 'You are offline. Your text is kept here, and Send works again once the connection is back.',
   tooLong: (over: number) => `Too long by ${over} ${over === 1 ? 'character' : 'characters'}.`,
   attachFailed: 'That file could not be attached. Upload it again.',

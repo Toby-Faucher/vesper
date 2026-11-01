@@ -220,11 +220,11 @@
 
 <div class="shrink-0 px-4 pb-4">
   <div class="slot">
-    {#if notice}
-      <p class="truncate" class:text-danger={!!error || over > 0} class:text-fg-2={!error && over <= 0} role={error ? 'alert' : undefined} title={notice}>{notice}</p>
-    {/if}
-    <!-- Polite and only the words: the text changes when someone starts or stops, not per key press. -->
-    <p class="truncate text-fg-3" class:hidden={!!notice} role="status">{notice ? '' : typing}</p>
+    {#if online && error}<p class="truncate text-danger" role="alert" title={error}>{error}</p>{/if}
+    <!-- Always rendered, so a new text is announced: the offline and too-long lines, else who is typing (that changes when
+         someone starts or stops, not per key press). -->
+    <p class="truncate" class:hidden={online && !!error} class:text-danger={over > 0} class:text-fg-2={!online && over <= 0}
+      class:text-fg-3={online && over <= 0} role="status" title={notice || undefined}>{online && error ? '' : notice || typing}</p>
   </div>
 
   <span class="sr-only" role="status">{trayLine}</span>

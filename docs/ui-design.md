@@ -36,6 +36,12 @@ badge, status line, empty state. Dialogs are native `<dialog>` with `showModal()
 `place()` in `web/src/lib/ui/place.ts`. Per-user colour is an avatar slot from `web/src/lib/ui/avatar.ts`. Icons are Lucide paths in
 `web/src/lib/ui/icons.ts`. `/_gallery?primitives` shows each one in its states.
 
+## Checked
+
+The tokens (contrast in `tokens.test.ts`, colours only through roles in `no-raw-colours.test.ts`), errors shown only as table sentences
+(`no-raw-errors.test.ts`), and the browser tests in `web/e2e/ui.mjs`: the keyboard paths of the primitives, a keyboard-only walk with
+a focus ring on every Tab stop, reduced motion and layout shift. Headless Chromium only.
+
 ## Not done yet
 
-A linter or formatter for the web code and a screen reader pass.
+A linter or formatter for the web code, a screen reader pass, and the keyboard and focus paths in Firefox and Safari.

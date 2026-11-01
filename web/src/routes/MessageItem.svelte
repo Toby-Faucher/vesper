@@ -187,7 +187,7 @@
     {#if m.deleted}
       <p class="quiet italic">Message deleted</p>
     {:else if editing}
-      <textarea class="control mt-1 block w-full resize-y px-2.5 py-1.5" rows="2" aria-label="Edit message" bind:value={editText}
+      <textarea class="control mt-1 block w-full resize-none px-2.5 py-1.5" rows="2" aria-label="Edit message" bind:value={editText}
         onkeydown={onEditKey} {@attach (el) => { el.focus({ preventScroll: true }); el.closest('article')?.scrollIntoView({ block: 'nearest' }); }}></textarea>
       <p class="mt-1 flex items-center gap-2 text-xs text-fg-2">
         <Button size="sm" variant="primary" loading={saving} onclick={save}>Save</Button>

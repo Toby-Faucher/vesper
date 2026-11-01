@@ -54,6 +54,11 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 
 ## Web client
 
+- **People who sign up after your page loaded show as "Someone"** in messages for a while. The server sends no event for a signup. The person card, the composer, the switcher, search and the admin pages ask for the user list again (at most every 30 s; Members and Invites also when the tab comes back), and the names update then; a reload always fixes them.
+- **"Your current password is not right." relies on the server's message.** A wrong current password is a 403 with the generic `forbidden` code; the client tells it apart from other 403s by the message text "wrong password". A server wording change would show the plain forbidden text instead.
+- **Image boxes change shape when the image loads.** `Attachment` has no width or height, so the timeline keeps a 360 x 280 box and resizes it on load; the reader's place is kept, but rows under an image in view can move.
+- **The keyboard, focus and motion checks run in headless Chromium only.** Safari does not focus a clicked button (the image viewer focuses it itself); other focus returns are not checked there.
+
 - **A very slow first visit can still fall back.** The denoiser files (about 23 MB) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
 - **Not tried in real Chrome or Firefox.** Firefox may refuse a mic and AudioContext rate mismatch, which forces the browser fallback every time.
 - **The VAD threshold in Settings is display-only.** Nothing gates on it. DTX still drops silence. The UI says so. See [decision 0006](decisions/0006-quality-checkpoint-gate.md).
