@@ -30,6 +30,8 @@ Plain binary instead: `deploy/vesper.service` (systemd, hardened, `DynamicUser`)
 - **Client address:** the server trusts the last `X-Forwarded-For` entry from a loopback or private peer, which Caddy sets by default. Keep the HTTP port reachable only from Caddy, or anyone on the LAN can fake their address. Behind a Cloudflare tunnel that entry may be the tunnel for everyone: see [known-issues.md](known-issues.md#security-and-abuse-all-need-the-join-key-except-where-noted).
 - **`VESPER_UDP_PORT_PUBLIC`** only matters when the external UDP port differs from the one the container listens on.
 
+- **Data dir permissions:** the server creates a new `VESPER_DATA_DIR` with mode 0700 and `vesper.db` (and its WAL files) with 0600. An existing directory keeps its mode, so a bind-mounted `/data` keeps its host permissions: set it to 0700 for the container user yourself. The database holds password and session hashes. Verified by a test on a fresh directory only.
+
 ## Verify
 
 - Connectivity: open the app, join, open Diagnostics, press **Test connection**. Run it from a device on cellular (outside your LAN) and from the LAN. `ok: true` means the UDP path works.

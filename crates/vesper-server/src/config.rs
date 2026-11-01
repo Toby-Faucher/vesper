@@ -69,7 +69,7 @@ impl Config {
             v.parse::<SocketAddr>().map_err(|e| format!("{k}={v}: {e}"))
         };
         let udp_bind = addr("VESPER_UDP_BIND", "0.0.0.0:40000")?;
-        let num = |k: &str, default: u64| match get(k) {
+        let num = |k: &str, default: u64| match get(k).filter(|v| !v.is_empty()) {
             Some(v) => v.parse::<u64>().map_err(|e| format!("{k}={v}: {e}")),
             None => Ok(default),
         };
@@ -134,7 +134,13 @@ fn normalise_origin(s: &str) -> Result<String, &'static str> {
         return Err("host is empty");
     }
     match port {
-        Some(p) if p.parse::<u16>().is_err() => Err("port is not a number"),
+        Some(p)
+            if p.starts_with('0')
+                || !p.bytes().all(|b| b.is_ascii_digit())
+                || p.parse::<u16>().is_err() =>
+        {
+            Err("port is not a number from 1 to 65535")
+        }
         Some(p) if p == default_port => Ok(format!("{scheme}://{host}")),
         _ => Ok(format!("{scheme}://{rest}")),
     }
@@ -213,6 +219,16 @@ mod tests {
         assert_eq!(o("http://localhost:5173"), "http://localhost:5173");
         assert_eq!(o("http://[::1]:8080"), "http://[::1]:8080");
         assert_eq!(o("http://[::1]"), "http://[::1]");
+        for bad in [
+            "http://x:+80",
+            "http://x:080",
+            "http://x:0",
+            "http://x:99999",
+        ] {
+            assert!(normalise_origin(bad).is_err(), "{bad}");
+        }
+        let q = lookup(&[("VESPER_DEV_KEY", "k"), ("VESPER_UPLOAD_QUOTA_MB", "")]).unwrap();
+        assert_eq!(q.upload_quota_bytes, 10240 * 1024 * 1024);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # Known issues
 
 Things found in review that were left on purpose, because they are small, rare or wait on a bigger piece of work.
-Last updated 2026-10-30. Nothing here was run in a real browser or a real deploy. Fix an item, then delete its line in the same commit.
+Last updated 2026-11-01. Nothing here was run in a real browser or a real deploy. Fix an item, then delete its line in the same commit.
 
 ## Security and abuse (all need the join key, except where noted)
 

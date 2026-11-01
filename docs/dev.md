@@ -63,9 +63,12 @@ the same variables as the server, so `VESPER_DEV_KEY` must be set for them too. 
 VESPER_DEV_KEY=pick-a-passphrase cargo run -p vesper-server -- create-owner
 # an invite for friends (default: member, 1 use, 168 h)
 VESPER_DEV_KEY=pick-a-passphrase cargo run -p vesper-server -- invite --role member --uses 5 --hours 48
-# load test accounts: no password, one session token per line. Throwaway data dir only.
+# load test accounts: no password, one session token per line. Throwaway data dir only:
+# it refuses a dir that already has accounts unless you add --force-nonempty yes.
 VESPER_DEV_KEY=pick-a-passphrase VESPER_DATA_DIR=/tmp/vesper-load cargo run -p vesper-server -- loadtest-accounts --count 12
 ```
+
+Links and tokens go to stdout. Logs go to stderr, so piping stdout stays clean.
 
 The links start with `VESPER_ORIGIN`. Set it to the address you open in the browser (`http://localhost:5173` with Vite).
 The link is printed once and never logged; the server keeps only a hash of it. The signup page that takes it comes with the web plan.

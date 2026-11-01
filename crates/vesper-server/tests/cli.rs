@@ -156,3 +156,61 @@ async fn loadtest_accounts_tokens_authenticate() {
     assert_eq!(ids.len(), 3);
     assert!(run(&config(&data), &["loadtest-accounts"]).await.is_err());
 }
+
+#[tokio::test]
+async fn loadtest_accounts_refuses_a_used_data_dir() {
+    let data = TempDir::new().unwrap();
+    let cfg = config(&data);
+    run(&cfg, &["loadtest-accounts", "--count", "1"])
+        .await
+        .unwrap();
+    let e = run(&cfg, &["loadtest-accounts", "--count", "1"])
+        .await
+        .unwrap_err();
+    assert!(e.contains("already has accounts"), "{e}");
+    let forced = [
+        "loadtest-accounts",
+        "--count",
+        "1",
+        "--force-nonempty",
+        "yes",
+    ];
+    assert!(run(&cfg, &forced).await.is_ok());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn new_data_dir_and_db_files_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    let dir = root.path().join("a/data");
+    let store = Store::open(&dir.join("vesper.db")).await.unwrap();
+    store.owner_exists().await.unwrap();
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&dir), 0o700);
+    for f in std::fs::read_dir(&dir).unwrap() {
+        let f = f.unwrap().path();
+        assert_eq!(mode(&f), 0o600, "{}", f.display());
+    }
+}
+
+#[test]
+fn owner_link_never_reaches_the_logs() {
+    let data = TempDir::new().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_vesper-server"))
+        .arg("create-owner")
+        .env("RUST_LOG", "trace")
+        .env("VESPER_DEV_KEY", "k")
+        .env("VESPER_DATA_DIR", data.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let c = code(stdout.trim());
+    assert!(!stderr.is_empty(), "trace logging should have run");
+    assert!(
+        !stderr.contains(c) && !stderr.contains("/invite#"),
+        "{stderr}"
+    );
+}

@@ -46,6 +46,28 @@ impl From<sqlx::Error> for StoreError {
     }
 }
 
+/// New data dir 0700 and new db file 0600 (the -wal and -shm files copy the db file's mode).
+/// An existing dir keeps its mode, so a bind mount keeps its host permissions.
+fn create_private(dir: &Path, db: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(db)?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)?;
+    let _ = db;
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
@@ -55,7 +77,7 @@ impl Store {
     /// Opens (or creates) the database, creating the parent directory, and runs the migrations.
     pub async fn open(path: &Path) -> Result<Store> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir).map_err(|e| StoreError::Db(sqlx::Error::Io(e)))?;
+            create_private(dir, path).map_err(|e| StoreError::Db(sqlx::Error::Io(e)))?;
         }
         let opts = SqliteConnectOptions::new()
             .filename(path)

@@ -14,9 +14,10 @@ pub const USAGE: &str = "usage: vesper-server [command]
   create-owner              print a one-use owner invite link, valid 24 h (only while no owner exists)
   invite [--role member|moderator] [--uses N] [--hours H]
                             print an invite link (default: member, 1 use, 168 h)
-  loadtest-accounts --count N
+  loadtest-accounts --count N [--force-nonempty yes]
                             create N member accounts with one session each and print one token per
                             line. Throwaway data dir only: these accounts log in with no password.
+                            Refuses a data dir that already has accounts unless --force-nonempty yes.
   help                      print this";
 
 const HOUR_MS: i64 = 3600 * 1000;
@@ -56,7 +57,7 @@ pub async fn run(args: &[String], cfg: &Config) -> Result<Option<String>, String
             invite_link(&store, cfg, role, uses, hours).await.map(Some)
         }
         "loadtest-accounts" => {
-            allow(&["--count"])?;
+            allow(&["--count", "--force-nonempty"])?;
             if !flags.contains_key("--count") {
                 return Err(format!("loadtest-accounts needs --count N\n{USAGE}"));
             }
@@ -65,6 +66,11 @@ pub async fn run(args: &[String], cfg: &Config) -> Result<Option<String>, String
                 return Err(format!("--count must be at most {MAX_LOAD_ACCOUNTS}"));
             }
             let store = open(cfg).await?;
+            if !flags.contains_key("--force-nonempty")
+                && !store.users().await.map_err(err)?.is_empty()
+            {
+                return Err("this data dir already has accounts; use a throwaway one (or pass --force-nonempty yes)".into());
+            }
             let mut tokens = Vec::new();
             for i in 0..count {
                 let name = format!("load_{i}_{}", random_hex(2));
