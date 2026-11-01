@@ -27,28 +27,33 @@ export async function startServer() {
     VESPER_WEB_DIR: 'dist',
   };
   const server = spawn(bin, [], { cwd: web, stdio: ['ignore', 'inherit', 'inherit'], env });
-  const exited = new Promise((r) => server.once('exit', r));
+  let spawnError = null;
+  server.once('error', (e) => (spawnError = e)); // ENOENT etc.: without a listener this would crash the process
+  const exited = new Promise((r) => server.once('exit', r).once('error', r));
   const stop = async () => {
+    process.off('SIGINT', onSigint);
     await Promise.all(browsers.map((b) => b.close()));
-    if (server.exitCode === null) server.kill('SIGTERM');
+    if (server.exitCode === null && !spawnError) server.kill('SIGTERM');
     await exited;
     await rm(dataDir, { recursive: true, force: true });
   };
+  const onSigint = () => stop().finally(() => process.exit(130));
+  process.on('SIGINT', onSigint);
   let up = false;
-  for (let i = 0; i < 40 && !up && server.exitCode === null; i++) {
+  for (let i = 0; i < 40 && !up && server.exitCode === null && !spawnError; i++) {
     up = await fetch(ORIGIN + '/health').then((r) => r.ok, () => false);
     if (!up) await sleep(250);
   }
   if (!up) {
     await stop();
-    throw new Error('server did not answer /health');
+    throw new Error(spawnError ? `cannot start ${bin}: ${spawnError.message}` : 'server did not answer /health');
   }
   return stop;
 }
 
 // Runs `vesper-server <args>` on the same data dir and returns its stdout, trimmed.
 export async function cli(args) {
-  const { stdout } = await promisify(execFile)(bin, args, { cwd: web, env });
+  const { stdout } = await promisify(execFile)(bin, args, { cwd: web, env, timeout: 30000 });
   return stdout.trim();
 }
 

@@ -8,3 +8,10 @@ web/public/dsp
 **/.env.*
 **/*.pem
 **/*.key
+# Local databases hold password and session hashes: never copy them into a build layer.
+/data
+/deploy/data
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.sqlite*

@@ -53,13 +53,13 @@ There is no sign-up without an invite. On the host:
 
 ## Upgrade and rollback
 
-Upgrade: first tag the current image, `docker tag vesper:latest vesper:previous`; then `git pull` and `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins. The database in the data dir stays; the server applies its schema migrations at start, so an older image may not read a database a newer one migrated: take a backup before an upgrade that changes the schema. Rollback: `VESPER_TAG=previous docker compose -f deploy/compose.yaml up -d` (no `--build`), or `git checkout <old>` and rebuild. For the binary install keep the previous binary next to the new one and swap the file, then `systemctl restart vesper`.
+Upgrade: first tag the current image, `docker tag vesper:latest vesper:previous`; then `git pull` and `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins. The database in the data dir stays; the server applies its schema migrations at start, so an older image may not read a database a newer one migrated: take a backup before an upgrade that changes the schema. Rollback: the image and `deploy/compose.yaml` must match, because compose only passes the variables it lists. Check out the previous commit's `deploy/compose.yaml` (`git checkout <old> -- deploy/compose.yaml`) and run `VESPER_TAG=previous docker compose -f deploy/compose.yaml up -d` (no `--build`), or `git checkout <old>` and rebuild. An image from before accounts needs its old compose file (or a local `VESPER_DEV_KEY: ${VESPER_DEV_KEY:?}` line) and the key in `.env`. Not verified. For the binary install keep the previous binary next to the new one and swap the file, then `systemctl restart vesper`.
 
 If the voice engine thread dies (a bug on hostile input), `/health` returns 503 and the server process exits non-zero so Docker (`restart: unless-stopped`) or systemd (`Restart=on-failure`) restarts it; look for "voice engine (SFU thread) died" in `docker compose logs` / `journalctl -u vesper`. Covered by a test of the watcher, not verified with a real container.
 
 ## Backup
 
-Back up the data dir (`data/` next to `compose.yaml`, or `/var/lib/private/vesper`). With the Proxmox snapshot of the VM, check that the snapshot includes that directory. For a copy while the server runs, use SQLite's own backup so the WAL is included: `sqlite3 data/vesper.db ".backup vesper-backup.db"` on the host (needs the `sqlite3` tool there), or stop the stack and copy the whole directory. The copy holds password and session hashes: keep it private. Not verified.
+Back up the data dir (`data/` next to `compose.yaml`, or `/var/lib/private/vesper`). With the Proxmox snapshot of the VM, check that the snapshot includes that directory. For a copy while the server runs, use SQLite's own backup so the WAL is included: `sqlite3 data/vesper.db ".backup vesper-backup.db"` (needs the `sqlite3` tool; the data dir is owned by uid 10001 with mode 0700, so on the host run it with `sudo`, or run it inside the container), or stop the stack and copy the whole directory. The copy holds password and session hashes: keep it private. Not verified.
 
 ## Upgrade from the shared key
 
@@ -74,7 +74,7 @@ For the instance that still runs the voice-only build with `VESPER_DEV_KEY`. Not
 7. Make invites with `docker compose exec vesper vesper-server invite` (or the API) and send each friend their link. The old key no longer works for anyone.
 8. Backups: the Proxmox snapshot now has to include the `data` directory.
 
-Rollback to the shared-key image still works: `VESPER_TAG=previous docker compose up -d` with the old key put back in `.env`. That image ignores the data dir, and the accounts stay there for the next try.
+Rolling back to the shared-key image needs the old `deploy/compose.yaml` too (the current one does not pass `VESPER_DEV_KEY`), plus the key in `.env`. Not verified. That image ignores the data dir, and the accounts stay there for the next try.
 
 ## Security headers
 

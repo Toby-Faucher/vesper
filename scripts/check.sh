@@ -66,8 +66,8 @@ run_step() {
       for t in scripts/test-*.sh; do
         [ "$t" = scripts/test-check-secrets.sh ] && continue # run by the secrets step
         step "$t"
-        # The tests stub systemd-run and expect the capped commands, so they never see VESPER_NO_CAP.
-        env -u VESPER_NO_CAP timeout 300 "$t"
+        # The tests stub systemd-run and expect the default cap, so they never see VESPER_NO_CAP or VESPER_CAP_MIB.
+        env -u VESPER_NO_CAP -u VESPER_CAP_MIB timeout 300 "$t"
       done
       ;;
     shell)

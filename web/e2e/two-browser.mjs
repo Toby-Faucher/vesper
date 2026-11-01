@@ -1,6 +1,6 @@
 // Two-browser voice test. Starts the release server on a throwaway data dir, makes the owner invite with the CLI, signs
 // alice up, has her invite bob through the API, and joins both into `general` with fake microphones. Checks that audio
-// flows both ways, that bob hears alice, and that each sees the other in the people list. Stops the server.
+// flows both ways (bob to alice only as rising packets), that bob hears alice, and that each sees the other in the people list. Stops the server.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';

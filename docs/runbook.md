@@ -62,9 +62,10 @@ Replace the web app by copying the new `web/dist` to `/opt/vesper/web.new`, then
 
 ## Roll back
 
-Docker: start the image you tagged before the update. No rebuild.
+Docker: start the image you tagged before the update. No rebuild. Use the `deploy/compose.yaml` of that same version, because compose only passes the variables it lists (not verified).
 
     docker image ls vesper
+    git checkout <old> -- deploy/compose.yaml
     VESPER_TAG=previous docker compose -f deploy/compose.yaml up -d
 
 Binary: `mv -T /opt/vesper/vesper-server.prev /opt/vesper/vesper-server && systemctl restart vesper`.
