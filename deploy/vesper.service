@@ -1,6 +1,6 @@
 # Plain-binary install. Assumes: binary at /opt/vesper/vesper-server, web app (web/dist) at
 # /opt/vesper/web (world-readable: DynamicUser has no group/owner access), and /etc/vesper/vesper.env containing (mode 600, owned by root):
-#   VESPER_DEV_KEY=<the join passphrase>
+#   VESPER_ORIGIN=https://vesper.tfaucher.com
 #   VESPER_PUBLIC_HOST=vesper.tfaucher.com
 [Unit]
 Description=Vesper voice chat server

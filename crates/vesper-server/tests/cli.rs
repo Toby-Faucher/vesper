@@ -14,9 +14,7 @@ fn config(data: &TempDir) -> Config {
         udp_bind: "127.0.0.1:0".parse().unwrap(),
         public_host: None,
         udp_port_public: 0,
-        dev_key: "k".into(),
         max_room_size: 12,
-        join_deadline: Duration::from_secs(30),
         ping_interval: Duration::from_secs(30),
         max_sockets: 4,
         web_dir: "does-not-exist".into(),
@@ -200,7 +198,6 @@ fn owner_link_never_reaches_the_logs() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_vesper-server"))
         .arg("create-owner")
         .env("RUST_LOG", "trace")
-        .env("VESPER_DEV_KEY", "k")
         .env("VESPER_DATA_DIR", data.path())
         .output()
         .unwrap();

@@ -1,5 +1,5 @@
 # Build from the repo root:  docker build -f deploy/Dockerfile -t vesper .
-# No secrets are baked in: VESPER_DEV_KEY is supplied at run time only.
+# No secrets are baked in: accounts and sessions live in the data dir, outside the image.
 
 # --- 1. denoiser wasm (scripts/build-dsp.sh) ---------------------------------------------------
 FROM rust:1-bookworm AS dsp

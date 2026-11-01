@@ -31,9 +31,7 @@ async fn start(web_dir: std::path::PathBuf) -> SocketAddr {
         udp_bind: "127.0.0.1:0".parse().unwrap(),
         public_host: None,
         udp_port_public: 0,
-        dev_key: "k".into(),
         max_room_size: 12,
-        join_deadline: Duration::from_secs(30),
         ping_interval: Duration::from_secs(30),
         max_sockets: 4,
         web_dir,
@@ -91,10 +89,11 @@ async fn health_and_ws_take_precedence() {
         !r.ends_with("INDEX") && !r.starts_with("HTTP/1.1 200"),
         "{r}"
     );
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
-        .await
-        .unwrap();
-    let _ = ws.close(None).await;
+    // A real upgrade reaches the ws route too: without Origin and session it is refused there.
+    match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status(), 403),
+        other => panic!("expected 403, got {other:?}"),
+    }
 }
 
 #[tokio::test]

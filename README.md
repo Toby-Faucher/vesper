@@ -27,7 +27,7 @@ It exists because the other Discord replacements sound bad. Discord's edge is it
 | **Voice controls** | Mute, deafen, per-person volume, a speaking ring, push to talk, a mic test with a level meter. |
 | **A Rust SFU** | One UDP port carries all audio. The server forwards each person's Opus stream and never decodes it. |
 | **Diagnostics** | Live round trip, jitter and loss, mic and denoiser levels, plus a "Test connection" button that tells you if UDP is blocked. |
-| **Yours** | Self-hosted, no telemetry, no accounts yet (one shared join key). |
+| **Yours** | Self-hosted, no telemetry, accounts by invite only. |
 
 ## How it fits together
 
@@ -49,10 +49,12 @@ You need Rust, Node and the `wasm32-unknown-unknown` target. From the repo root:
 ```bash
 scripts/build-dsp.sh
 npm --prefix web install && npm --prefix web run build
-VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 VESPER_WEB_DIR=web/dist cargo run -p vesper-server --release
+cargo run -p vesper-server -- create-owner   # prints a one-use link for the first account
+VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 VESPER_WEB_DIR=web/dist cargo run -p vesper-server --release
 ```
 
-Open http://127.0.0.1:8080, type any name, and use your passphrase as the join key. More detail, tests and the hot-reload setup are in [docs/dev.md](docs/dev.md).
+Open the printed link to create the owner account, then sign in at http://127.0.0.1:8080. The login and signup pages are being
+built: until they land the web app does not build against the current server. More detail, tests and the hot-reload setup are in [docs/dev.md](docs/dev.md).
 For friends on other machines, see [docs/deploy.md](docs/deploy.md): Docker or systemd, Caddy for HTTPS, and forwarding UDP 40000 on your router.
 
 ## Status

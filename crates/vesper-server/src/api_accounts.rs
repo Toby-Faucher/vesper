@@ -13,8 +13,8 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use vesper_protocol::{
-    ApiErrorCode, Device, InvitePreview, LoginReq, Me, PasswordChange, ProfilePatch, Role,
-    SignupReq, UserInfo,
+    ApiErrorCode, CLOSE_SESSION_ENDED, Device, InvitePreview, LoginReq, Me, PasswordChange,
+    ProfilePatch, Role, SignupReq, UserInfo,
 };
 use vesper_store::{NewAccount, NewSession, StoreError, now_ms};
 
@@ -134,7 +134,10 @@ impl FromRequestParts<AppState> for Authed {
 }
 
 /// The live session named by the cookie, if any.
-async fn session_of(h: &HeaderMap, st: &AppState) -> Result<Option<(i64, UserInfo)>, ApiError> {
+pub(crate) async fn session_of(
+    h: &HeaderMap,
+    st: &AppState,
+) -> Result<Option<(i64, UserInfo)>, ApiError> {
     let Some(hash) = cookie_token(h, st.cfg.secure_cookies).and_then(|t| hash_token(&t)) else {
         return Ok(None);
     };
@@ -145,6 +148,7 @@ async fn session_of(h: &HeaderMap, st: &AppState) -> Result<Option<(i64, UserInf
 /// (another tab logged out meanwhile) is fine.
 async fn drop_presented_session(h: &HeaderMap, st: &AppState) -> Result<(), ApiError> {
     if let Some((sid, old)) = session_of(h, st).await? {
+        st.hub.close_session(sid, CLOSE_SESSION_ENDED);
         match st.store.delete_session(&old.user_id, sid).await {
             Ok(()) | Err(StoreError::NotFound) => {}
             Err(e) => return Err(e.into()),
@@ -316,6 +320,7 @@ async fn logout(State(st): State<AppState>, a: Authed) -> Result<Response, ApiEr
     st.store
         .delete_session(&a.user.user_id, a.session_id)
         .await?;
+    st.hub.close_session(a.session_id, CLOSE_SESSION_ENDED);
     let cookie = clear_cookie(st.cfg.secure_cookies);
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response())
 }
@@ -348,6 +353,7 @@ async fn patch_me(
         .store
         .update_profile(&a.user.user_id, display_name.as_deref(), accent.as_deref())
         .await?;
+    st.hub.update_user(user.clone());
     Ok(Json(user))
 }
 
@@ -378,6 +384,8 @@ async fn change_password(
     st.store
         .set_password(&a.user.user_id, &phc, a.session_id)
         .await?;
+    st.hub
+        .close_user_except(&a.user.user_id, Some(a.session_id), CLOSE_SESSION_ENDED);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -395,6 +403,7 @@ async fn revoke(
 ) -> Result<Response, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::new(ApiErrorCode::NotFound, "not found"))?;
     st.store.delete_session(&a.user.user_id, id).await?;
+    st.hub.close_session(id, CLOSE_SESSION_ENDED);
     if id == a.session_id {
         let cookie = clear_cookie(st.cfg.secure_cookies);
         return Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response());

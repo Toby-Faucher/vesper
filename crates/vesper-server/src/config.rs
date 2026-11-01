@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     pub http_bind: SocketAddr,
     pub udp_bind: SocketAddr,
@@ -11,11 +11,7 @@ pub struct Config {
     pub public_host: Option<String>,
     /// UDP port clients reach the SFU on through the router forward.
     pub udp_port_public: u16,
-    // shortcut: one shared secret stands in for accounts; remove it with the accounts plan.
-    pub dev_key: String,
     pub max_room_size: usize,
-    /// A socket that has not joined within this long is closed.
-    pub join_deadline: Duration,
     /// Server ping period; a socket silent for two periods is dropped.
     pub ping_interval: Duration,
     /// Concurrent WebSockets; upgrades beyond this get 503.
@@ -31,34 +27,12 @@ pub struct Config {
     pub upload_quota_bytes: u64,
 }
 
-/// Like a derived Debug, but `dev_key` prints as `***` so logs never carry the secret.
-impl std::fmt::Debug for Config {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Config")
-            .field("http_bind", &self.http_bind)
-            .field("udp_bind", &self.udp_bind)
-            .field("public_host", &self.public_host)
-            .field("udp_port_public", &self.udp_port_public)
-            .field("dev_key", &"***")
-            .field("max_room_size", &self.max_room_size)
-            .field("join_deadline", &self.join_deadline)
-            .field("ping_interval", &self.ping_interval)
-            .field("max_sockets", &self.max_sockets)
-            .field("web_dir", &self.web_dir)
-            .field("data_dir", &self.data_dir)
-            .field("origin", &self.origin)
-            .field("secure_cookies", &self.secure_cookies)
-            .field("upload_quota_bytes", &self.upload_quota_bytes)
-            .finish()
-    }
-}
-
 impl Config {
     /// `VESPER_HTTP_BIND` (default `0.0.0.0:8080`), `VESPER_UDP_BIND` (default `0.0.0.0:40000`),
     /// `VESPER_PUBLIC_HOST` (optional), `VESPER_UDP_PORT_PUBLIC` (default: the `VESPER_UDP_BIND`
-    /// port), `VESPER_JOIN_DEADLINE_SECS` (default 10), `VESPER_MAX_SOCKETS` (default 256), `VESPER_WEB_DIR` (default `web/dist`) and
-    /// `VESPER_DEV_KEY` (required, non-empty), `VESPER_DATA_DIR` (default `data`), `VESPER_ORIGIN`
-    /// (default `http://localhost:8080`) and `VESPER_UPLOAD_QUOTA_MB` (default 10240).
+    /// port), `VESPER_MAX_SOCKETS` (default 256), `VESPER_WEB_DIR` (default `web/dist`),
+    /// `VESPER_DATA_DIR` (default `data`), `VESPER_ORIGIN` (default `http://localhost:8080`) and
+    /// `VESPER_UPLOAD_QUOTA_MB` (default 10240).
     pub fn from_env() -> Result<Config, String> {
         Config::from_lookup(|k| std::env::var(k).ok())
     }
@@ -75,9 +49,6 @@ impl Config {
         };
         let udp_port_public = u16::try_from(num("VESPER_UDP_PORT_PUBLIC", udp_bind.port().into())?)
             .map_err(|e| format!("VESPER_UDP_PORT_PUBLIC: {e}"))?;
-        let dev_key = get("VESPER_DEV_KEY")
-            .filter(|k| !k.is_empty())
-            .ok_or("VESPER_DEV_KEY must be set to a non-empty shared key")?;
         let origin = get("VESPER_ORIGIN").unwrap_or_else(|| "http://localhost:8080".into());
         let origin =
             normalise_origin(&origin).map_err(|e| format!("VESPER_ORIGIN={origin}: {e}"))?;
@@ -87,9 +58,7 @@ impl Config {
             udp_bind,
             public_host: get("VESPER_PUBLIC_HOST").filter(|h| !h.is_empty()),
             udp_port_public,
-            dev_key,
             max_room_size: 12,
-            join_deadline: Duration::from_secs(num("VESPER_JOIN_DEADLINE_SECS", 10)?),
             ping_interval: Duration::from_secs(25),
             max_sockets: num("VESPER_MAX_SOCKETS", 256)? as usize,
             web_dir: get("VESPER_WEB_DIR")
@@ -159,32 +128,18 @@ mod tests {
     }
 
     #[test]
-    fn dev_key_is_required_and_non_empty() {
-        assert!(lookup(&[]).is_err());
-        assert!(lookup(&[("VESPER_DEV_KEY", "")]).is_err());
-        let c = lookup(&[("VESPER_DEV_KEY", "k")]).unwrap();
-        assert_eq!(c.dev_key, "k");
+    fn defaults_need_no_variables() {
+        let c = lookup(&[]).unwrap();
         assert_eq!(c.udp_port_public, 40000);
         assert_eq!(c.max_room_size, 12);
         assert!(c.public_host.is_none());
-        assert_eq!(c.join_deadline, Duration::from_secs(10));
         assert_eq!(c.max_sockets, 256);
         assert_eq!(c.web_dir, PathBuf::from("web/dist"));
-        let c = lookup(&[("VESPER_DEV_KEY", "k"), ("VESPER_JOIN_DEADLINE_SECS", "3")]).unwrap();
-        assert_eq!(c.join_deadline, Duration::from_secs(3));
-    }
-
-    #[test]
-    fn debug_hides_the_dev_key() {
-        let c = lookup(&[("VESPER_DEV_KEY", "s3cret-key")]).unwrap();
-        let d = format!("{c:?}");
-        assert!(!d.contains("s3cret-key"), "{d}");
-        assert!(d.contains("dev_key: \"***\""), "{d}");
     }
 
     #[test]
     fn origin_must_be_scheme_host_port() {
-        let with = |o: &str| lookup(&[("VESPER_DEV_KEY", "k"), ("VESPER_ORIGIN", o)]);
+        let with = |o: &str| lookup(&[("VESPER_ORIGIN", o)]);
         let c = with("https://vesper.tfaucher.com").unwrap();
         assert_eq!(c.origin, "https://vesper.tfaucher.com");
         assert!(c.secure_cookies);
@@ -199,7 +154,7 @@ mod tests {
         ] {
             assert!(with(bad).is_err(), "{bad}");
         }
-        let c = lookup(&[("VESPER_DEV_KEY", "k")]).unwrap();
+        let c = lookup(&[]).unwrap();
         assert_eq!(c.origin, "http://localhost:8080");
         assert!(!c.secure_cookies);
         assert_eq!(c.data_dir, PathBuf::from("data"));
@@ -227,12 +182,12 @@ mod tests {
         ] {
             assert!(normalise_origin(bad).is_err(), "{bad}");
         }
-        let q = lookup(&[("VESPER_DEV_KEY", "k"), ("VESPER_UPLOAD_QUOTA_MB", "")]).unwrap();
+        let q = lookup(&[("VESPER_UPLOAD_QUOTA_MB", "")]).unwrap();
         assert_eq!(q.upload_quota_bytes, 10240 * 1024 * 1024);
     }
 
     #[test]
     fn bad_address_is_an_error() {
-        assert!(lookup(&[("VESPER_DEV_KEY", "k"), ("VESPER_HTTP_BIND", "nope")]).is_err());
+        assert!(lookup(&[("VESPER_HTTP_BIND", "nope")]).is_err());
     }
 }

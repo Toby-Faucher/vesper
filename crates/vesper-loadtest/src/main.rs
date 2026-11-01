@@ -11,6 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use vesper_protocol::{ClientMsg, ServerMsg};
 use vesper_sfu::testing::FakeClient;
 
@@ -73,8 +74,11 @@ fn summarize(sent: &[u64], received: &[Vec<u64>]) -> Vec<SpeakerReport> {
 
 struct Args {
     url: String,
-    key: String,
-    room: String,
+    /// Sent as `Origin` on every upgrade; also picks the cookie name.
+    origin: String,
+    /// One session token per speaker, from `vesper-server loadtest-accounts`.
+    tokens: Vec<String>,
+    room_id: i64,
     speakers: usize,
     seconds: u64,
     pid: Option<u32>,
@@ -96,10 +100,27 @@ fn parse_args() -> Result<Args, String> {
     if seconds < 1 {
         return Err("--seconds must be at least 1".into());
     }
+    let file = get("--tokens")?;
+    let tokens: Vec<String> = std::fs::read_to_string(&file)
+        .map_err(|e| format!("--tokens {file}: {e}"))?
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    if tokens.len() < speakers {
+        return Err(format!(
+            "--tokens {file}: {} tokens for {speakers} speakers",
+            tokens.len()
+        ));
+    }
     Ok(Args {
         url: get("--url")?,
-        key: get("--key")?,
-        room: get("--room")?,
+        origin: get("--origin")?,
+        tokens,
+        room_id: get("--room-id")?
+            .parse()
+            .map_err(|e| format!("--room-id: {e}"))?,
         speakers,
         seconds,
         pid: match m.get("--pid") {
@@ -127,15 +148,30 @@ struct Speaker {
 
 /// Join like a browser: Join with the offer, apply the Joined answer, answer every later Offer.
 async fn join(a: &Args, n: usize) -> Result<Speaker, String> {
-    let (ws, _) = tokio_tungstenite::connect_async(&a.url)
+    let mut req = a
+        .url
+        .as_str()
+        .into_client_request()
+        .map_err(|e| e.to_string())?;
+    let name = if a.origin.starts_with("https://") {
+        "__Host-vesper_session"
+    } else {
+        "vesper_session"
+    };
+    let cookie = format!("{name}={}", a.tokens[n]);
+    for (k, v) in [("cookie", cookie.as_str()), ("origin", a.origin.as_str())] {
+        let v = v
+            .parse()
+            .map_err(|_| format!("speaker {n}: bad {k} header"))?;
+        req.headers_mut().insert(k, v);
+    }
+    let (ws, _) = tokio_tungstenite::connect_async(req)
         .await
         .map_err(|e| format!("speaker {n}: connect: {e}"))?;
     let client = Arc::new(FakeClient::new().map_err(|e| e.to_string())?);
     let (mut sink, mut stream) = ws.split();
     let join = ClientMsg::Join {
-        room: a.room.clone(),
-        name: format!("load-{n}"),
-        key: a.key.clone(),
+        room_id: a.room_id,
         offer: client.offer().into(),
     };
     sink.send(Message::text(serde_json::to_string(&join).unwrap()))
@@ -292,7 +328,7 @@ async fn run(a: Args) -> Result<bool, String> {
 async fn main() {
     let args = parse_args().unwrap_or_else(|e| {
         eprintln!(
-            "vesper-loadtest: {e}\nusage: vesper-loadtest --url ws://127.0.0.1:PORT/ws --key K --room R --speakers N --seconds S [--pid PID]"
+            "vesper-loadtest: {e}\nusage: vesper-loadtest --url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--pid PID]"
         );
         std::process::exit(2);
     });

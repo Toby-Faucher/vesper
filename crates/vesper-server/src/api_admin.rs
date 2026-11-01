@@ -9,7 +9,8 @@ use axum::http::StatusCode;
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use vesper_protocol::{
-    ApiErrorCode, InviteCreate, InviteCreated, InviteInfo, Role, RolePatch, UserInfo,
+    ApiErrorCode, CLOSE_SESSION_ENDED, InviteCreate, InviteCreated, InviteInfo, Role, RolePatch,
+    UserInfo,
 };
 use vesper_store::now_ms;
 
@@ -134,7 +135,11 @@ async fn set_role(
     if req.role == Role::Owner {
         return Err(bad("the owner role only comes from the command line"));
     }
-    Ok(Json(st.store.set_role(&id, req.role).await?))
+    let user = st.store.set_role(&id, req.role).await?;
+    st.hub.update_user(user.clone());
+    // The role decides which restricted rooms they see.
+    crate::api_rooms::rooms_changed(&st).await;
+    Ok(Json(user))
 }
 
 /// The store deletes every session of the user in the same transaction.
@@ -146,7 +151,7 @@ async fn ban(
     let id = path(id)?;
     owner_target(&st, &a, &id).await?;
     let user = st.store.set_banned(&id, true, now_ms()).await?;
-    after_ban(&st, &id);
+    after_ban(&st, &user);
     Ok(Json(user))
 }
 
@@ -157,12 +162,16 @@ async fn unban(
 ) -> Result<Json<UserInfo>, ApiError> {
     let id = path(id)?;
     owner_target(&st, &a, &id).await?;
-    Ok(Json(st.store.set_banned(&id, false, now_ms()).await?))
+    let user = st.store.set_banned(&id, false, now_ms()).await?;
+    st.hub.update_user(user.clone());
+    Ok(Json(user))
 }
 
-/// Closes the banned user's live sockets. Sessions are already gone, so new requests get 401.
-fn after_ban(_state: &AppState, _user_id: &str) {
-    // Task 8: hub.disconnect_user
+/// Closes the banned user's live sockets, which also takes them out of voice. Sessions are
+/// already gone, so new requests get 401.
+fn after_ban(st: &AppState, user: &UserInfo) {
+    st.hub.close_user(&user.user_id, CLOSE_SESSION_ENDED);
+    st.hub.update_user(user.clone());
 }
 
 #[cfg(test)]

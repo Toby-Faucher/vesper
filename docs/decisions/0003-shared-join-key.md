@@ -1,6 +1,6 @@
 # 0003. One shared join key until accounts exist
 
-Status: accepted, temporary, 2026-10-30
+Status: superseded by [0007](0007-accounts-and-sessions.md) on 2026-11-01 (was: accepted, temporary, 2026-10-30)
 
 Context: The voice foundation ships before accounts and invites. The server still must not accept anonymous sockets.
 

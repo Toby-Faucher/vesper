@@ -13,7 +13,6 @@ Shape: one server (`vesper-server`). HTTP/WebSocket on TCP 8080, media on UDP 40
 | Logs | `docker compose logs vesper` | `journalctl -u vesper` |
 | Health | `curl -fsS http://127.0.0.1:8080/health` prints `ok` | same |
 | Binary / image | image `vesper:latest`, or the tag in `VESPER_TAG` | `/opt/vesper/vesper-server`, previous one as `.prev` |
-| Join key | `VESPER_DEV_KEY` in the env file | same |
 
 Log level: set `RUST_LOG` (default `info`), for example `RUST_LOG=vesper_server=debug,info`, then recreate the container or restart the unit.
 
@@ -80,14 +79,14 @@ Start with: `ps` shows healthy? `/health` says `ok`? Logs for the last 100 lines
 | Log says `VESPER_PUBLIC_HOST unset and UDP bound to ...` | Variable missing | Set it in the env file, restart. |
 | It worked, then stopped working for new calls after the ISP changed your IP | Public IP changed | The name is re-resolved every 60 s, but running calls keep the old address. New joins recover by themselves; ask everyone to rejoin. |
 | `/health` returns 503 `sfu down`, log has `voice engine (SFU thread) died` | The media thread crashed | The process exits non-zero and Docker or systemd restarts it within seconds. If it repeats, keep the log lines before it and stop the stack. Check `docker compose ps` for a restart loop. |
-| Container restarts forever, log says `vesper-server: ...` and exits | Bad config (`VESPER_DEV_KEY` empty, bad bind address, port in use) | Read the first log line. Fix the env file. An empty `VESPER_UDP_PORT_PUBLIC` is a parse error: remove the line instead. |
+| Container restarts forever, log says `vesper-server: ...` and exits | Bad config (bad bind address or `VESPER_ORIGIN`, port in use) | Read the first log line. Fix the env file. An empty `VESPER_UDP_PORT_PUBLIC` is a parse error: remove the line instead. |
 | Site loads blank or 404 | Web app missing from the image or `VESPER_WEB_DIR` wrong | Log has `.../index.html not found`. Rebuild the image. |
 | Browser says it cannot use the microphone | Not a secure context, or permission denied | Use the HTTPS name or localhost, never the bare IP. Click the padlock, allow the microphone, reload. Another app may hold the device. |
-| Join form rejects the key | Wrong `VESPER_DEV_KEY`, or the env file changed without a restart | `up -d` recreates the container with the new value. |
+| The app cannot connect, the browser shows the WebSocket refused with 403 | `VESPER_ORIGIN` is not the address in the browser bar | Set it to that address (for example `https://vesper.tfaucher.com`). `up -d` recreates the container with the new value. |
 | 502 from Caddy, or WebSocket fails only through the proxy | Caddy cannot reach 8080 | If Caddy is on another host, the compose mapping must be `8080:8080`, not `127.0.0.1:8080:8080`. Test `curl http://<vm>:8080/health` from the Caddy host. |
-| Join works, then the call drops after about 10 seconds | Proxy idle timeout | The join deadline only applies to sockets that have not joined yet. A joined socket that is silent for 2 x 25 s (the ping interval) is closed. Check the proxy does not cut idle WebSockets. |
+| Join works, then the call drops after about 10 seconds | Proxy idle timeout | The server closes a socket only when it is silent for 2 x 25 s (the ping interval). Check the proxy does not cut idle WebSockets. |
 | Disk filling on the VM | Container logs or old images | Compose caps logs at 3 x 10 MB. `docker image prune` for images. |
 
 ## Before you ask for help
 
-Collect: `docker compose ps`, `docker compose logs --tail 200 vesper`, the git commit (`git rev-parse --short HEAD`), what the Diagnostics panel says, and whether the client was on the LAN or cellular. The join key is not in the logs; do not paste the env file.
+Collect: `docker compose ps`, `docker compose logs --tail 200 vesper`, the git commit (`git rev-parse --short HEAD`), what the Diagnostics panel says, and whether the client was on the LAN or cellular. Session cookies and invite links are not in the logs; do not paste the env file.

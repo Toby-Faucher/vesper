@@ -27,23 +27,24 @@ The Docker build does the same inside the image.
 
 ## Run
 
-The join key is whatever you put in `VESPER_DEV_KEY`. Browsers only allow the mic on `localhost` or HTTPS.
+Browsers only allow the mic on `localhost` or HTTPS. You sign in with an account; make the first one with `create-owner`
+(see [Accounts](#accounts)).
 
 One terminal (the server serves the built app at http://127.0.0.1:8080):
 
 ```bash
 npm --prefix web install && npm --prefix web run build
-VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
+VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
   VESPER_WEB_DIR=web/dist cargo run -p vesper-server --release
 ```
 
-`just run-local` does the same steps with a throwaway key (`pick-a-passphrase` unless `VESPER_DEV_KEY` is set). Not verified: `just` is not installed on the dev machine.
+`just run-local` does the same steps. Not verified: `just` is not installed on the dev machine.
 
 Two terminals (hot reload for the web app):
 
 ```bash
 # terminal 1: the server
-VESPER_DEV_KEY=pick-a-passphrase VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
+VESPER_ORIGIN=http://localhost:5173 VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
   cargo run -p vesper-server --release
 
 # terminal 2: Vite (proxies /ws to localhost:8080, prints a localhost URL)
@@ -51,21 +52,22 @@ npm --prefix web install
 npm --prefix web run dev
 ```
 
-Open the page, type any name, and use your passphrase as the key.
+Open the page and sign in. The login and signup pages are being built: until they land the web app does not build against the
+current server.
 
 ### Accounts
 
 The server keeps its database in `VESPER_DATA_DIR` (default `data`, relative to where you start it). The subcommands below read
-the same variables as the server, so `VESPER_DEV_KEY` must be set for them too. Each prints its result and exits.
+the same variables as the server. Each prints its result and exits.
 
 ```bash
 # a one-use owner invite link, valid 24 h; works until someone signs up as owner
-VESPER_DEV_KEY=pick-a-passphrase cargo run -p vesper-server -- create-owner
+cargo run -p vesper-server -- create-owner
 # an invite for friends (default: member, 1 use, 168 h)
-VESPER_DEV_KEY=pick-a-passphrase cargo run -p vesper-server -- invite --role member --uses 5 --hours 48
+cargo run -p vesper-server -- invite --role member --uses 5 --hours 48
 # load test accounts: no password, one session token per line. Throwaway data dir only:
 # it refuses a dir that already has accounts unless you add --force-nonempty yes.
-VESPER_DEV_KEY=pick-a-passphrase VESPER_DATA_DIR=/tmp/vesper-load cargo run -p vesper-server -- loadtest-accounts --count 12
+VESPER_DATA_DIR=/tmp/vesper-load cargo run -p vesper-server -- loadtest-accounts --count 12
 ```
 
 Links and tokens go to stdout. Logs go to stderr, so piping stdout stays clean.

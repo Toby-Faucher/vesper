@@ -4,13 +4,13 @@ Vesper is one server binary (`vesper-server`): HTTP (the web app, `/health`, the
 
 ## Configuration
 
-Every variable, with defaults, is in [env.md](env.md). To run on one machine first, see [dev.md](dev.md#run). The two you must set to deploy are `VESPER_DEV_KEY` (the shared join key, no default, the server refuses to start without it) and `VESPER_PUBLIC_HOST` (see Network below).
+Every variable, with defaults, is in [env.md](env.md). To run on one machine first, see [dev.md](dev.md#run). The two you must set to deploy are `VESPER_ORIGIN` (the https address people open; the WebSocket and every change refuse other origins) and `VESPER_PUBLIC_HOST` (see Network below).
 
 ## Docker / Dockge
 
 Files: `deploy/Dockerfile` (build from the repo root), `deploy/compose.yaml`.
 
-1. Put `VESPER_DEV_KEY=<passphrase>` and `VESPER_PUBLIC_HOST` (see Network: it must resolve to the public IP from this host) in a `.env` next to `compose.yaml`. Compose refuses to start without the key; the image never contains it.
+1. Put `VESPER_ORIGIN` and `VESPER_PUBLIC_HOST` (see Network: it must resolve to the public IP from this host) in a `.env` next to `compose.yaml`. Compose refuses to start without either one.
 2. `docker compose -f deploy/compose.yaml up -d --build` (in Dockge: create the stack from this repo and add the `.env`; it is not verified that the compose file's `context: ..` finds the repo inside a Dockge stack directory). The first build is slow: it compiles the denoiser to wasm and downloads the DeepFilterNet model (sha256-checked by `scripts/fetch-model.sh`).
 3. `curl http://127.0.0.1:8080/health` returns `ok`; `docker compose ps` shows `healthy`.
 
@@ -18,7 +18,7 @@ If Docker's UDP NAT misbehaves, `network_mode: host` is the alternative (see the
 
 Publishing: TCP 8080 is bound to `127.0.0.1` by default, which suits Caddy on the same host. If Caddy runs elsewhere, change the mapping to `"8080:8080"` and firewall it to the proxy, or attach both containers to one docker network and point Caddy at `vesper:8080` (then drop the 8080 mapping). UDP `40000:40000/udp` must stay published on all interfaces. The container runs as a non-root user with a read-only root filesystem and no capabilities.
 
-Plain binary instead: `deploy/vesper.service` (systemd, hardened, `DynamicUser`). Install the binary to `/opt/vesper/vesper-server`, the built `web/dist` to `/opt/vesper/web`, and put `VESPER_DEV_KEY=...` and `VESPER_PUBLIC_HOST=...` in `/etc/vesper/vesper.env` (mode 600). Then `systemctl enable --now vesper`.
+Plain binary instead: `deploy/vesper.service` (systemd, hardened, `DynamicUser`). Install the binary to `/opt/vesper/vesper-server`, the built `web/dist` to `/opt/vesper/web`, and put `VESPER_ORIGIN=...` and `VESPER_PUBLIC_HOST=...` in `/etc/vesper/vesper.env` (mode 600). Then `systemctl enable --now vesper`.
 
 ## Network
 
@@ -27,7 +27,7 @@ Plain binary instead: `deploy/vesper.service` (systemd, hardened, `DynamicUser`)
 - **`VESPER_PUBLIC_HOST`** is the name or IP the server puts into its ICE candidates, for everyone. The server resolves it with the Docker host's own resolver, so it must resolve to the **public** IP *from the server's point of view*. Use the literal public IP, or a public-only name (for example `media.tfaucher.com`) that your LAN DNS does not override. Do not point it at `vesper.tfaucher.com` if you use split DNS for that name: the server would resolve it to the LAN address and advertise that to internet clients, whose media would then fail.
 - **Split DNS (HTTPS name only):** make your LAN resolver answer `vesper.tfaucher.com` with the Caddy host's LAN address so LAN browsers reach HTTPS directly. This does not affect media: LAN clients still send media to the advertised public IP, so they rely on the router's hairpin NAT (loopback of UDP 40000 to the Docker host). If the router has no hairpin NAT, LAN clients cannot get media through that path; test from outside instead (phone on cellular) and treat LAN-to-LAN calls as unsupported until that is solved.
 - Known limit: the name is re-resolved every 60 s, but only sessions started afterwards pick up a changed IP; people already in a call keep the old address and must rejoin after your public IP changes.
-- **Client address:** the chain is Cloudflare, `cloudflared` on the VM, Caddy, Vesper, so Vesper's TCP peer is a loopback or private address. From such a peer (loopback, 10/8, 172.16/12, 192.168/16, IPv6 unique-local) the server takes a valid `CF-Connecting-IP` first (Cloudflare overwrites it, so a client cannot fake it through Cloudflare), then the last `X-Forwarded-For` entry (the one Caddy adds), then the peer. From any other peer it ignores both headers. Keep the HTTP port reachable only from Caddy: a LAN client that reaches it directly can set either header and pick its own address. See [known-issues.md](known-issues.md#security-and-abuse-all-need-the-join-key-except-where-noted).
+- **Client address:** the chain is Cloudflare, `cloudflared` on the VM, Caddy, Vesper, so Vesper's TCP peer is a loopback or private address. From such a peer (loopback, 10/8, 172.16/12, 192.168/16, IPv6 unique-local) the server takes a valid `CF-Connecting-IP` first (Cloudflare overwrites it, so a client cannot fake it through Cloudflare), then the last `X-Forwarded-For` entry (the one Caddy adds), then the peer. From any other peer it ignores both headers. Keep the HTTP port reachable only from Caddy: a LAN client that reaches it directly can set either header and pick its own address. See [known-issues.md](known-issues.md#security-and-abuse).
 - **`VESPER_UDP_PORT_PUBLIC`** only matters when the external UDP port differs from the one the container listens on.
 
 - **Data dir permissions:** the server creates a new `VESPER_DATA_DIR` with mode 0700 and `vesper.db` (and its WAL files) with 0600. An existing directory keeps its mode, so a bind-mounted `/data` keeps its host permissions: set it to 0700 for the container user yourself. The database holds password and session hashes. Verified by a test on a fresh directory only.
@@ -35,7 +35,7 @@ Plain binary instead: `deploy/vesper.service` (systemd, hardened, `DynamicUser`)
 ## Verify
 
 - Connectivity: open the app, join, open Diagnostics, press **Test connection**. Run it from a device on cellular (outside your LAN) and from the LAN. `ok: true` means the UDP path works.
-- Load: `docs/testing/latency.md` section 1 (`vesper-loadtest`, 12 speakers). Run it on the server host against a throwaway key.
+- Load: `docs/testing/latency.md` section 1 (`vesper-loadtest`, 12 speakers). Run it on the server host against a throwaway data dir.
 
 ## Upgrade and rollback
 

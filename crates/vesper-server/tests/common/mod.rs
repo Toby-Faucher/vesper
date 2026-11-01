@@ -1,5 +1,5 @@
-//! Test server for the `/api` routes: the router driven in process with `oneshot`, plus a real
-//! listener on `addr` for socket tests.
+//! Test server: the `/api` router driven in process with `oneshot`, plus the whole app (with a
+//! real SFU) on `addr` for socket tests. The data dir is removed when the server is dropped.
 #![allow(dead_code)] // each test binary uses a different part
 
 use std::net::SocketAddr;
@@ -13,11 +13,13 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
-use vesper_protocol::UserInfo;
+use vesper_protocol::{Role, UserInfo};
 use vesper_server::config::Config;
+use vesper_server::hub::Hub;
 use vesper_server::limits::Limiter;
 use vesper_server::{AppState, cli, router};
-use vesper_store::Store;
+use vesper_sfu::{Sfu, SfuConfig, SfuHandle};
+use vesper_store::{NewAccount, NewSession, Store, now_ms};
 
 pub const ORIGIN: &str = "http://localhost:8080";
 pub const PASSWORD: &str = "test-password-1";
@@ -40,9 +42,7 @@ pub fn config(data: &TempDir) -> Config {
         udp_bind: "127.0.0.1:0".parse().unwrap(),
         public_host: None,
         udp_port_public: 0,
-        dev_key: "k".into(),
         max_room_size: 12,
-        join_deadline: Duration::from_secs(30),
         ping_interval: Duration::from_secs(30),
         max_sockets: 16,
         web_dir: "does-not-exist".into(),
@@ -55,19 +55,59 @@ pub fn config(data: &TempDir) -> Config {
 
 impl TestServer {
     pub async fn new() -> TestServer {
+        TestServer::with(|_| {}, spawn_sfu()).await
+    }
+
+    /// A server with `edit` applied to the test config, on an SFU the caller spawned.
+    pub async fn with(edit: impl FnOnce(&mut Config), sfu: SfuHandle) -> TestServer {
         let data = TempDir::new().unwrap();
-        let cfg = config(&data);
+        let mut cfg = config(&data);
+        edit(&mut cfg);
         let store = Store::open(&cfg.data_dir.join("vesper.db")).await.unwrap();
         let state = AppState {
             store,
             cfg: Arc::new(cfg),
             limits: Limiter::default(),
+            hub: Hub::default(),
         };
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let app = router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
-        tokio::spawn(async move { axum::serve(listener, app).await });
+        let (addr, _serving) = vesper_server::serve(state.clone(), sfu).await.unwrap();
         TestServer { addr, state, data }
+    }
+
+    /// An account with a session, made in the store directly: no invite and no argon2, so tests
+    /// that need many users stay fast. It has no password, so it cannot log in.
+    pub async fn account(&self, username: &str, role: Role) -> Session {
+        let user = self
+            .state
+            .store
+            .create_account(NewAccount {
+                username,
+                display_name: username,
+                password_phc: None,
+                role,
+            })
+            .await
+            .unwrap();
+        self.session(&user).await
+    }
+
+    /// Another session (device) for `user`, made in the store directly.
+    pub async fn session(&self, user: &UserInfo) -> Session {
+        let (token, token_hash) = vesper_server::auth::new_token();
+        let s = NewSession {
+            token_hash,
+            label: "test",
+            now: now_ms(),
+        };
+        self.state
+            .store
+            .create_session(&user.user_id, s)
+            .await
+            .unwrap();
+        Session {
+            cookie: format!("vesper_session={token}"),
+            user: user.clone(),
+        }
     }
 
     /// One request through the router. The peer is loopback, so `X-Forwarded-For` is trusted.
@@ -127,6 +167,14 @@ impl TestServer {
         assert_eq!(status, StatusCode::OK, "{v}");
         session(&h, &v["user"])
     }
+}
+
+pub fn spawn_sfu() -> SfuHandle {
+    Sfu::spawn(SfuConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        ..Default::default()
+    })
+    .unwrap()
 }
 
 /// The `name=value` part of the response's `Set-Cookie`.

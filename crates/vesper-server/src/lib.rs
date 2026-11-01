@@ -7,6 +7,7 @@ pub mod api_rooms;
 pub mod auth;
 pub mod cli;
 pub mod config;
+pub mod hub;
 pub mod limits;
 pub mod public_addr;
 pub mod rooms;
@@ -37,6 +38,7 @@ use vesper_store::Store;
 
 pub use crate::api_accounts::{ApiError, Authed};
 use crate::config::Config;
+use crate::hub::Hub;
 use crate::limits::Limiter;
 use crate::rooms::Rooms;
 
@@ -49,6 +51,7 @@ pub struct AppState {
     pub store: Store,
     pub cfg: Arc<Config>,
     pub limits: Limiter,
+    pub hub: Hub,
 }
 
 /// The `/api` routes, with the Origin check and the body cap.
@@ -109,6 +112,26 @@ pub async fn start_with_sfu(
     cfg: Config,
     sfu: SfuHandle,
 ) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
+    let db = cfg.data_dir.join("vesper.db");
+    let store = Store::open(&db)
+        .await
+        .map_err(|e| std::io::Error::other(format!("open {}: {e}", db.display())))?;
+    let state = AppState {
+        store,
+        cfg: Arc::new(cfg),
+        limits: Limiter::default(),
+        hub: Hub::default(),
+    };
+    serve(state, sfu).await
+}
+
+/// Serve the whole app for `state` on `state.cfg.http_bind`: `/api`, `/ws`, `/health` and the
+/// web app.
+pub async fn serve(
+    state: AppState,
+    sfu: SfuHandle,
+) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
+    let cfg = state.cfg.clone();
     match cfg.public_host.clone() {
         Some(host) => {
             public_addr::spawn_refresh(sfu.clone(), host, cfg.udp_port_public, public_addr::REFRESH)
@@ -129,25 +152,17 @@ pub async fn start_with_sfu(
             cfg.web_dir.display()
         );
     }
-    let db = cfg.data_dir.join("vesper.db");
-    let store = Store::open(&db)
-        .await
-        .map_err(|e| std::io::Error::other(format!("open {}: {e}", db.display())))?;
-    let rooms = Rooms::new(sfu, &cfg.dev_key, cfg.max_room_size);
-    let api = router(AppState {
-        store,
-        cfg: Arc::new(cfg.clone()),
-        limits: Limiter::default(),
-    });
+    let rooms = Rooms::new(sfu, cfg.max_room_size);
+    let api = router(state.clone());
     let app = Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws::upgrade))
         // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`.
         .fallback_service(ServeDir::new(&cfg.web_dir))
         .with_state(ws::WsState {
+            app: state,
             rooms,
             sockets: Arc::new(Semaphore::new(cfg.max_sockets)),
-            join_deadline: cfg.join_deadline,
             ping_interval: cfg.ping_interval,
         })
         .merge(api)

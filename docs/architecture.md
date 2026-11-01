@@ -14,6 +14,7 @@ The "Not verified" list at the end says what was only read.
 │ Svelte UI (web/)          │◄──────────────────►│ vesper-server (axum)                │
 │ mic ─► worklet ⇄ DSP      │   (via Caddy)      │   rooms.rs  presence, session ids   │
 │ worker (DeepFilterNet     │                    │   ws.rs     one task per socket     │
+│                           │                    │   hub.rs    open sockets, pushes    │
 │ WASM) ─► Opus (WebRTC)    │◄═ UDP 40000 ═════► │   vesper-sfu  own thread, str0m     │
 └───────────────────────────┘   media, direct    └─────────────────────────────────────┘
 ```
@@ -29,42 +30,60 @@ The "Not verified" list at the end says what was only read.
 
 | Crate | Job |
 |---|---|
-| `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, and the limits `MAX_NAME_CHARS` (32) and `MAX_MSG_BYTES` (64 KiB). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
+| `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, the limit `MAX_MSG_BYTES` (64 KiB) and the close codes `CLOSE_SESSION_ENDED` (4001) and `CLOSE_DISCONNECTED` (4003). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`, `Unread`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
 | `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites and rooms (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`). It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `rooms.rs` (presence and session numbers), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `rooms.rs` (voice presence and session numbers), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
 ## Message flow
 
-All messages are JSON on one WebSocket, tagged by `type` (`vesper-protocol/src/lib.rs`).
+All messages are JSON on one WebSocket per tab, tagged by `type` (`vesper-protocol/src/lib.rs`).
 
-Client to server: `join { room, name, key, offer }`, `answer { sdp }`, `set_muted { muted }`, `leave`.
-Server to client: `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`, `peer_left`, `peer_muted`, `error { code, message }`.
-Error codes: `bad_key`, `room_full`, `bad_message`.
+Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `leave`, `check { offer }`,
+`typing { room_id }`. `check` answers `bad_message` until the connectivity check is built; `typing` is ignored until text chat.
+Server to client: `hello { me, users, rooms, voice, unread }`, `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
+`peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `rooms_changed { rooms }`, `user_updated { user }`,
+`force_muted { muted }`, `error { code, message }`. `unread` is empty and `force_muted` is never sent yet.
+Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`.
 
-1. The client opens `/ws`. A socket that does not join within `VESPER_JOIN_DEADLINE_SECS` is closed. Five failed pre-join messages also close it
-   (`ws.rs`, `MAX_PREJOIN_ERRORS`).
-2. The client builds an SDP offer first, then sends `join` with the key, the name and that offer (`web/src/lib/signaling.ts`).
-3. `Rooms::join` (`rooms.rs`) checks the key, trims and validates room and name (1 to 32 chars, no control characters), takes the join lock,
-   replaces any earlier session of the same user, checks the room cap (12), then asks the SFU to join with the offer.
-4. The server replies `joined` with the SFU's SDP answer and the current peers, and broadcasts `peer_joined` to the rest of the room.
+1. The client opens `/ws` with its session cookie. The upgrade gets 403 unless `Origin` equals `VESPER_ORIGIN`, 401 unless the
+   cookie names a live session, and 503 past `VESPER_MAX_SOCKETS` (`ws.rs` `upgrade`).
+2. The server writes `hello` first: the user and session, every user, the rooms this user can see, and who is in voice in them.
+   The socket joins the hub before `hello` is read, so no change in between is lost; changes queued meanwhile follow `hello`.
+3. The client builds an SDP offer, then sends `join` with a room id. The server reads the user again (so a role change counts),
+   looks the room up (`bad_message` if unknown) and checks `can_see` (`forbidden` if not).
+4. `Rooms::join` (`rooms.rs`) takes the join lock, replaces any earlier voice session of the same account, checks the room cap
+   (12), then asks the SFU to join SFU room `room-<id>` with the offer.
+5. The server replies `joined` with the SFU's SDP answer and the current peers, and broadcasts `peer_joined` to the rest of the room.
    `joined` is queued under the members lock, so every later presence message for that room follows it.
-5. When tracks are added or stopped, the SFU makes a new offer. It arrives as `offer`; the client answers with `answer`, one at a time.
-6. `set_muted` updates presence and broadcasts `peer_muted`. `leave` or a closed socket removes the user and broadcasts `peer_left`.
-7. The server pings every 25 s and drops a socket silent for two periods (`ws.rs`).
+6. When tracks are added or stopped, the SFU makes a new offer. It arrives as `offer`; the client answers with `answer`, one at a time.
+7. `set_voice_state` updates presence and broadcasts `peer_state`. `leave` or a closed socket removes the user and broadcasts `peer_left`.
+8. The server pings every 25 s and drops a socket silent for two periods (`ws.rs`).
+
+Pushed from REST (`hub.rs`): a room change sends each socket `rooms_changed` with only the rooms its user can see; a role
+change also does, since the role decides that. A role, ban or profile change sends everyone `user_updated`.
+
+Closing (`hub.rs`): logout, revoking a device, a login that replaces a presented cookie, and a password change (other sessions
+only) close the sockets of the ended sessions with code 4001. A ban closes all of that user's sockets with 4001, which also
+takes them out of voice. Code 4003 is for a moderator disconnect (not built yet). Each socket has a queue of 256 messages and
+every send is non-blocking: a send to a full queue closes that socket with 1013, through a signal outside the queue, so a client
+that stopped reading cannot hold memory or the task. A replaced or SFU-ended voice session closes its socket with 1000.
+
+Tests: `crates/vesper-server/tests/signaling.rs` (a real server and sockets, `FakeClient` as the browser's WebRTC side) and the
+unit tests in `hub.rs`.
 
 ## Identity, sessions and the MSID rule
 
-- There are no accounts. One shared key (`VESPER_DEV_KEY`) gates every join. A user is identified by display name.
-- `user_id` is the first 16 bytes of sha256(name) as 32 lowercase hex characters (`rooms.rs` `user_id`). Hex keeps it a valid MSID stream id
-  (RFC 8830).
+- A user is an account. The WebSocket takes the session cookie on the upgrade; no message carries a name or a key.
+- `user_id` is `accounts.id`: 16 random bytes as 32 lowercase hex characters. Hex keeps it a valid MSID stream id (RFC 8830).
 - The SFU labels each forwarded track with the sender's `user_id` as its MSID stream id (`vesper-sfu/src/client.rs`, `TrackIn.user`). In the
   browser, `ontrack` gives `MediaStream.id` equal to that `user_id`, and the client keys remote streams on it (`signaling.ts`).
-- A second join with the same name replaces the first. Each join gets a fresh `session` number (`next_session`, `rooms.rs`). `answer`,
-  `set_muted` and `leave` carry the socket's session and are ignored if it is no longer current, because the SFU keys sessions by user alone.
-  SFU offers for a stale session are not forwarded to the new socket.
+- A second voice join by the same account (another tab) replaces the first and closes the first tab's socket. Each join gets a
+  fresh `session` number (`next_session`, `rooms.rs`). `answer`, `set_voice_state` and `leave` carry the socket's session and are
+  ignored if it is no longer current, because the SFU keys sessions by user alone. SFU offers for a stale session are not
+  forwarded to the new socket.
 - Joins are serialised by one lock, so a rejoin finishes closing the old SFU session (up to a timeout) before anyone else joins.
 
 ## SFU ownership
@@ -146,7 +165,7 @@ Rooms (`api_rooms.rs`, store `rooms.rs`): every room has text and voice. A fresh
 (migration `0002_rooms.sql`). Room names follow the display name rule (NFC, 1 to 32 characters, no control or hidden format
 characters, else 400) and are unique ignoring case (409). A restricted room is seen only by the owner, the moderators and the
 accounts on its member list (`can_see`); `members` is filled only while the room is restricted, and the list is kept when the
-room is opened again. The room routes do not push changes to open sockets yet.
+room is opened again. Every change pushes `rooms_changed` to open sockets.
 
 A ban ends the user's sessions but does not revoke invites they already created; the owner revokes those by hand. `InviteCreate` needs all three fields (`role`, `max_uses`, `expires_hours`), so the web client must send them.
 
@@ -164,7 +183,7 @@ Roles (`require`, `api_admin.rs`; owner > moderator > member):
 | Create, rename, reorder, restrict a room or set its members | no | no | yes |
 
 A refused role is 403. An `owner` role in `InviteCreate` or `RolePatch`, the owner acting on their own account, `max_uses` outside
-1 to 50 and `expires_hours` outside 1 to 720 are 400. A role change counts from the user's next request. A banned user's cookie
+1 to 50 and `expires_hours` outside 1 to 720 are 400. A role change counts from the user's next request and their next voice join. A banned user's cookie
 gets 401 at once and login fails until an unban; the unban does not bring old sessions back.
 
 Rules every route keeps:
@@ -182,13 +201,13 @@ Rules every route keeps:
   `CF-Connecting-IP`, else the last `X-Forwarded-For` entry, else the peer. From any other peer it ignores both headers.
   Behind Cloudflare, `cloudflared` and Caddy the peer is private and Cloudflare overwrites `CF-Connecting-IP`, so the key is the real
   client. Reached on a private network without Cloudflare, a LAN client could set that header itself
-  ([known-issues.md](known-issues.md#security-and-abuse-all-need-the-join-key-except-where-noted)). The login limit per username
+  ([known-issues.md](known-issues.md#security-and-abuse)). The login limit per username
   is keyed on address and username, so each faked address gets that username 5 more tries, then 1 a minute.
 - **Invites.** Unknown, used up, expired, revoked and changed codes all give the same 404 body. An owner invite stops working
   once an owner exists; the store checks this in the signup transaction.
 - **Caching.** Every `/api` response has `Cache-Control: no-store`.
 - Handlers never log request bodies, and the request types with a password or invite code print `***` in `Debug`. A body that does
-  not parse gets a fixed "invalid request body" message. The WebSocket does not use the session yet; it still takes the join key.
+  not parse gets a fixed "invalid request body" message. The WebSocket upgrade takes the same session cookie and Origin check.
 
 Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs` and `tests/rooms.rs` (every route for every caller and target role), through
 `tests/common/mod.rs`.

@@ -9,10 +9,11 @@ Please do not open a public issue for something exploitable. You will get an ans
 
 ## What to know
 
-- The only access control today is one shared join key (`VESPER_DEV_KEY`). Anyone who has it can join. See [decision 0003](docs/decisions/0003-shared-join-key.md).
-- Put HTTPS in front. The key travels in the first WebSocket message. [docs/deploy.md](docs/deploy.md) shows a Caddy setup.
+- Access is by account. Accounts come from invite links, passwords are hashed with argon2id, and the session cookie holds a random
+  token whose hash is stored. See [decision 0007](docs/decisions/0007-accounts-and-sessions.md).
+- Put HTTPS in front: the session cookie travels with every request. [docs/deploy.md](docs/deploy.md) shows a Caddy setup.
 - There is no Content-Security-Policy yet ([decision 0004](docs/decisions/0004-no-csp-yet.md)).
 - Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
 - Audio is forwarded by the server without decoding. It is encrypted between each browser and the server (WebRTC DTLS-SRTP), not end to end.
-- Never commit the join key, `.env` files, keys or certificates. `scripts/check-secrets.sh` looks for them in tracked files, and CI runs it.
+- Never commit session tokens, invite links, `.env` files, keys or certificates. `scripts/check-secrets.sh` looks for them in tracked files, and CI runs it.
 - Dependencies are checked weekly with `cargo deny` and `npm audit` (`.github/workflows/advisories.yml`).

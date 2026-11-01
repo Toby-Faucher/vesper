@@ -201,6 +201,18 @@ pub struct RoomInfo {
     pub members: Vec<String>,
 }
 
+/// Unread state of one room for the signed-in user, sent in `Hello`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Unread {
+    #[ts(type = "number")]
+    pub room_id: i64,
+    #[ts(type = "number")]
+    pub last_read_id: i64,
+    pub unread: u32,
+    pub mentions: u32,
+}
+
 /// `POST /api/rooms`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

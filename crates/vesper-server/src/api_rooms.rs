@@ -34,9 +34,12 @@ fn room_name(s: &str) -> Result<String, ApiError> {
     valid_display_name(s).ok_or_else(|| bad("room name: 1 to 32 characters, no hidden characters"))
 }
 
-/// Tells connected clients the room list changed.
-fn rooms_changed(_state: &AppState) {
-    // Task 8: broadcast RoomsChanged, filtered by can_see.
+/// Tells connected clients the room list changed, each with only the rooms they can see.
+pub(crate) async fn rooms_changed(st: &AppState) {
+    match st.store.rooms().await {
+        Ok(rooms) => st.hub.rooms_changed(&rooms),
+        Err(e) => tracing::error!("store: {e}"),
+    }
 }
 
 async fn list(State(st): State<AppState>, a: Authed) -> Result<Json<Vec<RoomInfo>>, ApiError> {
@@ -53,7 +56,7 @@ async fn create(
     require(&a.user, Role::Owner)?;
     let name = room_name(&body(req)?.name)?;
     let room = st.store.create_room(&name, now_ms()).await?;
-    rooms_changed(&st);
+    rooms_changed(&st).await;
     Ok((StatusCode::CREATED, Json(room)))
 }
 
@@ -71,7 +74,7 @@ async fn update(
         .store
         .patch_room(id, name.as_deref(), req.restricted)
         .await?;
-    rooms_changed(&st);
+    rooms_changed(&st).await;
     Ok(Json(room))
 }
 
@@ -82,7 +85,7 @@ async fn reorder(
 ) -> Result<StatusCode, ApiError> {
     require(&a.user, Role::Owner)?;
     st.store.reorder_rooms(&body(req)?.ids).await?;
-    rooms_changed(&st);
+    rooms_changed(&st).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -95,7 +98,7 @@ async fn members(
     require(&a.user, Role::Owner)?;
     let id = path(id)?;
     let room = st.store.set_room_members(id, &body(req)?.user_ids).await?;
-    rooms_changed(&st);
+    rooms_changed(&st).await;
     Ok(Json(room))
 }
 
