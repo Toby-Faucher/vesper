@@ -7,7 +7,8 @@
   import { errorText } from '../lib/api';
   import type { SearchHit } from '../lib/gen/SearchHit';
   import { loadUsers } from '../lib/ui/users';
-  import { dayLabel } from '../lib/ui/timeline';
+  import { dayLabel, plain } from '../lib/ui/timeline';
+  import { parse } from '../lib/markdown';
   import { MAX_QUERY, complete, keyAt, keyValue, nothingToSearch, parseSearch, setKey, shortLast, type Key } from '../lib/ui/searchq';
   import { Searcher } from '../lib/ui/search.svelte';
   import Avatar from '../lib/ui/c/Avatar.svelte';
@@ -255,7 +256,7 @@
                   <time class="shrink-0 text-xs text-fg-3 tabular-nums">{clock.format(h.message.created_at)}</time>
                   <span class="go">Jump <Icon d={I.chevronRight} size={16} /></span>
                 </span>
-                <span class="snip">{#each marks(h.snippet) as part}{#if part.mark}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
+                <span class="snip">{#each marks(plain(parse(h.snippet))) as part}{#if part.mark}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
               </span>
             </button>
           {/each}
