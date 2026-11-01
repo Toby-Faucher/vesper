@@ -1105,6 +1105,33 @@ scene('settings-picture', async (ctx) => {
   await home(page);
   await ctx.shot(page, 'shell-picture', { fullPage: false });
 });
+// The accent: Appearance with Rose chosen, a refused custom colour, then a room with three accents (the Join primary, a
+// mention, the selected room and a focus ring on the composer). Back to amber at the end for the other scenes.
+scene('accent', async (ctx) => {
+  const page = ctx.alice.page;
+  await ctx.seed();
+  await home(page);
+  await settingsPage(page, 'Appearance');
+  await page.getByRole('radio', { name: 'Rose' }).check();
+  await rest(page);
+  await ctx.shot(page, 'settings-accent', { fullPage: false });
+  await page.getByLabel('Custom colour', { exact: true }).fill('#3050a0');
+  await page.getByText(/^Not allowed/).waitFor();
+  await rest(page);
+  await ctx.shot(page, 'settings-accent-refused', { fullPage: false });
+  for (const key of ['rose', 'sky', 'lime']) {
+    await ctx.api(page, 'PATCH', '/api/me', { ui_accent: key });
+    await home(page);
+    await openRoom(page, 'general');
+    await page.getByRole('textbox', { name: 'Message', exact: true }).focus();
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab'); // keyboard focus, so the ring shows
+    await page.mouse.move(1439, 899);
+    await sleep(300);
+    await ctx.shot(page, `accent-${key}`, { fullPage: false });
+  }
+  await ctx.api(page, 'PATCH', '/api/me', { ui_accent: 'amber' });
+});
 // The meter at three levels, from the primitives gallery.
 scene('settings-meter', async ({ open }) => {
   const page = await open(`${await devServer()}/_gallery?primitives`);

@@ -61,11 +61,11 @@
 
   <fieldset class="flex max-w-120 flex-col gap-3" aria-describedby="accent-help">
     <legend class="mb-1 text-base font-medium text-fg">Accent</legend>
-    <p id="accent-help" class="text-sm text-fg-2">Buttons, focus, selection and mentions use it. It follows your account to every device.</p>
+    <p id="accent-help" class="text-sm text-fg-2">Buttons, focus, selection and mentions use it, on every device you sign in on.</p>
     <div class="grid grid-cols-4 gap-2">
       {#each Object.entries(PRESETS) as [key, p] (key)}
-        <label class="option flex h-10 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm text-fg">
-          <input type="radio" name="accent" class="sr-only" value={key} checked={accent === key} onchange={() => save(key)} />
+        <label class="option relative flex h-10 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm text-fg">
+          <input type="radio" name="accent" class="absolute inset-0 cursor-pointer appearance-none rounded-md" value={key} checked={accent === key} onchange={() => save(key)} />
           <span class="dot" style:--c={p.hex}></span>
           <span class="flex-1">{p.name}</span>
           {#if accent === key}<Icon d={I.check} />{/if}

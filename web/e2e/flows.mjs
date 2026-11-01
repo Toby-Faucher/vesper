@@ -391,6 +391,43 @@ try {
   await a2.getByLabel('Password', { exact: true }).fill('test-password-1');
   await a2.getByRole('button', { name: 'Sign in' }).click();
   await signedIn(a2);
+
+  // Settings > Appearance, the accent: a preset paints at once, follows the account to the second browser (live and after
+  // a reload), and survives a reload here. A custom colour that fails the contrast rules is refused with its ratio; the
+  // nearest allowed one is taken. Reset goes back to amber. The server refuses a value that is not a preset or #rrggbb.
+  const accentOf = (p) => p.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+  const accentIs = (p, hex) => p.waitForFunction((h) => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() === h, hex);
+  assert.equal(await accentOf(a2), '#f0b010', 'amber is the default');
+  await a.goto(`${ORIGIN}/settings/appearance`);
+  const [saved] = await Promise.all([
+    a.waitForResponse((r) => r.url().endsWith('/api/me') && r.request().method() === 'PATCH'),
+    a.getByRole('radio', { name: 'Teal' }).check(),
+  ]);
+  assert.equal(await accentOf(a), '#2fc4b2', 'the preview did not apply at once');
+  assert.equal(saved.status(), 200);
+  await accentIs(a2, '#2fc4b2');
+  await a2.reload();
+  await signedIn(a2);
+  assert.equal(await accentOf(a2), '#2fc4b2', 'the other device lost the accent on reload');
+  await a.reload();
+  await a.getByRole('radio', { name: 'Teal' }).waitFor();
+  assert.ok(await a.getByRole('radio', { name: 'Teal' }).isChecked(), 'Teal is not checked after a reload');
+  assert.equal(await accentOf(a), '#2fc4b2');
+  await a.getByLabel('Custom colour', { exact: true }).fill('#3050a0');
+  await a.getByText(/^Not allowed\. Dark text on this colour is \d\.\d:1 and needs 4\.5:1\.$/).waitFor();
+  assert.ok(await a.getByRole('button', { name: 'Use colour' }).isDisabled(), 'a refused colour can be used');
+  await a.getByRole('button', { name: /^Use nearest allowed/ }).click();
+  await a.getByText(/^Allowed\./).waitFor();
+  const near = await a.getByLabel('Custom colour', { exact: true }).inputValue();
+  await a.getByRole('button', { name: 'Use colour' }).click();
+  await accentIs(a, near);
+  await accentIs(a2, near);
+  await a.getByRole('button', { name: 'Reset to amber' }).click();
+  await accentIs(a2, '#f0b010');
+  assert.equal((await call(a, 'GET', '/api/me')).user.ui_accent, 'amber');
+  await assert.rejects(call(a, 'PATCH', '/api/me', { ui_accent: 'red' }), /400/);
+  console.log('accent follows the account, custom checked: ok');
+
   await a.goto(`${ORIGIN}/settings/account`);
   const deviceRows = a.getByRole('list', { name: 'Signed-in devices' }).getByRole('listitem');
   await deviceRows.nth(1).waitFor();
