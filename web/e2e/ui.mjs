@@ -1,10 +1,12 @@
 // UI flows for the admin pages, in real Chromium against the release server: alice (owner) creates an invite in the UI,
 // copies the link, and bob signs up with it; a revoked link shows the bad-link text; making bob a moderator gives him the
 // Admin menu entry and the moderator view (no Revoke on a moderator invite); a member who opens /admin sees the not-allowed
-// page; a ban of carol ends her session. Invite links are never printed. Needs ../target/release/vesper-server and dist/
-// (npm run build). Run: npm run e2e
+// page; a ban of carol ends her session. Invite links are never printed. Before those, the primitives' keyboard paths
+// (primitives.mjs, on the dev-only gallery page). After them: layout shift after a join, reduced motion, and a keyboard-only
+// walk with a focus ring on every Tab stop. Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
-import { ORIGIN, browser, cli, cspViolations, signedIn, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, composer, cspViolations, devServer, openRoom, png1x1, searchHits, signedIn, signup, sleep, startServer } from './lib.mjs';
+import { checkPrimitives } from './primitives.mjs';
 
 const BAD_LINK = 'This invite link does not work. Ask the person who sent it for a new one.';
 const DENIED = 'You do not have access to admin pages.';
@@ -22,8 +24,40 @@ async function createInvite(page) {
   return page.getByLabel('Invite link', { exact: true }).inputValue();
 }
 
+// Records the keyframes of every Element.animate call (anime's WAAPI build uses it), for the motion checks.
+const recordMotion = () => {
+  window.__motion = [];
+  const animate = Element.prototype.animate;
+  Element.prototype.animate = function (k, o) { window.__motion.push(JSON.stringify(k)); return animate.call(this, k, o); };
+};
+// The keyframes animated since the last call: the recorded ones plus the CSS animations and transitions running now.
+const motionSince = (page) => page.evaluate(() => {
+  const all = [...window.__motion, ...document.getAnimations().map((a) => JSON.stringify(a.effect?.getKeyframes?.() ?? []))];
+  window.__motion = [];
+  return all;
+});
+const moves = (frames) => frames.filter((f) => /"(transform|translate|scale|rotate)"/.test(f));
+
+async function signIn(page, name) {
+  await page.goto(`${ORIGIN}/login`);
+  await page.getByLabel('Username').fill(name);
+  await page.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await signedIn(page);
+}
+
 const stop = await startServer();
 try {
+  // The primitives' keyboard paths, on the dev-only gallery page from a Vite dev server.
+  const gallery = await browser('gallery');
+  await checkPrimitives(async (u) => {
+    const p = await gallery.page.context().newPage();
+    p.on('pageerror', (e) => gallery.errors.push(`gallery: ${e}`));
+    await p.goto(u);
+    return p;
+  }, `${await devServer()}/_gallery?primitives`);
+  console.log('primitives keyboard paths: ok');
+
   const alice = await browser('alice');
   const a = alice.page;
   await signup(a, await cli(['create-owner']), 'alice');
@@ -217,8 +251,149 @@ try {
   await a.getByRole('button', { name: 'Unban carol' }).waitFor();
   console.log('ban ends the session: ok');
 
-  for (const p of [a, b, s]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
-  assert.deepEqual([alice, bob, carol, stranger].flatMap((x) => x.errors), [], 'page errors');
+  // Layout shift on bob's page, from after his join: opening a room, a message arriving, an image loading, hovering the
+  // messages and the typing line. Shifts within 500 ms of his own input do not count (as in CLS).
+  await openRoom(a, 'general');
+  await openRoom(b, 'general');
+  await b.getByRole('button', { name: 'Join voice' }).click();
+  await b.getByRole('button', { name: 'Leave' }).waitFor();
+  await sleep(500);
+  await b.evaluate(() => {
+    window.__shift = [];
+    new PerformanceObserver((l) => window.__shift.push(...l.getEntries().map((e) => ({ v: e.value, input: e.hadRecentInput })))).observe({ type: 'layout-shift' });
+  });
+  await openRoom(b, 'hangout');
+  await openRoom(b, 'general');
+  await sleep(700);
+  const general = Number(new URL(b.url()).pathname.split('/').pop());
+  const post = (body, attachments = []) => a.evaluate(([room, body, attachments]) => fetch(`/api/rooms/${room}/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body, reply_to: null, attachments }),
+  }), [general, body, attachments]);
+  await post('a message arriving');
+  await b.getByText('a message arriving', { exact: true }).waitFor();
+  const img = await a.evaluate(async ([room, bytes]) => (await (await fetch(`/api/rooms/${room}/uploads?name=dot.png`, { method: 'POST', body: new Uint8Array(bytes) })).json()).attachment.id, [general, [...png1x1()]]);
+  await post('an image', [img]);
+  await b.getByRole('button', { name: 'Open image dot.png' }).waitFor();
+  await b.waitForFunction(() => [...document.querySelectorAll('img')].some((i) => i.alt === 'dot.png' && i.complete));
+  await sleep(500);
+  for (const t of ['a message arriving', 'an image']) { await b.getByText(t, { exact: true }).hover(); await sleep(300); }
+  await b.mouse.move(5, 5);
+  await composer(a).pressSequentially('typing');
+  await b.getByText('alice is typing').waitFor();
+  await composer(a).fill('');
+  await sleep(500);
+  const shifts = await b.evaluate(() => window.__shift);
+  const cls = shifts.filter((x) => !x.input).reduce((n, x) => n + x.v, 0);
+  console.log(`layout shift after join: ${cls.toFixed(4)} (${shifts.length} entries)`);
+  assert.ok(cls < 0.02, `layout shift ${cls} is 0.02 or more`);
+  await b.getByRole('button', { name: 'Leave' }).click();
+  console.log('layout shift: ok');
+
+  // Reduced motion: opening a dialog, the call bar and a jump move nothing (opacity only).
+  const calm = await browser('calm');
+  const r = calm.page;
+  await r.emulateMedia({ reducedMotion: 'reduce' });
+  await r.addInitScript(recordMotion);
+  await signIn(r, 'bob');
+  await openRoom(r, 'general');
+  await motionSince(r);
+  await r.getByRole('button', { name: 'Join voice' }).click();
+  await r.getByRole('button', { name: 'Leave' }).waitFor();
+  const barMotion = await motionSince(r);
+  await r.locator('main').focus();
+  await r.keyboard.press('Shift+Slash');
+  await r.getByRole('dialog', { name: 'Keyboard shortcuts' }).waitFor();
+  const dialogMotion = await motionSince(r);
+  await r.keyboard.press('Escape');
+  await r.getByRole('dialog', { name: 'Keyboard shortcuts' }).waitFor({ state: 'hidden' });
+  await r.getByRole('button', { name: 'Search', exact: true }).click();
+  await r.getByLabel('Search messages').fill('arriving');
+  await searchHits(r).first().click();
+  await r.getByRole('dialog', { name: 'Search' }).waitFor({ state: 'hidden' });
+  const jumpMotion = await motionSince(r);
+  assert.ok(dialogMotion.length && barMotion.length, 'no motion recorded: the hook missed the animations');
+  assert.deepEqual(moves([...dialogMotion, ...barMotion, ...jumpMotion]), [], 'something moves under reduced motion');
+  await r.getByRole('button', { name: 'Leave' }).click();
+  console.log('reduced motion: ok');
+
+  // Keyboard only after the first page load: sign in, Ctrl+K to a room, Join voice by Tab and Enter, Ctrl+Shift+M, send,
+  // Up edits, Esc cancels, Ctrl+Shift+F and Enter jumps, Ctrl+K Settings and Esc back. Every Tab stop shows an outline.
+  const keys = await browser('keys');
+  const k = keys.page;
+  await k.addInitScript(recordMotion);
+  await k.goto(`${ORIGIN}/login`);
+  await k.getByLabel('Username').waitFor();
+  const tabTo = async (want) => {
+    for (let i = 0; i < 100; i++) {
+      await k.keyboard.press('Tab');
+      await sleep(150); // a border ring fades in over --dur-1
+      const at = await k.evaluate(() => {
+        const e = document.activeElement;
+        if (!e || e === document.body) return null;
+        const cs = getComputedStyle(e);
+        const name = (e.getAttribute('aria-label') || e.labels?.[0]?.innerText || e.innerText || '').trim().split('\n')[0];
+        // A ring is an outline, or (the composer) a parent's border in the focus colour.
+        const probe = document.body.appendChild(document.createElement('i'));
+        probe.style.color = 'var(--focus)';
+        const focus = getComputedStyle(probe).color;
+        probe.remove();
+        const parents = [e.parentElement, e.parentElement?.parentElement].filter(Boolean);
+        return { name, ring: (cs.outlineStyle !== 'none' && cs.outlineWidth !== '0px') || parents.some((p) => getComputedStyle(p).borderTopColor === focus) };
+      });
+      if (!at) continue;
+      assert.ok(at.ring, `no focus outline on ${JSON.stringify(at.name)}`);
+      if (at.name === want) return;
+    }
+    assert.fail(`Tab never reached ${want}`);
+  };
+  const focusedName = () => k.evaluate(() => document.activeElement?.getAttribute('aria-label'));
+  await tabTo('Username');
+  await k.keyboard.type('alice');
+  await tabTo('Password');
+  await k.keyboard.type('test-password-1');
+  await k.keyboard.press('Enter');
+  await signedIn(k);
+  await k.keyboard.press('Control+k');
+  await k.getByRole('combobox', { name: 'Switch to' }).waitFor();
+  await k.keyboard.type('general');
+  await k.keyboard.press('Enter');
+  await k.getByRole('heading', { level: 1, name: 'general', exact: true }).waitFor();
+  await tabTo('Join voice');
+  await k.keyboard.press('Enter');
+  await k.getByRole('button', { name: 'Leave' }).waitFor();
+  assert.ok(moves(await motionSince(k)).length > 0, 'the call bar rose without moving: the reduced motion check proves nothing');
+  await k.keyboard.press('Control+Shift+M');
+  await k.getByRole('button', { name: 'Unmute' }).waitFor();
+  await tabTo('Message');
+  await k.keyboard.type('kiwi from the keyboard');
+  await k.keyboard.press('Enter');
+  await k.locator('article').filter({ hasText: 'kiwi from the keyboard' }).waitFor();
+  await k.keyboard.press('ArrowUp');
+  const edit = k.getByRole('textbox', { name: 'Edit message' });
+  await edit.waitFor();
+  assert.equal(await edit.inputValue(), 'kiwi from the keyboard');
+  await k.keyboard.press('Escape');
+  await edit.waitFor({ state: 'detached' });
+  assert.equal(await focusedName(), 'Message', 'Esc on the edit did not give focus back to the composer');
+  await k.keyboard.press('Control+Shift+F');
+  await k.getByLabel('Search messages').waitFor();
+  await k.keyboard.type('kiwi');
+  await searchHits(k).first().waitFor();
+  await k.keyboard.press('Enter');
+  await k.getByRole('dialog', { name: 'Search' }).waitFor({ state: 'hidden' });
+  await k.waitForURL(/\/r\/\d+/);
+  await k.keyboard.press('Control+k');
+  await k.keyboard.type('Settings');
+  await k.getByRole('option', { selected: true, name: /Settings: Voice/ }).waitFor();
+  await k.keyboard.press('Enter');
+  await k.locator('#main').getByRole('heading', { level: 2, name: 'Voice' }).waitFor();
+  await k.keyboard.press('Escape');
+  await k.getByRole('heading', { level: 1, name: 'general', exact: true }).waitFor();
+  await k.getByRole('button', { name: 'Leave' }).waitFor(); // still in the call
+  console.log('keyboard only: ok');
+
+  for (const p of [a, b, s, r, k]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
+  assert.deepEqual([gallery, alice, bob, carol, stranger, calm, keys].flatMap((x) => x.errors), [], 'page errors');
   await signedIn(a);
   console.log('e2e ui: PASS');
 } finally {

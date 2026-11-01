@@ -1,10 +1,12 @@
 // Helpers for the e2e tests: a release server on a throwaway data dir, its admin CLI, and browsers with fake microphones.
 import { spawn, execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { crc32, deflateSync } from 'node:zlib';
 import { chromium } from 'playwright-core';
 
 const web = fileURLToPath(new URL('..', import.meta.url));
@@ -14,6 +16,7 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let env = null;
 const browsers = [];
+let dev = null; // { url: Promise<string>, kill() }
 
 // Starts the server on 127.0.0.1:18090 (UDP 18091) with a new data dir and waits for /health. Returns stop(), which also
 // has stop.restart(during, extraEnv): it stops the server, awaits during() while it is down, then starts it again on the same
@@ -42,6 +45,8 @@ export async function startServer() {
   const stop = async () => {
     process.off('SIGINT', onSigint);
     await Promise.all(browsers.map((b) => b.close()));
+    dev?.kill();
+    dev = null;
     await kill();
     await rm(dataDir, { recursive: true, force: true });
   };
@@ -68,6 +73,23 @@ export async function startServer() {
     await healthy();
   };
   return stop;
+}
+
+// A Vite dev server for the dev-only /_gallery pages (the build leaves them out), started once on a spare port; the stop()
+// of startServer kills it. Returns its URL.
+export function devServer() {
+  if (!dev) {
+    let vite;
+    const url = (async () => {
+      const port = await new Promise((r) => { const s = createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+      vite = spawn('node_modules/.bin/vite', ['--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: web, stdio: 'ignore' });
+      const u = `http://127.0.0.1:${port}`;
+      for (let i = 0; i < 80 && !(await fetch(u).then((r) => r.ok, () => false)); i++) await sleep(250);
+      return u;
+    })();
+    dev = { url, kill: () => vite?.kill('SIGTERM') };
+  }
+  return dev.url;
 }
 
 // Runs `vesper-server <args>` on the same data dir and returns its stdout, trimmed.
@@ -178,3 +200,22 @@ export async function searchFor(page, text, { keys = false } = {}) {
 
 // The search dialog's result buttons that show a highlighted match.
 export const searchHits = (page) => page.getByLabel('Search results').locator('button', { has: page.locator('mark') });
+
+// A 1x1 RGBA PNG, built here so no binary is committed.
+export function png1x1() {
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE(crc32(body), 8 + data.length);
+    return out;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(1, 0);
+  ihdr.writeUInt32BE(1, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // RGBA
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return Buffer.concat([signature, chunk('IHDR', ihdr), chunk('IDAT', deflateSync(Buffer.from([0, 255, 0, 0, 255]))), chunk('IEND', Buffer.alloc(0))]);
+}

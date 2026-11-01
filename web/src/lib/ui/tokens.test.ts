@@ -47,6 +47,12 @@ it('ui_pairs_meet_3', () => {
   expect(low).toEqual([]);
 });
 
+// --fg-3 is borderline on hover rows and fails on selected ones: selected rows use --fg-2 for meta (checked above).
+it('fg_3_passes_on_hover_and_fails_on_selected', () => {
+  expect(contrast('--fg-3', '--bg-hover')).toBeGreaterThanOrEqual(4.5);
+  expect(contrast('--fg-3', '--bg-selected')).toBeLessThan(4.5);
+});
+
 it('measured_values_match_the_plan', () => {
   expect(contrast('--fg', '--bg-app')).toBeCloseTo(16.4, 0);
   expect(contrast('--on-accent', '--accent')).toBeCloseTo(10.0, 0);

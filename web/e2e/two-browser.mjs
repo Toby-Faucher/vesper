@@ -6,8 +6,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { crc32, deflateSync } from 'node:zlib';
-import { browser, cli, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, searchFor, searchHits, signup, sleep, startServer } from './lib.mjs';
+import { browser, cli, png1x1, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, searchFor, searchHits, signup, sleep, startServer } from './lib.mjs';
 
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
@@ -15,25 +14,6 @@ async function join(page) {
   await openRoom(page, 'general');
   await page.getByRole('button', { name: 'Join' }).click();
   await page.getByRole('button', { name: 'Leave' }).waitFor();
-}
-
-// A 1x1 RGBA PNG, built here so no binary is committed.
-function png1x1() {
-  const chunk = (type, data) => {
-    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
-    const out = Buffer.alloc(12 + data.length);
-    out.writeUInt32BE(data.length, 0);
-    body.copy(out, 4);
-    out.writeUInt32BE(crc32(body), 8 + data.length);
-    return out;
-  };
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(1, 0);
-  ihdr.writeUInt32BE(1, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // RGBA
-  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  return Buffer.concat([signature, chunk('IHDR', ihdr), chunk('IDAT', deflateSync(Buffer.from([0, 255, 0, 0, 255]))), chunk('IEND', Buffer.alloc(0))]);
 }
 
 // fetch from the page, so it sends the session cookie and the Origin header as the app does.
