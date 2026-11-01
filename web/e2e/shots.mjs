@@ -467,7 +467,7 @@ function plans({ alice, bob, api }) {
     m.push(await post('a', 'anyone up for a game tonight?'));
     m.push(await post('b', 'I can do 9'));
     m.push(await post('b', 'after dinner works better for me'));
-    m.push(await post('a', 'this is the config I use for voice:\n```\nbitrate = 64\nnoise = deepfilter\n```\nthe `deepfilter` mode helps a lot'));
+    m.push(await post('a', 'this is the config I use for voice:\n```json\n{ "bitrate": 64, "noise": "deepfilter", "ptt": false }\n```\nthe `deepfilter` mode helps a lot'));
     m.push(await post('b', 'count me in', m[5].id));
     const mic = await post('a', 'I fixed my mic, tell me if it still crackles');
     m.push(mic);
@@ -609,7 +609,7 @@ scene('composer', async (ctx) => {
   await openRoom(page, 'general');
   await rest(page);
   await ctx.shot(page, 'composer-empty');
-  await box.fill('three things for friday:\nbring the **good** cable\nsomeone check the `deepfilter` mode\n> last time it crackled\nand snacks');
+  await box.fill('## three things for friday\nbring the **good** cable, *please*\nsomeone check the `deepfilter` mode\n> last time it crackled\n- and ~~chips~~ snacks');
   await still();
   await ctx.shot(page, 'composer-multiline');
   await box.fill('');
