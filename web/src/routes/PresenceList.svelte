@@ -2,11 +2,12 @@
   import type { Peer } from '../lib/gen/Peer';
   import { session } from '../lib/session.svelte';
   import { voice } from '../lib/voice.svelte';
+  import { togglePerson } from '../lib/ui/person.svelte';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   import Speaking from '../lib/ui/c/Speaking.svelte';
   // The people in voice under a room row. Folded, it is a stack of avatars on one line. Speaking is known only for the call
-  // you are in; other rooms send no level, so they show no ring.
+  // you are in; other rooms send no level, so they show no ring. Each person is a button that opens their card.
   let { roomId, roomName, peers, folded }: { roomId: number; roomName: string; peers: Peer[]; folded: boolean } = $props();
 
   const STACK = 8; // avatars drawn when folded; the rest is "+n"
@@ -19,9 +20,11 @@
   <ul class="flex h-7 items-center pr-2 pl-7" aria-label="In voice in {roomName}">
     {#each peers.slice(0, STACK) as p (p.user_id)}
       {@const s = speaking(p)}
-      <li class="stacked -mr-1" class:speaking={s} data-speaking={s ? 'true' : 'false'} title={p.name}>
-        <Avatar user={user(p)} size={20} speaking={s} />
-        <span class="sr-only">{p.name}{s ? ', speaking' : ''}{state(p) ? `, ${state(p)}` : ''}</span>
+      <li class="stacked -mr-1" class:speaking={s} data-speaking={s ? 'true' : 'false'}>
+        <button type="button" class="flex rounded-full" title={p.name} onclick={(e) => togglePerson(p.user_id, e.currentTarget)}>
+          <Avatar user={user(p)} size={20} speaking={s} />
+          <span class="sr-only">{p.name}{s ? ', speaking' : ''}{state(p) ? `, ${state(p)}` : ''}</span>
+        </button>
       </li>
     {/each}
     {#if peers.length > STACK}<li class="ml-2 text-xs text-fg-2 tabular-nums">+{peers.length - STACK}</li>{/if}
@@ -31,15 +34,18 @@
     {#each peers as p (p.user_id)}
       {@const s = speaking(p)}
       {@const st = state(p)}
-      <li class="flex h-7 min-w-0 items-center gap-2 pr-2 pl-7 text-fg-2" class:speaking={s} data-speaking={s ? 'true' : 'false'}>
-        <Avatar user={user(p)} size={20} speaking={s} />
-        <span class="min-w-0 truncate" title={p.name}>{p.name}</span>
-        {#if s}<Speaking />{/if}
-        {#if st}
-          <span class="flex shrink-0 items-center text-danger" title={st === 'deafened' ? 'Deafened' : 'Muted'}>
-            <Icon name={st === 'deafened' ? 'headphones-off' : 'mic-off'} /><span class="sr-only">{st}</span>
-          </span>
-        {/if}
+      <li class="flex min-w-0" class:speaking={s} data-speaking={s ? 'true' : 'false'}>
+        <button type="button" class="person flex h-7 min-w-0 flex-1 items-center gap-2 rounded-sm pr-2 pl-7 text-left text-fg-2"
+          onclick={(e) => togglePerson(p.user_id, e.currentTarget)}>
+          <Avatar user={user(p)} size={20} speaking={s} />
+          <span class="min-w-0 truncate" title={p.name}>{p.name}</span>
+          {#if s}<Speaking />{/if}
+          {#if st}
+            <span class="flex shrink-0 items-center text-danger" title={st === 'deafened' ? 'Deafened' : 'Muted'}>
+              <Icon name={st === 'deafened' ? 'headphones-off' : 'mic-off'} /><span class="sr-only">{st}</span>
+            </span>
+          {/if}
+        </button>
       </li>
     {/each}
   </ul>
@@ -49,5 +55,8 @@
   /* The stack's overlap: each avatar sits on a 2 px ring of the sidebar so the edges read. */
   .stacked { position: relative; display: flex; }
   .stacked :global(.av) { box-shadow: 0 0 0 2px var(--bg-sidebar); }
-  .stacked.speaking { z-index: 1; } /* the ring draws over the next avatar, not under it */
+  .stacked.speaking { z-index: 1; }
+  .person { transition: background-color var(--dur-1) var(--ease-out); }
+  .person:hover { background: var(--bg-hover); color: var(--fg); }
+  .person:focus-visible { outline-offset: -2px; } /* the ring draws over the next avatar, not under it */
 </style>

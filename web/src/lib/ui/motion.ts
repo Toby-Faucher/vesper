@@ -7,7 +7,8 @@ type Kind = 'pop' | 'fade' | 'rise';
 export const reduced = (): boolean => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const ms = (name: string) => parseFloat(token(name)) || 0;
+// The CSS minifier writes 220ms as .22s, so read the unit.
+const ms = (name: string) => { const v = token(name); return (parseFloat(v) || 0) * (v.endsWith('ms') ? 1 : v.endsWith('s') ? 1000 : 1); };
 
 // Under reduced motion, pop and rise become a fade at --dur-1.
 function frames(kind: Kind): { opacity: [number, number]; transform?: [string, string]; duration: number } {
@@ -31,7 +32,8 @@ export function exit(el: Element, kind: Kind): Promise<void> {
     ease: token('--ease-out'),
     persist: true, // hold the end frame until the caller removes the element
   });
-  return a.then(() => undefined);
+  // anime never completes a persisted animation (its then() would wait forever): wait for the browser's own instead.
+  return Promise.all(a.animations.map((x) => x.finished)).then(() => undefined, () => undefined);
 }
 
 // The jump flash: the message background goes to --accent-subtle and fades back.

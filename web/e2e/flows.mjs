@@ -1,7 +1,7 @@
 // UI flows test. Starts the release server like two-browser.mjs and checks, in real Chromium: the invite code leaves
 // the address bar, a bad link, autocomplete attributes, passwords cleared and focus on the error after a failed
-// submit, routes, the call staying up while moving between rooms and settings, force-mute (also on rejoin), a kick
-// ending the call, and a room that becomes private ending the call.
+// submit, routes, the call staying up while moving between rooms and settings, force-mute (also on rejoin and from the
+// person card), a kick ending the call, and a room that becomes private ending the call.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -129,13 +129,26 @@ try {
   await b.getByText(MUTED_NOTICE).waitFor();
   assert.ok(await b.getByRole('button', { name: 'Unmute' }).isDisabled(), 'Mute not disabled when force-muted');
   await b.getByRole('button', { name: 'Leave' }).click();
-  assert.equal(await b.getByText(MUTED_NOTICE).count(), 0, 'force-mute notice stayed after Leave');
+  // The bar goes at once; an inert copy fades out for --dur-3, so wait for that copy too.
+  await b.getByText(MUTED_NOTICE).waitFor({ state: 'detached', timeout: 2000 });
   await join(b, 'general');
   await b.getByText(MUTED_NOTICE).waitFor();
   await call(a, 'POST', `/api/users/${bobId}/force-mute`, { muted: false });
   await b.getByText(MUTED_NOTICE).waitFor({ state: 'detached' });
   assert.ok(await b.getByRole('button', { name: 'Unmute' }).isEnabled(), 'Mute still disabled after the lift');
   console.log('force-mute: ok');
+
+  // The same from the person card: alice (owner) opens bob from the sidebar presence list.
+  await inVoice(a, 'bob').getByRole('button').click();
+  const card = a.getByRole('dialog', { name: 'bob' });
+  await card.getByRole('button', { name: 'Mute for everyone' }).click();
+  await b.getByText(MUTED_NOTICE).waitFor();
+  await card.getByRole('button', { name: 'Allow to speak' }).click();
+  await b.getByText(MUTED_NOTICE).waitFor({ state: 'detached' });
+  await a.keyboard.press('Escape');
+  await card.waitFor({ state: 'hidden' });
+  assert.ok(await inVoice(a, 'bob').getByRole('button').evaluate((e) => e === document.activeElement), 'focus did not go back to the person');
+  console.log('person card force-mute: ok');
 
   // A kick sends peer_left with bob's own id: his call ends, the socket stays.
   await call(a, 'POST', `/api/users/${bobId}/kick`);
@@ -150,7 +163,7 @@ try {
   await call(a, 'PATCH', `/api/rooms/${room.id}`, { restricted: true });
   // The server takes bob out of voice too, so its peer_left may come before rooms_changed: either text ends the call.
   await b.getByRole('button', { name: 'Join' }).waitFor();
-  const why = await b.getByRole('alert').first().textContent();
+  const why = (await b.getByRole('alert').first().textContent()).trim(); // Status puts a space after its icon
   assert.match(why, /^(You no longer have access to that room\.|Your call ended\.)/);
   assert.equal(await roomLink(b, 'secret').count(), 0, 'secret still listed');
   assert.notEqual(roomId(b), room.id, 'still on the hidden room');

@@ -14,7 +14,7 @@
     onclick,
     ...rest
   }: {
-    variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+    variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-ghost';
     size?: 'sm' | 'md';
     loading?: boolean;
     el?: HTMLButtonElement | null; // bind:el to anchor a Popover or Menu
@@ -64,6 +64,8 @@
   .ghost:hover:enabled { background: var(--bg-hover); color: var(--fg); }
   .danger { background: var(--danger-solid); color: var(--on-danger); }
   .danger:hover:enabled { background: color-mix(in oklab, var(--danger-solid), var(--fg) 8%); }
+  .danger-ghost { color: var(--danger-fg); }
+  .danger-ghost:hover:enabled { background: var(--danger-subtle); }
   .label { display: contents; }
   [aria-busy] { cursor: progress; }
   [aria-busy] .label { visibility: hidden; }

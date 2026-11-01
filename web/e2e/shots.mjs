@@ -274,13 +274,13 @@ scene('shell-empty', async ({ alice }) => {
 // Five people in voice in music (two speaking, one muted, one deafened, one with a long name), unread and mention pills
 // on the other rooms, and a long room name. Alice is in the call and reads general.
 let house;
+let extra = []; // carol, dave and Bartholomew, in the music call with alice and bob
 const LONG_ROOM = 'weekend plans and the games list'; // 32 characters, the server's limit
 function fullHouse({ alice, bob, api, seed }) {
   house ??= (async () => {
     await seed();
     const rooms = await api(alice.page, 'GET', '/api/rooms');
     const id = (name) => rooms.find((r) => r.name === name).id;
-    const extra = [];
     for (const [name, display] of [['carol', 'carol'], ['dave', 'dave'], ['bart', 'Bartholomew Featherstonehaugh']]) {
       const { url } = await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 });
       const b = await browser(name, [], { viewport: VIEWPORT });
@@ -322,6 +322,109 @@ scene('shell-collapsed', async (ctx) => {
   await rest(page);
   await ctx.shot(page, 'shell-collapsed');
   await page.getByRole('button', { name: 'Show sidebar' }).click();
+});
+
+// The call bar: alice reads general while in the music call with four others (two muted or deafened, one speaking).
+const bar = (page) => page.getByRole('region', { name: 'Call' });
+scene('call-bar', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  await bar(page).locator('[data-speaking]').first().waitFor({ timeout: 10000 }).catch(() => console.warn('call-bar: nobody seen speaking'));
+  await rest(page);
+  await ctx.shot(page, 'call-bar');
+  await page.getByRole('button', { name: 'Mute', exact: true }).click();
+  await page.getByRole('button', { name: 'Deafen', exact: true }).click();
+  await rest(page);
+  await ctx.shot(page, 'call-muted-deafened');
+  await page.getByRole('button', { name: 'Unmute' }).click();
+  await page.getByRole('button', { name: 'Undeafen' }).click();
+  // The narrowest main pane: 1024 px wide with the sidebar open.
+  await page.setViewportSize({ width: 1024, height: 640 });
+  await rest(page);
+  await ctx.shot(page, 'call-narrow');
+  await page.setViewportSize(VIEWPORT);
+});
+// Push to talk on (from Settings), first idle, then with the key held.
+scene('call-ptt', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByLabel('Push to talk').check();
+  await page.goBack();
+  await page.getByText('Push to talk: hold Space').waitFor();
+  await rest(page);
+  await ctx.shot(page, 'call-ptt-idle');
+  await page.keyboard.down('Space');
+  await bar(page).getByText('Talking').waitFor();
+  await sleep(300);
+  await ctx.shot(page, 'call-ptt');
+  await page.keyboard.up('Space');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByLabel('Push to talk').uncheck();
+  await page.goBack();
+});
+// Bob is muted by the owner: Mute is disabled and the notice is in the status line.
+scene('call-force-muted', async (ctx) => {
+  await fullHouse(ctx);
+  const me = await api(ctx.bob.page, 'GET', '/api/me');
+  await api(ctx.alice.page, 'POST', `/api/users/${me.user.user_id}/force-mute`, { muted: true });
+  await ctx.bob.page.getByText('A moderator muted you.').waitFor();
+  await rest(ctx.bob.page);
+  await ctx.shot(ctx.bob.page, 'call-force-muted');
+  await api(ctx.alice.page, 'POST', `/api/users/${me.user.user_id}/force-mute`, { muted: false });
+});
+// A weak connection: alice's stats report 420 ms round trip (getStats is wrapped through the window.__pcs hook).
+scene('call-weak', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  await page.evaluate(() => {
+    const pc = window.__pcs.at(-1);
+    const get = pc.getStats.bind(pc);
+    pc.getStats = async () => new Map([...(await get()).entries()].map(([k, v]) => [k, v.type === 'candidate-pair' ? { ...v, currentRoundTripTime: 0.42 } : v]));
+  });
+  await bar(page).getByText('Weak connection: 420 ms delay').waitFor({ timeout: 10000 });
+  await rest(page);
+  await ctx.shot(page, 'call-weak');
+});
+// Person cards. A member (bob) opens alice from the call bar and turns her up past 100 %; a moderator (dave) opens carol
+// from the sidebar and sees the voice actions, then the Disconnect confirm. Dave on alice (the owner) gets no actions.
+scene('person-card', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.bob.page;
+  await bar(page).getByRole('button', { name: 'alice' }).click();
+  const card = page.getByRole('dialog', { name: 'alice' });
+  await card.getByRole('slider', { name: 'Volume for alice' }).fill('140');
+  await card.getByText('Above 100 % can distort.').waitFor();
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'person-card');
+  await card.getByRole('button', { name: 'Reset' }).click();
+  await page.keyboard.press('Escape');
+});
+scene('person-card-mod', async (ctx) => {
+  await fullHouse(ctx);
+  const users = await api(ctx.alice.page, 'GET', '/api/users');
+  const dave = users.find((u) => u.username === 'dave');
+  await api(ctx.alice.page, 'PATCH', `/api/users/${dave.user_id}/role`, { role: 'moderator' });
+  const page = extra[1].page; // dave's tab learns the new role from user_updated
+  await inVoice(page, 'carol').getByRole('button').click();
+  const card = page.getByRole('dialog', { name: 'carol' });
+  await card.getByRole('button', { name: 'Remove from voice' }).waitFor();
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'person-card-mod');
+  await card.getByRole('button', { name: 'Disconnect' }).click();
+  await page.getByRole('dialog', { name: 'Disconnect carol?' }).waitFor();
+  await sleep(300);
+  await ctx.shot(page, 'person-card-confirm', { fullPage: false });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.keyboard.press('Escape');
+  await card.waitFor({ state: 'hidden' });
+  await inVoice(page, 'alice').getByRole('button').click();
+  const owner = page.getByRole('dialog', { name: 'alice' });
+  await owner.getByText('Owner').waitFor();
+  if (await owner.getByRole('button', { name: 'Disconnect' }).count()) throw new Error('person-card-mod: a moderator sees actions on the owner');
+  await page.keyboard.press('Escape');
 });
 
 // A restricted room: alice (owner) sees it with its label; bob (member) opening its address gets the plain missing state.

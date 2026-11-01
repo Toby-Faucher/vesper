@@ -2,12 +2,14 @@
   import { onMount, untrack } from 'svelte';
   import { href, parse } from '../lib/route';
   import { navigate, route, session } from '../lib/session.svelte';
-  import { startVoice } from '../lib/voice.svelte';
+  import { startVoice, voice } from '../lib/voice.svelte';
+  import { closePerson, person } from '../lib/ui/person.svelte';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
   import { UI_MESSAGES } from '../lib/ui/messages';
   import Button from '../lib/ui/c/Button.svelte';
   import EmptyState from '../lib/ui/c/EmptyState.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
+  import CallBar from './CallBar.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
   import RoomView from './RoomView.svelte';
   import Sidebar from './Sidebar.svelte';
@@ -48,6 +50,7 @@
     e.preventDefault();
     navigate(a.pathname);
   }
+  let barH = $state(0); // the pane keeps this much room below its content for the call bar
   const title = $derived(r.name === 'settings' ? 'Settings' : r.name === 'admin' ? 'Admin' : '');
 </script>
 
@@ -55,7 +58,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="grid h-screen overflow-hidden {sidebar.collapsed ? 'grid-cols-[1fr]' : 'grid-cols-[248px_1fr]'}" {onclick}>
   {#if !sidebar.collapsed}<Sidebar current={room?.id ?? null} />{/if}
-  <main class="flex h-screen min-w-0 flex-col">
+  <main class="relative flex h-screen min-w-0 flex-col" style:padding-bottom={voice.joined ? `${barH + 24}px` : null}>
     <ConnectionBanner />
     {#if room}
       <RoomView {room} />
@@ -82,8 +85,15 @@
         {#snippet action()}<Button onclick={() => navigate('/')}>{UI_MESSAGES.goHome}</Button>{/snippet}
       </EmptyState>
     {/if}
+    {#if voice.joined}<CallBar bind:height={barH} />{/if}
   </main>
 </div>
+
+{#if person.id}
+  {#await import('./PersonCard.svelte') then m}
+    {#key person.anchor}<m.default userId={person.id} anchor={person.anchor} side={person.side} onclose={closePerson} />{/key}
+  {/await}
+{/if}
 
 {#snippet pageHeader(text: string, closable = false)}
   {#if text || sidebar.collapsed}

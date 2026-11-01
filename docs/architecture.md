@@ -28,7 +28,7 @@ The "Not verified" list at the end says what was only read.
 - **The web app** (`web/src/App.svelte`, paths in `web/src/lib/route.ts`) has `/login`, `/invite` (signup; the code is read from the part after `#`, then removed from the URL)
   and the app shell (`web/src/routes/Shell.svelte`) for every other path, which needs a session (`GET /api/me`, else `/login`): `/r/<id>` (a room),
   `/settings/<section>`, `/admin/<section>`, and `/`, which opens the last room (`localStorage['vesper.lastRoom']`) or the first. Any other path
-  shows a plain not-found page. The shell starts the call store once, so a call stays up while you move between pages. `web/src/lib/session.svelte.ts` keeps one socket per
+  shows a plain not-found page. The shell starts the call store once, so a call stays up while you move between pages, and shows the call bar (`CallBar.svelte`) at the bottom of the main pane while you are in voice. A person in the sidebar or the call bar opens their person card (`PersonCard.svelte`: volume, and the moderator voice actions). `web/src/lib/session.svelte.ts` keeps one socket per
   page and the state it pushes (`state.ts`). After a close it reconnects after a random wait that doubles from 1 to 2 s up to 15 to 30 s, asking `/api/me` first; the wait
   starts over only after a socket stayed up for 10 s.
   It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). A `peer_left` with your
