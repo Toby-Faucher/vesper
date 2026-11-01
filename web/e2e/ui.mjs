@@ -301,7 +301,8 @@ try {
   await b.getByRole('button', { name: 'Leave' }).click();
   console.log('layout shift: ok');
 
-  // Reduced motion: opening a dialog, the call bar and a jump move nothing (opacity only).
+  // Reduced motion: opening a dialog, the call bar, a jump, a new message, a room switch (the sidebar glide too) and a
+  // settings section move nothing (opacity only).
   const calm = await browser('calm');
   const r = calm.page;
   await r.emulateMedia({ reducedMotion: 'reduce' });
@@ -323,8 +324,18 @@ try {
   await searchHits(r).first().click();
   await r.getByRole('dialog', { name: 'Search' }).waitFor({ state: 'hidden' });
   const jumpMotion = await motionSince(r);
-  assert.ok(dialogMotion.length && barMotion.length, 'no motion recorded: the hook missed the animations');
-  assert.deepEqual(moves([...dialogMotion, ...barMotion, ...jumpMotion]), [], 'something moves under reduced motion');
+  await composer(r).fill('calm hello');
+  await composer(r).press('Enter');
+  await r.locator('article').filter({ hasText: 'calm hello' }).waitFor();
+  await openRoom(r, 'hangout');
+  await openRoom(r, 'general');
+  await r.getByRole('button', { name: 'Settings', exact: true }).click();
+  await r.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Appearance' }).click();
+  await sleep(300);
+  const chatMotion = await motionSince(r);
+  assert.ok(dialogMotion.length && barMotion.length && chatMotion.length, 'no motion recorded: the hook missed the animations');
+  assert.deepEqual(moves([...dialogMotion, ...barMotion, ...jumpMotion, ...chatMotion]), [], 'something moves under reduced motion');
+  await r.keyboard.press('Escape');
   await r.getByRole('button', { name: 'Leave' }).click();
   console.log('reduced motion: ok');
 
@@ -406,6 +417,7 @@ try {
   await k.keyboard.type('kiwi from the keyboard');
   await k.keyboard.press('Enter');
   await k.locator('article').filter({ hasText: 'kiwi from the keyboard' }).waitFor();
+  assert.ok(moves(await motionSince(k)).length > 0, 'a new message did not rise in: the reduced motion check proves nothing');
   await k.keyboard.press('ArrowUp');
   const edit = k.getByRole('textbox', { name: 'Edit message' });
   await edit.waitFor();

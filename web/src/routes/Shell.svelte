@@ -7,6 +7,7 @@
   import { closePerson, person } from '../lib/ui/person.svelte';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
   import { layers } from '../lib/ui/layers.svelte';
+  import { settle } from '../lib/ui/motion';
   import { chat } from '../lib/chat.svelte';
   import { isMac, isTyping, nextUnread, shortcut, stepRoom } from '../lib/ui/keys';
   import { loadRecent, pushRecent } from '../lib/ui/recent';
@@ -26,6 +27,7 @@
   // The signed-in app: the sidebar and the routed page. It lives as long as the sign-in, so the call does too: startVoice()
   // runs once here, and its cleanup (sign out) ends the call and resets its state.
   onMount(startVoice);
+  onMount(() => settle()); // the first rooms, counts and people appear without motion
   // The tab title carries the mention count; it drops as rooms are read.
   $effect(() => {
     document.title = titleFor(mentionCount(session.state));

@@ -6,6 +6,7 @@
   import { navigate, session } from '../lib/session.svelte';
   import { voice } from '../lib/voice.svelte';
   import { setCollapsed } from '../lib/ui/sidebar.svelte';
+  import { glide } from '../lib/ui/motion';
   import { layers } from '../lib/ui/layers.svelte';
   import { isMac } from '../lib/ui/keys';
   import { UI_MESSAGES } from '../lib/ui/messages';
@@ -34,6 +35,18 @@
     return self?.room_id === id ? [self, ...list] : list;
   };
   let accountEl = $state<HTMLButtonElement | null>(null);
+  // Another room opened: its selected fill glides over from the one before.
+  let nav: HTMLElement;
+  let was: HTMLElement | null = null;
+  $effect.pre(() => {
+    void current;
+    was = nav?.querySelector('.row.current') ?? null;
+  });
+  $effect(() => {
+    void current;
+    const now = nav.querySelector<HTMLElement>('.row.current');
+    if (was && now) glide(was, now);
+  });
   let menuOpen = $state(false);
 </script>
 
@@ -48,7 +61,7 @@
     </span>
   </div>
 
-  <nav aria-label="Rooms" class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+  <nav bind:this={nav} aria-label="Rooms" class="relative isolate min-h-0 flex-1 overflow-y-auto px-2 pb-3">
     <h2 class="flex h-7 items-center px-2 text-xs text-fg-3">Rooms</h2>
     {#if rooms.length}
       <ul class="flex flex-col gap-px">

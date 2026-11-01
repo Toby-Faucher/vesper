@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { motion } from '../../lib/ui/motion';
   import { ADMIN_NAMES as NAMES, ADMIN_OWNER_ONLY, ADMIN_SECTIONS, href, type AdminSection } from '../../lib/route';
   import { navigate, session } from '../../lib/session.svelte';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
@@ -29,7 +30,8 @@
         {/each}
       </ul>
     </nav>
-    <div class="min-w-0 max-w-200 flex-1 pb-12">
+    {#key section}
+    <div class="min-w-0 max-w-200 flex-1 pb-12" in:motion={'swap'}>
       {#if !sections.includes(section)}
         {@render denied(M.adminOwnerOnly)}
       {:else}
@@ -45,6 +47,7 @@
         {/if}
       {/if}
     </div>
+    {/key}
   </div>
 {/if}
 
