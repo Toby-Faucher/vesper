@@ -124,7 +124,11 @@ bob's finds exactly his 1, and the hit jumps to the message. The test sets the d
 
 `web/e2e/flows.mjs` then starts a fresh server the same way and checks the UI in Chromium: a bad invite link, the invite code leaving the
 address bar, autocomplete attributes, an empty password field and focus on the error after a failed sign in or signup, force-mute (also
-after a rejoin, and lifted), a kick ending the call, and a room made private ending the call.
+after a rejoin, and lifted), a kick ending the call, and a room made private ending the call. If `web/dist/dsp/` exists
+(`scripts/build-dsp.sh`, then `npm run build`), it also signs alice in with DeepFilterNet on and checks the denoiser starts.
+
+Both tests fail on any CSP block: each page records `securitypolicyviolation` events and console lines about the Content Security
+Policy, through sign up, sign in, voice, chat, upload and search ([decision 0008](decisions/0008-csp.md)).
 
 The fixture is synthetic (voiced syllables with vowel formants), so it has no third-party licence. `node web/e2e/fixtures/make-speech.mjs` rebuilds it.
 Not checked: the inbound `audioLevel` stat. It stays 0 because the app plays remote audio through Web Audio with the `<audio>` element muted.

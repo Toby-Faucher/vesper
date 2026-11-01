@@ -12,13 +12,7 @@ vesper.tfaucher.com {
 	reverse_proxy 127.0.0.1:8080   # or vesper:8080 on a shared docker network
 
 	# HSTS makes browsers refuse plain HTTP for this name for a year: keep it only once HTTPS works.
-	header {
-		Strict-Transport-Security "max-age=31536000"
-		Referrer-Policy "no-referrer"
-		Permissions-Policy "microphone=(self)"
-		X-Content-Type-Options "nosniff"
-		# CSP is UNTESTED against the real app (a wrong CSP silently breaks WASM, the audio worklet
-		# or WebRTC). Try it in a browser with the console open before enabling:
-		# Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' wss://vesper.tfaucher.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; base-uri 'none'"
-	}
+	# Vesper sends the same HSTS and its own CSP, Referrer-Policy, Permissions-Policy, COOP and nosniff
+	# (docs/decisions/0008-csp.md): do not set those here, a second copy would conflict.
+	header Strict-Transport-Security "max-age=31536000"
 }

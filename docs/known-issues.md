@@ -5,7 +5,6 @@ Last updated 2026-11-01. Nothing here was run in a real browser or a real deploy
 
 ## Security and abuse
 
-- **No Content-Security-Policy.** See [decision 0004](decisions/0004-no-csp-yet.md).
 - **Plain HTTP connections before the upgrade are not limited.** A slow client can hold a connection on `/ws` or `/health`. The cap of 256 sockets counts upgraded sockets only.
 - **A very large `VESPER_MAX_SOCKETS` panics at start.** Keep it in the hundreds.
 - **The client address trusts headers from private peers.** When the TCP peer is loopback or private, the server takes a valid `CF-Connecting-IP`,

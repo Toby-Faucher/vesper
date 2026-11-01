@@ -700,3 +700,30 @@ async fn served_over_http_keeps_upload_headers() {
         assert!(!res.contains("sqlite"), "{bad}");
     }
 }
+
+#[tokio::test]
+async fn upload_keeps_sandbox_csp() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let id = upload_ok(&server, &alice, general(&server).await, &png()).await;
+    let res = wire_get(&server, &format!("/api/uploads/{id}"), &alice).await;
+    assert!(res.starts_with("http/1.1 200"), "{res}");
+    // Exactly one policy, the sandbox: the page's global CSP must not replace or join it.
+    let csp: Vec<&str> = res
+        .lines()
+        .filter(|l| l.starts_with("content-security-policy:"))
+        .collect();
+    assert_eq!(
+        csp,
+        ["content-security-policy: default-src 'none'; sandbox"],
+        "{res}"
+    );
+    // The other security headers still come from `guard`.
+    for want in [
+        "referrer-policy: no-referrer",
+        "x-content-type-options: nosniff",
+        "cross-origin-opener-policy: same-origin",
+    ] {
+        assert!(res.contains(want), "{want}: {res}");
+    }
+}

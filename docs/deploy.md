@@ -78,7 +78,10 @@ Rolling back to the shared-key image needs the old `deploy/compose.yaml` too (th
 
 ## Security headers
 
-The server sets `X-Content-Type-Options: nosniff` only. `deploy/Caddyfile.example` adds HSTS, `Referrer-Policy`, `Permissions-Policy` and `X-Content-Type-Options`. Nothing sends a Content-Security-Policy: a suggested CSP is commented out in the Caddyfile; it is **untested** against the real app (WASM, the audio worklet and WebRTC all break silently under a wrong CSP), so verify in a browser before enabling it.
+The server sets the security headers itself, on every response: a strict Content-Security-Policy, `Referrer-Policy`, `Permissions-Policy`
+(microphone for this site only), `Cross-Origin-Opener-Policy`, `X-Content-Type-Options`, and HSTS when `VESPER_ORIGIN` is https. The policy
+and why each part is there: [decision 0008](decisions/0008-csp.md). Uploads keep their own sandbox policy. `deploy/Caddyfile.example` sets
+only HSTS (the same value), so the headers do not depend on Caddy. Verified in headless Chromium by the e2e test; not verified through Caddy.
 
 ## Not verified
 
@@ -89,7 +92,7 @@ Last updated 2026-11-01. Written and checked for syntax and against the real fil
 - `compose.yaml` was read, not parsed by compose; `vesper.service` passes `systemd-analyze verify` apart from the binary not existing, and its hardening options were not run (check `MemoryDenyWriteExecute` and `SystemCallFilter` with a real start).
 - Dockge deploy, router forward, split DNS, Caddy, certificates.
 - The phone-on-cellular connectivity check.
-- The CSP in the Caddyfile.
+- The server's headers through Caddy and Cloudflare (Cloudflare can add or change headers).
 - The `data` bind mount, `create-owner` and `invite` through `docker compose exec`, the `systemd-run` form for the binary install, the backup commands and the "Upgrade from the shared key" steps.
 
 Verified locally: the release server serves `web/dist` (index, SPA fallback, `application/wasm`, `text/javascript`, `nosniff`, dotfiles and `..` traversal refused) and `/health`/`/ws` still work (`crates/vesper-server/tests/static_files.rs`).

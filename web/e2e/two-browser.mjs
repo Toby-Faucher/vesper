@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
-import { browser, cli, signup, sleep, startServer } from './lib.mjs';
+import { browser, cli, cspViolations, signup, sleep, startServer } from './lib.mjs';
 
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
@@ -173,6 +173,8 @@ try {
   await boldBob(bob.page).waitFor({ timeout: 5000 });
   console.log('search_roundtrip: ok');
 
+  for (const p of [alice.page, bob.page]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
+  console.log('no CSP violations: ok');
   assert.deepEqual([...alice.errors, ...bob.errors], [], 'page errors');
   console.log('e2e two-browser: PASS');
 } finally {

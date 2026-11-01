@@ -1,6 +1,6 @@
 # 0004. No Content-Security-Policy yet
 
-Status: accepted, revisit before accounts, 2026-10-30
+Status: superseded by [0008](0008-csp.md), 2026-11-01 (accepted 2026-10-30)
 
 Context: The design calls for a strict CSP, HttpOnly SameSite cookies and CSRF protection. Today the server serves a static app, holds no cookies and renders no user content.
 

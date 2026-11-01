@@ -3,7 +3,8 @@
 // submit, force-mute (also on rejoin), a kick ending the call, and a room that becomes private ending the call.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
-import { ORIGIN, browser, cli, startServer } from './lib.mjs';
+import { existsSync } from 'node:fs';
+import { ORIGIN, browser, cli, cspViolations, startServer } from './lib.mjs';
 
 // fetch from the page, so it sends the session cookie and the Origin header as the app does.
 const call = (page, method, path, body) =>
@@ -120,6 +121,32 @@ try {
   assert.equal(await b.getByLabel('Room').locator('option', { hasText: 'secret' }).count(), 0, 'secret still listed');
   console.log(`vanished room ends the call: ok (${why})`);
 
+  // The denoiser (worklet, worker, WASM) under the server's CSP. A CSP block in the worker is not a page console
+  // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (not in CI).
+  const pages = [alice.page, bob.page];
+  if (existsSync(new URL('../dist/dsp/vesper_dsp_bg.wasm', import.meta.url))) {
+    const dsp = await browser('alice-dsp', []);
+    const d = dsp.page;
+    await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter' })));
+    await d.goto(`${ORIGIN}/login`);
+    await d.getByLabel('Username').fill('alice');
+    await d.getByLabel('Password').fill('test-password-1');
+    await d.getByRole('button', { name: 'Sign in' }).click();
+    await d.getByText('Signed in as').waitFor();
+    await join(d, 'general');
+    const line = d.getByText('Noise suppression:').first();
+    let status = '';
+    for (let i = 0; i < 80 && (i < 8 || status.includes('loading')); i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      status = await line.innerText();
+    }
+    assert.equal(status, 'Noise suppression: deepfilter', 'denoiser did not start under the CSP');
+    pages.push(d);
+    alice.errors.push(...dsp.errors);
+    console.log('denoiser under CSP: ok');
+  } else console.log('denoiser under CSP: skipped (no dist/dsp; run scripts/build-dsp.sh and npm run build)');
+  for (const p of pages) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
+  console.log('no CSP violations: ok');
   assert.deepEqual([...alice.errors, ...bob.errors], [], 'page errors');
   console.log('e2e flows: PASS');
 } finally {

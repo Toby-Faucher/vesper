@@ -79,7 +79,13 @@ export async function browser(name, args) {
   const page = await (await b.newContext({ permissions: ['microphone'] })).newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(`${name}: ${e}`));
+  // The server sends a strict CSP: a blocked load shows as a console error (also from workers) and an event.
+  page.on('console', (m) => /content security policy/i.test(m.text()) && errors.push(`${name}: ${m.text()}`));
   await page.addInitScript(hook);
+  await page.addInitScript(() => {
+    window.__csp = [];
+    document.addEventListener('securitypolicyviolation', (e) => window.__csp.push(`${e.effectiveDirective} ${e.blockedURI}`));
+  });
   // CI does not build the wasm denoiser, so use browser suppression instead of waiting for the fallback.
   await page.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'browser' })));
   return { page, errors };
@@ -94,3 +100,6 @@ export async function signup(page, link, name) {
   await page.getByRole('button', { name: 'Create account' }).click();
   await page.getByText(`Signed in as`).waitFor();
 }
+
+// The securitypolicyviolation events the page saw since it loaded; must be [].
+export const cspViolations = (page) => page.evaluate(() => window.__csp);

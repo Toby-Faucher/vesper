@@ -289,7 +289,7 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
 - **Name.** Display text only: control, bidi and hidden format characters dropped, `/` and `\` turned into `_`, at most 200
   characters, `file` when empty. `Content-Disposition` carries an ASCII `filename` and the exact name as `filename*` (RFC 6266 and
   5987), so a name can not add a header.
-- **Served headers.** `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`,
+- **Served headers.** `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` (kept in place of the page's policy),
   `Cross-Origin-Resource-Policy: same-origin`, `Cache-Control: private, max-age=31536000, immutable` (the file behind an id never changes).
 - **Who.** Attaching (`SendMessage.attachments`) needs your own upload, not attached yet, in the same room (else 409). An attached
   file is served to anyone who can see the room; one not attached yet only to its uploader. Everything else is the same 404 as an
@@ -370,7 +370,7 @@ A one-letter prefix is still the slow case; the client should not search on one 
 ## Static serving
 
 `guard` in `vesper-server/src/lib.rs`: dotfiles and `%2e` are 404; an extensionless 404 gets `index.html` (SPA routes); a missing file with
-an extension or under `/api/` stays 404; `/assets/*` is `immutable`, `/api/*` `no-store` (unless the handler set its own, as uploads do), everything else `no-cache`; `nosniff` on all. Tests: `crates/vesper-server/tests/static_files.rs`.
+an extension or under `/api/` stays 404; `/assets/*` is `immutable`, `/api/*` `no-store` (unless the handler set its own, as uploads do), everything else `no-cache`. Every response gets the security headers and the CSP of [decision 0008](decisions/0008-csp.md); a CSP the handler set (uploads' sandbox) is kept. Tests: `crates/vesper-server/tests/static_files.rs`, `tests/uploads.rs` `upload_keeps_sandbox_csp`.
 
 ## Not verified
 
