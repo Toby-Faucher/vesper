@@ -75,7 +75,8 @@ impl Store {
         Ok(Store { pool })
     }
 
-    /// Raw pool, for tests and checks that need plain SQL.
+    /// Raw pool, for this crate's tests only. Hidden so the server does not reach sqlx (ADR 0005).
+    #[doc(hidden)]
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }

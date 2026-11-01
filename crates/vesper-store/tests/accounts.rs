@@ -248,3 +248,30 @@ async fn delete_session_of_someone_else_is_not_found() {
     s.delete_session(&a.user_id, sid).await.unwrap();
     assert!(s.session_user(&[1; 32], now).await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn signup_username_conflict_rolls_back_invite_use() {
+    let (_tmp, s) = open().await;
+    let now = now_ms();
+    s.create_account(acct("toby")).await.unwrap();
+    s.create_invite(&[1; 32], Role::Member, 2, now + 60 * MIN, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        s.signup(&[1; 32], acct("toby"), sess(9, now)).await,
+        Err(StoreError::Conflict(_))
+    ));
+    assert_eq!(s.invites().await.unwrap()[0].uses, 0);
+    assert_eq!(s.users().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn session_of_banned_user_is_none() {
+    let (_tmp, s) = open().await;
+    let now = now_ms();
+    let u = s.create_account(acct("bob")).await.unwrap();
+    s.set_banned(&u.user_id, true, now).await.unwrap();
+    // set_banned drops sessions; one made after the ban must still not resolve.
+    s.create_session(&u.user_id, sess(1, now)).await.unwrap();
+    assert!(s.session_user(&[1; 32], now).await.unwrap().is_none());
+}

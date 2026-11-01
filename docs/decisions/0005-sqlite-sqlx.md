@@ -8,4 +8,4 @@ Decision: SQLite in WAL mode, accessed through `sqlx` with plain SQL and migrati
 
 Why: One directory means a Proxmox snapshot is a complete backup, and WAL keeps the file crash-consistent under snapshots. A periodic `.backup` copy is a cheap extra. Plain SQL keeps the schema readable.
 
-Consequences: One writer at a time, fine at this size. Moving to Postgres later is a rewrite of queries, not of the app. Keep storage behind its own crate so the server crate does not import sqlx directly. `sqlx` compile-time checks need a prepared query cache committed or `DATABASE_URL` in CI.
+Consequences: One writer at a time, fine at this size. Moving to Postgres later is a rewrite of queries, not of the app. Keep storage behind its own crate so the server crate does not import sqlx directly. Queries are checked at runtime by tests, not at compile time, so there is no `.sqlx` cache and no `DATABASE_URL` in CI.
