@@ -18,7 +18,7 @@ Last updated 2026-11-01. Nothing here was run in a real browser or a real deploy
   else the last `X-Forwarded-For` entry, else the peer; from any other peer it ignores both. Through Cloudflare this is the real client, because
   Cloudflare overwrites `CF-Connecting-IP`. If the app is ever reached on a private network without Cloudflare (the HTTP port open on the LAN, or
   Caddy without the tunnel), a LAN client can set `CF-Connecting-IP` itself and dodge or spend another address's login and invite limits. The
-  per-username login limit does not use the address and still holds. Unit-tested (`client_ip` in `auth.rs`); not verified on the deploy.
+  login limit per username still allows each address only 5 tries for one name, then 1 a minute. Unit-tested (`client_ip` in `auth.rs`); not verified on the deploy.
 
 ## Server behaviour
 

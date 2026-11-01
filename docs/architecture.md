@@ -145,8 +145,8 @@ Rules every route keeps:
   `CF-Connecting-IP`, else the last `X-Forwarded-For` entry, else the peer. From any other peer it ignores both headers.
   Behind Cloudflare, `cloudflared` and Caddy the peer is private and Cloudflare overwrites `CF-Connecting-IP`, so the key is the real
   client. Reached on a private network without Cloudflare, a LAN client could set that header itself
-  ([known-issues.md](known-issues.md#security-and-abuse-all-need-the-join-key-except-where-noted)). The per-username login limit does
-  not use the address.
+  ([known-issues.md](known-issues.md#security-and-abuse-all-need-the-join-key-except-where-noted)). The login limit per username
+  is keyed on address and username, so each faked address gets that username 5 more tries, then 1 a minute.
 - **Invites.** Unknown, used up, expired, revoked and changed codes all give the same 404 body. An owner invite stops working
   once an owner exists; the store checks this in the signup transaction.
 - **Caching.** Every `/api` response has `Cache-Control: no-store`.
