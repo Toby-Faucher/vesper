@@ -6,8 +6,8 @@
   import Diagnostics from '../Diagnostics.svelte';
   import Notifications from './Notifications.svelte';
   import Voice from './Voice.svelte';
-  // A lazy chunk: the section list and the open section. The section links replace the history entry, so the whole visit
-  // to Settings is one entry and Close (Back) returns to the page it was opened from.
+  // A lazy chunk: the section list and the open section. A move inside Settings replaces the history entry (navigate), so
+  // the whole visit to Settings is one entry and Close (Back) returns to the page it was opened from.
   let { section }: { section: SettingsSection } = $props();
 </script>
 
@@ -16,7 +16,7 @@
     <ul class="flex flex-col gap-px">
       {#each SETTINGS_SECTIONS as s (s)}
         <li>
-          <a href={href({ name: 'settings', section: s })} data-replace aria-current={s === section ? 'page' : undefined}
+          <a href={href({ name: 'settings', section: s })} aria-current={s === section ? 'page' : undefined}
             class="flex h-8 items-center rounded-sm px-2 text-fg-2 hover:bg-hover hover:text-fg aria-[current=page]:bg-selected aria-[current=page]:text-fg">{NAMES[s]}</a>
         </li>
       {/each}

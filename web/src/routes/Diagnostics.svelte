@@ -93,8 +93,8 @@
 {/snippet}
 
 <div class="flex flex-col gap-8">
-  <section class="flex flex-col gap-3">
-    <h3 id="diag-call" class="text-base font-medium text-fg">Call</h3>
+  <section role="group" aria-labelledby="diag-call" class="flex flex-col gap-3">
+    <h3 id="diag-call" class="text-base font-medium text-fg">Call numbers</h3>
     <p class="text-fg">{noise}</p>
     {#if !pc}<p class="text-xs text-fg-3">Not in a call. A dash means no value: join voice in a room to see the numbers.</p>
     {:else if !diag}<p class="text-xs text-fg-3">Waiting for the first numbers from the call.</p>
@@ -110,11 +110,11 @@
       ['Path', diag?.selectedPair ?? 'n/a'],
     ])}
   </section>
-  <section class="flex flex-col gap-3 border-t border-subtle pt-6">
+  <section role="group" aria-labelledby="diag-audio" class="flex flex-col gap-3 border-t border-subtle pt-6">
     <h3 id="diag-audio" class="text-base font-medium text-fg">Audio pipeline</h3>
     {@render rows2(rows)}
   </section>
-  <section class="flex flex-col gap-3 border-t border-subtle pt-6">
+  <section role="group" aria-labelledby="diag-tools" class="flex flex-col gap-3 border-t border-subtle pt-6">
     <h3 id="diag-tools" class="text-base font-medium text-fg">Report and test</h3>
     <p class="text-xs text-fg-3">Test connection checks the server and the UDP path the call uses. Copy report copies this page and your browser version, to paste into a bug report.</p>
     <div class="flex gap-2">

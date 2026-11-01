@@ -21,6 +21,9 @@ describe('pttKeyEvent', () => {
     expect(pttKeyEvent(false, ev({ capturing: true }))).toEqual({ held: false, prevent: false });
     expect(pttKeyEvent(true, ev({ code: 'KeyA', type: 'keyup' }))).toEqual({ held: true, prevent: false });
   });
+  it('a saved Tab key talks but never swallows Tab', () => {
+    expect(pttKeyEvent(false, ev({ code: 'Tab', pttKey: 'Tab' }))).toEqual({ held: true, prevent: false });
+  });
   it('disabled PTT ignores presses', () => {
     expect(pttKeyEvent(false, ev({ enabled: false })).held).toBe(false);
   });

@@ -1,6 +1,7 @@
 // The keyboard shortcuts: one table, read by the shell's keydown handler, the shortcuts dialog and the switcher's hints.
-// Every shortcut but Escape and ? needs a modifier, and those two never fire while typing. Push to talk can be any key, also
-// a modifier (ControlLeft) or a letter (KeyK): so nothing fires while it is held, or when the key pressed is that key.
+// Every shortcut but Escape and ? needs a modifier, and those two never fire while typing. Settings refuses a modifier or a
+// shortcut's key for push to talk (pttKeyProblem), but an older saved key can be one (ControlLeft, KeyK): so nothing fires
+// while push to talk is held, or when the key pressed is its key.
 
 export type Shortcut = 'switcher' | 'help' | 'mute' | 'deafen' | 'prev-room' | 'next-room' | 'next-unread' | 'search' | 'sidebar' | 'escape';
 import type { Unread } from '../gen/Unread';
@@ -95,11 +96,13 @@ const MODIFIERS = ['Control', 'Alt', 'AltGraph', 'Shift', 'Meta', 'OS', 'Hyper',
 // The keys of the table above (k, m, d, f, \, the arrows, ?, Esc), by the character typed or by the key's place.
 const SHORTCUT_KEYS = new Set(SHORTCUTS.map((d) => d.key));
 const SHORTCUT_CODES = new Set(['KeyK', 'KeyM', 'KeyD', 'KeyF', 'ArrowUp', 'ArrowDown', 'Backslash', 'Slash', 'Escape']);
+const MOVE_KEYS = ['Tab', 'Enter', 'Backspace'];
 /** Why `e` cannot be the push-to-talk key, or null when it can. A held modifier or a shortcut's key would block the shortcuts. */
 export function pttKeyProblem(e: Pick<KeyboardEvent, 'key' | 'code'>): string | null {
   if (MODIFIERS.includes(e.key) || /^(Control|Alt|Shift|Meta|OS)/.test(e.code)) return 'Pick a key that is not Ctrl, Alt, Shift or Meta.';
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (SHORTCUT_KEYS.has(key) || SHORTCUT_CODES.has(e.code)) return 'A keyboard shortcut uses that key. Pick another one.';
+  if (MOVE_KEYS.includes(e.key) || MOVE_KEYS.includes(e.code) || e.code === 'NumpadEnter') return 'Tab, Enter and Backspace move around the app and type. Pick another one.';
   if (!e.code) return 'That key cannot be read. Pick another one.';
   return null;
 }

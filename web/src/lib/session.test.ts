@@ -217,3 +217,49 @@ describe('session', () => {
     expect(calls.at(-1)).toBe('replace /login'); // signing out on purpose keeps no page to return to
   });
 });
+
+describe('navigate and closePage', () => {
+  // A history with entries and state, enough for push, replace and back.
+  async function nav(start: string, startState: unknown = null) {
+    const mod = await load();
+    const h = { entries: [{ path: start, state: startState }], i: 0 };
+    const at = (p: string) => Object.assign(location, { pathname: p, search: '', hash: '' });
+    at(start);
+    vi.stubGlobal('history', {
+      get state() { return h.entries[h.i].state; },
+      get length() { return h.entries.length; },
+      pushState(state: unknown, _: string, p: string) { h.entries.splice(++h.i, Infinity, { path: p, state }); at(p); },
+      replaceState(state: unknown, _: string, p: string) { h.entries[h.i] = { path: p, state }; at(p); },
+      back() { at(h.entries[--h.i].path); },
+    });
+    return { ...mod, paths: () => h.entries.map((e) => e.path), h };
+  }
+
+  it('a click in the app pushes an entry marked app; a deep link is not', async () => {
+    const { navigate, cameInApp } = await nav('/r/1');
+    expect(cameInApp()).toBe(false);
+    navigate('/r/2');
+    expect(cameInApp()).toBe(true);
+  });
+
+  it('moves inside Settings replace and keep the mark, so Close goes Back to the room', async () => {
+    const { navigate, closePage, paths, route } = await nav('/r/1');
+    navigate('/settings/voice'); // the sidebar button
+    navigate('/settings/diagnostics'); // a section link or Call details
+    navigate('/settings/voice'); // the sidebar button again, already in Settings
+    expect(paths()).toEqual(['/r/1', '/settings/voice']);
+    closePage();
+    expect(location.pathname).toBe('/r/1');
+    navigate('/admin/invites');
+    navigate('/admin/members');
+    navigate('/settings/voice'); // another page: a new entry
+    expect(paths()).toEqual(['/r/1', '/admin/members', '/settings/voice']);
+    expect(route.path).toBe('/settings/voice');
+  });
+
+  it('closePage after a deep link replaces with / and adds no entry', async () => {
+    const { closePage, paths } = await nav('/settings/voice');
+    closePage();
+    expect(paths()).toEqual(['/']);
+  });
+});

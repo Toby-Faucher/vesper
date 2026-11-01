@@ -1098,8 +1098,8 @@ scene('settings', async (ctx) => {
   await page.getByText('Pick a key that is not Ctrl, Alt, Shift or Meta.').waitFor();
   await ctx.shot(page, 'settings-ptt-refused', { fullPage: false });
   await page.keyboard.press('Escape');
-  // The reset confirm for Push to talk; Cancel keeps the setting.
-  await page.getByRole('button', { name: 'Reset to defaults' }).nth(4).click();
+  // The reset confirm for Talk mode; Cancel keeps the setting.
+  await page.getByRole('group', { name: 'Talk mode' }).getByRole('button', { name: 'Reset to defaults' }).click();
   await page.getByRole('dialog').waitFor();
   await sleep(300);
   await ctx.shot(page, 'settings-reset-confirm', { fullPage: false });

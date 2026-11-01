@@ -2,7 +2,7 @@
   import * as I from '../lib/ui/icons';
   import { onMount, untrack } from 'svelte';
   import { href, parse } from '../lib/route';
-  import { cameInApp, lastRoomKey, navigate, route, session } from '../lib/session.svelte';
+  import { closePage, lastRoomKey, navigate, route, session } from '../lib/session.svelte';
   import { startVoice, toggleDeafen, toggleMute, voice } from '../lib/voice.svelte';
   import { closePerson, person } from '../lib/ui/person.svelte';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
@@ -60,13 +60,7 @@
     const a = (e.target as Element).closest?.('a');
     if (!a || a.target || a.hasAttribute('download') || a.origin !== location.origin || a.pathname.startsWith('/api/')) return;
     e.preventDefault();
-    navigate(a.pathname + a.search + a.hash, a.hasAttribute('data-replace'));
-  }
-  // Settings and Admin close back to where they were opened from: Back when that was an app page (so Back after Close does
-  // not show the same room twice), else the last room (`/` opens it) in place of this entry.
-  function closePage() {
-    if (cameInApp()) history.back();
-    else navigate('/', true);
+    navigate(a.pathname + a.search + a.hash);
   }
   // The switcher and the shortcuts list are one chunk, loaded on first use. The switcher's dialog is here, in the first
   // load, so it opens at once with a field that takes the typing (not the composer) and a Loading line. A failed load

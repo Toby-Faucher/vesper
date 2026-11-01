@@ -203,6 +203,16 @@ describe('push-to-talk key', () => {
       ['ArrowDown', 'ArrowDown'], ['/', 'Slash'], ['#', 'Backslash']])
       expect(pttKeyProblem({ key, code }), code).toMatch(/shortcut/);
   });
+  it('refuses_tab_enter_backspace', () => {
+    for (const [key, code] of [['Tab', 'Tab'], ['Enter', 'Enter'], ['Enter', 'NumpadEnter'], ['Backspace', 'Backspace']]) {
+      expect(pttKeyProblem({ key, code }), code).toMatch(/^Tab, Enter and Backspace/);
+      expect(pttKeyProblem({ key: '', code }), `saved ${code}`).not.toBeNull(); // a saved key is checked by its code alone
+    }
+  });
+  it('checks_a_saved_key_by_its_code', () => {
+    for (const code of ['ControlLeft', 'KeyK', 'Backslash', 'Escape']) expect(pttKeyProblem({ key: '', code }), code).not.toBeNull();
+    for (const code of ['Space', 'KeyQ', 'F5']) expect(pttKeyProblem({ key: '', code }), code).toBeNull();
+  });
   it('takes_ordinary_keys', () => {
     for (const [key, code] of [[' ', 'Space'], ['q', 'KeyQ'], ['1', 'Digit1'], ['F5', 'F5'], ['`', 'Backquote'], ['ArrowLeft', 'ArrowLeft']])
       expect(pttKeyProblem({ key, code }), code).toBeNull();

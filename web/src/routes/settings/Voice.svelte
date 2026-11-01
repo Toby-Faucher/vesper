@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { clampSettings, DEFAULT_AUDIO_SETTINGS as D, type AudioSettings } from '../../lib/audio/settings';
+  import { clampSettings, type AudioSettings } from '../../lib/audio/settings';
+  import { NAMES, RESETS, type Section } from './sections';
   import { keyName, pttKeyProblem } from '../../lib/ui/keys';
   import { updateSettings, voice } from '../../lib/voice.svelte';
   import Button from '../../lib/ui/c/Button.svelte';
@@ -29,10 +30,12 @@
   };
 
   // Push to talk key: the button listens while it has focus. Its handlers stop the keys, so neither push to talk nor the
-  // shortcuts see them (the shell's capturingPtt stays false). Esc or leaving the button cancels.
+  // shortcuts see them (the shell's capturingPtt stays false). Esc or leaving the button (Tab) cancels. Focus stays on the
+  // button after a capture: the window's push-to-talk handler still gets the key and stops it from clicking the button.
   let capturing = $state(false);
   let refused = $state('');
   function captureKey(e: KeyboardEvent) {
+    if (e.key === 'Tab') return; // Tab leaves the button, and the blur cancels
     e.preventDefault();
     if (e.repeat) return;
     if (e.key === 'Escape') return void ([capturing, refused] = [false, '']);
@@ -40,21 +43,12 @@
     if (refused) return;
     capturing = false;
     set({ pushToTalk: { ...settings.pushToTalk, key: e.code } });
-    (e.currentTarget as HTMLElement).blur(); // keep focus off the button so the push-to-talk key reaches the window handler
   }
+  const savedKeyProblem = $derived(pttKeyProblem({ key: '', code: settings.pushToTalk.key })); // an older saved key
 
-  type Section = 'input' | 'noise' | 'output' | 'quality' | 'ptt';
-  const NAMES: Record<Section, string> = { input: 'Input', noise: 'Noise suppression', output: 'Output', quality: 'Quality', ptt: 'Push to talk' };
-  const DEFAULTS: Record<Section, Partial<AudioSettings>> = {
-    input: { micId: D.micId, vad: D.vad },
-    noise: { mode: D.mode, attenDb: D.attenDb, postFilter: D.postFilter, inputBoostDb: D.inputBoostDb, noiseSuppression: D.noiseSuppression, autoGain: D.autoGain },
-    output: { speakerId: D.speakerId },
-    quality: { bitrateKbps: D.bitrateKbps, dtx: D.dtx },
-    ptt: { pushToTalk: D.pushToTalk },
-  };
   let resetting = $state<Section | null>(null);
   function reset() {
-    set(DEFAULTS[resetting!]);
+    set(RESETS[resetting!]!);
     resetting = null;
   }
 </script>
@@ -62,17 +56,17 @@
 {#snippet head(s: Section)}
   <div class="flex h-8 items-center justify-between gap-4">
     <h3 id="voice-{s}" class="text-base font-medium text-fg">{NAMES[s]}</h3>
-    <span class="-mr-2"><Button variant="ghost" size="sm" aria-describedby="voice-{s}" onclick={() => (resetting = s)}>Reset to defaults</Button></span>
+    {#if RESETS[s]}<span class="-mr-2"><Button variant="ghost" size="sm" aria-describedby="voice-{s}" onclick={() => (resetting = s)}>Reset to defaults</Button></span>{/if}
   </div>
 {/snippet}
 
 <div class="sections">
-  <section>
+  <section role="group" aria-labelledby="voice-input">
     {@render head('input')}
     <MicCheck {settings} onchange={updateSettings} liveStream={voice.mic} bind:devices />
   </section>
 
-  <section>
+  <section role="group" aria-labelledby="voice-noise">
     {@render head('noise')}
     <Field label="Noise suppression" help={MODES[settings.mode]}>
       <Select value={settings.mode} onchange={(e) => set({ mode: e.currentTarget.value as AudioSettings['mode'] })}>
@@ -104,7 +98,7 @@
     </div>
   </section>
 
-  <section>
+  <section role="group" aria-labelledby="voice-output">
     {@render head('output')}
     {#if sinkSupported}
       <Field label="Speaker">
@@ -122,7 +116,7 @@
     {/if}
   </section>
 
-  <section>
+  <section role="group" aria-labelledby="voice-quality">
     {@render head('quality')}
     <Field label="Bitrate" value="{bitrateDraft} kbps" help="Higher sounds better and uses more data. 64 kbps is plenty for speech.">
       <Range min={32} max={510} value={settings.bitrateKbps} aria-valuetext="{bitrateDraft} kbps"
@@ -139,7 +133,7 @@
       onchange={(e) => set({ dtx: e.currentTarget.checked })} />
   </section>
 
-  <section>
+  <section role="group" aria-labelledby="voice-ptt">
     {@render head('ptt')}
     <Switch label="Push to talk" help="Your mic sends only while you hold the key." checked={settings.pushToTalk.enabled}
       onchange={(e) => set({ pushToTalk: { ...settings.pushToTalk, enabled: e.currentTarget.checked } })} />
@@ -147,30 +141,31 @@
       <div class="flex flex-col gap-1.5">
         <div class="flex min-h-8 items-center justify-between gap-4">
           <span id="ptt-key" class="text-sm text-fg">Key</span>
-          <span class:capturing><Button aria-describedby="ptt-key ptt-note" onclick={() => ([capturing, refused] = [true, ''])} onblur={() => ([capturing, refused] = [false, ''])}
+          <span class:capturing><Button aria-describedby="ptt-key ptt-capture ptt-saved ptt-note" onclick={() => ([capturing, refused] = [true, ''])} onblur={() => ([capturing, refused] = [false, ''])}
             onkeydown={(e) => { if (capturing) { e.stopPropagation(); captureKey(e); } }}
             onkeyup={(e) => { if (capturing) e.stopPropagation(); }}>
             {#if capturing}Press a key...{:else}Key: <Kbd>{keyName(settings.pushToTalk.key)}</Kbd>{/if}
           </Button></span>
         </div>
-        {#if capturing}<p class="text-xs text-fg-2">Press the key to use. Esc cancels.</p>{/if}
+        <p id="ptt-capture" role="status" class="text-xs text-fg-2 empty:hidden">{#if capturing}Press the key to use. Esc cancels.{/if}</p>
+        {#if savedKeyProblem && !capturing}<p id="ptt-saved" class="text-xs text-warn">Your saved key can get in the way. {savedKeyProblem}</p>{/if}
         {#if refused}<p class="text-xs text-warn" role="alert">{refused}</p>{/if}
         <p id="ptt-note" class="text-xs text-fg-3">Works only while this tab has focus. Browsers do not allow keys from other apps.</p>
       </div>
     {/if}
   </section>
 
-  <section>
+  <section role="group" aria-labelledby="voice-keys">
     <div class="flex h-8 items-center"><h3 id="voice-keys" class="text-base font-medium text-fg">Keyboard shortcuts</h3></div>
     <ShortcutList />
   </section>
 </div>
 
 <Dialog open={resetting !== null} title="Reset {resetting ? NAMES[resetting] : ''} to defaults?" onclose={() => (resetting = null)}>
-  Every setting under {resetting ? NAMES[resetting] : ''} goes back to its default. The other sections keep theirs.
+  Every setting under {resetting ? NAMES[resetting] : ''} goes back to its default. Your microphone, your speaker and the other sections stay as they are.
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (resetting = null)}>Cancel</Button>
-    <Button variant="primary" onclick={reset}>Reset</Button>
+    <Button variant="danger" onclick={reset}>Reset</Button>
   {/snippet}
 </Dialog>
 

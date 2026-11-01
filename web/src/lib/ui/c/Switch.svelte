@@ -46,4 +46,7 @@
   input:checked { background: var(--accent); box-shadow: none; }
   input:checked::before { background: var(--on-accent); transform: translateX(12px); }
   input:disabled { cursor: not-allowed; opacity: 0.5; }
+  /* On and locked (always on): neutral, so the amber stays for what you can change. */
+  input:checked:disabled { background: var(--bg-selected); box-shadow: inset 0 0 0 1px var(--line-strong); }
+  input:checked:disabled::before { background: var(--fg-2); }
 </style>

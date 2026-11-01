@@ -13,13 +13,22 @@ export const route = $state({ path: location.pathname });
  * Back does not loop. An entry pushed here is marked `app`, so a page can tell that Back stays in the app (`cameInApp`). */
 export function navigate(to: string, replace = false): void {
   if (location.pathname + location.search + location.hash === to) return void (route.path = to.split(/[?#]/)[0]);
-  if (replace) history.replaceState(history.state, '', to);
+  // A move inside Settings or Admin replaces, so one visit is one entry and Close (Back) leaves the page.
+  const page = (p: string) => /^\/(settings|admin)(\/|$)/.exec(p)?.[1];
+  if (replace || (page(location.pathname) && page(location.pathname) === page(to))) history.replaceState(history.state, '', to);
   else history.pushState({ app: true }, '', to);
   route.path = to.split(/[?#]/)[0];
 }
 
 /** True when this history entry came from a click in the app, so the entry before it is an app page too. */
 export const cameInApp = () => !!(history.state as { app?: boolean } | null)?.app;
+
+/** Settings and Admin close back to where they were opened from: Back when that was an app page (so Back after Close does
+ * not show the same room twice), else the last room (`/` opens it) in place of this entry. */
+export function closePage(): void {
+  if (cameInApp()) history.back();
+  else navigate('/', true);
+}
 
 /** The localStorage key of the room `/` opens, per account, so a second account on this browser does not get it. */
 export const lastRoomKey = (userId: string) => `vesper.lastRoom.${userId}`;

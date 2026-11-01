@@ -192,9 +192,21 @@ try {
   // Push to talk in Settings: Control is refused with a plain line and the key stays; Q is taken, shown as Q, and the call
   // bar says so. The input meter is a role=meter with a number, on a track you can see.
   await b.getByLabel('Push to talk').check();
-  const keyBtn = b.getByRole('button', { name: /^Key:/ });
+  const keyBtn = b.getByRole('button', { name: /^(Key:|Press a key)/ });
   await keyBtn.click();
   await b.getByText('Press a key...').waitFor();
+  // The waiting line is a status, read with the button.
+  await b.getByRole('status').filter({ hasText: 'Press the key to use. Esc cancels.' }).waitFor();
+  assert.match(await keyBtn.getAttribute('aria-describedby'), /\bptt-capture\b/);
+  for (const k of ['Enter', 'Backspace']) {
+    await b.keyboard.press(k);
+    await b.getByRole('alert').filter({ hasText: 'Tab, Enter and Backspace move around the app and type.' }).waitFor({ timeout: 2000 });
+  }
+  // Tab is not taken: it leaves the button and ends the capture.
+  await b.keyboard.press('Tab');
+  await b.getByRole('button', { name: 'Key: Space' }).waitFor({ timeout: 2000 });
+  assert.equal(await keyBtn.evaluate((el) => el === document.activeElement), false, 'Tab stayed on the key button');
+  await keyBtn.click();
   await b.keyboard.press('Control');
   await b.getByRole('alert').filter({ hasText: 'Pick a key that is not Ctrl, Alt, Shift or Meta.' }).waitFor({ timeout: 2000 });
   await b.keyboard.press('KeyK');
@@ -203,6 +215,7 @@ try {
   await b.keyboard.press('KeyQ');
   await b.getByRole('button', { name: 'Key: Q' }).waitFor({ timeout: 2000 });
   assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).pushToTalk.key), 'KeyQ');
+  assert.ok(await keyBtn.evaluate((el) => el === document.activeElement), 'focus left the key button after the capture');
   await b.getByRole('region', { name: 'Call' }).getByText('Push to talk: hold Q').waitFor({ timeout: 2000 });
   await keyBtn.click();
   await b.keyboard.press('Escape'); // Esc cancels the capture, not Settings
@@ -218,8 +231,13 @@ try {
   assert.ok(meter.h >= 6 && meter.track, `meter track not visible: ${JSON.stringify(meter)}`);
   await b.getByText(/^(Silent|-?\d+ dBFS)$/).first().waitFor(); // the number beside the bar
   console.log('settings push-to-talk key and meter: ok');
-  // Close goes back to the room it came from (a section link replaced the entry), and Back after it is the room before.
+  // Close goes back to the room it came from, and Back after it is the room before: inside Settings a section link, the
+  // sidebar's Settings button and the call bar's Call details each replace the entry.
   await b.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Diagnostics' }).click();
+  await b.getByRole('heading', { name: 'Diagnostics', level: 2 }).waitFor();
+  await b.getByRole('button', { name: 'Settings' }).click();
+  await b.getByRole('heading', { name: 'Voice', level: 2 }).waitFor();
+  await b.getByRole('region', { name: 'Call' }).getByRole('link', { name: 'Call details' }).click();
   await b.getByRole('heading', { name: 'Diagnostics', level: 2 }).waitFor();
   await b.getByRole('button', { name: 'Close' }).click();
   await b.waitForURL(`${ORIGIN}/r/${music.id}`);
