@@ -16,6 +16,7 @@
   import Menu from '../../lib/ui/c/Menu.svelte';
   import MenuItem from '../../lib/ui/c/MenuItem.svelte';
   import Popover from '../../lib/ui/c/Popover.svelte';
+  import Meter from '../../lib/ui/c/Meter.svelte';
   import Range from '../../lib/ui/c/Range.svelte';
   import Select from '../../lib/ui/c/Select.svelte';
   import Speaking from '../../lib/ui/c/Speaking.svelte';
@@ -124,6 +125,11 @@
         </Select>
       </Field>
       <Field label="Volume" help="{volume} %, above 100 % can clip."><Range bind:value={volume} max={200} /></Field>
+      <div class="flex flex-col gap-2" data-meters>
+        <Meter db={-100} marker={-50} label="Input level silent" />
+        <Meter db={-38} marker={-50} label="Input level speech" />
+        <Meter db={-2} marker={-50} label="Input level clipping" />
+      </div>
       <div class="flex flex-col">
         <Switch label="Push to talk" bind:checked={ptt} />
         <Switch label="Join and leave sounds" bind:checked={sounds} />

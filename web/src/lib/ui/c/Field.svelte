@@ -8,7 +8,8 @@
 <script lang="ts">
   import { setContext, type Snippet } from 'svelte';
   // Label above the control, then the error (role="alert") or else the help line, tied with aria-describedby.
-  let { label, help, error, children }: { label: string; help?: string; error?: string; children: Snippet } = $props();
+  // `value`: the control's current value as text, at the right of the label (a range's dB or kbps).
+  let { label, help, error, value, children }: { label: string; help?: string; error?: string; value?: string; children: Snippet } = $props();
   const id = $props.id();
   setContext<FieldCtx>('vesper.field', {
     id,
@@ -22,7 +23,14 @@
 </script>
 
 <div class="flex flex-col gap-1.5">
-  <label for={id} class="text-sm font-medium text-fg">{label}</label>
+  {#if value === undefined}
+    <label for={id} class="text-sm font-medium text-fg">{label}</label>
+  {:else}
+    <div class="flex items-baseline justify-between gap-4">
+      <label for={id} class="text-sm font-medium text-fg">{label}</label>
+      <span class="text-sm text-fg-2 tabular-nums" aria-hidden="true">{value}</span>
+    </div>
+  {/if}
   {@render children()}
   {#if error}
     <p id="{id}-error" role="alert" class="text-xs text-danger">{error}</p>

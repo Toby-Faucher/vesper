@@ -176,8 +176,45 @@ try {
   await b.getByRole('button', { name: 'Settings' }).click();
   await b.waitForURL(`${ORIGIN}/settings/voice`);
   await b.getByLabel('Bitrate', { exact: false }).first().waitFor();
-  await b.goBack();
+  // Push to talk in Settings: Control is refused with a plain line and the key stays; Q is taken, shown as Q, and the call
+  // bar says so. The input meter is a role=meter with a number, on a track you can see.
+  await b.getByLabel('Push to talk').check();
+  const keyBtn = b.getByRole('button', { name: /^Key:/ });
+  await keyBtn.click();
+  await b.getByText('Press a key...').waitFor();
+  await b.keyboard.press('Control');
+  await b.getByRole('alert').filter({ hasText: 'Pick a key that is not Ctrl, Alt, Shift or Meta.' }).waitFor({ timeout: 2000 });
+  await b.keyboard.press('KeyK');
+  await b.getByRole('alert').filter({ hasText: 'A keyboard shortcut uses that key.' }).waitFor({ timeout: 2000 });
+  assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).pushToTalk.key), 'Space', 'a refused key was saved');
+  await b.keyboard.press('KeyQ');
+  await b.getByRole('button', { name: 'Key: Q' }).waitFor({ timeout: 2000 });
+  assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).pushToTalk.key), 'KeyQ');
+  await b.getByRole('region', { name: 'Call' }).getByText('Push to talk: hold Q').waitFor({ timeout: 2000 });
+  await keyBtn.click();
+  await b.keyboard.press('Escape'); // Esc cancels the capture, not Settings
+  await b.getByRole('button', { name: 'Key: Q' }).waitFor({ timeout: 2000 });
+  assert.equal(new URL(b.url()).pathname, '/settings/voice', 'Esc in the key capture closed Settings');
+  await b.getByLabel('Push to talk').uncheck();
+  const meter = await b.getByRole('meter', { name: 'Input level' }).evaluate((m) => {
+    const cs = getComputedStyle(m);
+    return { now: m.getAttribute('aria-valuenow'), text: m.getAttribute('aria-valuetext'), h: m.getBoundingClientRect().height, track: cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.boxShadow !== 'none' };
+  });
+  assert.ok(Number.isFinite(Number(meter.now)) && meter.now !== null, `meter value ${meter.now}`);
+  assert.match(meter.text, /^(Silent|-?\d+ dBFS)$/);
+  assert.ok(meter.h >= 6 && meter.track, `meter track not visible: ${JSON.stringify(meter)}`);
+  await b.getByText(/^(Silent|-?\d+ dBFS)$/).first().waitFor(); // the number beside the bar
+  console.log('settings push-to-talk key and meter: ok');
+  // Close goes back to the room it came from (a section link replaced the entry), and Back after it is the room before.
+  await b.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Diagnostics' }).click();
+  await b.getByRole('heading', { name: 'Diagnostics', level: 2 }).waitFor();
+  await b.getByRole('button', { name: 'Close' }).click();
   await b.waitForURL(`${ORIGIN}/r/${music.id}`);
+  await b.goBack();
+  await b.waitForURL(`${ORIGIN}/r/${general}`);
+  await b.goForward();
+  await b.waitForURL(`${ORIGIN}/r/${music.id}`);
+  console.log('settings close goes back: ok');
   await openRoom(b, 'general');
   await b.getByRole('button', { name: 'Leave' }).waitFor();
   assert.equal(await pcUp(), 'connected', 'the call dropped while moving between pages');
@@ -187,6 +224,28 @@ try {
   await b.getByRole('button', { name: 'Leave' }).click();
   await inVoice(a, 'bob').waitFor({ state: 'detached' });
   console.log('call survives navigation: ok');
+
+  // A Voice setting persists over a reload. Settings opened from its address closes to the last room, in place, and Esc
+  // closes it too.
+  await b.goto(`${ORIGIN}/settings/voice`);
+  await b.getByLabel('Auto gain').check();
+  // A second tab, as a reload would: b's page writes mode=browser into storage on every load (lib.mjs), a new page does not.
+  const b2 = await b.context().newPage();
+  await b2.goto(`${ORIGIN}/settings/voice`);
+  await b2.getByLabel('Auto gain').waitFor();
+  assert.ok(await b2.getByLabel('Auto gain').isChecked(), 'Auto gain did not persist');
+  await b2.close();
+  await b.getByLabel('Auto gain').uncheck();
+  assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).autoGain), false);
+  const depth = await b.evaluate(() => history.length);
+  await b.getByRole('button', { name: 'Close' }).click();
+  await b.waitForURL(`${ORIGIN}/r/${general}`);
+  assert.equal(await b.evaluate(() => history.length), depth, 'Close from a direct load added a history entry');
+  await b.getByRole('button', { name: 'Settings' }).click();
+  await b.getByRole('heading', { name: 'Voice', level: 2 }).waitFor();
+  await b.keyboard.press('Escape');
+  await b.waitForURL(`${ORIGIN}/r/${general}`);
+  console.log('settings persist, close and Esc: ok');
 
   // The switcher: Ctrl+K works from the composer, a typed room name and Enter open that room, Esc closes and gives focus
   // back. Alt+Down and Alt+Up step through the rooms; Ctrl+\ hides the sidebar and focus moves to the Show button.

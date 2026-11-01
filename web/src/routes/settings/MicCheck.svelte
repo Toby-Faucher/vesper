@@ -5,6 +5,8 @@
   import { DEVICE_MESSAGES, classifyMediaError, isBluetoothLabel, levelHint, watchDevices } from '../../lib/devices';
   import Button from '../../lib/ui/c/Button.svelte';
   import Field from '../../lib/ui/c/Field.svelte';
+  import Meter from '../../lib/ui/c/Meter.svelte';
+  import Range from '../../lib/ui/c/Range.svelte';
   import Select from '../../lib/ui/c/Select.svelte';
   // The microphone picker, the input level meter and the mic test, for Settings > Voice and the welcome steps.
   // `devices` is bindable so Settings can list the speakers from the same list. `marker` shows the level marker slider.
@@ -90,8 +92,6 @@
     peaks = [];
   }
 
-  const pct = $derived(Math.max(0, Math.min(100, levelDb + 100)));
-  const label = 'block text-sm text-fg-2';
 </script>
 
 <Field label="Microphone" help="Pick a specific microphone to get disconnect alerts; the system default is not watched.">
@@ -106,29 +106,23 @@
   </p>
 {/if}
 
-<div class="space-y-1">
-  {#if marker}
-    <div class={label}>Input level; marker at {settings.vad.thresholdDb} dB (voice-activity gating is not implemented yet, display only)</div>
-  {:else}
-    <div class={label} aria-hidden="true">Input level</div>
-  {/if}
-  <div class="relative h-3 rounded border border-line bg-app" role="meter" aria-label="Input level" aria-valuemin="-100"
-    aria-valuemax="0" aria-valuenow={Math.round(levelDb)}>
-    <div class="h-full rounded bg-ok" style="width:{pct}%"></div>
-    {#if marker}<div class="absolute top-0 h-full w-0.5 bg-fg" style="left:{settings.vad.thresholdDb + 100}%"></div>{/if}
-  </div>
-  {#if marker}
-    <input class="w-full" type="range" min="-100" max="0" aria-label="Level marker" value={settings.vad.thresholdDb}
-      oninput={(e) => set({ vad: { thresholdDb: +e.currentTarget.value } })} />
-  {/if}
-  {#if hint === 'clipping'}<p class="text-warn">Too loud: the signal is clipping. Lower input gain.</p>{/if}
-  {#if hint === 'too-quiet'}<p class="text-warn">Very quiet or silent. Speak, check the mic, or try a little input boost.</p>{/if}
+<div class="flex flex-col gap-1.5">
+  <div class="text-sm font-medium text-fg" aria-hidden="true">Input level</div>
+  <Meter db={levelDb} marker={marker ? settings.vad.thresholdDb : undefined} />
+  {#if hint === 'clipping'}<p class="text-xs text-warn">Too loud: the signal is clipping. Lower input gain.</p>{/if}
+  {#if hint === 'too-quiet'}<p class="text-xs text-warn">Very quiet or silent. Speak, check the mic, or try a little input boost.</p>{/if}
 </div>
+{#if marker}
+  <Field label="Level marker" value="{settings.vad.thresholdDb} dB" help="The white line on the meter. Display only: voice activity gating is not built yet.">
+    <Range min={-100} max={0} aria-valuetext="{settings.vad.thresholdDb} dB" value={settings.vad.thresholdDb}
+      oninput={(e) => set({ vad: { thresholdDb: +e.currentTarget.value } })} />
+  </Field>
+{/if}
 
 <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
   <Button onclick={() => (testing ? stopTest() : startTest())}>
     {testing ? 'Stop mic test' : 'Mic test (hear yourself)'}
   </Button>
-  <span class="text-fg-3">Use headphones, or you will get feedback.</span>
+  <span class="text-xs text-fg-3">Use headphones, or you will get feedback.</span>
   {#if testError}<p class="w-full text-danger" role="alert">{testError}</p>{/if}
 </div>

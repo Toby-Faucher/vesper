@@ -1058,21 +1058,80 @@ scene('room', async ({ alice, bob, seed }) => {
   return alice.page;
 });
 
-scene('settings', async ({ alice }) => {
-  await home(alice.page);
-  await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await alice.page.getByLabel('Audio settings').waitFor();
-  await rest(alice.page);
-  return alice.page;
+// Each Settings page at 1440x900; Voice also whole (a tall window, as the page scrolls inside the pane) and at 1024x640.
+async function settingsPage(page, name) {
+  const nav = page.getByRole('navigation', { name: 'Settings sections' });
+  if (!(await nav.count())) await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await nav.getByRole('link', { name }).click();
+  await page.getByRole('heading', { level: 2, name }).waitFor();
+}
+async function tall(page, ctx, name) {
+  const h = await page.locator('main .max-w-160').evaluate((e) => e.scrollHeight + 200);
+  await page.setViewportSize({ width: VIEWPORT.width, height: Math.max(VIEWPORT.height, h) });
+  await rest(page);
+  await ctx.shot(page, name);
+  await page.setViewportSize(VIEWPORT);
+}
+scene('settings', async (ctx) => {
+  const page = ctx.alice.page;
+  await home(page);
+  await settingsPage(page, 'Voice');
+  await page.getByLabel('Push to talk').check();
+  await page.getByRole('button', { name: 'Mic test (hear yourself)' }).click();
+  await page.waitForFunction(() => Number(document.querySelector('[role=meter]')?.getAttribute('aria-valuenow')) > -60);
+  await rest(page);
+  await ctx.shot(page, 'settings-voice');
+  await tall(page, ctx, 'settings-voice-full');
+  await page.setViewportSize({ width: 1024, height: 640 });
+  await rest(page);
+  await ctx.shot(page, 'settings-voice-narrow');
+  await page.setViewportSize(VIEWPORT);
+  await page.getByRole('button', { name: 'Stop mic test' }).click();
+  // The key capture: waiting, then a refused Control.
+  const key = page.getByRole('button', { name: /^Key:/ });
+  await key.scrollIntoViewIfNeeded();
+  await key.click();
+  await page.mouse.move(1439, 899);
+  await sleep(200);
+  await ctx.shot(page, 'settings-ptt-capturing', { fullPage: false });
+  await page.keyboard.press('Control');
+  await page.getByText('Pick a key that is not Ctrl, Alt, Shift or Meta.').waitFor();
+  await ctx.shot(page, 'settings-ptt-refused', { fullPage: false });
+  await page.keyboard.press('Escape');
+  // The reset confirm for Push to talk; Cancel keeps the setting.
+  await page.getByRole('button', { name: 'Reset to defaults' }).nth(4).click();
+  await page.getByRole('dialog').waitFor();
+  await sleep(300);
+  await ctx.shot(page, 'settings-reset-confirm', { fullPage: false });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByLabel('Push to talk').uncheck();
+  for (const [name, file] of [['Notifications', 'settings-notifications'], ['Appearance', 'settings-appearance'], ['Account', 'settings-account']]) {
+    await settingsPage(page, name);
+    await rest(page);
+    await ctx.shot(page, file);
+  }
 });
-
-scene('diagnostics', async ({ alice }) => {
-  await home(alice.page);
-  await joinVoice(alice.page);
-  await alice.page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await alice.page.getByRole('link', { name: 'Diagnostics' }).click();
+// The meter at three levels, from the primitives gallery.
+scene('settings-meter', async ({ open }) => {
+  const page = await open(`${await devServer()}/_gallery?primitives`);
+  const m = page.locator('[data-meters]');
+  await m.scrollIntoViewIfNeeded();
+  await m.screenshot({ path: `${out}settings-meter.png` });
+  console.log(`${out}settings-meter.png`);
+});
+scene('settings-voice-in-call', async (ctx) => {
+  const page = ctx.alice.page;
+  await home(page);
+  await joinVoice(page);
+  await settingsPage(page, 'Voice');
+  await page.waitForFunction(() => Number(document.querySelector('[role=meter]')?.getAttribute('aria-valuenow')) > -100);
+  await tall(page, ctx, 'settings-voice-in-call');
+  await settingsPage(page, 'Diagnostics');
   await sleep(2500); // the stats refresh
-  return alice.page;
+  await rest(page);
+  await ctx.shot(page, 'settings-diagnostics');
+  await page.getByRole('button', { name: 'Close' }).click();
+  await page.getByRole('button', { name: 'Leave' }).click();
 });
 
 // Main-thread CPU on bob's page in a two-person call: CDP TaskDuration over 10 s, printed, no picture. Run it three times

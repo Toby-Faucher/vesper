@@ -2,7 +2,7 @@
   import * as I from '../lib/ui/icons';
   import { onMount, untrack } from 'svelte';
   import { href, parse } from '../lib/route';
-  import { lastRoomKey, navigate, route, session } from '../lib/session.svelte';
+  import { cameInApp, lastRoomKey, navigate, route, session } from '../lib/session.svelte';
   import { startVoice, toggleDeafen, toggleMute, voice } from '../lib/voice.svelte';
   import { closePerson, person } from '../lib/ui/person.svelte';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
@@ -60,7 +60,13 @@
     const a = (e.target as Element).closest?.('a');
     if (!a || a.target || a.hasAttribute('download') || a.origin !== location.origin || a.pathname.startsWith('/api/')) return;
     e.preventDefault();
-    navigate(a.pathname + a.search + a.hash);
+    navigate(a.pathname + a.search + a.hash, a.hasAttribute('data-replace'));
+  }
+  // Settings and Admin close back to where they were opened from: Back when that was an app page (so Back after Close does
+  // not show the same room twice), else the last room (`/` opens it) in place of this entry.
+  function closePage() {
+    if (cameInApp()) history.back();
+    else navigate('/', true);
   }
   // The switcher and the shortcuts list are one chunk, loaded on first use. The switcher's dialog is here, in the first
   // load, so it opens at once with a field that takes the typing (not the composer) and a Loading line. A failed load
@@ -105,7 +111,9 @@
     if (!s) return;
     if (s === 'escape') {
       // Dialogs, menus and popovers close themselves on Esc; with none open, the timeline goes to the newest message.
-      if (room && !document.querySelector('dialog[open], :popover-open')) chat.latest++;
+      if (document.querySelector('dialog[open], :popover-open')) return;
+      if (room) chat.latest++;
+      else if (r.name === 'settings' || r.name === 'admin') closePage();
       return;
     }
     if (e.repeat && s !== 'prev-room' && s !== 'next-room') return e.preventDefault(); // a held key toggles once
@@ -238,7 +246,7 @@
       <span class="-ml-2"><IconButton icon={I.sidebar} label="Show sidebar" tip aria-expanded="false" aria-controls="sidebar" onclick={() => setCollapsed(false)} /></span>
     {/if}
     {#if text}<h1 class="min-w-0 truncate text-base font-medium text-fg">{text}</h1>{/if}
-    {#if closable}<span class="ml-auto"><Button variant="ghost" onclick={() => navigate('/', true)}>Close</Button></span>{/if}
+    {#if closable}<span class="ml-auto"><Button variant="ghost" onclick={closePage}>Close</Button></span>{/if}
   </header>
   {/if}
 {/snippet}

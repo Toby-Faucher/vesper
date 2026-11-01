@@ -90,3 +90,19 @@ export function nextUnread(ids: number[], current: number | null, unread: Record
 /** Enter without Shift sends (or saves an edit). Not while an IME is composing: Safari reports keyCode 229 for the Enter that ends it. */
 export const isSendKey = (e: { key: string; shiftKey: boolean; isComposing: boolean; keyCode: number }) =>
   e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229;
+
+const MODIFIERS = ['Control', 'Alt', 'AltGraph', 'Shift', 'Meta', 'OS', 'Hyper', 'Super', 'Fn'];
+// The keys of the table above (k, m, d, f, \, the arrows, ?, Esc), by the character typed or by the key's place.
+const SHORTCUT_KEYS = new Set(SHORTCUTS.map((d) => d.key));
+const SHORTCUT_CODES = new Set(['KeyK', 'KeyM', 'KeyD', 'KeyF', 'ArrowUp', 'ArrowDown', 'Backslash', 'Slash', 'Escape']);
+/** Why `e` cannot be the push-to-talk key, or null when it can. A held modifier or a shortcut's key would block the shortcuts. */
+export function pttKeyProblem(e: Pick<KeyboardEvent, 'key' | 'code'>): string | null {
+  if (MODIFIERS.includes(e.key) || /^(Control|Alt|Shift|Meta|OS)/.test(e.code)) return 'Pick a key that is not Ctrl, Alt, Shift or Meta.';
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (SHORTCUT_KEYS.has(key) || SHORTCUT_CODES.has(e.code)) return 'A keyboard shortcut uses that key. Pick another one.';
+  if (!e.code) return 'That key cannot be read. Pick another one.';
+  return null;
+}
+/** A key code as people read it: KeyQ is Q, Digit1 is 1, BracketLeft is Bracket left, Numpad0 is Numpad 0. */
+export const keyName = (code: string) =>
+  code.replace(/^(Key|Digit)(?=.)/, '').replace(/(?<=[a-z])(?=[A-Z0-9])/g, ' ').replace(/ (\w)/g, (_, c: string) => ` ${c.toLowerCase()}`);

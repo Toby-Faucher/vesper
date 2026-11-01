@@ -8,6 +8,7 @@
   import { enter, exit } from '../lib/ui/motion';
   import { togglePerson } from '../lib/ui/person.svelte';
   import { qualityText } from '../lib/ui/quality';
+  import { keyName } from '../lib/ui/keys';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
@@ -40,7 +41,7 @@
   const LEVEL = { good: 3, fair: 2, poor: 1, unknown: 0 } as const;
   const qText = $derived(voice.quality === 'good' ? 'Good connection' : voice.quality === 'unknown' ? 'Checking connection' : qualityText(voice.quality, voice.diag));
   const [qWords, qFigure = ''] = $derived(qText.split(': '));
-  const key = $derived(voice.settings.pushToTalk.key.replace(/^(Key|Digit)/, ''));
+  const key = $derived(keyName(voice.settings.pushToTalk.key));
   const warning = $derived(
     voice.micWarning === 'mic' ? 'No sound from your microphone. Check the input device, its volume, and the mute switch.'
       : voice.micWarning === 'pipeline' ? 'The audio pipeline stopped. Leave and join again.' : '',

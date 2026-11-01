@@ -10,11 +10,16 @@ import { applyServerMsg, emptyState, type AppState } from './state';
 export const route = $state({ path: location.pathname });
 
 /** Goes to `to` (a path, maybe with a query and a fragment). `replace` swaps the current history entry, for redirects, so
- * Back does not loop. */
+ * Back does not loop. An entry pushed here is marked `app`, so a page can tell that Back stays in the app (`cameInApp`). */
 export function navigate(to: string, replace = false): void {
-  if (location.pathname + location.search + location.hash !== to) history[replace ? 'replaceState' : 'pushState'](null, '', to);
+  if (location.pathname + location.search + location.hash === to) return void (route.path = to.split(/[?#]/)[0]);
+  if (replace) history.replaceState(history.state, '', to);
+  else history.pushState({ app: true }, '', to);
   route.path = to.split(/[?#]/)[0];
 }
+
+/** True when this history entry came from a click in the app, so the entry before it is an app page too. */
+export const cameInApp = () => !!(history.state as { app?: boolean } | null)?.app;
 
 /** The localStorage key of the room `/` opens, per account, so a second account on this browser does not get it. */
 export const lastRoomKey = (userId: string) => `vesper.lastRoom.${userId}`;

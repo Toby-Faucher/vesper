@@ -1,17 +1,22 @@
 <script lang="ts">
   import type { HTMLInputAttributes } from 'svelte/elements';
-  // A checkbox with role="switch", drawn as a 28x16 track; the label sits left of it on one row.
+  // A checkbox with role="switch", drawn as a 28x16 track; the label sits left of it on one row, `help` under the label.
   let {
     checked = $bindable(false),
     label,
+    help,
     ...rest
-  }: { checked?: boolean; label: string } & Omit<HTMLInputAttributes, 'checked' | 'type' | 'role'> = $props();
+  }: { checked?: boolean; label: string; help?: string } & Omit<HTMLInputAttributes, 'checked' | 'type' | 'role'> = $props();
+  const id = $props.id();
 </script>
 
-<label class="flex min-h-8 items-center justify-between gap-4 text-sm text-fg has-disabled:text-fg-disabled">
-  <span>{label}</span>
-  <input type="checkbox" role="switch" {...rest} bind:checked />
-</label>
+<div>
+  <label class="flex min-h-8 items-center justify-between gap-4 text-sm text-fg has-disabled:text-fg-disabled">
+    <span>{label}</span>
+    <input type="checkbox" role="switch" aria-describedby={help ? `${id}-help` : undefined} {...rest} bind:checked />
+  </label>
+  {#if help}<p id="{id}-help" class="-mt-1 pr-11 text-xs text-fg-3">{help}</p>{/if}
+</div>
 
 <style>
   input {

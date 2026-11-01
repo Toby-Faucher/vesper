@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Unread } from '../gen/Unread';
-import { SHORTCUTS, isSendKey, isTyping, keysFor, nextUnread, shortcut, stepRoom, type Def } from './keys';
+import { SHORTCUTS, isSendKey, isTyping, keyName, keysFor, nextUnread, pttKeyProblem, shortcut, stepRoom, type Def } from './keys';
 
 const un = (room_id: number, unread: number): Unread => ({ room_id, last_read_id: 0, unread, mentions: 0 });
 
@@ -188,5 +188,27 @@ describe('isSendKey', () => {
   it('does not send while an IME is composing, including the Safari keyCode 229 Enter', () => {
     expect(k({ isComposing: true })).toBe(false);
     expect(k({ keyCode: 229 })).toBe(false);
+  });
+});
+
+describe('push-to-talk key', () => {
+  const MOD = 'Pick a key that is not Ctrl, Alt, Shift or Meta.';
+  it('refuses_bare_modifiers', () => {
+    for (const [key, code] of [['Control', 'ControlLeft'], ['Control', 'ControlRight'], ['Alt', 'AltLeft'], ['AltGraph', 'AltRight'],
+      ['Shift', 'ShiftLeft'], ['Shift', 'ShiftRight'], ['Meta', 'MetaLeft'], ['Meta', 'MetaRight'], ['OS', 'OSLeft']])
+      expect(pttKeyProblem({ key, code }), code).toBe(MOD);
+  });
+  it('refuses_shortcut_keys', () => {
+    for (const [key, code] of [['k', 'KeyK'], ['m', 'KeyM'], ['d', 'KeyD'], ['f', 'KeyF'], ['\\', 'Backslash'], ['ArrowUp', 'ArrowUp'],
+      ['ArrowDown', 'ArrowDown'], ['/', 'Slash'], ['#', 'Backslash']])
+      expect(pttKeyProblem({ key, code }), code).toMatch(/shortcut/);
+  });
+  it('takes_ordinary_keys', () => {
+    for (const [key, code] of [[' ', 'Space'], ['q', 'KeyQ'], ['1', 'Digit1'], ['F5', 'F5'], ['`', 'Backquote'], ['ArrowLeft', 'ArrowLeft']])
+      expect(pttKeyProblem({ key, code }), code).toBeNull();
+  });
+  it('names_codes', () => {
+    expect(['KeyQ', 'Digit1', 'Space', 'BracketLeft', 'Numpad0', 'F5', 'CapsLock'].map(keyName))
+      .toEqual(['Q', '1', 'Space', 'Bracket left', 'Numpad 0', 'F5', 'Caps lock']);
   });
 });
