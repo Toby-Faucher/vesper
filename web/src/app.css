@@ -79,7 +79,8 @@
   outline-offset: 2px;
 }
 
-/* CSS-only tooltip: data-tip="Mute" on a button. Shows after 400 ms of hover or on keyboard focus. */
+/* CSS tooltip: data-tip="Mute" on a button. Shows after 400 ms of hover or on keyboard focus. tip.ts sets data-tip-side
+   and --tip-dx before it shows, so it flips or shifts to stay inside the viewport. */
 [data-tip] {
   position: relative;
 }
@@ -100,17 +101,22 @@
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  transform: translateX(-50%);
+  transform: translateX(calc(var(--tip-dx, 0px) - 50%));
   transition: opacity var(--dur-1) var(--ease-out);
 }
-[data-tip-up]::after {
+[data-tip-up]::after,
+[data-tip-side='top']::after {
   top: auto;
   bottom: calc(100% + 4px);
+}
+[data-tip-side='bottom']::after {
+  top: calc(100% + 4px);
+  bottom: auto;
 }
 [data-tip-end]::after {
   left: auto;
   right: 0;
-  transform: none;
+  transform: translateX(var(--tip-dx, 0px));
 }
 [data-tip]:hover::after,
 [data-tip]:focus-visible::after {
