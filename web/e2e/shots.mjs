@@ -1253,6 +1253,22 @@ scene('admin-rooms', async (ctx) => {
   await ctx.shot(page, 'admin-rooms-rename', { fullPage: false });
   await page.keyboard.press('Escape');
 });
+// An archived room (dimmed, with Unarchive) and the Archive confirm. The room is unarchived again for later scenes.
+scene('admin-rooms-archive', async (ctx) => {
+  const page = await roomsPage(ctx);
+  const crew = (await ctx.api(page, 'GET', '/api/rooms')).find((r) => r.name === 'crew');
+  await ctx.api(page, 'PATCH', `/api/rooms/${crew.id}`, { archived: true });
+  await page.getByRole('button', { name: 'Unarchive crew' }).waitFor();
+  await rest(page);
+  await ctx.shot(page, 'admin-rooms-archived');
+  await narrow(page, ctx, 'admin-rooms-archived-narrow');
+  await page.getByRole('button', { name: 'Archive music' }).click();
+  await page.getByRole('dialog', { name: 'Archive music?' }).waitFor();
+  await sleep(300);
+  await ctx.shot(page, 'admin-rooms-archive-confirm', { fullPage: false });
+  await page.keyboard.press('Escape');
+  await ctx.api(page, 'PATCH', `/api/rooms/${crew.id}`, { archived: false });
+});
 scene('admin-room-members', async (ctx) => {
   const page = await roomsPage(ctx);
   await page.getByRole('button', { name: 'Members of crew' }).click();

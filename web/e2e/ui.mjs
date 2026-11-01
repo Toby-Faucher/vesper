@@ -233,6 +233,34 @@ try {
   await order(c, ['general', 'hangout']);
   console.log('rooms: create, rename, reorder, restrict, live sidebars: ok');
 
+  // Archive: asks first, then hangout leaves every sidebar live (alice's too) and stays in Admin > Rooms, dimmed, with
+  // Unarchive. With music room archived as well, general is the last room: its Archive is off and the server says no.
+  await a.getByRole('button', { name: 'Archive hangout' }).click();
+  const ask = a.getByRole('dialog', { name: 'Archive hangout?' });
+  await ask.getByText('Its messages and files are kept.', { exact: false }).waitFor();
+  await ask.getByRole('button', { name: 'Archive', exact: true }).click();
+  await ask.waitFor({ state: 'hidden' });
+  await order(b, ['music room', 'general']);
+  await order(a, ['music room', 'general']);
+  await order(c, ['general']);
+  await a.locator('tr[data-room][data-archived]').getByRole('button', { name: 'Unarchive hangout' }).waitFor();
+  await a.getByRole('button', { name: 'Archive music room' }).click();
+  await a.getByRole('dialog', { name: 'Archive music room?' }).getByRole('button', { name: 'Archive', exact: true }).click();
+  await order(b, ['general']);
+  assert.ok(await a.getByRole('button', { name: 'Archive general' }).isDisabled(), 'the last room can be archived');
+  const lastId = await a.locator('tr[data-room]:not([data-archived])').getAttribute('data-room');
+  const status = await a.evaluate((id) => fetch(`/api/rooms/${id}`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ archived: true }),
+  }).then((r) => r.status), lastId);
+  assert.equal(status, 409, 'the server archived the last room');
+  await a.getByRole('button', { name: 'Unarchive hangout' }).click();
+  await a.getByRole('button', { name: 'Archive hangout' }).waitFor(); // one change at a time: a click meanwhile is ignored
+  await a.getByRole('button', { name: 'Unarchive music room' }).click();
+  await order(b, ['music room', 'general', 'hangout']);
+  await order(c, ['general', 'hangout']);
+  assert.equal(await a.locator('tr[data-archived]').count(), 0);
+  console.log('rooms: archive asks, hides live, keeps the last room, unarchive restores: ok');
+
   // Disk use: two meters (the database shows its size only); uploads are counted against the default 10 GB quota.
   await openAdmin(a, 'Disk use');
   const uploads = a.getByRole('meter', { name: 'Uploads' });
