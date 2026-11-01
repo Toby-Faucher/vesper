@@ -1,6 +1,7 @@
 import type { DspOut } from './dsp-handler';
 import { FrameRing, HOP } from './ring';
 import { ModeController } from './mode';
+import { Gate, Limiter } from './dynamics';
 
 // The cushion. postMessage between the worklet and the worker jitters in a browser, so keep enough frames in
 // each place to ride out a slow hop. This adds about 30 ms of delay over the old 2/3/2 setup (estimated, not measured).
@@ -43,6 +44,8 @@ export interface PipelineStats {
   maxReplyMs: number;
   inputRms: number;
   outputRms: number;
+  /** Sample peak of the boosted input before the limiter, so real clipping still shows. Linear, 0 and up. */
+  inputPeak: number;
 }
 
 /**
@@ -76,13 +79,20 @@ export class DenoiseCore {
   private cool = 0; // samples until the next trim drop
   private replyMs = new Float64Array(REPLY_WINDOW);
   // Level meters: sums over the current half second; the last full half second is what stats() reports.
-  private sq = { in: 0, out: 0, n: 0 };
-  private rms = { in: 0, out: 0 };
+  private sq = { in: 0, out: 0, n: 0, peak: 0 };
+  private rms = { in: 0, out: 0, peak: 0 };
+  /** On when there is an input boost; capture.ts sets it. */
+  limiter: Limiter;
+  private limited = new Float32Array(128); // reallocated only if the quantum size changes
+  /** The noise gate on the denoised output; capture.ts sets it from the settings. */
+  gate: Gate;
 
   constructor(onFail: (reason: string) => void, sampleRate: number) {
     this.onFail = onFail;
     this.rate = sampleRate;
     this.stallSamples = sampleRate / 2; // a killed worker sends no error; half a second of silence means stalled
+    this.limiter = new Limiter(sampleRate);
+    this.gate = new Gate(sampleRate);
   }
 
   stats(): PipelineStats {
@@ -106,6 +116,7 @@ export class DenoiseCore {
       avgReplyMs: k ? sum / k : 0,
       maxReplyMs: max,
       inputRms: this.rms.in,
+      inputPeak: this.rms.peak,
       outputRms: this.rms.out,
     };
   }
@@ -118,7 +129,8 @@ export class DenoiseCore {
     if ((this.sq.n += o.length) < this.rate / 2) return;
     this.rms.in = Math.sqrt(this.sq.in / this.sq.n);
     this.rms.out = Math.sqrt(this.sq.out / this.sq.n);
-    this.sq.in = this.sq.out = this.sq.n = 0;
+    this.rms.peak = this.sq.peak;
+    this.sq.in = this.sq.out = this.sq.n = this.sq.peak = 0;
   }
 
   connect(send: (f: Float32Array) => void) {
@@ -140,6 +152,7 @@ export class DenoiseCore {
     this.inflight = Math.max(0, this.inflight - 1);
     this.idle = 0;
     this.replyMs[this.n.replies++ % REPLY_WINDOW] = m.ms;
+    this.gate.detect(m.data); // on arrival, a queue depth ahead of playout: the gate's lookahead
     this.out.push(m.data);
     this.count += m.data.length;
     if (this.out.length > MAX_OUT) {
@@ -150,9 +163,15 @@ export class DenoiseCore {
     if (this.mode.report(m.ms) === 'browser') this.fail('denoiser too slow for real time');
   }
 
-  render(input: Float32Array | undefined, o: Float32Array): void {
-    if (input) this.n.inputBlocks++;
-    else this.n.emptyInputBlocks++;
+  /** The limiter runs first, so the denoiser, the passthrough and the input RMS see the limited boost; inputPeak sees it before. */
+  render(raw: Float32Array | undefined, o: Float32Array): void {
+    let input: Float32Array | undefined;
+    if (raw) {
+      this.n.inputBlocks++;
+      if (this.limited.length !== raw.length) this.limited = new Float32Array(raw.length);
+      for (let i = 0; i < raw.length; i++) this.sq.peak = Math.max(this.sq.peak, Math.abs(raw[i]));
+      this.limiter.process(raw, (input = this.limited));
+    } else this.n.emptyInputBlocks++;
     this.process(input, o);
     this.trim(o.length);
     this.meter(input, o);
@@ -204,5 +223,6 @@ export class DenoiseCore {
       this.playing = false; // underrun: re-prime
     }
     for (; i < o.length; i++) o[i] = 0;
+    this.gate.apply(o); // denoised output only: the passthrough above stays ungated, so the user stays audible
   }
 }
