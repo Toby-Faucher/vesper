@@ -64,7 +64,8 @@ To see every role, the type scale, the radii and the focus ring, run `npm --pref
 
 The primitives live in [`web/src/lib/ui/c/`](../web/src/lib/ui/c/): buttons, fields, switch, range, dialog, popover, menu, avatar,
 badge, status line, empty state. Dialogs are native `<dialog>` with `showModal()`; popovers and menus use the Popover API and
-`place()` in `web/src/lib/ui/place.ts`. Per-user colour is an avatar slot from `web/src/lib/ui/avatar.ts`. Icons are Lucide paths in
+`place()` in `web/src/lib/ui/place.ts`. The CSS tooltip (`data-tip`) goes through `place()` too
+(`web/src/lib/ui/tip.ts`), so it flips or shifts to stay on screen. Per-user colour is an avatar slot from `web/src/lib/ui/avatar.ts`. Icons are Lucide paths in
 `web/src/lib/ui/icons.ts`. `/_gallery?primitives` shows each one in its states.
 
 ## Checked

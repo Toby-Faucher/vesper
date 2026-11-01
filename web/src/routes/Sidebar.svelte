@@ -68,7 +68,7 @@
         <span class="min-w-0 truncate text-fg" title={me.display_name}>{me.display_name}</span>
         <span class="ml-auto flex shrink-0 text-fg-2"><Icon d={I.chevronDown} /></span>
       </button>
-      <IconButton icon={I.settings} label="Settings" tip onclick={() => navigate(href({ name: 'settings', section: 'voice' }))} />
+      <span class="cog flex"><IconButton icon={I.settings} label="Settings" tip onclick={() => navigate(href({ name: 'settings', section: 'voice' }))} /></span>
       <Menu anchor={accountEl} open={menuOpen} onclose={() => (menuOpen = false)} label="Account">
         {#if staff}<MenuItem icon={I.shield} onselect={() => navigate(href({ name: 'admin', section: 'invites' }))}>Admin</MenuItem>{/if}
         <MenuItem icon={I.logOut} onselect={() => session.logout()}>Log out</MenuItem>
@@ -80,4 +80,10 @@
 <style>
   .account { transition: background-color var(--dur-1) var(--ease-out); }
   .account:hover { background: var(--bg-hover); }
+  /* The gear turns a third of a turn (its six teeth line up again) on hover or keyboard focus. None under reduced motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    .cog :global(svg) { transition: transform var(--dur-3) var(--ease-out); }
+    .cog :global(button:hover svg),
+    .cog :global(button:focus-visible svg) { transform: rotate(120deg); }
+  }
 </style>
