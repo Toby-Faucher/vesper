@@ -1,9 +1,8 @@
 <script lang="ts">
-  // The Vesper mark: an amber disc with a four-point sparkle (same drawing as public/favicon.svg).
-  let { size = 20 }: { size?: number } = $props();
+  import logo from '../logo.webp';
+  // The Vesper logo (assets/logo.png cut to the wordmark, 112 px tall), `size` px tall. Vite hashes the file, so the
+  // server sends it as immutable. It reads "Vesper", so it is the name, not decoration.
+  let { size = 24 }: { size?: number } = $props();
 </script>
 
-<svg class="shrink-0" width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-  <circle cx="16" cy="16" r="15" fill="var(--accent)" />
-  <path d="M16 6c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z" fill="var(--on-accent)" />
-</svg>
+<img class="shrink-0" src={logo} alt="Vesper" height={size} width={Math.round((size * 235) / 112)} draggable="false" />
