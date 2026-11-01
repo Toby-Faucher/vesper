@@ -253,6 +253,7 @@ mod tests {
             banned: false,
             bio: String::new(),
             avatar: None,
+            ui_accent: None,
         }
     }
 

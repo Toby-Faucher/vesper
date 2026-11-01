@@ -311,6 +311,34 @@ async fn profile_patch_validates() {
 }
 
 #[tokio::test]
+async fn ui_accent_is_validated_kept_and_only_yours() {
+    let t = TestServer::new().await;
+    let a = t.member("alice").await;
+    let b = t.member("bob").await;
+    let patch = |v: Value, c: &str| request(Method::PATCH, "/api/me", Some(&v), Some(c));
+    for bad in ["red", "Teal", "#12345", "#1234567", "", "var(--x)"] {
+        let (s, _, v) = t.call(patch(json!({ "ui_accent": bad }), &a.cookie)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad:?}");
+        assert_eq!(v["code"], "bad_request");
+    }
+    let (_, _, v) = t.call(get("/api/me", &a)).await;
+    assert_eq!(v["user"]["ui_accent"], Value::Null);
+    let (s, _, v) = t
+        .call(patch(json!({ "ui_accent": "teal" }), &a.cookie))
+        .await;
+    assert_eq!((s, &v["ui_accent"]), (StatusCode::OK, &json!("teal")));
+    let (s, _, v) = t
+        .call(patch(json!({ "ui_accent": "#A0C0FF" }), &b.cookie))
+        .await;
+    assert_eq!((s, &v["ui_accent"]), (StatusCode::OK, &json!("#a0c0ff")));
+    // Bob's patch changed only Bob: Alice's choice survives in her Me.
+    let (_, _, v) = t.call(get("/api/me", &a)).await;
+    assert_eq!(v["user"]["ui_accent"], "teal");
+    let (_, _, v) = t.call(patch(json!({ "bio": "hi" }), &a.cookie)).await;
+    assert_eq!(v["ui_accent"], "teal");
+}
+
+#[tokio::test]
 async fn body_over_32k_is_413() {
     let t = TestServer::new().await;
     let big = login_body("alice", &"x".repeat(33 * 1024));

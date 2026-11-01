@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, HeaderValue, header};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 use unicode_normalization::UnicodeNormalization;
+use vesper_protocol::AccentPreset;
 
 /// At most this many argon2 hashes run at once (each takes 19 MiB and a core).
 static HASHERS: Semaphore = Semaphore::const_new(2);
@@ -64,6 +65,16 @@ fn clean_line(s: &str, len: std::ops::RangeInclusive<usize>) -> Option<String> {
 pub fn valid_accent(s: &str) -> Option<String> {
     let hex = s.strip_prefix('#')?;
     (hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| s.to_ascii_lowercase())
+}
+
+/// A UI accent: an `AccentPreset` key as it is, or `#rrggbb` lowercased. Contrast is the client's check.
+pub fn valid_ui_accent(s: &str) -> Option<String> {
+    let preset = serde_json::from_value::<AccentPreset>(serde_json::Value::from(s)).is_ok();
+    if preset {
+        Some(s.to_owned())
+    } else {
+        valid_accent(s)
+    }
 }
 
 pub fn valid_password(s: &str) -> bool {
@@ -262,6 +273,22 @@ mod tests {
         assert_eq!(valid_accent("#7C8CFF").as_deref(), Some("#7c8cff"));
         for bad in ["7c8cff", "#7c8cf", "#7c8cffa", "#7c8cfg"] {
             assert_eq!(valid_accent(bad), None, "{bad:?}");
+        }
+        for ok in ["amber", "lime", "teal"] {
+            assert_eq!(valid_ui_accent(ok).as_deref(), Some(ok));
+        }
+        assert_eq!(valid_ui_accent("#F0B010").as_deref(), Some("#f0b010"));
+        for bad in [
+            "",
+            "Amber",
+            "red",
+            "amber ",
+            "f0b010",
+            "#f0b01",
+            "url(x)",
+            "#f0b010;x",
+        ] {
+            assert_eq!(valid_ui_accent(bad), None, "{bad:?}");
         }
         assert!(!valid_password("1234567"));
         assert!(valid_password("12345678"));

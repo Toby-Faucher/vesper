@@ -7,4 +7,8 @@ export type ProfilePatch = { display_name?: string, accent?: string,
 /**
  * 0 to 160 characters; empty clears it.
  */
-bio?: string, };
+bio?: string, 
+/**
+ * An `AccentPreset` key or `#rrggbb`. The client also checks a custom colour's contrast.
+ */
+ui_accent?: string, };

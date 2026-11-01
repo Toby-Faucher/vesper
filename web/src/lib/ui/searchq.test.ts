@@ -8,7 +8,7 @@ import { Searcher } from './search.svelte';
 import { MAX_QUERY, complete, keyAt, keyValue, nothingToSearch, parseSearch, setKey, shortLast } from './searchq';
 
 const user = (user_id: string, username: string, display_name: string): UserInfo =>
-  ({ user_id, username, display_name, accent: '', role: 'member', banned: false, bio: '', avatar: null });
+  ({ user_id, username, display_name, accent: '', role: 'member', banned: false, bio: '', avatar: null, ui_accent: null });
 const room = (id: number, name: string): RoomInfo => ({ id, name, position: id, restricted: false, members: [] });
 const ctx = {
   users: [user('a1', 'alice', 'Alice'), user('s1', 'sam', 'Sam Smith'), user('b1', 'bob', 'sam')],
