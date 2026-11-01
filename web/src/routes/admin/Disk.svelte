@@ -24,11 +24,11 @@
     }
   }
   onMount(load);
-  // The database has no limit of its own: its bar is its share of the disk.
+  // The database has no limit of its own and is a sliver of the disk: its size only, no bar (of 0).
   const rows = $derived(
     d && [
       { label: 'Uploads', used: d.upload_bytes, of: d.quota_bytes, text: `${bytes(d.upload_bytes)} of ${bytes(d.quota_bytes)}` },
-      { label: 'Database', used: d.db_bytes, of: d.fs_total, text: `${bytes(d.db_bytes)}` },
+      { label: 'Database', used: d.db_bytes, of: 0, text: `${bytes(d.db_bytes)}` },
       { label: 'Disk', used: d.fs_total - d.fs_free, of: d.fs_total, text: `${bytes(d.fs_total - d.fs_free)} of ${bytes(d.fs_total)}` },
     ],
   );
@@ -48,11 +48,13 @@
         <div class="flex flex-col gap-2">
           <div class="flex items-baseline justify-between gap-4 text-sm">
             <span class="font-medium text-fg">{r.label}</span>
-            <span class="tabular-nums text-fg-2">{r.text}{r.label === 'Database' ? '' : `, ${p} %`}</span>
+            <span class="tabular-nums text-fg-2">{r.text}{r.of ? `, ${p} %` : ''}</span>
           </div>
-          <div class="track" role="meter" aria-label={r.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={p} aria-valuetext={r.text}>
-            <div class="bar" class:hot={p >= 80} style:width="{p}%"></div>
-          </div>
+          {#if r.of}
+            <div class="track" role="meter" aria-label={r.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={p} aria-valuetext={r.text}>
+              <div class="bar" class:hot={p >= 80} style:width="{p}%"></div>
+            </div>
+          {/if}
         </div>
       {/each}
     </div>

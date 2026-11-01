@@ -149,7 +149,7 @@ admin pages: alice creates an invite in the form (one request
 for two clicks), copies the link and bob signs up with it; a revoked link shows the bad-link text; a member who opens `/admin` sees
 that it is not allowed; after a confirmed role change bob has the Admin menu entry and the moderator view without role or ban controls; a
 confirmed ban ends carol's session. On Rooms alice creates, renames, moves (by button and by Alt+Up) and restricts a room to bob: bob's
-sidebar follows each change live and carol's never shows it once restricted; Disk use shows three meters. It never prints an invite link. Then: layout shift on bob's page after he joins a call (opening a
+sidebar follows each change live and carol's never shows it once restricted; Disk use shows two meters and the database size; a failed Members load offers Try again. It never prints an invite link. Then: layout shift on bob's page after he joins a call (opening a
 room, a message arriving, an image loading, hovering, the typing line) stays below 0.02, shifts within 500 ms of his own input left out
 as in CLS; with `prefers-reduced-motion: reduce` a dialog, the call bar and a search jump animate no transform; and a keyboard-only walk
 (sign in, Ctrl+K to a room, Join voice by Tab and Enter, Ctrl+Shift+M, send, Up edits, Esc cancels, Ctrl+Shift+F and Enter jumps,

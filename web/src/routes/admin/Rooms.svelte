@@ -181,7 +181,7 @@
 
   <section role="group" aria-labelledby="rooms-list" bind:this={list}>
     <h3 id="rooms-list" class="text-base font-medium text-fg">All rooms</h3>
-    <table class="tbl" aria-labelledby="rooms-list">
+    <table class="tbl table-fixed" aria-labelledby="rooms-list">
       <thead>
         <tr><th scope="col">Name</th><th scope="col" class="w-44">Restricted</th><th class="w-40"><span class="sr-only">Actions</span></th></tr>
       </thead>
@@ -261,8 +261,4 @@
   .sections { display: flex; flex-direction: column; gap: 32px; }
   section { display: flex; flex-direction: column; gap: 16px; }
   section + section { padding-top: 24px; border-top: 1px solid var(--line-subtle); }
-  .tbl { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; line-height: 20px; }
-  .tbl th { height: 32px; padding: 0 8px; border-bottom: 1px solid var(--line); color: var(--fg-2); font-weight: 500; text-align: left; white-space: nowrap; }
-  .tbl td { height: 48px; padding: 4px 8px; border-bottom: 1px solid var(--line-subtle); color: var(--fg); }
-  .tbl :is(th, td):first-child { padding-left: 12px; }
 </style>

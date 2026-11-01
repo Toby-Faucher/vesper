@@ -67,12 +67,16 @@
       listFailed = false;
       now = Date.now();
     } catch {
-      listFailed = true;
+      listFailed = !invites; // a failed reload keeps the table
     }
+    void loadUsers().catch(() => {}); // only for the Created by names; a dash stands in without them
   }
+  // Again when the tab comes back: uses and signups happen elsewhere.
+  const back = () => document.visibilityState === 'visible' && void load();
   onMount(() => {
     void load();
-    void loadUsers().catch(() => {}); // only for the Created by names; a dash stands in without them
+    document.addEventListener('visibilitychange', back);
+    return () => document.removeEventListener('visibilitychange', back);
   });
   // No creator: an owner invite from the command line (create-owner). An unknown id (users not loaded) shows a dash.
   const creator = (id: string | null) => (id === null ? 'Command line' : session.state.users[id]?.display_name ?? '-');
@@ -149,13 +153,16 @@
   <section role="group" aria-labelledby="invites-list">
     <h3 id="invites-list" tabindex="-1" bind:this={listHead} class="text-base font-medium text-fg">All invites</h3>
     {#if listFailed}
-      <p role="alert" class="text-sm text-fg-2">{M.invitesFailed}</p>
+      <div class="flex items-center gap-3">
+        <p role="alert" class="text-sm text-fg-2">{M.invitesFailed}</p>
+        <Button size="sm" onclick={load}>Try again</Button>
+      </div>
     {:else if !invites}
       <p class="text-sm text-fg-2">{M.invitesLoading}</p>
     {:else if !invites.length}
       <p class="text-sm text-fg-2">{M.invitesEmpty}</p>
     {:else}
-      <table class="tbl">
+      <table class="tbl whitespace-nowrap">
         <thead>
           <tr><th scope="col">Role</th><th scope="col">Uses</th><th scope="col">Expires</th><th scope="col">Created by</th><th scope="col">Status</th><th><span class="sr-only">Actions</span></th></tr>
         </thead>
@@ -167,7 +174,7 @@
               <td class="tabular-nums">{i.uses} of {i.max_uses}</td>
               <td title={new Date(i.expires_at).toLocaleString()}>{untilText(i.expires_at, now)}</td>
               <td class="who" title={creator(i.created_by)}>{creator(i.created_by)}</td>
-              <td class:dim={st !== 'active'}>{STATUS_NAMES[st]}</td>
+              <td class={st === 'active' ? '' : 'text-fg-2'}>{STATUS_NAMES[st]}</td>
               <td class="text-right">
                 {#if canRevoke(i, session.state.me!.user.role, now)}<Button size="sm" variant="ghost" onclick={() => ([revoking, revokeError] = [i, ''])}>Revoke</Button>{/if}
               </td>
@@ -196,11 +203,6 @@
   section { display: flex; flex-direction: column; gap: 16px; }
   section + section { padding-top: 24px; border-top: 1px solid var(--line-subtle); }
   .created { display: flex; max-width: 560px; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); }
-  /* Auto layout on one line per row: each column takes its content, so the table fits 512 px at the 1024 px window. */
-  .tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 20px; white-space: nowrap; }
-  .tbl th { height: 32px; padding: 0 8px; border-bottom: 1px solid var(--line); color: var(--fg-2); font-weight: 500; text-align: left; }
-  .tbl td { height: 44px; padding: 0 8px; border-bottom: 1px solid var(--line-subtle); color: var(--fg); }
-  .tbl :is(th, td):first-child { padding-left: 12px; }
-  .tbl td.dim { color: var(--fg-2); }
+  /* The table uses auto layout on one line per row: each column takes its content, so it fits 512 px at the 1024 px window. */
   .tbl td.who { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 </style>

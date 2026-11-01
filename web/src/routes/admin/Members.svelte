@@ -19,14 +19,21 @@
   const owner = $derived(me.role === 'owner');
   let loaded = $state(false);
   let failed = $state(false);
-  onMount(async () => {
+  async function load() {
     try {
       const list = await api<UserInfo[]>('GET', '/api/users');
       session.state.users = { ...session.state.users, ...Object.fromEntries(list.map((u) => [u.user_id, u])) };
-      loaded = true;
+      [loaded, failed] = [true, false];
     } catch {
-      failed = true;
+      failed = !loaded; // a failed reload keeps the table
     }
+  }
+  // Again when the tab comes back: no event announces a signup.
+  const back = () => document.visibilityState === 'visible' && void load();
+  onMount(() => {
+    void load();
+    document.addEventListener('visibilitychange', back);
+    return () => document.removeEventListener('visibilitychange', back);
   });
   const members = $derived(Object.values(session.state.users).sort(byRole));
   const editable = (u: UserInfo) => owner && u.user_id !== me.user_id && u.role !== 'owner';
@@ -74,11 +81,14 @@
 
 {#if !owner}<p class="mb-4 text-sm text-fg-2">{M.membersOwnerOnly}</p>{/if}
 {#if failed}
-  <p role="alert" class="text-sm text-fg-2">{M.membersFailed}</p>
+  <div class="flex items-center gap-3">
+    <p role="alert" class="text-sm text-fg-2">{M.membersFailed}</p>
+    <Button size="sm" onclick={load}>Try again</Button>
+  </div>
 {:else if !loaded}
   <p class="text-sm text-fg-2">{M.membersLoading}</p>
 {:else}
-  <table class="tbl" aria-label="Members">
+  <table class="tbl table-fixed" aria-label="Members">
     <thead>
       <tr><th scope="col">Name</th><th scope="col" class="w-36">Role</th><th scope="col" class="w-20">Status</th><th class="w-36"><span class="sr-only">Actions</span></th></tr>
     </thead>
@@ -142,9 +152,3 @@
     <Button variant={confirm?.role ? 'primary' : 'danger'} loading={!!busy} onclick={confirmed}>{confirm?.role ? 'Change role' : 'Ban'}</Button>
   {/snippet}
 </Dialog>
-
-<style>
-  .tbl { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; line-height: 20px; }
-  .tbl th { height: 32px; padding: 0 12px; border-bottom: 1px solid var(--line); color: var(--fg-2); font-weight: 500; text-align: left; white-space: nowrap; }
-  .tbl td { height: 48px; padding: 0 12px; border-bottom: 1px solid var(--line-subtle); color: var(--fg); }
-</style>

@@ -202,17 +202,22 @@ try {
   await order(c, ['general', 'hangout']);
   console.log('rooms: create, rename, reorder, restrict, live sidebars: ok');
 
-  // Disk use: three meters; uploads are counted against the default 10 GB quota.
+  // Disk use: two meters (the database shows its size only); uploads are counted against the default 10 GB quota.
   await openAdmin(a, 'Disk use');
   const uploads = a.getByRole('meter', { name: 'Uploads' });
   assert.equal(await uploads.getAttribute('aria-valuetext'), '0 B of 10 GB');
   assert.equal(await uploads.getAttribute('aria-valuenow'), '0');
-  assert.equal(await a.getByRole('meter').count(), 3);
+  assert.equal(await a.getByRole('meter').count(), 2);
+  await a.locator('#main').getByText('Database').waitFor();
   console.log('disk use: ok');
 
   // The role change asks first and names bob; Cancel keeps him a member. Then bob is a moderator: the Admin entry, no role
   // or ban controls, no owner sections, and /admin/rooms says it is the owner's.
+  // A failed load says so and offers Try again.
+  await a.route('**/api/users', (r) => r.abort(), { times: 1 });
   await openAdmin(a, 'Members');
+  await a.getByRole('alert').getByText('Could not load the members.', { exact: false }).waitFor();
+  await a.getByRole('button', { name: 'Try again' }).click();
   const roleFor = a.getByLabel('Role for bob');
   await roleFor.selectOption('moderator');
   const confirmRole = a.getByRole('dialog', { name: 'Make bob a moderator?' });
@@ -248,6 +253,8 @@ try {
   await confirmBan.getByRole('button', { name: 'Ban' }).click();
   await c.getByText('Your session ended. Sign in again.').waitFor();
   await a.locator('tr[data-user="carol"]').getByText('Banned').waitFor();
+  const banned = await a.locator('tr[data-user="carol"]').getByText('Banned').evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e.closest('tr').querySelector('p')).color]);
+  assert.notEqual(banned[0], banned[1], 'Banned is in the primary text colour');
   await a.getByRole('button', { name: 'Unban carol' }).waitFor();
   console.log('ban ends the session: ok');
 
