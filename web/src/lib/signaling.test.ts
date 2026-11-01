@@ -134,4 +134,13 @@ describe('joinRoom messages', () => {
     ws.onmessage!({ data: JSON.stringify({ type: 'error', code: 'room_full', message: 'room is full' }) });
     await expect(p).rejects.toThrow('This room is full.');
   });
+  it('an unknown error code shows a plain sentence, not the server text', async () => {
+    vi.stubGlobal('RTCPeerConnection', FakePC);
+    const { s, ws } = make();
+    ws.open();
+    const p = joinRoom(s, { roomId: 1, stream, bitrateKbps: 64 });
+    await tick();
+    ws.onmessage!({ data: JSON.stringify({ type: 'error', code: 'new_code', message: 'raw server text' }) });
+    await expect(p).rejects.toThrow('The server refused that. Try again.');
+  });
 });

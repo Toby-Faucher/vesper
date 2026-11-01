@@ -17,14 +17,20 @@ class FakeWS {
 }
 
 let meStatus = 200;
+let calls: string[] = []; // history calls
 const fetchMock = vi.fn(async () => new Response(meStatus === 204 ? null : '{"code":"unauthorized"}', { status: meStatus }));
 
 async function load() {
   vi.resetModules();
   FakeWS.all = [];
   vi.stubGlobal('WebSocket', FakeWS);
-  vi.stubGlobal('location', { pathname: '/', protocol: 'http:', host: 'x' });
-  vi.stubGlobal('history', { pushState: (_: unknown, __: string, p: string) => ((location as { pathname: string }).pathname = p) });
+  vi.stubGlobal('location', { pathname: '/', search: '', hash: '', protocol: 'http:', host: 'x' });
+  const go = (kind: string) => (_: unknown, __: string, p: string) => {
+    calls.push(`${kind} ${p}`);
+    Object.assign(location, { pathname: p, hash: '' });
+  };
+  calls = [];
+  vi.stubGlobal('history', { pushState: go('push'), replaceState: go('replace') });
   vi.stubGlobal('fetch', fetchMock);
   return import('./session.svelte');
 }
@@ -35,6 +41,7 @@ beforeEach(() => {
   fetchMock.mockClear();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -72,29 +79,69 @@ describe('session', () => {
     session.connect(); // the Reconnect button
     expect(FakeWS.all).toHaveLength(2);
   });
-  it('other closes reconnect after 1 s, 2 s, 5 s, 10 s, 10 s; hello resets it', async () => {
+  it('backoff doubles from 1 to 2 s up to 15 to 30 s, with jitter', async () => {
+    const { backoffMs } = await load();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    expect([0, 1, 2, 3, 4, 9].map(backoffMs)).toEqual([1000, 2000, 4000, 8000, 15000, 15000]);
+    vi.spyOn(Math, 'random').mockReturnValue(0.999999);
+    expect(Math.round(backoffMs(0))).toBe(2000);
+    expect(Math.round(backoffMs(9))).toBe(30000);
+  });
+  it('other closes reconnect with growing waits; hello alone does not reset them', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     const { session } = await load();
     session.connect();
-    for (const ms of [1000, 2000, 5000, 10000, 10000]) {
+    const drop = async (ms: number) => {
       const n = FakeWS.all.length;
+      FakeWS.all[n - 1].hello(); // accepted, then dropped at once
       FakeWS.all[n - 1].drop(1006);
       await vi.advanceTimersByTimeAsync(ms - 1);
       expect(FakeWS.all).toHaveLength(n);
       await vi.advanceTimersByTimeAsync(1);
       expect(FakeWS.all).toHaveLength(n + 1);
-    }
-    expect(fetchMock).toHaveBeenCalledTimes(5); // asks /api/me before each new socket
+    };
+    for (const ms of [1000, 2000, 4000, 8000, 15000, 15000]) await drop(ms);
+    expect(fetchMock).toHaveBeenCalledTimes(6); // asks /api/me before each new socket
+    // Up for 10 s before the drop: the next wait starts at 1 s again.
     FakeWS.all.at(-1)!.hello();
+    await vi.advanceTimersByTimeAsync(10000);
     FakeWS.all.at(-1)!.drop(1013);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(FakeWS.all).toHaveLength(7);
+    expect(FakeWS.all).toHaveLength(8);
+  });
+  it('logout while a retry asks /api/me opens no socket afterwards', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { session } = await load();
+    session.connect();
+    let answer!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (answer = r)));
+    FakeWS.all[0].drop(1006);
+    await vi.advanceTimersByTimeAsync(1000); // the /api/me call is in flight
+    const out = session.logout();
+    answer(new Response(null, { status: 204 }));
+    await out;
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(FakeWS.all).toHaveLength(1);
+  });
+  it('redirects to sign in replace the history entry', async () => {
+    const { session } = await load();
+    session.connect();
+    FakeWS.all[0].drop(4001);
+    expect(calls).toEqual(['replace /login']);
+  });
+  it('takeInvite returns the code and clears the fragment', async () => {
+    const { takeInvite } = await load();
+    Object.assign(location, { pathname: '/invite', search: '?a=1', hash: '#' + 'ab'.repeat(32) });
+    expect(takeInvite()).toBe('ab'.repeat(32));
+    expect(calls).toEqual(['replace /invite?a=1']);
+    expect(location.hash).toBe('');
   });
   it('a drop while signed out goes to sign in', async () => {
     const { session, route } = await load();
     session.connect();
     meStatus = 401;
     FakeWS.all[0].drop(1006);
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(route.path).toBe('/login');
     expect(FakeWS.all).toHaveLength(1);
   });

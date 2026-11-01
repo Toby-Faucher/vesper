@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { api, ApiFailure, errorText } from '../lib/api';
-  import { navigate, session } from '../lib/session.svelte';
+  import { navigate, session, takeInvite } from '../lib/session.svelte';
   import type { Me } from '../lib/gen/Me';
 
   // The code lives in the URL fragment, which the browser never sends to the server. Only the signup body carries it.
-  const code = location.hash.slice(1);
+  // takeInvite removes it from the address bar and history at once.
+  const code = takeInvite();
   const BAD_LINK = 'This invite link is not valid. Ask for a new one.';
   let badLink = $state(!/^[0-9a-f]{64}$/.test(code));
   let username = $state('');
@@ -12,6 +14,7 @@
   let password = $state('');
   let error = $state('');
   let busy = $state(false);
+  let errorEl = $state<HTMLElement>();
 
   async function submit(e: Event) {
     e.preventDefault();
@@ -19,13 +22,17 @@
     error = '';
     try {
       session.state.me = await api<Me>('POST', '/api/signup', { invite: code, username, password, display_name: displayName });
-      password = '';
-      navigate('/');
+      navigate('/', true);
     } catch (err) {
       if (err instanceof ApiFailure && err.code === 'invite_invalid') badLink = true;
       else error = errorText(err);
     } finally {
+      password = '';
       busy = false;
+    }
+    if (error) {
+      await tick();
+      errorEl?.focus();
     }
   }
 </script>
@@ -51,6 +58,6 @@
       <p id="password-help" class="text-sm text-neutral-400">At least 8 characters.</p>
       <button class="w-full rounded bg-neutral-700 p-2" disabled={busy}>Create account</button>
     </form>
-    {#if error}<p role="alert" class="text-red-400">{error}</p>{/if}
+    {#if error}<p role="alert" class="text-red-400" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
   {/if}
 </main>

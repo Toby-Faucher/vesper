@@ -122,7 +122,7 @@ export async function joinRoom(
         settled = true;
         resolve(m);
       } else if (m.type === 'error') {
-        const err = new Error(SIGNAL_MESSAGES[m.code] ?? m.message);
+        const err = new Error(SIGNAL_MESSAGES[m.code] ?? 'The server refused that. Try again.');
         if (settled) report(err);
         else {
           settled = true;

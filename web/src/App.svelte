@@ -22,7 +22,7 @@
       session.state.me = await api<Me>('GET', '/api/me');
       session.connect();
     } catch (e) {
-      if (e instanceof ApiFailure && e.status === 401) navigate('/login');
+      if (e instanceof ApiFailure && e.status === 401) navigate('/login', true);
       else error = errorText(e);
     }
   }
@@ -33,7 +33,7 @@
     const signedIn = !!session.state.me;
     // untrack: connect() reads the socket state, and a closed socket must not reconnect from here.
     untrack(() => {
-      if (path !== '/') navigate('/');
+      if (path !== '/') navigate('/', true);
       else if (!signedIn) void load();
       else session.connect();
     });

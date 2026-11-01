@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { joinRoom } from '../lib/signaling';
   import { inRoom } from '../lib/peers';
+  import { callEvent, idleCall } from '../lib/call';
   import { session, wsUrl } from '../lib/session.svelte';
   import { Playback } from '../lib/playback';
   import { restoreVolumes, saveVolumes } from '../lib/volume';
@@ -21,6 +22,7 @@
   let callOff: (() => void) | undefined; // drops the call's handlers from the shared socket
   let joined = $state(false);
   let error = $state('');
+  let errorEl = $state<HTMLElement>();
   let userId = $state('');
   let muted = $state(false);
   let deafened = $state(false);
@@ -151,8 +153,7 @@
     modeReason = '';
     silence = MIC_QUIET;
     micWarning = null;
-    muted = false;
-    deafened = false;
+    ({ muted, deafened, forceMuted } = idleCall());
     speaking = new Set();
     joined = false;
   }
@@ -165,15 +166,16 @@
       if (m.type === 'peer_left') {
         playback?.remove(m.user_id);
         if (speaking.has(m.user_id)) speaking = new Set([...speaking].filter((i) => i !== m.user_id));
-        // Our own id: the call ended (another tab took it, a moderator kicked us, or access was lost).
-        if (joined && m.user_id === userId) {
-          teardown();
-          error = 'Your call ended. You may have joined from another tab, or a moderator removed you.';
-        }
-      } else if (m.type === 'force_muted') {
-        forceMuted = m.muted;
-        if (m.muted && !muted) {
-          muted = true; // lifting a force-mute does not unmute
+      }
+      const c = callEvent(m, { userId: joined ? userId : '', room: joinedRoom, muted });
+      if (c.end) {
+        if (c.leave) session.sig?.leave();
+        teardown();
+        error = c.end;
+      } else if (c.forceMuted !== undefined) {
+        forceMuted = c.forceMuted;
+        if (c.muted !== muted) {
+          muted = !!c.muted;
           applyTrack();
         }
       }
@@ -189,16 +191,11 @@
     };
   });
 
-  // Keep the picked room valid, and end the call if its room is no longer in the list.
+  // Keep the picked room valid. A call whose room left the list ends in callEvent.
   $effect(() => {
     const rooms = session.state.rooms;
     untrack(() => {
       if (rooms.length && !rooms.some((r) => r.id === roomId)) roomId = rooms[0].id;
-      if (joinedRoom !== null && !rooms.some((r) => r.id === joinedRoom)) {
-        session.sig?.leave();
-        teardown();
-        error = 'You no longer have access to that room.';
-      }
     });
   });
 
@@ -216,8 +213,7 @@
     }
     const room = roomId;
     joining = true;
-    muted = false;
-    deafened = false;
+    ({ muted, deafened, forceMuted } = idleCall()); // before the join: the server re-sends force_muted after it
     // Create and resume the AudioContext inside the click gesture, before any await.
     playback = new Playback(restoreVolumes(localStorage));
     // Held for the call's lifetime so the browser does not freeze the tab's audio in the background.
@@ -229,11 +225,13 @@
     // Called before any await: it creates its AudioContext.
     const capturing = createCapture(settings, { startLive: trackLive(false, settings.pushToTalk.enabled, false) });
     mode = settings.mode;
+    let asked = false; // a failure before joinRoom (no mic) never reached the server, so it needs no leave
     try {
       const cap = (capture = await capturing);
       const stream = cap.stream;
       mic = stream;
       volumes = Object.fromEntries(restoreVolumes(localStorage));
+      asked = true;
       const r = await joinRoom(sig, {
         roomId: room, stream, bitrateKbps: settings.bitrateKbps, dtx: settings.dtx,
         onError: (err) => (error = err.message),
@@ -269,9 +267,11 @@
       joinedRoom = room;
       joined = true;
     } catch (err) {
-      if (session.sig === sig) sig.leave(); // the server may have let us in before the failure
+      if (asked && session.sig === sig) sig.leave(); // the server may have let us in before the failure
       teardown();
       error = err instanceof DOMException ? DEVICE_MESSAGES[classifyMediaError(err)] : err instanceof Error ? err.message : String(err);
+      await tick();
+      errorEl?.focus();
     } finally {
       joining = false;
     }
@@ -301,7 +301,7 @@
       </button>
     </form>
   {/if}
-  {#if error}<p class="text-red-400" role="alert">{error}</p>{/if}
+  {#if error}<p class="text-red-400" role="alert" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
   {#if deviceError}<p class="text-amber-400" role="alert">{deviceError}</p>{/if}
   {#if offered}
     <p class="text-sm">

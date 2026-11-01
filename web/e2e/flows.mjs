@@ -1,0 +1,127 @@
+// UI flows test. Starts the release server like two-browser.mjs and checks, in real Chromium: the invite code leaves
+// the address bar, a bad link, autocomplete attributes, passwords cleared and focus on the error after a failed
+// submit, force-mute (also on rejoin), a kick ending the call, and a room that becomes private ending the call.
+// Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
+import assert from 'node:assert/strict';
+import { ORIGIN, browser, cli, startServer } from './lib.mjs';
+
+// fetch from the page, so it sends the session cookie and the Origin header as the app does.
+const call = (page, method, path, body) =>
+  page.evaluate(
+    async ([method, path, body]) => {
+      const r = await fetch(path, {
+        method,
+        headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(`${method} ${path}: ${r.status}`);
+      return r.status === 204 ? null : r.json();
+    },
+    [method, path, body],
+  );
+
+async function join(page, room) {
+  await page.getByLabel('Room').selectOption({ label: room });
+  await page.getByRole('button', { name: 'Join' }).click();
+  await page.getByRole('button', { name: 'Leave' }).waitFor();
+}
+const focusedText = (page) => page.evaluate(() => document.activeElement?.textContent?.trim());
+const MUTED_NOTICE = 'A moderator muted you.';
+
+const stop = await startServer();
+try {
+  const alice = await browser('alice', []);
+  const a = alice.page;
+
+  // A bad link: plain text, and the fragment is gone.
+  await a.goto(`${ORIGIN}/invite#not-a-code`);
+  await a.getByText('This invite link is not valid. Ask for a new one.').waitFor();
+  assert.equal(new URL(a.url()).hash, '', 'bad invite fragment stayed in the URL');
+
+  const ownerLink = await cli(['create-owner']);
+  await a.goto(`${ORIGIN}/login`); // from /invite, the link alone would be a same-page fragment change
+  await a.goto(ownerLink);
+  await a.getByLabel('Username').waitFor();
+  assert.equal(a.url(), `${ORIGIN}/invite`, 'invite code stayed in the address bar');
+  for (const [label, want] of [['Username', 'username'], ['Display name', 'nickname'], ['Password', 'new-password']])
+    assert.equal(await a.getByLabel(label).getAttribute('autocomplete'), want, `${label} autocomplete`);
+  await a.getByLabel('Username').fill('alice');
+  await a.getByLabel('Display name').fill('alice');
+  await a.getByLabel('Password').fill('test-password-1');
+  await a.getByRole('button', { name: 'Create account' }).click();
+  await a.getByText('Signed in as').waitFor();
+  assert.equal(a.url(), `${ORIGIN}/`);
+  console.log('invite fragment cleared: ok');
+
+  // Wrong password: plain text, the password field is empty, focus is on the error.
+  await a.getByRole('button', { name: 'Log out' }).click();
+  await a.getByRole('button', { name: 'Sign in' }).waitFor();
+  assert.equal(await a.getByLabel('Username').getAttribute('autocomplete'), 'username');
+  assert.equal(await a.getByLabel('Password').getAttribute('autocomplete'), 'current-password');
+  await a.getByLabel('Username').fill('alice');
+  await a.getByLabel('Password').fill('test-password-2');
+  await a.getByRole('button', { name: 'Sign in' }).click();
+  await a.getByText('Wrong username or password.').waitFor();
+  assert.equal(await a.getByLabel('Password').inputValue(), '', 'password kept after a failed sign in');
+  assert.equal(await focusedText(a), 'Wrong username or password.', 'focus did not move to the error');
+  await a.getByLabel('Password').fill('test-password-1');
+  await a.getByRole('button', { name: 'Sign in' }).click();
+  await a.getByText('Signed in as').waitFor();
+  console.log('failed sign in: ok');
+
+  // A failed signup (name taken) clears the password too.
+  const bobLink = (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url;
+  const bob = await browser('bob', []);
+  const b = bob.page;
+  await b.goto(bobLink);
+  await b.getByLabel('Username').fill('alice');
+  await b.getByLabel('Display name').fill('bob');
+  await b.getByLabel('Password').fill('test-password-1');
+  await b.getByRole('button', { name: 'Create account' }).click();
+  await b.getByText('That name is already taken.').waitFor();
+  assert.equal(await b.getByLabel('Password').inputValue(), '', 'password kept after a failed signup');
+  assert.equal(await focusedText(b), 'That name is already taken.');
+  await b.getByLabel('Username').fill('bob');
+  await b.getByLabel('Password').fill('test-password-1');
+  await b.getByRole('button', { name: 'Create account' }).click();
+  await b.getByText('Signed in as').waitFor();
+  const bobId = (await call(b, 'GET', '/api/me')).user.user_id;
+  console.log('failed signup: ok');
+
+  // Force-mute disables Mute, and still holds after Leave and a rejoin. Lifting it enables Mute again.
+  await join(b, 'general');
+  await call(a, 'POST', `/api/users/${bobId}/force-mute`, { muted: true });
+  await b.getByText(MUTED_NOTICE).waitFor();
+  assert.ok(await b.getByRole('button', { name: 'Unmute' }).isDisabled(), 'Mute not disabled when force-muted');
+  await b.getByRole('button', { name: 'Leave' }).click();
+  assert.equal(await b.getByText(MUTED_NOTICE).count(), 0, 'force-mute notice stayed after Leave');
+  await join(b, 'general');
+  await b.getByText(MUTED_NOTICE).waitFor();
+  await call(a, 'POST', `/api/users/${bobId}/force-mute`, { muted: false });
+  await b.getByText(MUTED_NOTICE).waitFor({ state: 'detached' });
+  assert.ok(await b.getByRole('button', { name: 'Unmute' }).isEnabled(), 'Mute still disabled after the lift');
+  console.log('force-mute: ok');
+
+  // A kick sends peer_left with bob's own id: his call ends, the socket stays.
+  await call(a, 'POST', `/api/users/${bobId}/kick`);
+  await b.getByText('Your call ended.', { exact: false }).waitFor();
+  await b.getByRole('button', { name: 'Join' }).waitFor();
+  console.log('kick ends the call: ok');
+
+  // A room bob can no longer see ends his call.
+  const room = await call(a, 'POST', '/api/rooms', { name: 'secret' });
+  await b.getByLabel('Room').locator('option', { hasText: 'secret' }).waitFor({ state: 'attached' });
+  await join(b, 'secret');
+  await call(a, 'PATCH', `/api/rooms/${room.id}`, { restricted: true });
+  // The server takes bob out of voice too, so its peer_left may come before rooms_changed: either text ends the call.
+  await b.getByRole('button', { name: 'Join' }).waitFor();
+  const why = await b.getByRole('alert').first().textContent();
+  assert.match(why, /^(You no longer have access to that room\.|Your call ended\.)/);
+  assert.equal(await b.getByLabel('Room').locator('option', { hasText: 'secret' }).count(), 0, 'secret still listed');
+  console.log(`vanished room ends the call: ok (${why})`);
+
+  assert.deepEqual([...alice.errors, ...bob.errors], [], 'page errors');
+  console.log('e2e flows: PASS');
+} finally {
+  await stop();
+}

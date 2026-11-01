@@ -53,7 +53,7 @@ npm --prefix web run dev
 ```
 
 Open the page. It sends you to `/login`. To make the first account, run `create-owner` (below) and open the link it prints.
-The page at `/invite` reads the code from the part after `#`, which the browser never sends to the server.
+The page at `/invite` reads the code from the part after `#`, which the browser never sends to the server, and removes it from the address bar and history at once.
 
 ### Accounts
 
@@ -97,7 +97,7 @@ Other test commands:
 | Command | What it covers |
 |---|---|
 | `scripts/check.sh dsp` | The denoiser tests (4 tests behind the `tract` feature, so a plain workspace run skips them) and the wasm build. Fetches the model if missing. |
-| `npm --prefix web run e2e` | Two headless Chromium browsers join one room; checks that the second one receives and hears the first one's audio. The `e2e` CI job. See below. |
+| `npm --prefix web run e2e` | Two headless Chromium browsers join one room; checks that the second one receives and hears the first one's audio. Then the UI flows test. The `e2e` CI job. See below. |
 | `node scripts/bench-wasm.mjs chromium` | Real-browser speed of the built denoiser (needs `web/public/dsp` and Playwright; `PW_PKG` points at a `package.json` that has it). Prints median, p95, max and RTF over 20 s. Add `firefox`, or a CPU throttle rate such as `4` (Chromium, main thread). |
 | `docs/testing/latency.md` | Load test (12 speakers), loopback delay, `tc netem` loss. Manual. |
 | `docs/testing/checkpoint.md` | The listening test against Discord. Manual, Toby signs off. |
@@ -117,6 +117,10 @@ invite with `POST /api/invites`, signs bob up, and joins both to `general`.
 Those ports must be free. It opens two Chromium browsers with fake microphones: alice plays `web/e2e/fixtures/speech.wav`, bob uses the default fake
 device. It passes when bob's ICE is connected, his inbound audio packets and bytes rise, alice's speaking ring lights on bob's page, alice's inbound
 packets rise too, each page lists the other in the people list, and neither page throws. The test sets the denoise mode to `browser`, so it needs no wasm build. Its two variables are in [env.md](env.md#dev-machine-only).
+
+`web/e2e/flows.mjs` then starts a fresh server the same way and checks the UI in Chromium: a bad invite link, the invite code leaving the
+address bar, autocomplete attributes, an empty password field and focus on the error after a failed sign in or signup, force-mute (also
+after a rejoin, and lifted), a kick ending the call, and a room made private ending the call.
 
 The fixture is synthetic (voiced syllables with vowel formants), so it has no third-party licence. `node web/e2e/fixtures/make-speech.mjs` rebuilds it.
 Not checked: the inbound `audioLevel` stat. It stays 0 because the app plays remote audio through Web Audio with the `<audio>` element muted.

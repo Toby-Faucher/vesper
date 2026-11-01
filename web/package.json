@@ -13,7 +13,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "size": "node scripts/size-check.mjs",
     "ci": "npm run check && npm test && npm run build && npm run size",
-    "e2e": "node e2e/two-browser.mjs"
+    "e2e": "node e2e/two-browser.mjs && node e2e/flows.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.3.1",
