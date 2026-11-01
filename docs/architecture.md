@@ -401,5 +401,5 @@ else here was read from the code, not run:
   badges and the reconnect refetch are unit-tested through the pure helpers only.
 - Sign up and sign in run in headless Chromium over http only. The `Secure` `__Host-` cookie and HSTS on https are tested in process only.
 - The CSP ([decision 0008](decisions/0008-csp.md)): no violation in headless Chromium through the e2e. The denoiser under the CSP runs
-  only when `web/dist/dsp/` is built (not in CI). Not checked through Caddy and Cloudflare, which may add or change headers.
+  only when `web/dist/dsp/` is built (CI copies it from the dsp-wasm job). Not checked through Caddy and Cloudflare, which may add or change headers.
 - Upload read timeouts are unit-tested with short timers (`read_body_times_out_idle_and_total`), not with a real slow client.

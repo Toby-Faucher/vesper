@@ -6,7 +6,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { ORIGIN, browser, cli, composer, cspViolations, inVoice, logout, openRoom, roomId, roomLink, searchFor, searchHits, signedIn, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, composer, cspViolations, inVoice, logout, openRoom, roomId, roomLink, searchFor, searchHits, signedIn, signup, sleep, startServer } from './lib.mjs';
 
 // fetch from the page, so it sends the session cookie and the Origin header as the app does.
 const call = (page, method, path, body) =>
@@ -642,26 +642,26 @@ try {
   await b.keyboard.press('Escape');
   console.log('open search drops a room that became private: ok');
 
-  // The denoiser (worklet, worker, WASM) under the server's CSP. A CSP block in the worker is not a page console
-  // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (not in CI).
+  // The denoiser (worklet, worker, WASM, model) under the server's CSP. A CSP block in the worker is not a page console
+  // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (CI downloads it from
+  // the dsp-wasm job). A new account from an invite: alice has used up her sign-in budget (5 a minute) by now.
   const pages = [alice.page, bob.page];
   if (existsSync(new URL('../dist/dsp/vesper_dsp_bg.wasm', import.meta.url))) {
-    const dsp = await browser('alice-dsp', []);
+    const dsp = await browser('dana', []);
     const d = dsp.page;
     await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter' })));
-    await d.goto(`${ORIGIN}/login`);
-    await d.getByLabel('Username').fill('alice');
-    await d.getByLabel('Password', { exact: true }).fill('test-password-1');
-    await d.getByRole('button', { name: 'Sign in' }).click();
-    await signedIn(d);
+    await signup(d, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, 'dana');
     await join(d, 'general');
     const line = d.getByText('Noise suppression:').first();
     let status = '';
     for (let i = 0; i < 80 && (i < 8 || status.includes('loading')); i++) {
-      await new Promise((r) => setTimeout(r, 250));
+      await sleep(250);
       status = await line.innerText();
     }
     assert.equal(status, 'Noise suppression: deepfilter', 'denoiser did not start under the CSP');
+    await d.getByRole('link', { name: 'Call details' }).click();
+    const diag = d.getByRole('group', { name: 'Call numbers' }).getByText('Noise suppression:');
+    assert.equal(await diag.innerText(), 'Noise suppression: deepfilter', 'Diagnostics shows another mode');
     pages.push(d);
     alice.errors.push(...dsp.errors);
     console.log('denoiser under CSP: ok');
