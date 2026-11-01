@@ -101,7 +101,7 @@
 
 </script>
 
-<Field label="Microphone" help="Pick a specific microphone to get disconnect alerts; the system default is not watched.">
+<Field label="Microphone" help="Pick a microphone by name to get an alert when it is unplugged. The system default is not watched.">
   <Select value={settings.micId ?? ''} onchange={(e) => set({ micId: e.currentTarget.value || null })}>
     <option value="">System default</option>
     {#each mics as d (d.deviceId)}<option value={d.deviceId}>{d.label || d.deviceId}</option>{/each}

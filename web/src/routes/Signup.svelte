@@ -58,9 +58,10 @@
 </script>
 
 <AuthCard>
-  <h1 class="text-xl font-semibold text-fg">Create your account</h1>
+  <h1 class="text-xl font-semibold text-fg">{badLink ? 'You cannot sign up with this link' : 'Create your account'}</h1>
   {#if badLink}
     <p role="alert" class="mt-3 text-fg-2" tabindex="-1" bind:this={badEl}>{API_MESSAGES.invite_invalid}</p>
+    <p class="mt-4 text-fg-3">Already have an account? <a class="text-accent-fg underline underline-offset-2" href="/login">Sign in</a></p>
   {:else}
     <p class="mt-1 mb-5 text-fg-2">You were invited to Vesper. Pick a username and a password.</p>
     <form onsubmit={submit} class="flex flex-col gap-4">
