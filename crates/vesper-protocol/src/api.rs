@@ -49,3 +49,76 @@ pub struct InviteInfo {
     pub created_by: Option<String>,
     pub revoked: bool,
 }
+
+/// Error body of every failed `/api` call. The HTTP status follows `code`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ApiError {
+    pub code: ApiErrorCode,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ApiErrorCode {
+    BadRequest,
+    Unauthorized,
+    Forbidden,
+    NotFound,
+    Conflict,
+    RateLimited,
+    TooLarge,
+    QuotaFull,
+    InviteInvalid,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SignupReq {
+    pub invite: String,
+    pub username: String,
+    pub password: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LoginReq {
+    pub username: String,
+    pub password: String,
+}
+
+/// A missing field is left as it is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProfilePatch {
+    #[serde(default)]
+    #[ts(optional)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub accent: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PasswordChange {
+    pub old: String,
+    pub new: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Me {
+    pub user: UserInfo,
+    #[ts(type = "number")]
+    pub session_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct InvitePreview {
+    pub role: Role,
+}

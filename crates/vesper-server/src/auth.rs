@@ -116,7 +116,8 @@ fn cookie(value: &str, max_age: u32, secure: bool) -> HeaderValue {
     HeaderValue::from_str(&s).expect("cookie is printable ASCII")
 }
 
-/// `Set-Cookie` value for a session token from `new_token`.
+/// `Set-Cookie` value for a session token from `new_token`. Panics on any other text (a byte that
+/// is not visible ASCII), so never pass it a token taken from a request.
 pub fn session_cookie(token: &str, secure: bool) -> HeaderValue {
     cookie(token, COOKIE_MAX_AGE, secure)
 }

@@ -7,6 +7,7 @@ publish.workspace = true
 [dependencies]
 argon2 = "0.6.0"
 axum = { version = "0.8", features = ["ws"] }
+serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
@@ -21,7 +22,9 @@ vesper-store.workspace = true
 [dev-dependencies]
 tempfile = "3"
 futures-util = { workspace = true, features = ["sink"] }
+http-body-util = "0.1"
 tokio-tungstenite.workspace = true
+tower = { version = "0.5", features = ["util"] }
 vesper-sfu = { workspace = true, features = ["test-support"] }
 
 [lints]

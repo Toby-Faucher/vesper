@@ -92,7 +92,8 @@ impl Store {
     }
 
     /// Uses the invite, takes its role (`a.role` is ignored), creates the account and its first
-    /// session, all in one transaction. Returns the user and the session id.
+    /// session, all in one transaction. Returns the user and the session id. An owner invite is
+    /// `InviteInvalid` once an owner exists.
     pub async fn signup(
         &self,
         invite_hash: &[u8; 32],
@@ -111,6 +112,10 @@ impl Store {
         .fetch_optional(&mut *tx)
         .await?;
         let role = parse_role(&role.ok_or(StoreError::InviteInvalid)?)?;
+        // Two old create-owner links must not make two owners. Dropping `tx` undoes the use.
+        if role == Role::Owner && owner_exists(&mut tx).await? {
+            return Err(StoreError::InviteInvalid);
+        }
         let id = insert_account(&mut tx, &a, role).await?;
         let sid = insert_session(&mut tx, &id, &s).await?;
         let user = user_by_id(&mut tx, &id).await?;
@@ -234,10 +239,14 @@ impl Store {
     }
 
     pub async fn owner_exists(&self) -> Result<bool> {
-        Ok(
-            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE role = 'owner')")
-                .fetch_one(&self.pool)
-                .await?,
-        )
+        owner_exists(&mut *self.pool.acquire().await?).await
     }
+}
+
+async fn owner_exists(c: &mut SqliteConnection) -> Result<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM accounts WHERE role = 'owner')")
+            .fetch_one(c)
+            .await?,
+    )
 }

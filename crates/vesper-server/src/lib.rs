@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Vesper server: HTTP + WebSocket signaling and presence in front of the audio SFU.
 
+pub mod api_accounts;
 pub mod auth;
 pub mod cli;
 pub mod config;
@@ -27,8 +28,47 @@ use tower_http::services::ServeDir;
 use tracing::{info, warn};
 use vesper_sfu::{Sfu, SfuConfig, SfuHandle};
 
+use axum::extract::DefaultBodyLimit;
+use axum::http::Method;
+use vesper_protocol::ApiErrorCode;
+use vesper_store::Store;
+
+pub use crate::api_accounts::{ApiError, Authed};
 use crate::config::Config;
+use crate::limits::Limiter;
 use crate::rooms::Rooms;
+
+/// Largest JSON body any `/api` route reads.
+pub const API_BODY_LIMIT: usize = 32 * 1024;
+
+/// Shared state of the `/api` routes.
+#[derive(Clone)]
+pub struct AppState {
+    pub store: Store,
+    pub cfg: Arc<Config>,
+    pub limits: Limiter,
+}
+
+/// The `/api` routes, with the Origin check and the body cap.
+pub fn router(state: AppState) -> Router {
+    let api = api_accounts::routes()
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_origin,
+        ))
+        .layer(DefaultBodyLimit::max(API_BODY_LIMIT));
+    Router::new().nest("/api", api).with_state(state)
+}
+
+/// CSRF guard: every `/api` request that can change state must come from our own origin.
+async fn require_origin(State(st): State<AppState>, req: Request, next: Next) -> Response {
+    let safe = matches!(*req.method(), Method::GET | Method::HEAD);
+    if !safe && !auth::origin_ok(req.headers(), &st.cfg.origin) {
+        return ApiError::new(ApiErrorCode::Forbidden, "request from another origin")
+            .into_response();
+    }
+    next.run(req).await
+}
 
 /// Start the SFU and the HTTP server. Returns the bound HTTP address and the serving task.
 pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
@@ -65,7 +105,7 @@ pub async fn start_with_sfu(
     cfg: Config,
     sfu: SfuHandle,
 ) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
-    match cfg.public_host {
+    match cfg.public_host.clone() {
         Some(host) => {
             public_addr::spawn_refresh(sfu.clone(), host, cfg.udp_port_public, public_addr::REFRESH)
         }
@@ -85,28 +125,44 @@ pub async fn start_with_sfu(
             cfg.web_dir.display()
         );
     }
+    let db = cfg.data_dir.join("vesper.db");
+    let store = Store::open(&db)
+        .await
+        .map_err(|e| std::io::Error::other(format!("open {}: {e}", db.display())))?;
     let rooms = Rooms::new(sfu, &cfg.dev_key, cfg.max_room_size);
+    let api = router(AppState {
+        store,
+        cfg: Arc::new(cfg.clone()),
+        limits: Limiter::default(),
+    });
     let app = Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws::upgrade))
         // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`.
         .fallback_service(ServeDir::new(&cfg.web_dir))
-        .layer(middleware::from_fn_with_state(
-            Arc::new(cfg.web_dir.clone()),
-            guard,
-        ))
         .with_state(ws::WsState {
             rooms,
             sockets: Arc::new(Semaphore::new(cfg.max_sockets)),
             join_deadline: cfg.join_deadline,
             ping_interval: cfg.ping_interval,
-        });
+        })
+        .merge(api)
+        .layer(middleware::from_fn_with_state(
+            Arc::new(cfg.web_dir.clone()),
+            guard,
+        ));
     let listener = tokio::net::TcpListener::bind(cfg.http_bind).await?;
     let addr = listener.local_addr()?;
     info!("listening on {addr}");
     Ok((
         addr,
-        tokio::spawn(async move { axum::serve(listener, app).await }),
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+        }),
     ))
 }
 
@@ -123,7 +179,7 @@ async fn health(State(st): State<ws::WsState>) -> (StatusCode, &'static str) {
 /// Static-serving policy around ServeDir:
 /// - dotfiles are hidden (a served dir may hold `.env`);
 /// - a 404 on an extensionless path gets `index.html` (SPA routes); a 404 on a path with an
-///   extension (`/assets/old.js`) stays a 404 so a stale page fails loudly, not as HTML;
+///   extension (`/assets/old.js`) or under `/api/` stays a 404 so it fails loudly, not as HTML;
 /// - `/assets/*` (content-hashed by Vite) is immutable, everything else is `no-cache`;
 /// - `nosniff` on every response.
 async fn guard(State(dir): State<Arc<PathBuf>>, req: Request, next: Next) -> Response {
@@ -133,6 +189,7 @@ async fn guard(State(dir): State<Arc<PathBuf>>, req: Request, next: Next) -> Res
     }
     let mut res = next.run(req).await;
     let spa = res.status() == StatusCode::NOT_FOUND
+        && !path.starts_with("/api/")
         && !path.rsplit('/').next().unwrap_or("").contains('.');
     if spa && let Ok(html) = tokio::fs::read(dir.join("index.html")).await {
         res = ([(header::CONTENT_TYPE, "text/html")], html).into_response();

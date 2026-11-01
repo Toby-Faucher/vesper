@@ -25,6 +25,7 @@ fn site() -> std::path::PathBuf {
 }
 
 async fn start(web_dir: std::path::PathBuf) -> SocketAddr {
+    let data_dir = web_dir.with_file_name("data");
     let (addr, _) = vesper_server::start(Config {
         http_bind: "127.0.0.1:0".parse().unwrap(),
         udp_bind: "127.0.0.1:0".parse().unwrap(),
@@ -36,7 +37,7 @@ async fn start(web_dir: std::path::PathBuf) -> SocketAddr {
         ping_interval: Duration::from_secs(30),
         max_sockets: 4,
         web_dir,
-        data_dir: "does-not-exist".into(),
+        data_dir,
         origin: "http://localhost:8080".into(),
         secure_cookies: false,
         upload_quota_bytes: 0,
@@ -152,7 +153,7 @@ async fn cache_control_and_extension_paths_do_not_fall_back() {
         r.starts_with("HTTP/1.1 404") && !r.contains("INDEX") && !header_has(&r, "immutable"),
         "{r}"
     );
-    for p in ["/dsp/missing.wasm", "/dsp/model.tar.gz"] {
+    for p in ["/dsp/missing.wasm", "/dsp/model.tar.gz", "/api/missing"] {
         let r = get(addr, p).await;
         assert!(
             r.starts_with("HTTP/1.1 404") && !r.contains("INDEX"),

@@ -32,7 +32,7 @@ The "Not verified" list at the end says what was only read.
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, and the limits `MAX_NAME_CHARS` (32) and `MAX_MSG_BYTES` (64 KiB). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
 | `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions and invites (`accounts.rs`, `sessions.rs`, `invites.rs`). It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher), `ws.rs` (one socket), `rooms.rs` (presence and session numbers), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `rooms.rs` (presence and session numbers), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -111,10 +111,45 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 - The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. Skipped when the browser asks to save data. Not verified in a real browser.
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.
 
+## HTTP API
+
+JSON over HTTP under `/api` (`api_accounts.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
+`ApiError { code, message }`, and the status follows the code: `bad_request` 400, `unauthorized` 401, `forbidden` 403,
+`not_found` and `invite_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
+`internal` 500, `quota_full` 507.
+
+| Route | Needs | Returns |
+|---|---|---|
+| `GET /api/invites/preview?code=` | Invite limit by address | `InvitePreview` or 404 `invite_invalid` |
+| `POST /api/signup` (`SignupReq`) | Invite limit by address | 201 `Me` and the session cookie |
+| `POST /api/login` (`LoginReq`) | Login limits by address, then by address and username | `Me` and a new session cookie |
+| `POST /api/logout` | a session | 204, the session is deleted and the cookie cleared |
+| `GET /api/me` | a session | `Me` |
+| `PATCH /api/me` (`ProfilePatch`) | a session | the new `UserInfo` |
+| `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
+| `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
+| `DELETE /api/sessions/{id}` | a session | 204, or 404 if the id is not one of yours |
+
+Rules every route keeps:
+
+- **Origin.** A request that is not GET or HEAD needs `Origin` equal to `VESPER_ORIGIN`, else 403 before the handler runs
+  (`require_origin`, `lib.rs`).
+- **Body cap.** JSON bodies over 32 KiB get 413 (`API_BODY_LIMIT`).
+- **Sessions.** The cookie holds a random token; the database holds its SHA-256. `Authed` turns the cookie into the user and
+  session id, or 401 when it is missing, malformed, unknown, expired or the user is banned.
+- **Login.** Every failure is the same 401 "wrong username or password". An unknown user still costs one argon2 check, so the
+  time taken does not tell whether the name exists. A cookie sent with a login is deleted, and a new token is always minted.
+  Rate-limit keys use the client address, and IPv6 clients are keyed on their /64.
+- **Invites.** Unknown, used up, expired, revoked and changed codes all give the same 404 body. An owner invite stops working
+  once an owner exists; the store checks this in the signup transaction.
+- Handlers never log request bodies. The WebSocket does not use the session yet; it still takes the join key.
+
+Tests: `crates/vesper-server/tests/accounts.rs`, through `tests/common/mod.rs`.
+
 ## Static serving
 
 `guard` in `vesper-server/src/lib.rs`: dotfiles and `%2e` are 404; an extensionless 404 gets `index.html` (SPA routes); a missing file with
-an extension stays 404; `/assets/*` is `immutable`, everything else `no-cache`; `nosniff` on all. Tests: `crates/vesper-server/tests/static_files.rs`.
+an extension or under `/api/` stays 404; `/assets/*` is `immutable`, everything else `no-cache`; `nosniff` on all. Tests: `crates/vesper-server/tests/static_files.rs`.
 
 ## Not verified
 

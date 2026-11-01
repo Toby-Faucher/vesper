@@ -30,7 +30,8 @@ fn config() -> Config {
         ping_interval: Duration::from_secs(30),
         max_sockets: 256,
         web_dir: "does-not-exist".into(),
-        data_dir: "does-not-exist".into(),
+        // shortcut: the dir is left behind in the temp dir; Task 8 moves these tests to common::TestServer.
+        data_dir: tempfile::tempdir().unwrap().keep(),
         origin: "http://localhost:8080".into(),
         secure_cookies: false,
         upload_quota_bytes: 0,
