@@ -15,7 +15,7 @@
     <span>{label}</span>
     <input type="checkbox" role="switch" aria-describedby={help ? `${id}-help` : undefined} {...rest} bind:checked />
   </label>
-  {#if help}<p id="{id}-help" class="-mt-1 pr-11 text-xs text-fg-3">{help}</p>{/if}
+  {#if help}<p id="{id}-help" class="-mt-1 pr-11 text-xs text-fg-2">{help}</p>{/if}
 </div>
 
 <style>

@@ -48,11 +48,7 @@
 {:else if r.name === 'invite'}
   {#await import('./routes/Signup.svelte') then m}<m.default />{:catch}{@render failed()}{/await}
 {:else if session.state.me}
-  {#if r.name === 'welcome'}
-    {#await import('./routes/Welcome.svelte') then m}<m.default />{:catch}{@render failed()}{/await}
-  {:else}
-    <Shell />
-  {/if}
+  <Shell />
 {:else if error}
   <main class="mx-auto max-w-sm space-y-3 p-6">
     <p role="alert" class="text-danger">{error}</p>

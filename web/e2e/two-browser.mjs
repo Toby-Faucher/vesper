@@ -137,6 +137,30 @@ try {
   await inVoice(bob.page, 'alice').waitFor({ timeout: 5000 });
   console.log('presence_seen_by_both: ok');
 
+  // welcome_keeps_the_call: Settings > Account > "Run the welcome steps again" opens in the Shell, so the call stays up
+  // through the steps and after "Open Vesper".
+  const stillInCall = async (when) => {
+    const before = await inbound(bob.page);
+    await sleep(1000);
+    const after = await inbound(bob.page);
+    assert.match(after?.ice ?? '', /^(connected|completed)$/, `ICE not connected ${when}`);
+    assert.ok(after.packets > before.packets, `bob's audio stopped ${when}`);
+    assert.ok(await bob.page.getByRole('button', { name: 'Leave' }).isVisible(), `call bar gone ${when}`);
+    await inVoice(alice.page, 'bob').waitFor({ timeout: 2000 });
+  };
+  await bob.page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await bob.page.getByRole('link', { name: 'Account', exact: true }).click();
+  await bob.page.getByRole('link', { name: 'Run the welcome steps again' }).click();
+  await bob.page.getByRole('heading', { name: 'How others see you' }).waitFor();
+  await stillInCall('on the welcome steps');
+  await bob.page.getByRole('button', { name: 'Next' }).click();
+  await bob.page.getByText('Step 2 of 3').waitFor();
+  await bob.page.getByRole('button', { name: 'Next' }).click();
+  await bob.page.getByRole('button', { name: 'Open Vesper' }).click();
+  await bob.page.waitForURL(/\/r\/\d+$/);
+  await stillInCall('after the welcome steps');
+  console.log('welcome_keeps_the_call: ok');
+
   // chat_roundtrip: Markdown renders, raw HTML stays text, the link is safe, a reply and an edit arrive live.
   await composer(alice.page).fill('hello **bob** <b>x</b> https://example.test/a');
   await composer(alice.page).press('Enter');

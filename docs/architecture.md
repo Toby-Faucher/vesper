@@ -26,7 +26,7 @@ The "Not verified" list at the end says what was only read.
   (`watch_sfu` in `lib.rs`).
 - **The browser** captures the mic, cleans it with DeepFilterNet in WASM, and sends Opus over WebRTC (`web/src/lib/audio/`, `signaling.ts`).
 - **The web app** (`web/src/App.svelte`, paths in `web/src/lib/route.ts`) has `/login`, `/invite` (signup; the code is read from the part after `#`, then removed from the URL; a second link opened in the
-  same tab is read too), `/welcome` (after signup, and from Settings > Account: name and colour, a mic check, mention notifications; every step can be skipped)
+  same tab is read too), `/welcome` (after signup, and from Settings > Account: name and colour, a mic check, mention notifications; every step can be skipped; it renders inside the Shell, so a call keeps running)
   and the app shell (`web/src/routes/Shell.svelte`) for every other path, which needs a session (`GET /api/me`, else `/login`): `/r/<id>` (a room),
   `/settings/<section>`, `/admin/<section>`, and `/`, which opens the last room (`localStorage['vesper.lastRoom']`) or the first. Any other path
   shows a plain not-found page. The shell starts the call store once, so a call stays up while you move between pages, and shows the call bar (`CallBar.svelte`) at the bottom of the main pane while you are in voice. A person in the sidebar or the call bar opens their person card (`PersonCard.svelte`: volume, and the moderator voice actions). `web/src/lib/session.svelte.ts` keeps one socket per

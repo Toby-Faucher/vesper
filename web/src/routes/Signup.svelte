@@ -13,8 +13,9 @@
   // takeInvite removes it from the address bar and history at once. A used or expired code is only found on submit: the
   // server answers every invite failure the same way, and asking earlier would put the code in a query string.
   const valid = (c: string) => /^[0-9a-f]{64}$/.test(c);
-  let code = takeInvite();
-  let badLink = $state(!valid(code));
+  const first = takeInvite();
+  let code = $state(first);
+  let badLink = $state(!valid(first));
   let username = $state('');
   let displayName = $state('');
   let password = $state('');
@@ -70,10 +71,12 @@
       <Field label="Display name" help="What others see. You can change it later.">
         <TextInput autocomplete="nickname" bind:value={displayName} required maxlength={32} />
       </Field>
-      <Field label="Password" help="8 to 128 characters.">
-        <PasswordInput autocomplete="new-password" bind:value={password} required minlength={8} maxlength={128} />
-      </Field>
-      <Button variant="primary" type="submit" loading={busy}>Create account</Button>
+      {#key code}<!-- a new link remounts it, so the password is hidden again -->
+        <Field label="Password" help="8 to 128 characters.">
+          <PasswordInput autocomplete="new-password" bind:value={password} required minlength={8} maxlength={128} />
+        </Field>
+      {/key}
+      <div class="mt-2 flex flex-col"><Button variant="primary" type="submit" loading={busy}>Create account</Button></div>
     </form>
     {#if error}<p role="alert" class="mt-4 text-danger" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
   {/if}

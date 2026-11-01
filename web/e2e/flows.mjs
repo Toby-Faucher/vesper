@@ -97,14 +97,18 @@ try {
   await a.getByLabel('Display name').fill('alice');
   await a.getByLabel('Password', { exact: true }).fill('test-password-1');
   await a.getByRole('button', { name: 'Create account' }).click();
-  // Signup lands on the welcome steps; Esc skips them and opens the first room.
+  // Signup lands on the welcome steps. A stray Esc in the name field keeps the page and the typed name; Skip opens a room.
   await a.waitForURL(`${ORIGIN}/welcome`);
   await a.getByRole('heading', { name: 'How others see you' }).waitFor();
-  await a.keyboard.press('Escape');
+  await a.getByLabel('Display name').fill('alice a');
+  await a.getByLabel('Display name').press('Escape');
+  await sleep(300);
+  assert.equal(new URL(a.url()).pathname, '/welcome', 'Esc in the name field left the welcome steps');
+  assert.equal(await a.getByLabel('Display name').inputValue(), 'alice a', 'Esc lost the typed name');
+  await a.getByRole('button', { name: 'Skip for now' }).click();
   await signedIn(a);
   await a.waitForURL(/\/r\/\d+$/);
-  assert.equal(await a.evaluate(() => Object.keys(localStorage).some((k) => /^vesper\.welcomed\.[0-9a-f]{32}$/.test(k))), true, 'welcomed not remembered');
-  console.log('invite fragment cleared, Esc skips the welcome: ok');
+  console.log('invite fragment cleared, Esc keeps the welcome, Skip leaves it: ok');
 
   // Routes: an unknown path is a plain not-found page; a room id nobody can see says so; `/` opens the last room.
   await a.goto(`${ORIGIN}/no-such-page`);
@@ -122,9 +126,16 @@ try {
   assert.equal(await a.getByLabel('Password', { exact: true }).getAttribute('autocomplete'), 'current-password');
   await a.getByLabel('Username').fill('alice');
   await a.getByLabel('Password', { exact: true }).fill('test-password-2');
+  // The toggle: name and visible text stay "Show", aria-pressed carries the state; a failed submit hides the password again.
+  const showPw = a.getByRole('button', { name: 'Show password' });
+  await showPw.click();
+  assert.deepEqual([await showPw.textContent(), await showPw.getAttribute('aria-pressed')], ['Show', 'true']);
+  assert.equal(await a.getByLabel('Password', { exact: true }).getAttribute('type'), 'text');
   await a.getByRole('button', { name: 'Sign in' }).click();
   await a.getByText('Wrong username or password.').waitFor();
   assert.equal(await a.getByLabel('Password', { exact: true }).inputValue(), '', 'password kept after a failed sign in');
+  assert.equal(await a.getByLabel('Password', { exact: true }).getAttribute('type'), 'password', 'password left visible after a failed sign in');
+  assert.equal(await showPw.getAttribute('aria-pressed'), 'false');
   assert.equal(await focusedText(a), 'Wrong username or password.', 'focus did not move to the error');
   await a.getByLabel('Password', { exact: true }).fill('test-password-1');
   await a.getByRole('button', { name: 'Sign in' }).click();
@@ -140,9 +151,11 @@ try {
   await b.getByLabel('Username').fill('alice');
   await b.getByLabel('Display name').fill('bob');
   await b.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await b.getByRole('button', { name: 'Show password' }).click();
   await b.getByRole('button', { name: 'Create account' }).click();
   await b.getByText('That name is already taken.').waitFor();
   assert.equal(await b.getByLabel('Password', { exact: true }).inputValue(), '', 'password kept after a failed signup');
+  assert.equal(await b.getByLabel('Password', { exact: true }).getAttribute('type'), 'password', 'password left visible after a failed signup');
   assert.equal(await focusedText(b), 'That name is already taken.');
   await b.getByLabel('Username').fill('bob');
   await b.getByLabel('Password', { exact: true }).fill('test-password-1');

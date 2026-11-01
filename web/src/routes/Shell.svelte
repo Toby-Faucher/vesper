@@ -166,6 +166,9 @@
     {:else if r.name === 'settings'}
       {@render pageHeader(title, true)}
       {#await import('./settings/SettingsPage.svelte') then m}<m.default section={r.section} />{/await}
+    {:else if r.name === 'welcome'}
+      {@render pageHeader('')}
+      {#await import('./Welcome.svelte') then m}<m.default />{/await}
     {:else if r.name === 'admin'}
       {@render pageHeader(title, true)}
       {#await import('./admin/AdminPage.svelte') then m}<m.default section={r.section} />{/await}

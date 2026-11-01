@@ -16,6 +16,15 @@ export function avatarSlot(u: { user_id: string; accent: string }): number {
   return i >= 0 ? i + 1 : (hash(u.user_id) % SLOT_HEX.length) + 1;
 }
 
+// The PATCH /api/me body for a new name and slot: only what changed. The slot is compared with the stored accent, not
+// with avatarSlot(): the server default is no slot, so a colour equal to the id-hash slot must still be saved.
+export function profilePatch(u: { display_name: string; accent: string }, name: string, slot: number): { display_name?: string; accent?: string } {
+  const patch: { display_name?: string; accent?: string } = {};
+  if (name.trim() !== u.display_name) patch.display_name = name;
+  if (SLOT_HEX[slot - 1] !== u.accent.trim().toLowerCase()) patch.accent = SLOT_HEX[slot - 1];
+  return patch;
+}
+
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
 // The first grapheme of the first two words, upper-cased. NFC first, so a combining accent matches the precomposed letter.

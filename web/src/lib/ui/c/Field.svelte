@@ -35,6 +35,6 @@
   {#if error}
     <p id="{id}-error" role="alert" class="text-xs text-danger">{error}</p>
   {:else if help}
-    <p id="{id}-help" class="text-xs text-fg-3">{help}</p>
+    <p id="{id}-help" class="text-xs text-fg-2">{help}</p>
   {/if}
 </div>

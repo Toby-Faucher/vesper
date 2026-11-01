@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import tokens from '../../styles/tokens.css?raw';
-import { SLOT_HEX, avatarSlot, initials } from './avatar';
+import { SLOT_HEX, avatarSlot, initials, profilePatch } from './avatar';
 
 // A fixed pseudo-random sequence of 32-hex ids, so the spread test cannot flake.
 function ids(n: number): string[] {
@@ -40,4 +40,13 @@ it('initials_by_grapheme', () => {
   expect(initials('👩‍👩‍👧 family')).toBe('👩‍👩‍👧F');
   expect(initials('🇫🇷')).toBe('🇫🇷');
   expect(initials('')).toBe('');
+});
+
+it('profile_patch_saves_the_hashed_slot_over_the_server_default', () => {
+  const [id] = ids(1);
+  const u = { user_id: id, display_name: 'bob', accent: '#7c8cff' };
+  const slot = avatarSlot(u); // the colour shown before any choice
+  expect(profilePatch(u, 'bob', slot)).toEqual({ accent: SLOT_HEX[slot - 1] });
+  expect(profilePatch({ ...u, accent: SLOT_HEX[2].toUpperCase() }, ' bob ', 3)).toEqual({});
+  expect(profilePatch({ ...u, accent: SLOT_HEX[2] }, 'Bobby', 3)).toEqual({ display_name: 'Bobby' });
 });
