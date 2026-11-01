@@ -6,10 +6,24 @@ import { sleep } from './lib.mjs';
 
 export async function checkPrimitives(open, url) {
   const page = await open(url);
+  // Chromium gives focus back itself when a modal <dialog> or a popover with focus inside closes; Safari and Firefox lean
+  // on Dialog's and Popover's own code. Take that away: focus leaves before a popover hides, and after a dialog closes.
+  await page.addInitScript(() => {
+    const blur = () => document.activeElement instanceof HTMLElement && document.activeElement.blur();
+    addEventListener('beforetoggle', (e) => e.newState === 'closed' && e.target.contains(document.activeElement) && blur(), true);
+    const close = HTMLDialogElement.prototype.close;
+    HTMLDialogElement.prototype.close = function (...a) { close.apply(this, a); blur(); };
+  });
+  await page.reload();
   await page.getByRole('heading', { name: 'Primitives' }).waitFor();
   const must = (ok, what) => { if (!ok) throw new Error(`gallery: ${what}`); };
   const focused = () => page.evaluate(() => { const a = document.activeElement; return a?.getAttribute('aria-label') || a?.textContent?.trim() || a?.tagName; });
-  const expectFocus = async (name, what) => { const f = await focused(); must(f === name, `${what}: focus on ${JSON.stringify(f)}, want ${JSON.stringify(name)}`); };
+  // Polls a little: after a light dismiss, Popover gives focus back in the toggle event, a task after the layer hides.
+  const expectFocus = async (name, what) => {
+    let f;
+    for (let i = 0; i < 20 && (f = await focused()) !== name; i++) await sleep(50);
+    must(f === name, `${what}: focus on ${JSON.stringify(f?.slice(0, 80))}, want ${JSON.stringify(name)}`);
+  };
 
   // Every Tab stop shows an outline. Stops once focus comes back to the first element.
   const tabStops = [];

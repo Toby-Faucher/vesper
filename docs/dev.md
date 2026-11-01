@@ -143,16 +143,18 @@ Ctrl+Shift+F after a failed chunk load and from the switcher, and picks a `from:
 
 `web/e2e/ui.mjs` runs third, on its own fresh server. First it opens the dev-only `/_gallery?primitives` page from a Vite dev server on
 a spare port and checks the primitives by keyboard (`web/e2e/primitives.mjs`): a focus ring on every Tab stop, Dialog focus in and back
-(Esc, backdrop, a late close event, removed while open), nested dialogs and the scroll lock, Menu arrows, Home, End and typeahead,
+(Esc, backdrop, a late close event, removed while open), with Chromium's own focus return taken away so the components' code is what
+is checked, nested dialogs and the scroll lock, Menu arrows, Home, End and typeahead,
 Popover Esc, `aria-haspopup`, `aria-controls` and `aria-expanded`, and the Popover fallback without `showPopover({ source })`. Then the
 admin pages: alice creates an invite in the form (one request
 for two clicks), copies the link and bob signs up with it; a revoked link shows the bad-link text; a member who opens `/admin` sees
 that it is not allowed; after a confirmed role change bob has the Admin menu entry and the moderator view without role or ban controls; a
 confirmed ban ends carol's session. On Rooms alice creates, renames, moves (by button and by Alt+Up) and restricts a room to bob: bob's
-sidebar follows each change live and carol's never shows it once restricted; Disk use shows two meters and the database size; a failed Members load offers Try again. It never prints an invite link. Then: layout shift on bob's page after he joins a call (opening a
-room, a message arriving, an image loading, hovering, the typing line) stays below 0.02, shifts within 500 ms of his own input left out
-as in CLS; with `prefers-reduced-motion: reduce` a dialog, the call bar and a search jump animate no transform; and a keyboard-only walk
-(sign in, Ctrl+K to a room, Join voice by Tab and Enter, Ctrl+Shift+M, send, Up edits, Esc cancels, Ctrl+Shift+F and Enter jumps,
+sidebar follows each change live and carol's never shows it once restricted; Disk use shows two meters and the database size; a failed Members load offers Try again, which moves focus to the table. It never prints an invite link. Then: layout shift on bob's page after he joins a call (opening a
+room, a message arriving, an image loading, hovering, the typing line) stays below 0.02, every shift counted (also those right after
+his click, which CLS leaves out); with `prefers-reduced-motion: reduce` a dialog, the call bar and a search jump animate no transform; and a keyboard-only walk
+(sign in, the skip link is the first Tab stop and moves focus to main, Ctrl+K to a room, the socket dropped: Join voice keeps focus,
+says why and ignores Enter, then the socket back and Join voice by Enter, Ctrl+Shift+M, send, Up edits, Esc cancels, Ctrl+Shift+F and Enter jumps,
 Ctrl+K to Settings and Esc back) checks a visible focus ring after every Tab.
 
 All three tests fail on any CSP block in a page: each page records `securitypolicyviolation` events and console lines about the Content

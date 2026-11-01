@@ -218,6 +218,8 @@ try {
   await openAdmin(a, 'Members');
   await a.getByRole('alert').getByText('Could not load the members.', { exact: false }).waitFor();
   await a.getByRole('button', { name: 'Try again' }).click();
+  await a.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Members', null, { timeout: 5000 })
+    .catch(() => assert.fail('Try again did not move focus to the members table'));
   const roleFor = a.getByLabel('Role for bob');
   await roleFor.selectOption('moderator');
   const confirmRole = a.getByRole('dialog', { name: 'Make bob a moderator?' });
@@ -259,7 +261,8 @@ try {
   console.log('ban ends the session: ok');
 
   // Layout shift on bob's page, from after his join: opening a room, a message arriving, an image loading, hovering the
-  // messages and the typing line. Shifts within 500 ms of his own input do not count (as in CLS).
+  // messages and the typing line. Every shift counts, also those right after his click (CLS drops those, but a room open
+  // is a click and the brief measures it).
   await openRoom(a, 'general');
   await openRoom(b, 'general');
   await b.getByRole('button', { name: 'Join voice' }).click();
@@ -290,8 +293,8 @@ try {
   await composer(a).fill('');
   await sleep(500);
   const shifts = await b.evaluate(() => window.__shift);
-  const cls = shifts.filter((x) => !x.input).reduce((n, x) => n + x.v, 0);
-  console.log(`layout shift after join: ${cls.toFixed(4)} (${shifts.length} entries)`);
+  const cls = shifts.reduce((n, x) => n + x.v, 0);
+  console.log(`layout shift after join: ${cls.toFixed(4)} (${shifts.length} entries, ${shifts.filter((x) => x.input).length} after input)`);
   assert.ok(cls < 0.02, `layout shift ${cls} is 0.02 or more`);
   await b.getByRole('button', { name: 'Leave' }).click();
   console.log('layout shift: ok');
@@ -328,6 +331,10 @@ try {
   const keys = await browser('keys');
   const k = keys.page;
   await k.addInitScript(recordMotion);
+  // The socket goes through Playwright, so the walk can drop it: while `down`, a new socket opens but gets no hello.
+  let sock = null;
+  let down = false;
+  await k.routeWebSocket(/\/ws$/, (ws) => { sock = ws; if (!down) ws.connectToServer(); });
   await k.goto(`${ORIGIN}/login`);
   await k.getByLabel('Username').waitFor();
   const tabTo = async (want) => {
@@ -360,12 +367,34 @@ try {
   await k.keyboard.type('test-password-1');
   await k.keyboard.press('Enter');
   await signedIn(k);
+  // The skip link is the first Tab stop from the top and Enter moves focus to main.
+  await sleep(300); // the home view settles its own focus first
+  await k.evaluate(() => { const b = document.body; b.tabIndex = -1; b.focus(); b.removeAttribute('tabindex'); });
+  await k.keyboard.press('Tab');
+  const first = await k.evaluate(() => document.activeElement?.outerHTML.slice(0, 120));
+  assert.match(first, />Skip to main content<\/a>$/, `the skip link is not the first Tab stop: ${first}`);
+  await k.keyboard.press('Enter');
+  assert.equal(await k.evaluate(() => document.activeElement?.id), 'main', 'the skip link did not move focus to main');
   await k.keyboard.press('Control+k');
   await k.getByRole('combobox', { name: 'Switch to' }).waitFor();
   await k.keyboard.type('general');
   await k.keyboard.press('Enter');
   await k.getByRole('heading', { level: 1, name: 'general', exact: true }).waitFor();
   await tabTo('Join voice');
+  // Offline: Join voice keeps focus, says why (aria-describedby; the tip shows on focus) and Enter does nothing.
+  const join = k.getByRole('button', { name: 'Join voice' });
+  down = true;
+  sock.close();
+  await k.waitForFunction(() => document.activeElement?.getAttribute('aria-disabled') === 'true', null, { timeout: 5000 });
+  assert.equal(await join.evaluate((e) => e === document.activeElement), true, 'Join voice lost focus when the connection dropped');
+  assert.equal(await join.evaluate((e) => document.getElementById(e.getAttribute('aria-describedby'))?.textContent), 'You are offline. This works again once the connection is back.');
+  await k.keyboard.press('Enter');
+  await sleep(500);
+  assert.equal(await k.getByRole('button', { name: 'Leave' }).count(), 0, 'Join voice worked while offline');
+  down = false;
+  sock.close(); // the socket that got no hello: the next one reaches the server
+  await k.waitForFunction(() => document.activeElement?.textContent?.trim() === 'Join voice' && !document.activeElement.hasAttribute('aria-disabled'), null, { timeout: 15000 });
+  console.log('offline Join voice: ok');
   await k.keyboard.press('Enter');
   await k.getByRole('button', { name: 'Leave' }).waitFor();
   assert.ok(moves(await motionSince(k)).length > 0, 'the call bar rose without moving: the reduced motion check proves nothing');
