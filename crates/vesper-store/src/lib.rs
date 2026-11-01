@@ -104,6 +104,23 @@ impl Store {
         Ok(Store { pool })
     }
 
+    /// A consistent copy of the whole database at `dest` (`VACUUM INTO`), safe while others write.
+    /// `dest` must not exist or must be an empty file; SQLite refuses anything else.
+    pub async fn backup_into(&self, dest: &Path) -> Result<()> {
+        let dest = dest.to_str().ok_or_else(|| {
+            StoreError::Db(sqlx::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "backup path is not UTF-8",
+            )))
+        })?;
+        // Bound, never formatted into the SQL: SQLite 3.27+ takes an expression here.
+        sqlx::query("VACUUM INTO ?1")
+            .bind(dest)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Raw pool, for this crate's tests only. Hidden so the server does not reach sqlx (ADR 0005).
     #[doc(hidden)]
     pub fn pool(&self) -> &SqlitePool {

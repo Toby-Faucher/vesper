@@ -59,7 +59,34 @@ If the voice engine thread dies (a bug on hostile input), `/health` returns 503 
 
 ## Backup
 
-Back up the data dir (`data/` next to `compose.yaml`, or `/var/lib/private/vesper`). With the Proxmox snapshot of the VM, check that the snapshot includes that directory. For a copy while the server runs, use SQLite's own backup so the WAL is included: `sqlite3 data/vesper.db ".backup vesper-backup.db"` (needs the `sqlite3` tool; the data dir is owned by uid 10001 with mode 0700, so on the host run it with `sudo`, or run it inside the container), or stop the stack and copy the whole directory. The copy holds password and session hashes: keep it private. Not verified.
+`vesper-server backup <dir>` writes two things into `<dir>` (created with mode 0700 if missing):
+
+- `vesper-<UTC time>.db`, for example `vesper-20261101T040000Z.db`: a copy of the database made with SQLite's `VACUUM INTO`, so it is consistent while the server runs and needs no WAL file next to it. Profile pictures live in the database, so they are in this file.
+- `vesper-<UTC time>-uploads/`: a copy of `uploads/` (attachments), without `uploads/tmp`. A file deleted while the copy runs is skipped and counted in the summary.
+
+Directories are mode 0700 and files 0600. It never overwrites: a second run in the same second fails. It prints the paths, the file count and the bytes. The copy holds password and session hashes: keep it private.
+
+In the container (Docker / Dockge), from the stack directory:
+
+    docker compose exec vesper vesper-server backup /data/backups
+
+`/data/backups` is `data/backups` on the host, owned by uid 10001. It sits on the same disk as the data, so copy it off the machine as well (the Proxmox snapshot, or `sudo rsync` to another host). A nightly run at 04:00 that keeps 14 days (host crontab; `-T` because cron has no terminal; use the stack's path):
+
+    0 4 * * * cd /opt/stacks/vesper && docker compose exec -T vesper sh -c 'vesper-server backup /data/backups && find /data/backups -mindepth 1 -maxdepth 1 -mtime +14 -exec rm -r {} +' >> backup.log 2>&1
+
+Binary install: run it as the service user with the `systemd-run` form from [Docker / Dockge](#docker--dockge), for example with `/var/lib/vesper/backups` as `<dir>`.
+
+Restore (the stack stopped; `<t>` is the time in the file names):
+
+1. `docker compose stop vesper`.
+2. Move the current files aside: `sudo mv data/vesper.db data/vesper.db.old`, the same for `data/vesper.db-wal` and `data/vesper.db-shm` if present, and `sudo mv data/uploads data/uploads.old`.
+3. `sudo cp data/backups/vesper-<t>.db data/vesper.db` and `sudo cp -r data/backups/vesper-<t>-uploads data/uploads`.
+4. `sudo chown -R 10001:10001 data/vesper.db data/uploads && sudo chmod 600 data/vesper.db`.
+5. `docker compose up -d`, then `docker compose ps` shows `healthy`. Sign in and open a room with an attachment.
+
+Everything after the backup time is lost, and every session made later is gone (people sign in again). An upload made while the backup ran may be in the copy without a message; the server removes such files after 24 h.
+
+Verified by tests on the dev machine: the copy opens as a valid database (`PRAGMA integrity_check`) with the same rows, a copy taken while another connection writes is consistent, the modes are 0700 and 0600, `uploads/tmp` is left out, and an existing backup is never overwritten. Not verified: the command through `docker compose exec`, the cron line, the `systemd-run` form, and the restore steps. The tests open the copy with the same store code the server uses, but no restored copy was started as a real server.
 
 ## Upgrade from the shared key
 
@@ -93,6 +120,6 @@ Last updated 2026-11-01. Written and checked for syntax and against the real fil
 - Dockge deploy, router forward, split DNS, Caddy, certificates.
 - The phone-on-cellular connectivity check.
 - The server's headers through Caddy and Cloudflare (Cloudflare can add or change headers).
-- The `data` bind mount, `create-owner` and `invite` through `docker compose exec`, the `systemd-run` form for the binary install, the backup commands and the "Upgrade from the shared key" steps.
+- The `data` bind mount, `create-owner` and `invite` through `docker compose exec`, the `systemd-run` form for the binary install, the backup command through `docker compose exec`, its cron line, the restore steps, and the "Upgrade from the shared key" steps.
 
 Verified locally: the release server serves `web/dist` (index, SPA fallback, `application/wasm`, `text/javascript`, `nosniff`, dotfiles and `..` traversal refused) and `/health`/`/ws` still work (`crates/vesper-server/tests/static_files.rs`).

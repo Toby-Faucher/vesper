@@ -211,3 +211,58 @@ fn owner_link_never_reaches_the_logs() {
         "{stderr}"
     );
 }
+
+#[test]
+fn utc_stamp_is_the_calendar_time() {
+    assert_eq!(cli::utc_stamp(0), "19700101T000000Z");
+    // 2024-02-29 23:59:59 UTC, a leap day.
+    assert_eq!(cli::utc_stamp(1_709_251_199_000), "20240229T235959Z");
+    assert_eq!(cli::utc_stamp(1_709_251_200_000), "20240301T000000Z");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn backup_copies_db_and_uploads_privately_and_never_overwrites() {
+    use std::os::unix::fs::PermissionsExt;
+    let data = TempDir::new().unwrap();
+    let cfg = config(&data);
+    let s = store(&data).await;
+    s.create_room("games", 1).await.unwrap();
+    let shard = data.path().join("uploads/ab");
+    std::fs::create_dir_all(&shard).unwrap();
+    std::fs::write(shard.join("ab00"), b"hello").unwrap();
+    std::fs::create_dir_all(data.path().join("uploads/tmp")).unwrap();
+    std::fs::write(data.path().join("uploads/tmp/partial"), b"x").unwrap();
+
+    let out_root = TempDir::new().unwrap();
+    let dir = out_root.path().join("backups");
+    let now = 1_709_251_199_000;
+    let summary = cli::backup(&cfg, &dir, now).await.unwrap();
+    assert!(summary.contains("1 files, 5 bytes"), "{summary}");
+    let db = dir.join("vesper-20240229T235959Z.db");
+    let up = dir.join("vesper-20240229T235959Z-uploads");
+    let copy = Store::open(&db).await.unwrap();
+    assert_eq!(copy.rooms().await.unwrap(), s.rooms().await.unwrap());
+    assert_eq!(std::fs::read(up.join("ab/ab00")).unwrap(), b"hello");
+    assert!(!up.join("tmp").exists());
+
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    for d in [&dir, &up, &up.join("ab")] {
+        assert_eq!(mode(d), 0o700, "{}", d.display());
+    }
+    for f in [&db, &up.join("ab/ab00")] {
+        assert_eq!(mode(f), 0o600, "{}", f.display());
+    }
+
+    std::fs::write(shard.join("ab00"), b"changed").unwrap();
+    let e = cli::backup(&cfg, &dir, now).await.unwrap_err();
+    assert!(e.contains("not overwriting"), "{e}");
+    assert_eq!(std::fs::read(up.join("ab/ab00")).unwrap(), b"hello");
+    // The uploads dir alone also blocks it.
+    std::fs::remove_file(&db).unwrap();
+    assert!(cli::backup(&cfg, &dir, now).await.is_err());
+    assert!(!db.exists());
+
+    assert!(run(&cfg, &["backup"]).await.is_err());
+    assert!(run(&cfg, &["backup", "a", "b"]).await.is_err());
+}
