@@ -177,6 +177,11 @@ With the call bar (UI Task 5, 2026-11-01): runs of 379, 400 and 329 ms, median 3
 Task 4 build measured in the same session. So the bar adds about 7 percent; the machine was busier than on the baseline day, which is
 why both medians are above 326 ms. Compare against a fresh run of the previous build, not only against the number above.
 
+UI Task 17 (2026-11-01), browser mode, alternating builds in one session: the baseline build (621e9c9, the Task 3 commit, built from
+`git archive` and run against the current server) 269, 273 and 288 ms (median 273); this build 193, 305 and 269 ms (median 269). Before
+the fix the same session gave 297 against 476 ms: the speaking ring faded in and out over 100 ms, which repainted the sidebar and the
+call bar every frame while someone talked. The ring now toggles instantly, as the plan says.
+
 Debug-build note: `Cargo.toml` turns off debug assertions for `tract-core` only, because tract 0.21.4 trips one on the DeepFilterNet3 model
 ("duplicate name /convt3/Conv.bias"). Release builds are fine. Remove the override when tract moves past the bug.
 

@@ -2,7 +2,7 @@
   import { avatarSlot, initials } from '../avatar';
   import * as I from '../icons';
   // Initials on the user's slot colour. Speaking draws the ring (2 px gap in --bg-sidebar, 2 px slot colour), toggled
-  // instantly apart from a --dur-1 opacity change. Mute or deafen shows a glyph at the bottom right at 32 and 40 px; at
+  // instantly, with no fade (a fade repainted every frame while someone talked). Mute or deafen shows a glyph at the bottom right at 32 and 40 px; at
   // 20 px it would be a 10 px speck, so it is left out and the row shows the state after the name (an Icon plus the word,
   // as the gallery's sidebar mock does). Decorative: the row next to it carries the name and the state in words.
   let {
@@ -55,8 +55,7 @@
     inset: 0;
     border-radius: 50%;
     box-shadow: 0 0 0 2px var(--bg-sidebar), 0 0 0 4px var(--c);
-    opacity: 0;
-    transition: opacity var(--dur-1) linear;
+    opacity: 0; /* an instant toggle: nothing animates because someone speaks (and a fade repaints every frame) */
   }
   .av[data-speaking]::before { opacity: 1; }
   .s20 { width: 20px; height: 20px; font-size: 12px; line-height: 16px; }
