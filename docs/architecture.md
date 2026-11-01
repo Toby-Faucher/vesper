@@ -82,9 +82,9 @@ The "Not verified" list at the end says what was only read.
 | Crate | Job |
 |---|---|
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, the limit `MAX_MSG_BYTES` (64 KiB) and the close codes `CLOSE_SESSION_ENDED` (4001) and `CLOSE_DISCONNECTED` (4003). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`, `Unread`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
-| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. It stores only hashes of session tokens and invite codes. |
+| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. Archived rooms (`0008_room_archive.sql`): `rooms.archived_at`, NULL while not archived. `Store::backup_into` writes a consistent copy with `VACUUM INTO` (for `vesper-server backup`). It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`, `listed`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands, `backup`), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -126,7 +126,7 @@ over the limit is dropped with `error { code: rate_limited }`. Past 20 such refu
 Presence goes to every socket whose user can see the room (`Hub::broadcast_room`), in voice or not, so the room list shows who
 is talking. `peer_joined` and `peer_state` skip the session's own socket. `peer_left` also reaches the session's own socket: that
 is how a tab learns its call ended (kick, another tab took over, lost access, SFU). The socket stays open for the rest.
-A restricted room's presence reaches only sockets that can see it. When a room's member list or a role changes, everyone in
+A restricted room's presence reaches only sockets that can see it. When a room's member list or a role changes, or the room is archived, everyone in
 voice who can no longer see their room is taken out (`Voice::refresh`, called from `api_rooms::rooms_changed`). A socket that
 just lost sight of a room gets no `peer_left` for the people in it: the client drops the peers of every room missing from
 `rooms_changed`.
@@ -140,7 +140,7 @@ and `peer_state` to the room. While it holds, `set_voice_state` cannot clear `mu
 moderator lifts it, and lifting does not unmute. It lives in memory, so a restart lifts it. Only the client stops sending audio
 ([known-issues.md](known-issues.md#security-and-abuse)).
 
-Pushed from REST (`hub.rs`): a room change sends each socket `rooms_changed` with only the rooms its user can see; a role
+Pushed from REST (`hub.rs`): a room change sends each socket `rooms_changed` with only the rooms in its user's list (`listed`: what it can see, plus archived rooms for the owner); a role
 change also does, since the role decides that. A role, ban, profile or picture change sends everyone `user_updated`; a signup sends everyone `user_created`
 (every member sees the user list, so nobody is left out).
 
@@ -258,7 +258,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/users/{id}/disconnect` | moderator or owner, on a lower role | 204, every socket of the user closes with 4003 |
 | `GET /api/rooms` | a session | `RoomInfo[]` by position, only the rooms you can see |
 | `POST /api/rooms` (`RoomCreate`) | owner | 201 `RoomInfo`, open, placed last |
-| `PATCH /api/rooms/{id}` (`RoomPatch`) | owner | the new `RoomInfo` |
+| `PATCH /api/rooms/{id}` (`RoomPatch`: `name`, `restricted`, `archived`) | owner | the new `RoomInfo`; archiving the last room that is not archived is 409 |
 | `PUT /api/rooms/order` (`RoomOrder`) | owner | 204; `ids` must hold every room id once, else 409 |
 | `PUT /api/rooms/{id}/members` (`RoomMembers`) | owner | the new `RoomInfo`; the list replaces the old one, an unknown account is 404, a banned one 400 |
 | `GET /api/rooms/{id}/messages?before=\|after=\|around=&limit=` | sees the room | `MessagePage`, oldest first; at most one cursor (else 400), `limit` 1 to 100 (default 50) |
@@ -279,6 +279,12 @@ Rooms (`api_rooms.rs`, store `rooms.rs`): every room has text and voice. A fresh
 characters, else 400) and are unique ignoring case (409). A restricted room is seen only by the owner, the moderators and the
 accounts on its member list (`can_see`); `members` is filled only while the room is restricted. Opening a room clears its member list, so restricting it again
 starts empty. A banned account can not be put on a list (400). Every change pushes `rooms_changed` to open sockets.
+Archive (`PATCH` with `archived`, owner only like every room change): `can_see` is false for an archived room for everyone, so
+nobody reads its history, posts, types, searches it (its hits are left out) or joins its voice, and the people in its call are taken
+out like on any loss of access. Its messages and files stay. The owner still gets it in `GET /api/rooms`, `hello` and
+`rooms_changed` with `archived: true`, so Admin > Rooms can list it, dimmed, with Unarchive; the web client keeps it out of every
+other list (`AppState.archived`). Archiving the last room that is not archived is 409, checked inside the write transaction.
+Any room can be archived, the default ones too. There is still no hard delete.
 
 Chat (`api_messages.rs`, store `messages.rs`): a room you cannot see, and a message in one, is 404 on every route, the same as
 an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets that can see the room get them. Rules:
@@ -381,7 +387,7 @@ Roles (`require`, `api_admin.rs`; owner > moderator > member):
 | Change a role, ban, unban | no | no | yes, not on themselves or an owner |
 | Mint or grant the owner role | no | no | no, only `vesper-server create-owner` |
 | See a restricted room | only when listed | yes | yes |
-| Create, rename, reorder, restrict a room or set its members | no | no | yes |
+| Create, rename, reorder, restrict, archive a room or set its members | no | no | yes |
 | Kick from voice, force-mute, disconnect | no | on members only | yes, not on themselves |
 
 A refused role is 403. An `owner` role in `InviteCreate` or `RolePatch`, the owner acting on their own account, `max_uses` outside

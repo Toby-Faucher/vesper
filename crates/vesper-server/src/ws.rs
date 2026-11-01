@@ -17,7 +17,7 @@ use vesper_store::{StoreError, now_ms};
 
 use crate::AppState;
 use crate::api_accounts::ApiError;
-use crate::api_rooms::can_see;
+use crate::api_rooms::{can_see, listed};
 use crate::auth::{cookie_token, hash_token};
 use crate::hub::{Inbox, Outbox, outbox};
 use crate::limits::{Bucket, Kind};
@@ -101,11 +101,11 @@ pub async fn upgrade(ws: WebSocketUpgrade, State(st): State<WsState>, h: HeaderM
         .on_upgrade(move |socket| handle(socket, st, user, session_id, hash, permit))
 }
 
-/// `Hello` for `user`: everyone, and the rooms and voice presence this user can see.
+/// `Hello` for `user`: everyone, the rooms in this user's list, and their voice presence.
 async fn hello(st: &WsState, user: &UserInfo, session_id: i64) -> Result<ServerMsg, StoreError> {
     let users = st.app.store.users().await?;
     let mut rooms = st.app.store.rooms().await?;
-    rooms.retain(|r| can_see(user, r));
+    rooms.retain(|r| listed(user, r));
     let voice = st.app.voice.peers(|id| rooms.iter().any(|r| r.id == id));
     let ids: Vec<i64> = rooms.iter().map(|r| r.id).collect();
     let unread = st.app.store.unread(&user.user_id, &ids).await?;

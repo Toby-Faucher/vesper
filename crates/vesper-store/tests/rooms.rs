@@ -46,14 +46,17 @@ async fn room_names_unique_ignoring_case() {
     }
     let general = s.rooms().await.unwrap()[0].id;
     assert!(matches!(
-        s.patch_room(general, Some("GAMES"), None).await,
+        s.patch_room(general, Some("GAMES"), None, None, 0).await,
         Err(StoreError::Conflict(_))
     ));
     // A case-only rename of the same room is fine.
-    let g = s.patch_room(general, Some("General"), None).await.unwrap();
+    let g = s
+        .patch_room(general, Some("General"), None, None, 0)
+        .await
+        .unwrap();
     assert_eq!(g.name, "General");
     assert!(matches!(
-        s.patch_room(999, Some("x"), None).await,
+        s.patch_room(999, Some("x"), None, None, 0).await,
         Err(StoreError::NotFound)
     ));
 }
@@ -105,7 +108,7 @@ async fn members_only_for_restricted() {
         .unwrap();
     assert!(!r.restricted && r.members.is_empty(), "{r:?}");
 
-    let r = s.patch_room(id, None, Some(true)).await.unwrap();
+    let r = s.patch_room(id, None, Some(true), None, 0).await.unwrap();
     let mut want = vec![alice.clone(), bob.clone()];
     want.sort();
     assert_eq!(r.members, want);
@@ -131,4 +134,70 @@ async fn members_only_for_restricted() {
     assert_eq!(r.members, [alice]);
     let r = s.set_room_members(id, &[]).await.unwrap();
     assert!(r.restricted && r.members.is_empty());
+}
+
+#[tokio::test]
+async fn archive_keeps_the_room_and_never_the_last_one() {
+    let (_tmp, s) = open().await;
+    let rooms = s.rooms().await.unwrap();
+    let (general, hangout) = (rooms[0].id, rooms[1].id);
+    let r = s
+        .patch_room(hangout, None, None, Some(true), 5)
+        .await
+        .unwrap();
+    assert!(r.archived && r.name == "hangout");
+    // Archiving again keeps the first time.
+    s.patch_room(hangout, None, None, Some(true), 9)
+        .await
+        .unwrap();
+    let at: Option<i64> = sqlx::query_scalar("SELECT archived_at FROM rooms WHERE id = ?1")
+        .bind(hangout)
+        .fetch_one(s.pool())
+        .await
+        .unwrap();
+    assert_eq!(at, Some(5));
+    // A rename leaves the flag alone.
+    let r = s
+        .patch_room(hangout, Some("old"), None, None, 9)
+        .await
+        .unwrap();
+    assert!(r.archived);
+    assert!(matches!(
+        s.patch_room(general, None, None, Some(true), 9).await,
+        Err(StoreError::Conflict(_))
+    ));
+    assert!(!s.rooms().await.unwrap()[0].archived);
+    let r = s
+        .patch_room(hangout, None, None, Some(false), 9)
+        .await
+        .unwrap();
+    assert!(!r.archived);
+    assert!(matches!(
+        s.patch_room(999, None, None, Some(true), 9).await,
+        Err(StoreError::NotFound)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn racing_archives_leave_one_room_open() {
+    for _ in 0..10 {
+        let (_tmp, s) = open().await;
+        let rooms = s.rooms().await.unwrap();
+        let (a, b) = (rooms[0].id, rooms[1].id);
+        let (s1, s2) = (s.clone(), s.clone());
+        let (r1, r2) = tokio::join!(
+            tokio::spawn(async move { s1.patch_room(a, None, None, Some(true), 1).await }),
+            tokio::spawn(async move { s2.patch_room(b, None, None, Some(true), 1).await }),
+        );
+        assert!(r1.unwrap().is_ok() ^ r2.unwrap().is_ok());
+        assert_eq!(
+            s.rooms()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| !r.archived)
+                .count(),
+            1
+        );
+    }
 }

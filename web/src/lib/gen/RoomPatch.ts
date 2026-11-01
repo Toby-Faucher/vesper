@@ -3,4 +3,8 @@
 /**
  * `PATCH /api/rooms/{id}`. A missing field is left as it is.
  */
-export type RoomPatch = { name?: string, restricted?: boolean, };
+export type RoomPatch = { name?: string, restricted?: boolean, 
+/**
+ * The last room that is not archived can not be archived (409).
+ */
+archived?: boolean, };

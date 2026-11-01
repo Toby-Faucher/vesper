@@ -359,3 +359,77 @@ async fn room_name_rules() {
         .await;
     assert_eq!(s, StatusCode::CONFLICT);
 }
+
+/// Archive: hidden from every list but the owner's (marked), closed for history, posts and
+/// search, owner only, never the last room; unarchive brings it back with its messages.
+#[tokio::test]
+async fn archived_rooms_are_hidden_and_closed() {
+    let t = TestServer::new().await;
+    let o = t.owner().await;
+    let md = moderator(&t, "mod").await;
+    let m = t.member("alice").await;
+    let (_, _, v) = t.call(get("/api/rooms", &o)).await;
+    let (general, hangout) = (v[0]["id"].as_i64().unwrap(), v[1]["id"].as_i64().unwrap());
+    let msgs = format!("/api/rooms/{hangout}/messages");
+    let body = json!({ "body": "needle kept", "reply_to": null, "attachments": [] });
+    let (s, _, v) = t.call(post(&msgs, body.clone(), &m)).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let path = format!("/api/rooms/{hangout}");
+    let archive = |on: bool| json!({ "archived": on });
+
+    for who in [&md, &m] {
+        let (s, _) = call(&t, Method::PATCH, &path, archive(true), who).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{}", who.user.username);
+    }
+    let (s, v) = call(&t, Method::PATCH, &path, archive(true), &o).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["archived"], true);
+
+    for who in [&md, &m] {
+        assert_eq!(
+            room_names(&t, who).await,
+            ["general"],
+            "{}",
+            who.user.username
+        );
+    }
+    let (_, _, v) = t.call(get("/api/rooms", &o)).await;
+    assert_eq!(v[1]["name"], "hangout");
+    assert_eq!(
+        (v[0]["archived"].clone(), v[1]["archived"].clone()),
+        (json!(false), json!(true))
+    );
+    for who in [&o, &md, &m] {
+        let (s, _, _) = t.call(get(&msgs, who)).await;
+        assert_eq!(
+            s,
+            StatusCode::NOT_FOUND,
+            "history for {}",
+            who.user.username
+        );
+        let (s, _, _) = t.call(post(&msgs, body.clone(), who)).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "post for {}", who.user.username);
+        let (s, _, v) = t.call(get("/api/search?q=needle", who)).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["hits"], json!([]), "search for {}", who.user.username);
+    }
+
+    // general is the last room left open.
+    let last = format!("/api/rooms/{general}");
+    let (s, v) = call(&t, Method::PATCH, &last, archive(true), &o).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(room_names(&t, &m).await, ["general"]);
+
+    let (s, v) = call(&t, Method::PATCH, &path, archive(false), &o).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["archived"], false);
+    assert_eq!(room_names(&t, &m).await, ["general", "hangout"]);
+    let (s, _, v) = t.call(get(&msgs, &m)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["messages"][0]["body"], "needle kept");
+    let (_, _, v) = t.call(get("/api/search?q=needle", &m)).await;
+    assert_eq!(v["hits"].as_array().unwrap().len(), 1);
+    // A default room may be archived while another stays open.
+    let (s, v) = call(&t, Method::PATCH, &last, archive(true), &o).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+}

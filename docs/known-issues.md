@@ -32,7 +32,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
   An owner who forgets theirs has no way back in through the app.
 - **Uploads are not scanned for viruses.** Images are served inline only after their magic bytes match, everything else is a
   download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
-- **Rooms cannot be deleted.** The server has no delete route for a room. The admin Rooms page says so: restrict a room and list nobody to hide it from members.
+- **Rooms cannot be deleted, only archived.** An archived room's messages and files stay in the database and count toward disk use. Its search index rows stay too.
 - **No passkeys yet.** Sign in is username and password only (plan Task 6, a stretch goal, not built).
 - **A moderator disconnect does not keep anyone out.** The sessions stay valid and the client may reconnect at once; a ban is the way to keep someone out.
 

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 use vesper_protocol::{RoomInfo, ServerMsg, UserInfo};
 
-use crate::api_rooms::can_see;
+use crate::api_rooms::{can_see, listed};
 
 /// Messages one socket may have waiting to be written.
 pub const QUEUE: usize = 256;
@@ -149,10 +149,10 @@ impl Hub {
         }
     }
 
-    /// `RoomsChanged` to every socket, each with only the rooms its user can see.
+    /// `RoomsChanged` to every socket, each with only the rooms in its user's list.
     pub fn rooms_changed(&self, rooms: &[RoomInfo]) {
         for c in self.lock().conns.values() {
-            let rooms = rooms.iter().filter(|r| can_see(&c.user, r)).cloned();
+            let rooms = rooms.iter().filter(|r| listed(&c.user, r)).cloned();
             c.tx.send(ServerMsg::RoomsChanged {
                 rooms: rooms.collect(),
             });
@@ -248,6 +248,7 @@ mod tests {
             position: 0,
             restricted: true,
             members: vec![],
+            archived: false,
         };
         hub.broadcast_room(&room, ServerMsg::ForceMuted { muted: true });
         assert!(rx.queue.try_recv().is_err());
