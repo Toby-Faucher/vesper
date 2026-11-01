@@ -5,6 +5,6 @@
  */
 export type RoomPatch = { name?: string, restricted?: boolean, 
 /**
- * The last room that is not archived can not be archived (409).
+ * The last room that is not archived cannot be archived (409).
  */
 archived?: boolean, };

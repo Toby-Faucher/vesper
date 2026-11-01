@@ -53,6 +53,8 @@ There is no sign-up without an invite. On the host:
 
 ## Upgrade and rollback
 
+After an image with migration 0008 (room archive) has started on a database, an older image without it will not start on that database. Back up before you upgrade: `docker compose exec vesper vesper-server backup /data/backups`.
+
 Upgrade: first tag the current image, `docker tag vesper:latest vesper:previous`; then `git pull` and `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins. The database in the data dir stays; the server applies its schema migrations at start, so an older image may not read a database a newer one migrated: take a backup before an upgrade that changes the schema. Rollback: the image and `deploy/compose.yaml` must match, because compose only passes the variables it lists. Check out the previous commit's `deploy/compose.yaml` (`git checkout <old> -- deploy/compose.yaml`) and run `VESPER_TAG=previous docker compose -f deploy/compose.yaml up -d` (no `--build`), or `git checkout <old>` and rebuild. An image from before accounts needs its old compose file (or a local `VESPER_DEV_KEY: ${VESPER_DEV_KEY:?}` line) and the key in `.env`. Not verified. For the binary install keep the previous binary next to the new one and swap the file, then `systemctl restart vesper`.
 
 If the voice engine thread dies (a bug on hostile input), `/health` returns 503 and the server process exits non-zero so Docker (`restart: unless-stopped`) or systemd (`Restart=on-failure`) restarts it; look for "voice engine (SFU thread) died" in `docker compose logs` / `journalctl -u vesper`. Covered by a test of the watcher, not verified with a real container.
@@ -62,9 +64,9 @@ If the voice engine thread dies (a bug on hostile input), `/health` returns 503 
 `vesper-server backup <dir>` writes two things into `<dir>` (created with mode 0700 if missing):
 
 - `vesper-<UTC time>.db`, for example `vesper-20261101T040000Z.db`: a copy of the database made with SQLite's `VACUUM INTO`, so it is consistent while the server runs and needs no WAL file next to it. Profile pictures live in the database, so they are in this file.
-- `vesper-<UTC time>-uploads/`: a copy of `uploads/` (attachments), without `uploads/tmp`. A file deleted while the copy runs is skipped and counted in the summary.
+- `vesper-<UTC time>-uploads/`: a copy of `uploads/` (attachments), without `uploads/tmp`. A file deleted while the copy runs is skipped and counted in the summary; its row is still in the database copy, so after a restore that one attachment answers 404.
 
-Directories are mode 0700 and files 0600. It never overwrites: a second run in the same second fails. It prints the paths, the file count and the bytes. The copy holds password and session hashes: keep it private.
+Directories are mode 0700 and files 0600. It never overwrites: a second run in the same second fails. `<dir>` must be outside `uploads/`. It reads `vesper.db` in `VESPER_DATA_DIR` as it is: a missing file is an error (a wrong data dir), and it never creates or migrates the database. If any step fails, it removes both outputs and exits non-zero, so a pair left in `<dir>` is complete. It prints the paths, the file count and the bytes. The copy holds password and session hashes: keep it private.
 
 In the container (Docker / Dockge), from the stack directory:
 
@@ -86,7 +88,7 @@ Restore (the stack stopped; `<t>` is the time in the file names):
 
 Everything after the backup time is lost, and every session made later is gone (people sign in again). An upload made while the backup ran may be in the copy without a message; the server removes such files after 24 h.
 
-Verified by tests on the dev machine: the copy opens as a valid database (`PRAGMA integrity_check`) with the same rows, a copy taken while another connection writes is consistent, the modes are 0700 and 0600, `uploads/tmp` is left out, and an existing backup is never overwritten. Not verified: the command through `docker compose exec`, the cron line, the `systemd-run` form, and the restore steps. The tests open the copy with the same store code the server uses, but no restored copy was started as a real server.
+Verified by tests on the dev machine: the copy opens as a valid database (`PRAGMA integrity_check`) with the same rows, a copy taken while another connection writes is consistent, the modes are 0700 and 0600, `uploads/tmp` is left out, an existing backup is never overwritten, a failed copy leaves nothing behind, a missing database is refused without creating one, and the database is not migrated. Not verified: the command through `docker compose exec`, the cron line, the `systemd-run` form, and the restore steps. The tests open the copy with the same store code the server uses, but no restored copy was started as a real server.
 
 ## Upgrade from the shared key
 

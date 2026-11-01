@@ -104,6 +104,21 @@ impl Store {
         Ok(Store { pool })
     }
 
+    /// Opens an existing database as it is: never creates the file and never runs migrations
+    /// (for `backup`, which must not touch a live database a newer binary could migrate).
+    /// A missing file is an error.
+    pub async fn open_existing(path: &Path) -> Result<Store> {
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(false)
+            .busy_timeout(Duration::from_millis(5000));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
+        Ok(Store { pool })
+    }
+
     /// A consistent copy of the whole database at `dest` (`VACUUM INTO`), safe while others write.
     /// `dest` must not exist or must be an empty file; SQLite refuses anything else.
     pub async fn backup_into(&self, dest: &Path) -> Result<()> {

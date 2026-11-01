@@ -107,7 +107,7 @@ async fn hello(st: &WsState, user: &UserInfo, session_id: i64) -> Result<ServerM
     let mut rooms = st.app.store.rooms().await?;
     rooms.retain(|r| listed(user, r));
     let voice = st.app.voice.peers(|id| rooms.iter().any(|r| r.id == id));
-    let ids: Vec<i64> = rooms.iter().map(|r| r.id).collect();
+    let ids: Vec<i64> = rooms.iter().filter(|r| !r.archived).map(|r| r.id).collect();
     let unread = st.app.store.unread(&user.user_id, &ids).await?;
     Ok(ServerMsg::Hello {
         me: Me {

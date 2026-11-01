@@ -266,3 +266,49 @@ async fn backup_copies_db_and_uploads_privately_and_never_overwrites() {
     assert!(run(&cfg, &["backup"]).await.is_err());
     assert!(run(&cfg, &["backup", "a", "b"]).await.is_err());
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_backup_leaves_nothing_behind() {
+    use std::os::unix::fs::PermissionsExt;
+    let data = TempDir::new().unwrap();
+    let cfg = config(&data);
+    store(&data).await;
+    let shard = data.path().join("uploads/ab");
+    std::fs::create_dir_all(&shard).unwrap();
+    std::fs::write(shard.join("ab01"), b"ok").unwrap();
+    let locked = shard.join("ab02");
+    std::fs::write(&locked, b"secret").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&locked).is_ok() {
+        return; // root reads anything: this failure can not be forced here
+    }
+    let out = TempDir::new().unwrap();
+    let e = cli::backup(&cfg, out.path(), 0).await.unwrap_err();
+    assert!(e.contains("partial backup was removed"), "{e}");
+    let left: Vec<_> = std::fs::read_dir(out.path()).unwrap().collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[tokio::test]
+async fn backup_refuses_a_data_dir_without_a_database() {
+    let data = TempDir::new().unwrap();
+    let out = TempDir::new().unwrap();
+    let e = cli::backup(&config(&data), out.path(), 0)
+        .await
+        .unwrap_err();
+    assert!(e.contains("not found"), "{e}");
+    assert!(!data.path().join("vesper.db").exists());
+    assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn backup_dir_inside_uploads_is_refused() {
+    let data = TempDir::new().unwrap();
+    store(&data).await;
+    std::fs::create_dir_all(data.path().join("uploads")).unwrap();
+    let e = cli::backup(&config(&data), &data.path().join("uploads/backups"), 0)
+        .await
+        .unwrap_err();
+    assert!(e.contains("inside"), "{e}");
+}

@@ -2,8 +2,9 @@
 
 mod common;
 
-use axum::http::{Method, StatusCode};
-use common::{Session, TestServer, get, post, request};
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode, header};
+use common::{ORIGIN, Session, TestServer, get, post, request};
 use serde_json::{Value, json};
 
 async fn call(
@@ -374,6 +375,16 @@ async fn archived_rooms_are_hidden_and_closed() {
     let body = json!({ "body": "needle kept", "reply_to": null, "attachments": [] });
     let (s, _, v) = t.call(post(&msgs, body.clone(), &m)).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
+    let up = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/rooms/{hangout}/uploads?name=f.bin"))
+        .header(header::ORIGIN, ORIGIN)
+        .header(header::COOKIE, &m.cookie)
+        .body(Body::from(b"kept".to_vec()))
+        .unwrap();
+    let (s, _, v) = t.call(up).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let file = format!("/api/uploads/{}", v["attachment"]["id"].as_str().unwrap());
     let path = format!("/api/rooms/{hangout}");
     let archive = |on: bool| json!({ "archived": on });
 
@@ -412,6 +423,14 @@ async fn archived_rooms_are_hidden_and_closed() {
         let (s, _, v) = t.call(get("/api/search?q=needle", who)).await;
         assert_eq!(s, StatusCode::OK, "{v}");
         assert_eq!(v["hits"], json!([]), "search for {}", who.user.username);
+        // Files are kept on disk but not served while archived, the uploader's too.
+        let (s, _, _) = t.call(get(&file, who)).await;
+        assert_eq!(
+            s,
+            StatusCode::NOT_FOUND,
+            "download for {}",
+            who.user.username
+        );
     }
 
     // general is the last room left open.
@@ -427,6 +446,8 @@ async fn archived_rooms_are_hidden_and_closed() {
     let (s, _, v) = t.call(get(&msgs, &m)).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["messages"][0]["body"], "needle kept");
+    let (s, _, _) = t.call(get(&file, &m)).await;
+    assert_eq!(s, StatusCode::OK);
     let (_, _, v) = t.call(get("/api/search?q=needle", &m)).await;
     assert_eq!(v["hits"].as_array().unwrap().len(), 1);
     // A default room may be archived while another stays open.

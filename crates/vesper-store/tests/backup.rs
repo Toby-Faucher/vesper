@@ -95,3 +95,25 @@ async fn backup_while_another_connection_writes() {
         assert_eq!(count(&copy, "messages").await, 20);
     }
 }
+
+#[tokio::test]
+async fn open_existing_never_creates_or_migrates() {
+    let tmp = TempDir::new().unwrap();
+    let missing = tmp.path().join("nope.db");
+    assert!(Store::open_existing(&missing).await.is_err());
+    assert!(!missing.exists());
+
+    let path = tmp.path().join("v.db");
+    let s = Store::open(&path).await.unwrap();
+    let all = count(&s, "_sqlx_migrations").await;
+    // As if this binary had one migration the database has not run yet.
+    sqlx::query(
+        "DELETE FROM _sqlx_migrations WHERE version = (SELECT max(version) FROM _sqlx_migrations)",
+    )
+    .execute(s.pool())
+    .await
+    .unwrap();
+    let e = Store::open_existing(&path).await.unwrap();
+    e.backup_into(&tmp.path().join("copy.db")).await.unwrap();
+    assert_eq!(count(&s, "_sqlx_migrations").await, all - 1);
+}

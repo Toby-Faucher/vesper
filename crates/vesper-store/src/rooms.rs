@@ -113,7 +113,7 @@ impl Store {
             .fetch_one(&mut *tx)
             .await?;
             if others == 0 {
-                return Err(StoreError::Conflict("the last room can not be archived"));
+                return Err(StoreError::Conflict("the last room cannot be archived"));
             }
         }
         let n = sqlx::query(

@@ -112,9 +112,31 @@ pub async fn run(args: &[String], cfg: &Config) -> Result<Option<String>, String
 /// `backup <dir>` with the clock passed in, so a test can pin the file names.
 /// The database copy comes first, then the uploads: a file uploaded meanwhile is an extra file
 /// the restored server's sweep removes, and a file deleted meanwhile is counted as skipped.
+/// On any error after the first file is made, both outputs are removed: a pair left on disk is complete.
 pub async fn backup(cfg: &Config, dir: &Path, now: i64) -> Result<String, String> {
-    let store = open(cfg).await?;
+    let path = cfg.data_dir.join("vesper.db");
+    // Not `open`: a wrong data dir must fail, not create, migrate and back up an empty database.
+    if !path.is_file() {
+        return Err(format!(
+            "{} not found; is VESPER_DATA_DIR right?",
+            path.display()
+        ));
+    }
+    let store = Store::open_existing(&path)
+        .await
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let uploads = cfg.data_dir.join("uploads");
     private_dir(dir, true).map_err(io(dir))?;
+    // A backup dir inside uploads/ would be copied into the next backup as a shard.
+    if let (Ok(d), Ok(u)) = (dir.canonicalize(), uploads.canonicalize())
+        && d.starts_with(&u)
+    {
+        return Err(format!(
+            "{} is inside {}; pick a dir outside it",
+            dir.display(),
+            uploads.display()
+        ));
+    }
     let stamp = utc_stamp(now);
     let db = dir.join(format!("vesper-{stamp}.db"));
     let up = dir.join(format!("vesper-{stamp}-uploads"));
@@ -125,14 +147,25 @@ pub async fn backup(cfg: &Config, dir: &Path, now: i64) -> Result<String, String
     }
     // Created empty with mode 600 first: VACUUM INTO writes into an empty file and keeps its mode.
     private_file(&db).map_err(io(&db))?;
-    if let Err(e) = store.backup_into(&db).await {
-        let _ = std::fs::remove_file(&db);
-        return Err(format!("{}: {e}", db.display()));
-    }
-    private_dir(&up, false).map_err(io(&up))?;
     let mut n = Copied::default();
-    copy_uploads(&cfg.data_dir.join("uploads"), &up, &mut n).map_err(io(&up))?;
-    let db_bytes = std::fs::metadata(&db).map_err(io(&db))?.len();
+    let written = async {
+        store
+            .backup_into(&db)
+            .await
+            .map_err(|e| format!("{}: {e}", db.display()))?;
+        private_dir(&up, false).map_err(io(&up))?;
+        copy_uploads(&uploads, &up, &mut n).map_err(io(&up))?;
+        std::fs::metadata(&db).map(|m| m.len()).map_err(io(&db))
+    }
+    .await;
+    let db_bytes = match written {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = std::fs::remove_file(&db);
+            let _ = std::fs::remove_dir_all(&up);
+            return Err(format!("{e}; the partial backup was removed"));
+        }
+    };
     Ok(format!(
         "backup written to {}\n  database: {} ({db_bytes} bytes)\n  uploads:  {} ({} files, {} bytes; {} vanished during the copy and were skipped)\nIt holds password and session hashes: keep it private.",
         dir.display(),
@@ -151,12 +184,12 @@ struct Copied {
     skipped: u64,
 }
 
-/// `uploads/<2 hex>/<id>` into `dest`, skipping `uploads/tmp` (files still being received).
 /// Error mapper naming the path.
 fn io(what: &Path) -> impl Fn(std::io::Error) -> String + '_ {
     move |e| format!("{}: {e}", what.display())
 }
 
+/// `uploads/<2 hex>/<id>` into `dest`, skipping `uploads/tmp` (files still being received).
 fn copy_uploads(src: &Path, dest: &Path, n: &mut Copied) -> std::io::Result<()> {
     let shards = match std::fs::read_dir(src) {
         Ok(d) => d,

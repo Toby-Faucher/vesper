@@ -62,7 +62,7 @@ export const UI_MESSAGES = {
   roomLastOpen: 'The last room that is not archived cannot be archived.',
   roomArchiveHides: 'It leaves the room list, the switcher and search for everyone. Only this page still lists it.',
   roomArchiveKeeps: 'Its messages and files are kept. Unarchive brings the room back with all of them.',
-  roomArchiveCall: 'Anyone in its voice call, you too, is taken out of the call. Nobody can join it or post in it while it is archived.',
+  roomArchiveCall: 'Everyone in its voice call, you included, is taken out of it. Nobody can join it or post in it while it is archived.',
   roomMembersNone: 'Nobody matches that name.',
   diskLoading: 'Loading disk use...',
   diskFailed: 'Could not load the disk use. Check your connection and try again.',

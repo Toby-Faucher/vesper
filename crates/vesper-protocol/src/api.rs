@@ -425,7 +425,7 @@ pub struct RoomPatch {
     #[serde(default)]
     #[ts(optional)]
     pub restricted: Option<bool>,
-    /// The last room that is not archived can not be archived (409).
+    /// The last room that is not archived cannot be archived (409).
     #[serde(default)]
     #[ts(optional)]
     pub archived: Option<bool>,
