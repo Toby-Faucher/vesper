@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as I from '../lib/ui/icons';
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { href } from '../lib/route';
   import { navigate, session } from '../lib/session.svelte';
   import { chat, jumpTo, marks, search } from '../lib/chat.svelte';
@@ -8,7 +8,7 @@
   import type { SearchHit } from '../lib/gen/SearchHit';
   import { loadUsers } from '../lib/ui/users';
   import { dayLabel } from '../lib/ui/timeline';
-  import { complete, keyAt, keyValue, nothingToSearch, parseSearch, setKey, shortLast, type Key } from '../lib/ui/searchq';
+  import { MAX_QUERY, complete, keyAt, keyValue, nothingToSearch, parseSearch, setKey, shortLast, type Key } from '../lib/ui/searchq';
   import { Searcher } from '../lib/ui/search.svelte';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
@@ -19,7 +19,8 @@
   // chunk drawn in the shell's dialog (which opens at once with a plain field and keeps what was typed). The box takes
   // `from:`, `in:`, `after:` and `before:`; the chips, the scope buttons and the date fields under it edit the same
   // text, so the two always agree. While the caret is in a `from:` or `in:` word, the field is a combobox over people
-  // or rooms. Results are buttons: Down moves into them, Enter or a click jumps to the message. Nothing here animates.
+  // or rooms. Results are buttons in a region, not listbox options: Down moves real focus into them (a screen reader
+  // reads the whole hit), Enter or a click jumps to the message, Up from the first or Esc goes back. Nothing animates.
   let { open, current, onclose, q = $bindable('') }: { open: boolean; current: number | null; onclose: () => void; q?: string } = $props();
 
   const s = new Searcher(search);
@@ -34,7 +35,17 @@
       : { q: words, room_id: parsed.room_id, author_id: parsed.author_id, from: parsed.from, to: parsed.to },
   );
   $effect(() => s.set(ask));
-  $effect(() => () => s.stop());
+  $effect(() => () => s.stop()); // closing or signing out aborts a request in flight
+  // A room you can no longer see (made private, or you left it): its hits go before the next paint, and the query runs
+  // again. A new room runs it again too.
+  let roomKey = '';
+  $effect.pre(() => {
+    const ids = new Set(rooms.map((r) => r.id));
+    const key = [...ids].sort((a, b) => a - b).join();
+    if (roomKey && key !== roomKey) untrack(() => s.keep(ids));
+    roomKey = key;
+  });
+  const BUSY = 'Search is busy. Wait a moment, then press Enter to try again.';
 
   let field = $state<HTMLInputElement>();
   let caret = $state(0);
@@ -90,6 +101,9 @@
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       hitButtons()[0]?.focus();
+    } else if (e.key === 'Enter' && s.status === 'busy') {
+      e.preventDefault();
+      s.retry();
     } else if (e.key === 'Enter' && s.status === 'done' && s.hits[0]) { // not a hit of the query before this one
       e.preventDefault();
       void go(s.hits[0]);
@@ -106,7 +120,7 @@
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== ' ') field?.focus();
   }
 
-  const roomName = (id: number) => rooms.find((r) => r.id === id)?.name ?? 'a room';
+  const roomName = (id: number) => rooms.find((r) => r.id === id)?.name;
   const someone = { user_id: '', display_name: 'Someone', accent: '' };
   const author = (id: string) => session.state.users[id] ?? someone;
   const clock = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
@@ -145,7 +159,7 @@
 
 <SwitcherField bind:value={q} bind:el={field} aria-label="Search messages" placeholder="Search messages. Try from:alice in:general"
   oninput={() => { syncCaret(); active = 0; }} onkeyup={syncCaret} onclick={syncCaret} {onkeydown}
-  role="combobox" aria-expanded={sugs.length > 0} aria-controls="{uid}-sugs" aria-autocomplete="list"
+  maxlength={MAX_QUERY} role="combobox" aria-expanded={sugs.length > 0} aria-controls={sugs.length ? `${uid}-sugs` : undefined} aria-autocomplete="list"
   aria-activedescendant={sugs.length ? `${uid}-s${active}` : undefined} aria-describedby="{uid}-help" />
 
 <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-subtle px-4 py-2 text-xs text-fg-2">
@@ -185,11 +199,11 @@
     {/each}
   </div>
 {:else}
-  <div id="{uid}-sugs" class="min-h-0 flex-1 overflow-y-auto">
+  <div class="min-h-0 flex-1 overflow-y-auto">
     {#if parsed.unknown.length}
       <div class="px-4 py-6 text-center text-fg-2">
         {#each parsed.unknown as u (u)}<p>{u}</p>{/each}
-        <p class="mt-1 text-xs text-fg-3">Type from: or in: and pick a name from the list.</p>
+        {#if parsed.unknown.some((u) => u.startsWith('No '))}<p class="mt-1 text-xs text-fg-3">Type from: or in: and pick a name from the list.</p>{/if}
       </div>
     {:else if !q.trim()}
       <div class="px-4 py-6 text-fg-2">
@@ -212,11 +226,17 @@
       </div>
     {:else if s.status === 'error'}
       <p class="px-4 py-6 text-center text-danger" role="alert">{s.error}</p>
+    {:else if s.status === 'busy' && !s.hits.length}
+      <div class="flex flex-col items-center gap-3 px-4 py-6 text-center text-fg-2">
+        <p>{BUSY}</p>
+        <Button size="sm" onclick={() => s.retry()}>Try again</Button>
+      </div>
     {:else if !s.hits.length}
-      <p class="px-4 py-6 text-center text-fg-2">{s.status === 'slow' ? 'Slow down a little.' : 'Searching...'}</p>
+      <p class="px-4 py-6 text-center text-fg-2">Searching...</p>
     {:else}
       <div class="flex h-8 items-center gap-3 px-4 text-xs text-fg-3">
-        <span>{s.status === 'done' ? count : s.status === 'slow' ? 'Slow down a little.' : 'Searching...'}</span>
+        <span>{s.status === 'done' ? count : s.status === 'busy' ? BUSY : 'Searching...'}</span>
+        {#if s.status === 'busy'}<button type="button" class="font-medium text-fg-2 hover:text-fg" onclick={() => s.retry()}>Try again</button>{/if}
         {#if shortLast(words)}<span>Type at least 2 letters to search as you type.</span>{/if}
       </div>
       {#if jumpError}<p class="px-4 pb-2 text-xs text-danger" role="alert">{jumpError}</p>{/if}
@@ -231,7 +251,7 @@
               <span class="min-w-0 flex-1">
                 <span class="flex items-baseline gap-2">
                   <span class="truncate font-medium text-fg">{a.display_name}</span>
-                  <span class="truncate text-xs text-fg-3">in {roomName(h.message.room_id)}</span>
+                  {#if roomName(h.message.room_id)}<span class="truncate text-xs text-fg-3">in {roomName(h.message.room_id)}</span>{/if}
                   <time class="shrink-0 text-xs text-fg-3 tabular-nums">{clock.format(h.message.created_at)}</time>
                   <span class="go">Jump <Icon d={I.chevronRight} size={16} /></span>
                 </span>
@@ -252,11 +272,11 @@
 
 <div class="flex h-9 shrink-0 items-center gap-4 border-t border-subtle px-4 text-xs text-fg-3">
   <span class="flex items-center gap-1" aria-hidden="true"><Kbd>↑</Kbd><Kbd>↓</Kbd> move</span>
-  <span class="flex items-center gap-1" aria-hidden="true"><Kbd>Enter</Kbd> {sugs.length ? 'pick' : 'jump'}</span>
+  <span class="flex items-center gap-1" aria-hidden="true"><Kbd>Enter</Kbd> {sugs.length ? 'pick' : s.status === 'busy' ? 'try again' : 'jump'}</span>
   <span class="flex items-center gap-1" aria-hidden="true"><Kbd>Esc</Kbd> close</span>
   <span id="{uid}-help" class="ml-auto">Dates are whole days in your time zone.</span>
 </div>
-<p role="status" class="sr-only">{!open || !ask ? '' : s.status === 'slow' ? 'Slow down a little.' : s.status === 'done' ? (s.hits.length ? count : 'No messages found') : ''}</p>
+<p role="status" class="sr-only">{!open || !ask ? '' : s.status === 'busy' ? BUSY : s.status === 'done' ? (s.hits.length ? count : 'No messages found') : ''}</p>
 
 <style>
   code { color: var(--fg-2); font-family: var(--font-mono); font-size: 12px; }

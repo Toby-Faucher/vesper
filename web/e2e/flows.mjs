@@ -236,9 +236,27 @@ try {
   await a.keyboard.press('Enter');
   await searchBox.waitFor();
   assert.equal(await searchBox.inputValue(), '', 'search kept the last query');
+  await searchBox.fill('x'.repeat(10_000)); // a long paste is cut to the box's 200 characters
+  assert.equal((await searchBox.inputValue()).length, 200, 'the box took more than 200 characters');
+  await searchBox.fill('');
+  // While the caret is in a from: or in: word the box lists people or rooms: Enter and Tab pick one.
+  assert.equal(await searchBox.getAttribute('aria-controls'), null, 'aria-controls set with no list open');
+  await searchBox.pressSequentially('from:bo');
+  const people = a.getByRole('listbox', { name: 'People' });
+  await people.getByRole('option', { name: /bob/ }).waitFor();
+  assert.equal(await searchBox.getAttribute('aria-expanded'), 'true');
+  assert.equal(await searchBox.getAttribute('aria-controls'), await people.getAttribute('id'), 'aria-controls is not the list');
+  await a.keyboard.press('Enter');
+  await people.waitFor({ state: 'hidden' });
+  await searchBox.pressSequentially('in:gen');
+  await a.getByRole('listbox', { name: 'Rooms' }).getByRole('option', { name: 'general' }).waitFor();
+  await a.keyboard.press('Tab');
+  assert.equal(await searchBox.inputValue(), 'from:bob in:general ', 'the picks did not complete the box');
+  assert.ok(await searchBox.evaluate((e) => e === document.activeElement), 'Tab left the box while picking');
+  await a.getByText('Add a word to search for.').waitFor();
   await a.keyboard.press('Escape');
   await searchBox.waitFor({ state: 'hidden' });
-  console.log('search opens from the keys and the switcher: ok');
+  console.log('search opens from the keys and the switcher, and picks from: and in: names: ok');
 
   // A room link opened signed out: sign in returns to that room (music), not to the first one; Back does not loop to
   // sign in. A room id nobody can see gives the plain missing state after sign in.
@@ -334,6 +352,18 @@ try {
   assert.equal(await searchHits(b).count(), 0, 'bob found a message from a room he cannot see');
   for (const p of [a, b]) await p.keyboard.press('Escape');
   console.log('search skips a room that became private: ok');
+
+  // A room made private while bob's search is open: its hit goes from his list, and the search runs again.
+  const den = await call(a, 'POST', '/api/rooms', { name: 'den' });
+  await roomLink(b, 'den').waitFor();
+  await call(a, 'POST', `/api/rooms/${den.id}/messages`, { body: 'walrus plans in the den', reply_to: null, attachments: [] });
+  await searchFor(b, 'walrus', { keys: true });
+  await searchHits(b).first().waitFor({ timeout: 5000 });
+  await call(a, 'PATCH', `/api/rooms/${den.id}`, { restricted: true });
+  await b.getByText('No messages found.').waitFor({ timeout: 5000 });
+  assert.equal(await searchHits(b).count(), 0, 'a hit from a room bob lost stayed in his open search');
+  await b.keyboard.press('Escape');
+  console.log('open search drops a room that became private: ok');
 
   // The denoiser (worklet, worker, WASM) under the server's CSP. A CSP block in the worker is not a page console
   // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (not in CI).

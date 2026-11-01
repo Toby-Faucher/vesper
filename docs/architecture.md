@@ -40,8 +40,11 @@ The "Not verified" list at the end says what was only read.
   page is in flight (also on a room's first open) is held and kept. Re-entering a room left on an older slice after a search jump shows its newest page. Unread counts come from `Hello.unread` and live events (`state.ts`); a room is
   marked read when its newest message is on screen in a visible tab. Typing is sent at most every 3 s and shown for 5 s. Drafts are kept in memory
   only. Search is a dialog (`SearchDialog.svelte`, Ctrl/Cmd+Shift+F or the header's Search button) with `from:`, `in:`, `after:` and
-  `before:` in the text (`lib/ui/searchq.ts`; dates are whole local days, both included); it waits 300 ms after the last key, does not send a
-  lone one-letter word, retries a 429 after a second, and a result jumps to the message with `around=`. New messages from others are read out by a polite live region; paste
+  `before:` in the text (`lib/ui/searchq.ts`; dates are whole local days, both included; the box takes 200 characters and sends at most 12
+  words). Ctrl/Cmd+Shift+F works while typing in the composer too. On macOS, Cmd+Shift+F may also be a browser's full screen key (not
+  verified). The dialog waits 300 ms after the last key, does not send a lone one-letter word, aborts a request the next query replaces,
+  retries a 429 once after a second and then says search is busy until Enter, drops the hits of a room you can no longer see and asks again,
+  and a result jumps to the message with `around=`. New messages from others are read out by a polite live region; paste
   takes only PNG, JPEG, GIF and WebP images.
 - **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed elements:
   bold, italic, strike, inline code, fenced code, one level of `> ` quote, `@name` and bare `http`/`https` links. Anything else is text, so raw

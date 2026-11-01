@@ -5,7 +5,7 @@ import type { SearchPage } from '../gen/SearchPage';
 import type { SearchQuery } from '../gen/SearchQuery';
 import type { UserInfo } from '../gen/UserInfo';
 import { Searcher } from './search.svelte';
-import { complete, keyAt, keyValue, nothingToSearch, parseSearch, setKey, shortLast } from './searchq';
+import { MAX_QUERY, complete, keyAt, keyValue, nothingToSearch, parseSearch, setKey, shortLast } from './searchq';
 
 const user = (user_id: string, username: string, display_name: string): UserInfo =>
   ({ user_id, username, display_name, accent: '', role: 'member', banned: false });
@@ -50,6 +50,17 @@ describe('parseSearch', () => {
     expect(p('to:bob http://x.y has:link').q).toBe('to:bob http://x.y has:link');
     expect(p('a OR b NEAR(c d) * "x" -- ; DROP TABLE messages').q).toBe('a OR b NEAR(c d) * x -- ; DROP TABLE messages');
     expect(p('<img src=x onerror=alert(1)>').q).toBe('<img src=x onerror=alert(1)>');
+  });
+  it('cuts a long paste to MAX_QUERY characters and 12 words', () => {
+    const a = p('from:alice ' + 'word '.repeat(2000));
+    expect(a.author_id).toBe('a1');
+    expect(a.q.split(' ')).toHaveLength(12);
+    const b = p('x'.repeat(10_000));
+    expect(b.q).toHaveLength(MAX_QUERY);
+  });
+  it('says when the After date is later than the Before date', () => {
+    expect(p('after:2026-10-31 before:2026-10-01 hi').unknown).toEqual(['The After date is later than the Before date.']);
+    expect(p('after:2026-10-31 before:2026-10-31 hi').unknown).toEqual([]); // one whole day
   });
   it('lets the last of a repeated key count', () => {
     const a = p('from:carl from:alice');
@@ -130,18 +141,57 @@ describe('Searcher', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(s.hits.map((h) => h.message.id)).toEqual([2]);
   });
-  it('says slow on a 429 and tries again a second later', async () => {
+  it('tries a 429 once more after a second, then waits for the person', async () => {
     vi.useFakeTimers();
-    let n = 0;
-    const run = vi.fn(async () => (n++ ? page([1]) : Promise.reject(new ApiFailure(429, 'rate_limited'))));
+    let busy = 3; // three 429s, then an answer
+    const run = vi.fn(async () => (busy-- > 0 ? Promise.reject(new ApiFailure(429, 'rate_limited')) : page([1])));
     const s = new Searcher(run);
     s.set(q('hello'));
     await vi.advanceTimersByTimeAsync(300);
-    expect(s.status).toBe('slow');
+    expect([run.mock.calls.length, s.status]).toEqual([1, 'loading']);
     await vi.advanceTimersByTimeAsync(999);
     expect(run).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(s.status).toBe('done');
+    expect([run.mock.calls.length, s.status]).toEqual([2, 'busy']);
+    await vi.advanceTimersByTimeAsync(60_000); // no loop
+    expect(run).toHaveBeenCalledTimes(2);
+    s.retry(); // Enter or the button: one request, and one more a second later
+    await vi.advanceTimersByTimeAsync(0);
+    expect([run.mock.calls.length, s.status]).toEqual([3, 'loading']);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect([run.mock.calls.length, s.status, s.hits.length]).toEqual([4, 'done', 1]);
+    s.retry(); // only after busy
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(run).toHaveBeenCalledTimes(4);
+  });
+  it('aborts the request in flight when the query changes or the dialog closes', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const run = vi.fn((_: SearchQuery, signal: AbortSignal) => (signals.push(signal), new Promise<SearchPage>(() => {})));
+    const s = new Searcher(run);
+    s.set(q('one'));
+    await vi.advanceTimersByTimeAsync(300);
+    s.set(q('two'));
+    expect(signals[0].aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(300);
+    s.stop();
+    expect(signals[1].aborted).toBe(true);
+  });
+  it('drops hits from a room you can no longer see and asks again', async () => {
+    vi.useFakeTimers();
+    const hit = (id: number, room_id: number) => ({ snippet: '', message: { id, room_id } as SearchPage['hits'][0]['message'] });
+    let rooms = [1, 2];
+    const run = vi.fn(async () => ({ hits: [hit(3, 2), hit(2, 1), hit(1, 2)].filter((h) => rooms.includes(h.message.room_id)), next_before: null }));
+    const s = new Searcher(run);
+    s.set(q('hello'));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(s.hits.map((h) => h.message.id)).toEqual([3, 2, 1]);
+    rooms = [1];
+    s.keep(new Set(rooms));
+    expect(s.hits.map((h) => h.message.id)).toEqual([2]); // at once, before the answer
+    await vi.advanceTimersByTimeAsync(300);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect([s.status, s.hits.map((h) => h.message.id)]).toEqual(['done', [2]]);
   });
   it('shows other errors, clears on null, and pages with the cursor', async () => {
     vi.useFakeTimers();

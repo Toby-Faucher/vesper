@@ -137,7 +137,8 @@ switches to another room and back, and sees the newest page with a live message 
 `web/e2e/flows.mjs` then starts a fresh server the same way and checks the UI in Chromium: a bad invite link, the invite code leaving the
 address bar, autocomplete attributes, an empty password field and focus on the error after a failed sign in or signup, force-mute (also
 after a rejoin, and lifted), a kick ending the call, and a room made private ending the call and dropping out of bob's search
-(alice still finds its message). It also opens search by Ctrl+Shift+F after a failed chunk load and from the switcher. If `web/dist/dsp/` exists
+(alice still finds its message), and a room made private while bob's search is open dropping its hit from his list. It also opens search by
+Ctrl+Shift+F after a failed chunk load and from the switcher, and picks a `from:` and an `in:` name from the box's lists with Enter and Tab. If `web/dist/dsp/` exists
 (`scripts/build-dsp.sh`, then `npm run build`), it also signs alice in with DeepFilterNet on and checks the denoiser starts.
 
 Both tests fail on any CSP block in a page: each page records `securitypolicyviolation` events and console lines about the Content

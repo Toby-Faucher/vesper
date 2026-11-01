@@ -18,6 +18,9 @@ export type Parsed = {
 };
 type Token = { start: number; end: number; key: Key | null; value: string; text: string };
 
+/** The longest box the dialog takes (its `maxlength`), and the most words sent: a long paste is cut, not sent whole. */
+export const MAX_QUERY = 200;
+const MAX_TERMS = 12;
 const KEYS = new Set<string>(['from', 'in', 'after', 'before']);
 // A run of quoted text or of anything but spaces and quotes, glued together: `from:"Sam Smith"`, `"two words"`, `x"y`.
 const TOKEN = /(?:"[^"]*"?|[^\s"]+)+/g;
@@ -50,14 +53,15 @@ const dayText = (ms: number) => new Date(ms).toLocaleDateString([], { day: 'nume
 /**
  * The query the server gets for `input`. Dates are whole local days, both included: `after:` starts at that day's
  * midnight, `before:` ends at the last ms of that day (the server compares unix ms and knows no time zone). A
- * repeated key: the last one counts. A key with no value yet (`from:` while typing) is left out.
+ * repeated key: the last one counts. A key with no value yet (`from:` while typing) is left out. Only the first
+ * MAX_QUERY characters and MAX_TERMS words count.
  */
 export function parseSearch(input: string, ctx: { users: UserInfo[]; rooms: RoomInfo[]; today: Date }): Parsed {
   const out: Parsed = { q: '', room_id: null, author_id: null, from: null, to: null, chips: [], unknown: [] };
   const text: string[] = [];
   const chip = new Map<Key, string>();
   const bad = new Map<Key, string>();
-  for (const t of tokens(input)) {
+  for (const t of tokens(input.slice(0, MAX_QUERY))) {
     if (!t.key) {
       if (t.value) text.push(t.value);
       continue;
@@ -85,9 +89,10 @@ export function parseSearch(input: string, ctx: { users: UserInfo[]; rooms: Room
       else bad.set(t.key, `${v} is not a date. Use YYYY-MM-DD.`);
     }
   }
-  out.q = text.join(' ');
+  out.q = text.join(' ').split(/\s+/).slice(0, MAX_TERMS).join(' ');
   out.chips = (['from', 'in', 'after', 'before'] as Key[]).filter((k) => chip.has(k)).map((key) => ({ key, text: chip.get(key)! }));
   out.unknown = [...bad.values()];
+  if (out.from !== null && out.to !== null && out.from > out.to) out.unknown.push('The After date is later than the Before date.');
   return out;
 }
 

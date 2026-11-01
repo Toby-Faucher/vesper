@@ -42,7 +42,7 @@
     <Mark size={20} />
     <span class="text-sm font-medium text-fg">Vesper</span>
     <span class="ml-auto flex">
-      <IconButton icon={I.search} label="Switch to ({isMac() ? '⌘' : 'Ctrl'} K)" tip aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}
+      <IconButton icon={I.command} label="Switch to ({isMac() ? '⌘' : 'Ctrl'} K)" tip aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}
         onclick={() => (layers.switcher = true)} />
       <IconButton icon={I.sidebar} label="Hide sidebar" tip aria-expanded="true" aria-controls="sidebar" onclick={() => setCollapsed(true)} />
     </span>

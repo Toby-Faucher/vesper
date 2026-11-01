@@ -10,9 +10,10 @@ export class ApiFailure extends Error {
 }
 
 /** JSON request to the server's `/api`. Rejects with ApiFailure on an error status; 204 resolves undefined. */
-export async function api<T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+export async function api<T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const r = await fetch(path, {
     method,
+    signal,
     credentials: 'same-origin',
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),

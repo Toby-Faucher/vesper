@@ -258,8 +258,8 @@ export function upload(roomId: number, file: File, onProgress?: (done: number) =
   });
 }
 
-export function search(q: SearchQuery): Promise<SearchPage> {
+export function search(q: SearchQuery, signal?: AbortSignal): Promise<SearchPage> {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(q)) if (v !== null && v !== '') p.set(k, String(v));
-  return api<SearchPage>('GET', `/api/search?${p}`);
+  return api<SearchPage>('GET', `/api/search?${p}`, undefined, signal);
 }

@@ -17,6 +17,7 @@
   import Dialog from '../lib/ui/c/Dialog.svelte';
   import { lazy } from '../lib/ui/lazy';
   import SwitcherField from './SwitcherField.svelte';
+  import { MAX_QUERY } from '../lib/ui/searchq';
   import CallBar from './CallBar.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
   import RoomView from './RoomView.svelte';
@@ -197,7 +198,7 @@
   {#if searchMod}
     <searchMod.default open={layers.search} current={room?.id ?? null} bind:q={searchTyped} onclose={() => (layers.search = false)} />
   {:else if layers.search}
-    <SwitcherField bind:value={searchTyped} aria-label="Search messages" placeholder="Search messages. Try from:alice in:general" />
+    <SwitcherField bind:value={searchTyped} maxlength={MAX_QUERY} aria-label="Search messages" placeholder="Search messages. Try from:alice in:general" />
     {#if searchFailed}
       <p role="alert" class="px-4 py-6 text-center text-fg-2">{UI_MESSAGES.searchFailed}</p>
     {:else}

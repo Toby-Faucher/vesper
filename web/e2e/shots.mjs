@@ -941,7 +941,8 @@ scene('upload-tray', async (ctx) => {
 });
 
 // The search dialog over plans (search hits get the same day shift as the timeline, so they group by day).
-// `answer` fakes the server's reply: 'hold' keeps it pending (the loading line), 429 is the rate limit.
+// `answer` fakes the server's reply: 'hold' keeps it pending (the loading line), 429 is the rate limit (busy after the
+// one retry a second later).
 async function openSearch(ctx, text, { answer } = {}) {
   const page = await openPlans(ctx);
   const { shift } = await plans(ctx);
@@ -961,7 +962,7 @@ async function openSearch(ctx, text, { answer } = {}) {
   const box = page.getByRole('combobox', { name: 'Search messages' });
   await box.waitFor();
   if (text) await box.fill(text);
-  await sleep(900); // past the debounce and the answer
+  await sleep(answer === 429 ? 2000 : 900); // past the debounce and the answer (and the 429's retry)
   return { page, release };
 }
 const day2 = new Date(Date.now() - 2 * 86_400_000);
@@ -974,7 +975,9 @@ for (const [name, text, answer] of [
   ['search-none', 'zebra'],
   ['search-unknown', 'from:carl hello'],
   ['search-hint', 'p'],
-  ['search-slow', 'patch', 429],
+  ['search-busy', 'patch', 429],
+  ['search-dates', `after:${iso(new Date())} before:${iso(day2)} patch`],
+  ['search-long', 'patch ' + 'plans for the weekend '.repeat(500)],
   ['search-loading', 'patch', 'hold'],
 ])
   scene(name, async (ctx) => {
