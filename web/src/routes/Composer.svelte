@@ -304,7 +304,7 @@
 {/if}
 
 <style>
-  .slot { position: relative; height: 16px; margin: 0 4px 4px; font-size: 12px; line-height: 16px; }
+  .slot { position: relative; height: 16px; margin: 0 0 4px; font-size: 12px; line-height: 16px; } /* flush with the box edge */
   .box {
     position: relative;
     border: 1px solid var(--line);
