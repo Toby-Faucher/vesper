@@ -380,6 +380,25 @@ try {
     await b.goto(`${ORIGIN}/r/${general}`);
     await b.waitForFunction(() => document.title === 'Vesper'); // general read at the bottom: the count clears
     console.log('mention notifications and title count: ok');
+
+    // A name in a message opens the card with the bio; Esc gives focus back to the name. Enter on a mention opens theirs.
+    await call(a, 'PATCH', '/api/me', { bio: 'Plays bass on Sundays' });
+    const row = b.locator('article').filter({ hasText: 'hey @bob can you look at this' });
+    // Her messages above group under one head row: its name is the button.
+    const name = b.getByRole('main').getByRole('button', { name: 'Open profile of alice' }).last();
+    await name.click();
+    const card = b.getByRole('dialog', { name: 'alice' });
+    await card.getByText('Plays bass on Sundays').waitFor();
+    const [c, vw] = [await card.boundingBox(), b.viewportSize()];
+    assert.ok(c.x >= 0 && c.y >= 0 && c.x + c.width <= vw.width && c.y + c.height <= vw.height, 'the card is outside the viewport');
+    await b.keyboard.press('Escape');
+    await card.waitFor({ state: 'hidden' });
+    assert.ok(await name.evaluate((e) => e === document.activeElement), 'focus did not go back to the name after Esc');
+    await row.getByRole('button', { name: 'Open profile of @bob' }).press('Enter');
+    await b.getByRole('dialog', { name: 'bob' }).waitFor();
+    await b.keyboard.press('Escape');
+    await b.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
+    console.log('a name or a mention in a message opens the person card: ok');
   }
 
   // Settings > Account, devices: alice signs in on a second browser, the first lists both and signs the other out, and

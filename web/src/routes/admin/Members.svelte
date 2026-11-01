@@ -3,10 +3,10 @@
   import { api, errorText } from '../../lib/api';
   import { session } from '../../lib/session.svelte';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
-  import { canModerate, togglePerson } from '../../lib/ui/person.svelte';
-  import { ROLE_NAMES, byRole } from './admin';
+    import { ROLE_NAMES, byRole } from './admin';
   import Avatar from '../../lib/ui/c/Avatar.svelte';
   import Button from '../../lib/ui/c/Button.svelte';
+  import PersonButton from '../../lib/ui/c/PersonButton.svelte';
   import Dialog from '../../lib/ui/c/Dialog.svelte';
   import Select from '../../lib/ui/c/Select.svelte';
   import type { Role } from '../../lib/gen/Role';
@@ -43,7 +43,6 @@
   onMount(() => void load());
   const members = $derived(Object.values(session.state.users).sort(byRole));
   const editable = (u: UserInfo) => owner && u.user_id !== me.user_id && u.role !== 'owner';
-  const inVoice = (u: UserInfo) => session.state.voice.some((p) => p.user_id === u.user_id);
 
   let error = $state('');
   let errorEl = $state<HTMLElement>();
@@ -102,13 +101,14 @@
       {#each members as u (u.user_id)}
         <tr data-user={u.username}>
           <td>
-            <div class="flex min-w-0 items-center gap-3">
+            <!-- The card has the voice actions for a moderator. -->
+            <PersonButton id={u.user_id} name={u.display_name} class="flex! max-w-full min-w-0 items-center gap-3 hover:no-underline!">
               <Avatar user={u} size={20} />
-              <div class="min-w-0">
-                <p class="truncate text-fg" title={u.display_name}>{u.display_name}</p>
-                <p class="truncate text-xs text-fg-2">@{u.username}{u.user_id === me.user_id ? ' (you)' : ''}</p>
-              </div>
-            </div>
+              <span class="min-w-0">
+                <span class="block truncate text-fg hover:underline" title={u.display_name}>{u.display_name}</span>
+                <span class="block truncate text-xs text-fg-2">@{u.username}{u.user_id === me.user_id ? ' (you)' : ''}</span>
+              </span>
+            </PersonButton>
           </td>
           <td>
             {#if editable(u)}
@@ -123,10 +123,6 @@
           <td class="text-fg-2">{u.banned ? 'Banned' : ''}</td>
           <td>
             <div class="flex justify-end gap-2">
-              {#if canModerate(me, u) && inVoice(u) && !u.banned}
-                <Button size="sm" variant="ghost" aria-label="Voice actions for {u.display_name}" aria-haspopup="dialog"
-                  onclick={(e) => togglePerson(u.user_id, e.currentTarget)}>Voice actions</Button>
-              {/if}
               {#if editable(u)}
                 {#if u.banned}
                   <Button size="sm" loading={busy === u.user_id} aria-label="Unban {u.display_name}" onclick={() => send(u, 'POST', 'unban')}>Unban</Button>
