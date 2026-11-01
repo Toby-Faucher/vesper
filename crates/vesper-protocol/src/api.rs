@@ -220,6 +220,69 @@ pub struct Unread {
     pub mentions: u32,
 }
 
+/// A chat message. A deleted one keeps its id and times with an empty body and no reactions,
+/// attachments, mentions or pin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Message {
+    #[ts(type = "number")]
+    pub id: i64,
+    #[ts(type = "number")]
+    pub room_id: i64,
+    pub author_id: String,
+    pub body: String,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number | null")]
+    pub edited_at: Option<i64>,
+    pub deleted: bool,
+    pub reply_to: Option<ReplyPreview>,
+    pub reactions: Vec<Reaction>,
+    pub attachments: Vec<Attachment>,
+    /// User ids mentioned in the body.
+    pub mentions: Vec<String>,
+    pub pinned: bool,
+}
+
+/// The message a reply points at. `excerpt` is its first 100 characters, empty when it was deleted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReplyPreview {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub author_id: String,
+    pub excerpt: String,
+}
+
+/// One emoji on a message and who added it, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Reaction {
+    pub emoji: String,
+    pub user_ids: Vec<String>,
+}
+
+/// An uploaded file attached to a message. `image` means it is shown inline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Attachment {
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    #[ts(type = "number")]
+    pub size: i64,
+    pub image: bool,
+}
+
+/// A slice of a room's history, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MessagePage {
+    pub messages: Vec<Message>,
+    pub more_before: bool,
+    pub more_after: bool,
+}
+
 /// `POST /api/rooms`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

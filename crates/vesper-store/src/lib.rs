@@ -12,10 +12,12 @@ use vesper_protocol::Role;
 
 mod accounts;
 mod invites;
+mod messages;
 mod rooms;
 mod sessions;
 
 pub use accounts::{LoginRow, NewAccount};
+pub use messages::{Cursor, MAX_PINS, MAX_REACTIONS, NewMessage};
 pub use sessions::{NewSession, SESSION_TTL_MS};
 
 pub type Result<T> = std::result::Result<T, StoreError>;
