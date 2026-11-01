@@ -1,6 +1,7 @@
 import type { DspOut } from './dsp-handler';
 import { FrameRing, HOP } from './ring';
 import { ModeController } from './mode';
+import { Gate, Limiter } from './dynamics';
 
 // The cushion. postMessage between the worklet and the worker jitters in a browser, so keep enough frames in
 // each place to ride out a slow hop. This adds about 30 ms of delay over the old 2/3/2 setup (estimated, not measured).
@@ -78,11 +79,17 @@ export class DenoiseCore {
   // Level meters: sums over the current half second; the last full half second is what stats() reports.
   private sq = { in: 0, out: 0, n: 0 };
   private rms = { in: 0, out: 0 };
+  private limiter: Limiter;
+  private limited = new Float32Array(128); // reallocated only if the quantum size changes
+  /** The noise gate on the denoised output; capture.ts sets it from the settings. */
+  gate: Gate;
 
   constructor(onFail: (reason: string) => void, sampleRate: number) {
     this.onFail = onFail;
     this.rate = sampleRate;
     this.stallSamples = sampleRate / 2; // a killed worker sends no error; half a second of silence means stalled
+    this.limiter = new Limiter(sampleRate);
+    this.gate = new Gate(sampleRate);
   }
 
   stats(): PipelineStats {
@@ -140,6 +147,7 @@ export class DenoiseCore {
     this.inflight = Math.max(0, this.inflight - 1);
     this.idle = 0;
     this.replyMs[this.n.replies++ % REPLY_WINDOW] = m.ms;
+    this.gate.detect(m.data); // on arrival, a queue depth ahead of playout: the gate's lookahead
     this.out.push(m.data);
     this.count += m.data.length;
     if (this.out.length > MAX_OUT) {
@@ -150,9 +158,14 @@ export class DenoiseCore {
     if (this.mode.report(m.ms) === 'browser') this.fail('denoiser too slow for real time');
   }
 
-  render(input: Float32Array | undefined, o: Float32Array): void {
-    if (input) this.n.inputBlocks++;
-    else this.n.emptyInputBlocks++;
+  /** The limiter runs first, so the denoiser, the passthrough and the input meter all see the limited boost. */
+  render(raw: Float32Array | undefined, o: Float32Array): void {
+    let input: Float32Array | undefined;
+    if (raw) {
+      this.n.inputBlocks++;
+      if (this.limited.length !== raw.length) this.limited = new Float32Array(raw.length);
+      this.limiter.process(raw, (input = this.limited));
+    } else this.n.emptyInputBlocks++;
     this.process(input, o);
     this.trim(o.length);
     this.meter(input, o);
@@ -204,5 +217,6 @@ export class DenoiseCore {
       this.playing = false; // underrun: re-prime
     }
     for (; i < o.length; i++) o[i] = 0;
+    this.gate.apply(o); // denoised output only: the passthrough above stays ungated, so the user stays audible
   }
 }
