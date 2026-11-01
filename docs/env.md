@@ -18,7 +18,14 @@ Fixed, not configurable: the room size cap (12, `max_room_size`) and the WebSock
 | `VESPER_WEB_DIR` | Directory with the built web app, served at `/`. Empty counts as unset. The server warns at start if `index.html` is missing. Serving rules (SPA fallback, cache headers, dotfiles hidden): `lib.rs` `guard`. | `web/dist` | `config.rs`, `lib.rs` |
 | `VESPER_JOIN_DEADLINE_SECS` | A socket that has not joined in this many seconds is closed. Whole seconds. | `10` | `config.rs`, `ws.rs` |
 | `VESPER_MAX_SOCKETS` | Concurrent WebSockets. More get HTTP 503. | `256` | `config.rs`, `ws.rs` |
+| `VESPER_DATA_DIR` | Directory for the database (`vesper.db`, with its WAL files). Created if missing. Empty counts as unset. | `data` | `config.rs`, `cli.rs` |
+| `VESPER_ORIGIN` | The address people open in the browser: `http://` or `https://`, a host and an optional port, no path. Stored lowercase with no trailing slash and no default port, so it matches the browser's `Origin` header byte for byte. It is the base of every printed invite link. `https` turns on `Secure` cookies with the `__Host-` name. With Vite dev set it to `http://localhost:5173`. | `http://localhost:8080` | `config.rs`, `cli.rs` |
+| `VESPER_UPLOAD_QUOTA_MB` | Total size of all uploads, in MiB. | `10240` | `config.rs` |
 | `RUST_LOG` | Log filter in `tracing_subscriber` `EnvFilter` syntax, for example `info,vesper_sfu=debug`. | `info` | `main.rs` |
+
+The Origin check (planned with the account API) applies to `/api` requests that change something (not GET or HEAD) and to the
+`/ws` upgrade. Browsers leave `Origin` out of same-origin GET requests, so GETs are not checked. Clients that are not browsers,
+such as `curl` and `vesper-loadtest`, must send `Origin: <VESPER_ORIGIN>` themselves.
 
 ## Build and tooling
 
@@ -46,6 +53,9 @@ Fixed, not configurable: the room size cap (12, `max_room_size`) and the WebSock
 | `E2E_CHROMIUM` | Path to a Chromium the two-browser test launches instead of the one Playwright downloaded. Local use only. | unset | `web/e2e/two-browser.mjs` |
 
 ## Not environment variables
+
+`vesper-server` subcommands (`create-owner`, `invite`, `loadtest-accounts`, `help`) take flags, not variables. They read the
+same variables as the server. See [dev.md](dev.md#accounts) and `crates/vesper-server/src/cli.rs`.
 
 `vesper-loadtest` takes flags: `--url ws://127.0.0.1:PORT/ws --key K --room R --speakers N --seconds S [--pid PID]`
 (`crates/vesper-loadtest/src/main.rs`; see `docs/testing/latency.md`).

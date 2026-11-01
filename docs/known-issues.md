@@ -14,6 +14,10 @@ Last updated 2026-10-30. Nothing here was run in a real browser or a real deploy
 - **A client that stops reading can grow memory.** Each socket has an unbounded outbound queue, and there is no send timeout.
 - **Pipelined messages after the 5th bad one may still be handled.** A correct join in that window can leave a ghost member for about 19 s until the session times out.
 - **A very large `VESPER_MAX_SOCKETS` panics at start.** Keep it in the hundreds.
+- **Per-address limits may see one address for everyone.** The server takes the client address from the last `X-Forwarded-For` entry when the peer is
+  loopback or private. Caddy adds that entry by default. Behind a Cloudflare tunnel (Cloudflare, `cloudflared`, Caddy, Vesper) that entry can be the
+  tunnel, so the login and invite limits by address may count many people as one. The per-username login limit still holds. Cloudflare puts the
+  real address in `CF-Connecting-IP`; the server does not read it, because it is only safe to trust when the peer is the tunnel. Not verified on the deploy.
 
 ## Server behaviour
 

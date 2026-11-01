@@ -1,0 +1,158 @@
+use std::collections::HashSet;
+use std::time::Duration;
+
+use tempfile::TempDir;
+use vesper_protocol::Role;
+use vesper_server::auth::hash_token;
+use vesper_server::cli;
+use vesper_server::config::Config;
+use vesper_store::{NewAccount, NewSession, Store, now_ms};
+
+fn config(data: &TempDir) -> Config {
+    Config {
+        http_bind: "127.0.0.1:0".parse().unwrap(),
+        udp_bind: "127.0.0.1:0".parse().unwrap(),
+        public_host: None,
+        udp_port_public: 0,
+        dev_key: "k".into(),
+        max_room_size: 12,
+        join_deadline: Duration::from_secs(30),
+        ping_interval: Duration::from_secs(30),
+        max_sockets: 4,
+        web_dir: "does-not-exist".into(),
+        data_dir: data.path().to_path_buf(),
+        origin: "http://localhost:8080".into(),
+        secure_cookies: false,
+        upload_quota_bytes: 0,
+    }
+}
+
+async fn run(cfg: &Config, args: &[&str]) -> Result<Option<String>, String> {
+    let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    cli::run(&args, cfg).await
+}
+
+async fn store(data: &TempDir) -> Store {
+    Store::open(&data.path().join("vesper.db")).await.unwrap()
+}
+
+/// The code after `#` in a printed link.
+fn code(link: &str) -> &str {
+    let code = link
+        .strip_prefix("http://localhost:8080/invite#")
+        .unwrap_or_else(|| panic!("not an invite link: {link}"));
+    assert_eq!(code.len(), 64, "{code}");
+    assert!(
+        code.bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    );
+    code
+}
+
+#[tokio::test]
+async fn no_subcommand_means_serve() {
+    let data = TempDir::new().unwrap();
+    assert_eq!(run(&config(&data), &[]).await, Ok(None));
+    assert!(run(&config(&data), &["nope"]).await.is_err());
+    assert!(
+        run(&config(&data), &["invite", "--role", "owner"])
+            .await
+            .is_err()
+    );
+    assert!(
+        run(&config(&data), &["invite", "--uses", "0"])
+            .await
+            .is_err()
+    );
+    let help = run(&config(&data), &["help"]).await.unwrap().unwrap();
+    assert!(help.contains("Throwaway data dir only"), "{help}");
+}
+
+#[tokio::test]
+async fn create_owner_prints_link_once() {
+    let data = TempDir::new().unwrap();
+    let cfg = config(&data);
+    let first = run(&cfg, &["create-owner"]).await.unwrap().unwrap();
+    // Nobody signed up yet: a second run still works, in case the first link was lost.
+    let second = run(&cfg, &["create-owner"]).await.unwrap().unwrap();
+    assert_ne!(first, second);
+    let store = store(&data).await;
+    let hash = hash_token(code(&second)).unwrap();
+    assert_eq!(
+        store.invite_role(&hash, now_ms()).await.unwrap(),
+        Some(Role::Owner)
+    );
+    let (user, _) = store
+        .signup(
+            &hash,
+            NewAccount {
+                username: "toby",
+                display_name: "Toby",
+                password_phc: None,
+                role: Role::Member,
+            },
+            NewSession {
+                token_hash: [7; 32],
+                label: "test",
+                now: now_ms(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(user.role, Role::Owner);
+    assert_eq!(
+        run(&cfg, &["create-owner"]).await,
+        Err("an owner already exists".into())
+    );
+}
+
+#[tokio::test]
+async fn invite_cli_defaults() {
+    let data = TempDir::new().unwrap();
+    let before = now_ms();
+    let link = run(&config(&data), &["invite"]).await.unwrap().unwrap();
+    code(&link);
+    let invites = store(&data).await.invites().await.unwrap();
+    assert_eq!(invites.len(), 1);
+    let i = &invites[0];
+    assert_eq!((i.role, i.uses, i.max_uses), (Role::Member, 0, 1));
+    let week = 168 * 3600 * 1000;
+    assert!(i.expires_at >= before + week && i.expires_at <= now_ms() + week);
+
+    run(
+        &config(&data),
+        &[
+            "invite",
+            "--role",
+            "moderator",
+            "--uses",
+            "3",
+            "--hours",
+            "2",
+        ],
+    )
+    .await
+    .unwrap();
+    let i = &store(&data).await.invites().await.unwrap()[0];
+    assert_eq!((i.role, i.max_uses), (Role::Moderator, 3));
+}
+
+#[tokio::test]
+async fn loadtest_accounts_tokens_authenticate() {
+    let data = TempDir::new().unwrap();
+    let out = run(&config(&data), &["loadtest-accounts", "--count", "3"])
+        .await
+        .unwrap()
+        .unwrap();
+    let store = store(&data).await;
+    let mut ids = HashSet::new();
+    for token in out.lines() {
+        let hash = hash_token(token).expect("64 hex");
+        let (_, user) = store.session_user(&hash, now_ms()).await.unwrap().unwrap();
+        assert_eq!(user.role, Role::Member);
+        assert!(user.username.starts_with("load_"), "{}", user.username);
+        ids.insert(user.user_id);
+    }
+    assert_eq!(ids.len(), 3);
+    assert!(run(&config(&data), &["loadtest-accounts"]).await.is_err());
+}

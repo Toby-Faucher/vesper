@@ -30,6 +30,10 @@ fn config() -> Config {
         ping_interval: Duration::from_secs(30),
         max_sockets: 256,
         web_dir: "does-not-exist".into(),
+        data_dir: "does-not-exist".into(),
+        origin: "http://localhost:8080".into(),
+        secure_cookies: false,
+        upload_quota_bytes: 0,
     }
 }
 

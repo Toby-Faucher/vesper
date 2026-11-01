@@ -1,7 +1,7 @@
 # Development
 
 How to build, run and test Vesper on one machine. Variables: [env.md](env.md). How the parts fit: [architecture.md](architecture.md).
-Deploying: [deploy.md](deploy.md). Last updated 2026-10-31.
+Deploying: [deploy.md](deploy.md). Last updated 2026-11-01.
 
 ## Prerequisites
 
@@ -52,6 +52,23 @@ npm --prefix web run dev
 ```
 
 Open the page, type any name, and use your passphrase as the key.
+
+### Accounts
+
+The server keeps its database in `VESPER_DATA_DIR` (default `data`, relative to where you start it). The subcommands below read
+the same variables as the server, so `VESPER_DEV_KEY` must be set for them too. Each prints its result and exits.
+
+```bash
+# a one-use owner invite link, valid 24 h; works until someone signs up as owner
+VESPER_DEV_KEY=pick-a-passphrase cargo run -p vesper-server -- create-owner
+# an invite for friends (default: member, 1 use, 168 h)
+VESPER_DEV_KEY=pick-a-passphrase cargo run -p vesper-server -- invite --role member --uses 5 --hours 48
+# load test accounts: no password, one session token per line. Throwaway data dir only.
+VESPER_DEV_KEY=pick-a-passphrase VESPER_DATA_DIR=/tmp/vesper-load cargo run -p vesper-server -- loadtest-accounts --count 12
+```
+
+The links start with `VESPER_ORIGIN`. Set it to the address you open in the browser (`http://localhost:5173` with Vite).
+The link is printed once and never logged; the server keeps only a hash of it. The signup page that takes it comes with the web plan.
 
 For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000` and
 `VESPER_PUBLIC_HOST=<address they can reach>`, and put HTTPS in front (their mic needs it). See [deploy.md](deploy.md).

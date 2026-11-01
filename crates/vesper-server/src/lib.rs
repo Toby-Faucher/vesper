@@ -2,6 +2,7 @@
 //! Vesper server: HTTP + WebSocket signaling and presence in front of the audio SFU.
 
 pub mod auth;
+pub mod cli;
 pub mod config;
 pub mod limits;
 pub mod public_addr;

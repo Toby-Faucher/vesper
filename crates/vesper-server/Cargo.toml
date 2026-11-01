@@ -19,6 +19,7 @@ vesper-sfu.workspace = true
 vesper-store.workspace = true
 
 [dev-dependencies]
+tempfile = "3"
 futures-util = { workspace = true, features = ["sink"] }
 tokio-tungstenite.workspace = true
 vesper-sfu = { workspace = true, features = ["test-support"] }

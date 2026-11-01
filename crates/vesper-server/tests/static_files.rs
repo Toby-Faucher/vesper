@@ -36,6 +36,10 @@ async fn start(web_dir: std::path::PathBuf) -> SocketAddr {
         ping_interval: Duration::from_secs(30),
         max_sockets: 4,
         web_dir,
+        data_dir: "does-not-exist".into(),
+        origin: "http://localhost:8080".into(),
+        secure_cookies: false,
+        upload_quota_bytes: 0,
     })
     .await
     .unwrap();

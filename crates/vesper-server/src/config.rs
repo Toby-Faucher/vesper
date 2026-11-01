@@ -22,6 +22,13 @@ pub struct Config {
     pub max_sockets: usize,
     /// Built web app served at `/` (with SPA fallback to `index.html`).
     pub web_dir: PathBuf,
+    /// Holds `vesper.db` (and uploads later).
+    pub data_dir: PathBuf,
+    /// Scheme, host and port the browser sees, normalised to match an `Origin` header byte for byte.
+    pub origin: String,
+    /// True when `origin` is https: cookies get `Secure` and the `__Host-` name.
+    pub secure_cookies: bool,
+    pub upload_quota_bytes: u64,
 }
 
 /// Like a derived Debug, but `dev_key` prints as `***` so logs never carry the secret.
@@ -38,6 +45,10 @@ impl std::fmt::Debug for Config {
             .field("ping_interval", &self.ping_interval)
             .field("max_sockets", &self.max_sockets)
             .field("web_dir", &self.web_dir)
+            .field("data_dir", &self.data_dir)
+            .field("origin", &self.origin)
+            .field("secure_cookies", &self.secure_cookies)
+            .field("upload_quota_bytes", &self.upload_quota_bytes)
             .finish()
     }
 }
@@ -46,7 +57,8 @@ impl Config {
     /// `VESPER_HTTP_BIND` (default `0.0.0.0:8080`), `VESPER_UDP_BIND` (default `0.0.0.0:40000`),
     /// `VESPER_PUBLIC_HOST` (optional), `VESPER_UDP_PORT_PUBLIC` (default: the `VESPER_UDP_BIND`
     /// port), `VESPER_JOIN_DEADLINE_SECS` (default 10), `VESPER_MAX_SOCKETS` (default 256), `VESPER_WEB_DIR` (default `web/dist`) and
-    /// `VESPER_DEV_KEY` (required, non-empty).
+    /// `VESPER_DEV_KEY` (required, non-empty), `VESPER_DATA_DIR` (default `data`), `VESPER_ORIGIN`
+    /// (default `http://localhost:8080`) and `VESPER_UPLOAD_QUOTA_MB` (default 10240).
     pub fn from_env() -> Result<Config, String> {
         Config::from_lookup(|k| std::env::var(k).ok())
     }
@@ -66,6 +78,10 @@ impl Config {
         let dev_key = get("VESPER_DEV_KEY")
             .filter(|k| !k.is_empty())
             .ok_or("VESPER_DEV_KEY must be set to a non-empty shared key")?;
+        let origin = get("VESPER_ORIGIN").unwrap_or_else(|| "http://localhost:8080".into());
+        let origin =
+            normalise_origin(&origin).map_err(|e| format!("VESPER_ORIGIN={origin}: {e}"))?;
+        let quota_mb = num("VESPER_UPLOAD_QUOTA_MB", 10240)?;
         Ok(Config {
             http_bind: addr("VESPER_HTTP_BIND", "0.0.0.0:8080")?,
             udp_bind,
@@ -79,7 +95,48 @@ impl Config {
             web_dir: get("VESPER_WEB_DIR")
                 .filter(|d| !d.is_empty())
                 .map_or_else(|| "web/dist".into(), PathBuf::from),
+            data_dir: get("VESPER_DATA_DIR")
+                .filter(|d| !d.is_empty())
+                .map_or_else(|| "data".into(), PathBuf::from),
+            secure_cookies: origin.starts_with("https://"),
+            origin,
+            upload_quota_bytes: quota_mb
+                .checked_mul(1024 * 1024)
+                .ok_or("VESPER_UPLOAD_QUOTA_MB is too large")?,
         })
+    }
+}
+
+/// `http(s)://host[:port]` with no path, query or user part, in the form browsers send as
+/// `Origin`: lowercase, no trailing slash, no default port.
+fn normalise_origin(s: &str) -> Result<String, &'static str> {
+    let lower = s.to_ascii_lowercase();
+    let (scheme, rest, default_port) = if let Some(r) = lower.strip_prefix("https://") {
+        ("https", r, "443")
+    } else if let Some(r) = lower.strip_prefix("http://") {
+        ("http", r, "80")
+    } else {
+        return Err("must start with http:// or https://");
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    if rest.is_empty()
+        || rest.contains(['/', '?', '#', '@', '\\'])
+        || rest.contains(char::is_whitespace)
+    {
+        return Err("must be scheme, host and optional port, with no path");
+    }
+    // The port is after the last ':' that is not inside an IPv6 literal's brackets.
+    let (host, port) = match rest.rfind(':').filter(|&i| !rest[i..].contains(']')) {
+        Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+        None => (rest, None),
+    };
+    if host.is_empty() {
+        return Err("host is empty");
+    }
+    match port {
+        Some(p) if p.parse::<u16>().is_err() => Err("port is not a number"),
+        Some(p) if p == default_port => Ok(format!("{scheme}://{host}")),
+        _ => Ok(format!("{scheme}://{rest}")),
     }
 }
 
@@ -117,6 +174,45 @@ mod tests {
         let d = format!("{c:?}");
         assert!(!d.contains("s3cret-key"), "{d}");
         assert!(d.contains("dev_key: \"***\""), "{d}");
+    }
+
+    #[test]
+    fn origin_must_be_scheme_host_port() {
+        let with = |o: &str| lookup(&[("VESPER_DEV_KEY", "k"), ("VESPER_ORIGIN", o)]);
+        let c = with("https://vesper.tfaucher.com").unwrap();
+        assert_eq!(c.origin, "https://vesper.tfaucher.com");
+        assert!(c.secure_cookies);
+        for bad in [
+            "ftp://x",
+            "https://x/path",
+            "x",
+            "https://",
+            "https://u@x",
+            "http://x:port",
+            "http://x?a",
+        ] {
+            assert!(with(bad).is_err(), "{bad}");
+        }
+        let c = lookup(&[("VESPER_DEV_KEY", "k")]).unwrap();
+        assert_eq!(c.origin, "http://localhost:8080");
+        assert!(!c.secure_cookies);
+        assert_eq!(c.data_dir, PathBuf::from("data"));
+        assert_eq!(c.upload_quota_bytes, 10240 * 1024 * 1024);
+    }
+
+    #[test]
+    fn origin_is_normalised_like_the_browser_header() {
+        let o = |s: &str| normalise_origin(s).unwrap();
+        assert_eq!(
+            o("HTTPS://Vesper.TFaucher.com/"),
+            "https://vesper.tfaucher.com"
+        );
+        assert_eq!(o("https://x:443"), "https://x");
+        assert_eq!(o("http://x:80/"), "http://x");
+        assert_eq!(o("http://x:443"), "http://x:443");
+        assert_eq!(o("http://localhost:5173"), "http://localhost:5173");
+        assert_eq!(o("http://[::1]:8080"), "http://[::1]:8080");
+        assert_eq!(o("http://[::1]"), "http://[::1]");
     }
 
     #[test]

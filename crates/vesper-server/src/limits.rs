@@ -36,23 +36,37 @@ impl Kind {
 }
 
 const PRUNE_ABOVE: usize = 10_000;
-const IDLE: Duration = Duration::from_secs(10 * 60);
+/// Past the cap, prune at most this often, so the O(n) sweep does not run on every call.
+const PRUNE_EVERY: Duration = Duration::from_secs(60);
 
 struct Bucket {
     tokens: f64,
     at: Instant,
 }
 
+#[derive(Default)]
+struct Buckets {
+    map: HashMap<(Kind, String), Bucket>,
+    pruned: Option<Instant>,
+}
+
 #[derive(Clone, Default)]
-pub struct Limiter(Arc<Mutex<HashMap<(Kind, String), Bucket>>>);
+pub struct Limiter(Arc<Mutex<Buckets>>);
 
 impl Limiter {
     /// Takes one token for `key`, or returns how long until one is free.
     pub fn check(&self, kind: Kind, key: &str, now: Instant) -> Result<(), Duration> {
         let (burst, per) = kind.budget();
-        let mut map = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if map.len() > PRUNE_ABOVE {
-            map.retain(|_, b| now.saturating_duration_since(b.at) < IDLE);
+        let mut guard = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let Buckets { map, pruned } = &mut *guard;
+        let due = pruned.is_none_or(|t| now.saturating_duration_since(t) >= PRUNE_EVERY);
+        if map.len() > PRUNE_ABOVE && due {
+            // Only drop buckets that have refilled: a fresh one would be identical.
+            map.retain(|(k, _), b| {
+                let (burst, per) = k.budget();
+                now.saturating_duration_since(b.at) < per.mul_f64(burst)
+            });
+            *pruned = Some(now);
         }
         let b = map.entry((kind, key.to_string())).or_insert(Bucket {
             tokens: burst,
@@ -110,13 +124,44 @@ mod tests {
     }
 
     #[test]
-    fn idle_keys_are_pruned_past_the_cap() {
+    fn only_refilled_keys_are_pruned_past_the_cap() {
+        let l = Limiter::default();
+        let now = Instant::now();
+        // A drained Invite bucket refills in 60 min: it must survive a prune 10 min later.
+        for _ in 0..10 {
+            l.check(Kind::Invite, "1.2.3.4", now).unwrap();
+        }
+        for i in 0..PRUNE_ABOVE {
+            l.check(Kind::Message, &i.to_string(), now).unwrap();
+        }
+        let later = now + Duration::from_secs(10 * 60);
+        l.check(Kind::Message, "fresh", later).unwrap();
+        assert_eq!(l.0.lock().unwrap().map.len(), 2);
+        assert!(l.check(Kind::Invite, "1.2.3.4", later).is_ok());
+        assert!(l.check(Kind::Invite, "1.2.3.4", later).is_err());
+    }
+
+    #[test]
+    fn prune_runs_at_most_once_per_interval() {
         let l = Limiter::default();
         let now = Instant::now();
         for i in 0..=PRUNE_ABOVE {
-            l.check(Kind::Message, &i.to_string(), now).unwrap();
+            l.check(Kind::Typing, &i.to_string(), now).unwrap();
         }
-        l.check(Kind::Message, "fresh", now + IDLE).unwrap();
-        assert_eq!(l.0.lock().unwrap().len(), 1);
+        l.check(Kind::Typing, "a", now + Duration::from_secs(5))
+            .unwrap();
+        // Typing refills in 3 s, but the prune just ran, so these stay for now.
+        for i in 0..=PRUNE_ABOVE {
+            l.check(
+                Kind::Typing,
+                &format!("b{i}"),
+                now + Duration::from_secs(10),
+            )
+            .unwrap();
+        }
+        assert!(l.0.lock().unwrap().map.len() > PRUNE_ABOVE);
+        l.check(Kind::Typing, "c", now + Duration::from_secs(70))
+            .unwrap();
+        assert_eq!(l.0.lock().unwrap().map.len(), 1);
     }
 }
