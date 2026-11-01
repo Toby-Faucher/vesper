@@ -39,8 +39,7 @@
 
 <aside class="flex h-screen w-62 flex-col border-r border-subtle bg-sidebar">
   <div class="flex h-12 shrink-0 items-center gap-2 pr-2 pl-4">
-    <Mark size={20} />
-    <span class="text-sm font-medium text-fg">Vesper</span>
+    <Mark size={28} />
     <span class="ml-auto flex">
       <IconButton icon={I.command} label="Switch to ({isMac() ? '⌘' : 'Ctrl'} K)" tip aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}
         onclick={() => (layers.switcher = true)} />
