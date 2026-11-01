@@ -127,8 +127,9 @@
   .details:hover { color: var(--fg); }
   .line :global(.status.warn) { min-width: 0; margin: 0 -8px; padding: 2px 8px; font-size: 12px; line-height: 16px; }
   .line :global(.status .mark) { height: 16px; }
-  /* Next to a notice the mode goes to the right and gives up its width first. */
-  .noise:not(:first-child) { margin-left: auto; flex-shrink: 4; }
+  /* The mode always sits on the right, so it does not jump when a notice comes; next to one it gives up its width first. */
+  .noise { margin-left: auto; }
+  .noise:not(:first-child) { flex-shrink: 4; }
   .link { flex-shrink: 0; color: var(--fg-2); text-decoration: underline; text-underline-offset: 2px; }
   .link:hover { color: var(--fg); }
 </style>
