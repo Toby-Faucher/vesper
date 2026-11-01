@@ -110,13 +110,21 @@ export async function browser(name, args = [], { viewport } = {}) {
   return { page, errors };
 }
 
-// Opens an invite link and creates the account `name` (display name `display`, default `name`). Waits for the app shell.
+// Opens an invite link and creates the account `name` (display name `display`, default `name`), skips the welcome steps
+// and waits for the app shell.
 export async function signup(page, link, name, display = name) {
   await page.goto(link);
   await page.getByLabel('Username').fill(name);
   await page.getByLabel('Display name').fill(display);
-  await page.getByLabel('Password').fill('test-password-1');
+  await page.getByLabel('Password', { exact: true }).fill('test-password-1');
   await page.getByRole('button', { name: 'Create account' }).click();
+  await skipWelcome(page);
+}
+
+// On /welcome (after a signup): presses "Skip for now" and waits for the app shell.
+export async function skipWelcome(page) {
+  await page.waitForURL(/\/welcome$/);
+  await page.getByRole('button', { name: 'Skip for now' }).click();
   await signedIn(page);
 }
 

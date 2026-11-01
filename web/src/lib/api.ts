@@ -35,7 +35,7 @@ export const API_MESSAGES: Record<ApiErrorCode, string> = {
   rate_limited: 'Too many tries. Wait a minute and try again.',
   too_large: 'That is too large.',
   quota_full: 'The server is out of space for uploads.',
-  invite_invalid: 'This invite link is not valid. Ask for a new one.',
+  invite_invalid: 'This invite link does not work. Ask the person who sent it for a new one.',
   internal: 'Something went wrong on the server. Try again.',
 };
 

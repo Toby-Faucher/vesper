@@ -271,17 +271,66 @@ scene('gallery', async ({ open, shot }) => {
   await dialog.waitFor({ state: 'hidden' });
 });
 
-scene('login', async ({ open }) => {
+// Sign in: empty, a wrong password, the rate limit (faked), and the narrow window.
+scene('login', async ({ open, shot }) => {
   const page = await open(`${ORIGIN}/login`);
   await page.getByRole('button', { name: 'Sign in' }).waitFor();
-  return page;
+  await rest(page);
+  await shot(page, 'login');
+  await page.getByLabel('Username').fill('alice');
+  await page.getByLabel('Password', { exact: true }).fill('test-password-9');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByText('Wrong username or password.').waitFor();
+  await shot(page, 'login-error'); // focus stays on the error, as a person sees it
+  await page.route('**/api/login', (r) => r.fulfill({ status: 429, contentType: 'application/json', body: '{"code":"rate_limited"}' }));
+  await page.getByLabel('Password', { exact: true }).fill('test-password-9');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByText('Too many tries. Wait a minute and try again.').waitFor();
+  await shot(page, 'login-429');
+  await page.setViewportSize({ width: 1024, height: 640 });
+  await rest(page);
+  await shot(page, 'login-narrow');
 });
 
-scene('signup', async ({ alice, open }) => {
+scene('signup', async ({ alice, open, shot }) => {
   const { url } = await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 });
   const page = await open(url);
   await page.getByRole('button', { name: 'Create account' }).waitFor();
-  return page;
+  await rest(page);
+  await shot(page, 'signup');
+  await page.goto(`${ORIGIN}/invite#not-a-code`);
+  await page.getByText('This invite link does not work.', { exact: false }).waitFor();
+  await rest(page);
+  await shot(page, 'signup-bad-link');
+});
+
+// The welcome steps of a new account whose fake mic plays speech: step 2 runs the mic test so the meter moves.
+scene('welcome', async ({ alice, shot }) => {
+  const { url } = await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 });
+  const { page } = await browser('welcome', [`--use-file-for-fake-audio-capture=${speech}`], { viewport: VIEWPORT });
+  await page.addInitScript(() => Object.defineProperty(Notification, 'permission', { get: () => 'default' })); // headless says 'denied'
+  await page.goto(url);
+  await page.getByLabel('Username').fill('wren');
+  await page.getByLabel('Display name').fill('Wren Okafor');
+  await page.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await page.getByRole('heading', { name: 'How others see you' }).waitFor();
+  await page.getByRole('radio', { name: 'Sky' }).check();
+  await rest(page);
+  await shot(page, 'welcome-1');
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Mic test (hear yourself)' }).click();
+  await page.waitForFunction(() => Number(document.querySelector('[role=meter]')?.getAttribute('aria-valuenow')) > -40);
+  await rest(page);
+  await shot(page, 'welcome-2');
+  await page.getByRole('button', { name: 'Next' }).click();
+  await rest(page);
+  await shot(page, 'welcome-3');
+  await page.setViewportSize({ width: 1024, height: 640 });
+  await page.getByRole('button', { name: 'Back' }).click();
+  await rest(page);
+  await shot(page, 'welcome-narrow');
+  await page.context().browser().close();
 });
 
 // One room, nobody in voice, no messages: what a new owner sees first.

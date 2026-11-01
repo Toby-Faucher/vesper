@@ -33,6 +33,48 @@ const MUTED_NOTICE = 'A moderator muted you.';
 // The notice in the live call bar; the inert copy that fades out after Leave is aria-hidden, so the region query skips it.
 const mutedNotice = (page) => page.getByRole('region', { name: 'Call' }).getByText(MUTED_NOTICE);
 
+const BAD_LINK = 'This invite link does not work. Ask the person who sent it for a new one.';
+
+// Headless Chromium answers 'denied' without asking, so the page gets a stand-in that starts at 'default', counts the
+// asks and grants. Add it before the page loads.
+const fakeNotifications = () => {
+  let p = 'default';
+  window.__asked = 0;
+  Object.defineProperty(Notification, 'permission', { get: () => p });
+  Notification.requestPermission = async () => (window.__asked++, (p = 'granted'));
+};
+
+// The three welcome steps once, with Back: the step count, the heading taking focus, the colour saved, and the browser
+// asked about notifications only from the button.
+async function walkWelcome(page) {
+  await page.waitForURL(`${ORIGIN}/welcome`);
+  const focusedHeading = () => page.evaluate(() => document.activeElement?.tagName === 'H1' && document.activeElement.textContent);
+  await page.getByText('Step 1 of 3').waitFor();
+  assert.equal(await focusedHeading(), 'How others see you');
+  await page.getByRole('radio', { name: 'Teal' }).check();
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByText('Step 2 of 3').waitFor();
+  assert.equal(await focusedHeading(), 'Check your microphone');
+  assert.equal((await call(page, 'GET', '/api/me')).user.accent, '#31c3b5', 'colour not saved');
+  await page.getByRole('button', { name: 'Back' }).click();
+  assert.equal(await focusedHeading(), 'How others see you');
+  assert.ok(await page.getByRole('radio', { name: 'Teal' }).isChecked(), 'Back lost the colour');
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Mic test (hear yourself)' }).click();
+  await page.waitForFunction(() => Number(document.querySelector('[role=meter]')?.getAttribute('aria-valuenow')) > -100);
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByText('Step 3 of 3').waitFor();
+  assert.equal(await focusedHeading(), 'Mentions');
+  assert.equal(await page.evaluate(() => window.__asked), 0, 'notification permission asked before the click');
+  await page.getByRole('button', { name: 'Turn on notifications' }).click();
+  await page.getByText('Notifications are on.', { exact: false }).waitFor();
+  assert.equal(await page.evaluate(() => window.__asked), 1);
+  await page.getByRole('button', { name: 'Open Vesper' }).click();
+  await signedIn(page);
+  await page.waitForURL(/\/r\/\d+$/);
+  console.log('welcome steps: ok');
+}
+
 const stop = await startServer();
 try {
   const alice = await browser('alice', []);
@@ -40,23 +82,29 @@ try {
 
   // A bad link: plain text, and the fragment is gone.
   await a.goto(`${ORIGIN}/invite#not-a-code`);
-  await a.getByText('This invite link is not valid. Ask for a new one.').waitFor();
+  await a.getByText(BAD_LINK).waitFor();
   assert.equal(new URL(a.url()).hash, '', 'bad invite fragment stayed in the URL');
 
+  // A second link opened in the same tab changes only the fragment (no page load): the form takes the new code.
   const ownerLink = await cli(['create-owner']);
-  await a.goto(`${ORIGIN}/login`); // from /invite, the link alone would be a same-page fragment change
   await a.goto(ownerLink);
   await a.getByLabel('Username').waitFor();
   assert.equal(a.url(), `${ORIGIN}/invite`, 'invite code stayed in the address bar');
+  console.log('second invite link in the same tab: ok');
   for (const [label, want] of [['Username', 'username'], ['Display name', 'nickname'], ['Password', 'new-password']])
-    assert.equal(await a.getByLabel(label).getAttribute('autocomplete'), want, `${label} autocomplete`);
+    assert.equal(await a.getByLabel(label, { exact: true }).getAttribute('autocomplete'), want, `${label} autocomplete`);
   await a.getByLabel('Username').fill('alice');
   await a.getByLabel('Display name').fill('alice');
-  await a.getByLabel('Password').fill('test-password-1');
+  await a.getByLabel('Password', { exact: true }).fill('test-password-1');
   await a.getByRole('button', { name: 'Create account' }).click();
+  // Signup lands on the welcome steps; Esc skips them and opens the first room.
+  await a.waitForURL(`${ORIGIN}/welcome`);
+  await a.getByRole('heading', { name: 'How others see you' }).waitFor();
+  await a.keyboard.press('Escape');
   await signedIn(a);
-  await a.waitForURL(/\/r\/\d+$/); // `/` opens the first room
-  console.log('invite fragment cleared: ok');
+  await a.waitForURL(/\/r\/\d+$/);
+  assert.equal(await a.evaluate(() => Object.keys(localStorage).some((k) => /^vesper\.welcomed\.[0-9a-f]{32}$/.test(k))), true, 'welcomed not remembered');
+  console.log('invite fragment cleared, Esc skips the welcome: ok');
 
   // Routes: an unknown path is a plain not-found page; a room id nobody can see says so; `/` opens the last room.
   await a.goto(`${ORIGIN}/no-such-page`);
@@ -71,14 +119,14 @@ try {
   await logout(a);
   await a.getByRole('button', { name: 'Sign in' }).waitFor();
   assert.equal(await a.getByLabel('Username').getAttribute('autocomplete'), 'username');
-  assert.equal(await a.getByLabel('Password').getAttribute('autocomplete'), 'current-password');
+  assert.equal(await a.getByLabel('Password', { exact: true }).getAttribute('autocomplete'), 'current-password');
   await a.getByLabel('Username').fill('alice');
-  await a.getByLabel('Password').fill('test-password-2');
+  await a.getByLabel('Password', { exact: true }).fill('test-password-2');
   await a.getByRole('button', { name: 'Sign in' }).click();
   await a.getByText('Wrong username or password.').waitFor();
-  assert.equal(await a.getByLabel('Password').inputValue(), '', 'password kept after a failed sign in');
+  assert.equal(await a.getByLabel('Password', { exact: true }).inputValue(), '', 'password kept after a failed sign in');
   assert.equal(await focusedText(a), 'Wrong username or password.', 'focus did not move to the error');
-  await a.getByLabel('Password').fill('test-password-1');
+  await a.getByLabel('Password', { exact: true }).fill('test-password-1');
   await a.getByRole('button', { name: 'Sign in' }).click();
   await signedIn(a);
   console.log('failed sign in: ok');
@@ -87,20 +135,34 @@ try {
   const bobLink = (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url;
   const bob = await browser('bob', []);
   const b = bob.page;
+  await b.addInitScript(fakeNotifications);
   await b.goto(bobLink);
   await b.getByLabel('Username').fill('alice');
   await b.getByLabel('Display name').fill('bob');
-  await b.getByLabel('Password').fill('test-password-1');
+  await b.getByLabel('Password', { exact: true }).fill('test-password-1');
   await b.getByRole('button', { name: 'Create account' }).click();
   await b.getByText('That name is already taken.').waitFor();
-  assert.equal(await b.getByLabel('Password').inputValue(), '', 'password kept after a failed signup');
+  assert.equal(await b.getByLabel('Password', { exact: true }).inputValue(), '', 'password kept after a failed signup');
   assert.equal(await focusedText(b), 'That name is already taken.');
   await b.getByLabel('Username').fill('bob');
-  await b.getByLabel('Password').fill('test-password-1');
+  await b.getByLabel('Password', { exact: true }).fill('test-password-1');
   await b.getByRole('button', { name: 'Create account' }).click();
-  await signedIn(b);
+  await walkWelcome(b);
   const bobId = (await call(b, 'GET', '/api/me')).user.user_id;
   console.log('failed signup: ok');
+
+  // A used link is found only on submit: one plain message, no form, focus on it.
+  await a.goto(bobLink);
+  await a.getByLabel('Username').fill('carol');
+  await a.getByLabel('Display name').fill('carol');
+  await a.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await a.getByRole('button', { name: 'Create account' }).click();
+  await a.getByText(BAD_LINK).waitFor();
+  assert.equal(await focusedText(a), BAD_LINK, 'focus did not move to the bad link message');
+  assert.equal(await a.getByLabel('Username').count(), 0, 'the form stayed after a used link');
+  await a.goto(`${ORIGIN}/`);
+  await signedIn(a);
+  console.log('used invite link: ok');
 
   // The call is held by the shell, not the page: moving to another room and to Settings keeps it up.
   const music = await call(a, 'POST', '/api/rooms', { name: 'music' });
@@ -264,7 +326,7 @@ try {
     await page.goto(`${ORIGIN}${path}`);
     await page.waitForURL(`${ORIGIN}/login?next=${encodeURIComponent(path)}`);
     await page.getByLabel('Username').fill('alice');
-    await page.getByLabel('Password').fill('test-password-1');
+    await page.getByLabel('Password', { exact: true }).fill('test-password-1');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await page.waitForURL(`${ORIGIN}${path}`);
   };
@@ -374,7 +436,7 @@ try {
     await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter' })));
     await d.goto(`${ORIGIN}/login`);
     await d.getByLabel('Username').fill('alice');
-    await d.getByLabel('Password').fill('test-password-1');
+    await d.getByLabel('Password', { exact: true }).fill('test-password-1');
     await d.getByRole('button', { name: 'Sign in' }).click();
     await signedIn(d);
     await join(d, 'general');

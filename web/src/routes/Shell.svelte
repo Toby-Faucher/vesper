@@ -33,9 +33,9 @@
   const loaded = $derived(session.online || rooms.length > 0); // the room list came with hello
   const room = $derived(r.name === 'room' ? rooms.find((x) => x.id === r.id) : undefined);
 
-  // `/` (and /welcome until Task 11) opens the last room, else the first.
+  // `/` opens the last room, else the first.
   $effect(() => {
-    if ((r.name !== 'home' && r.name !== 'welcome') || !loaded) return;
+    if (r.name !== 'home' || !loaded) return;
     const last = Number(storage?.getItem(LAST));
     const to = rooms.find((x) => x.id === last) ?? rooms[0];
     if (to) untrack(() => navigate(href({ name: 'room', id: to.id }), true));
@@ -142,7 +142,7 @@
     <ConnectionBanner />
     {#if room}
       <RoomView {room} />
-    {:else if r.name === 'room' || r.name === 'home' || r.name === 'welcome'}
+    {:else if r.name === 'room' || r.name === 'home'}
       {#if loaded}
         {@render pageHeader('')}
         <div class="center">

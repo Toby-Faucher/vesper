@@ -4,7 +4,6 @@
   import { loginHref, parse } from './lib/route';
   import { navigate, route, session } from './lib/session.svelte';
   import Login from './routes/Login.svelte';
-  import Signup from './routes/Signup.svelte';
   import Shell from './routes/Shell.svelte';
   import type { Me } from './lib/gen/Me';
   import type { Component } from 'svelte';
@@ -47,12 +46,20 @@
 {:else if r.name === 'login'}
   <Login />
 {:else if r.name === 'invite'}
-  <Signup />
+  {#await import('./routes/Signup.svelte') then m}<m.default />{:catch}{@render failed()}{/await}
 {:else if session.state.me}
-  <Shell />
+  {#if r.name === 'welcome'}
+    {#await import('./routes/Welcome.svelte') then m}<m.default />{:catch}{@render failed()}{/await}
+  {:else}
+    <Shell />
+  {/if}
 {:else if error}
   <main class="mx-auto max-w-sm space-y-3 p-6">
     <p role="alert" class="text-danger">{error}</p>
     <button class="rounded bg-selected px-3 py-1" onclick={load}>Try again</button>
   </main>
 {/if}
+
+{#snippet failed()}
+  <main class="mx-auto max-w-sm p-6"><p role="alert" class="text-danger">Could not load this page. Check your connection and reload.</p></main>
+{/snippet}

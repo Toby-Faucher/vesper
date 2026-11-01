@@ -3,6 +3,11 @@
   import { api, ApiFailure, errorText } from '../lib/api';
   import { safeNext } from '../lib/route';
   import { navigate, session } from '../lib/session.svelte';
+  import Button from '../lib/ui/c/Button.svelte';
+  import Field from '../lib/ui/c/Field.svelte';
+  import PasswordInput from '../lib/ui/c/PasswordInput.svelte';
+  import TextInput from '../lib/ui/c/TextInput.svelte';
+  import AuthCard from './AuthCard.svelte';
   import type { Me } from '../lib/gen/Me';
 
   let username = $state('');
@@ -13,6 +18,7 @@
 
   async function submit(e: Event) {
     e.preventDefault();
+    if (busy) return;
     busy = true;
     error = '';
     try {
@@ -32,17 +38,20 @@
   }
 </script>
 
-<main class="mx-auto max-w-sm space-y-4 p-6">
-  <h1 class="text-xl font-medium">Sign in</h1>
-  {#if session.notice}<p role="status" class="text-warn">{session.notice}</p>{/if}
-  <form onsubmit={submit} class="space-y-3">
-    <label class="block">Username
-      <input class="w-full rounded bg-element p-2" autocomplete="username" bind:value={username} required />
-    </label>
-    <label class="block">Password
-      <input class="w-full rounded bg-element p-2" type="password" autocomplete="current-password" bind:value={password} required />
-    </label>
-    <button class="w-full rounded bg-selected p-2" disabled={busy}>Sign in</button>
+<AuthCard>
+  <h1 class="mb-5 text-xl font-semibold text-fg">Sign in</h1>
+  {#if session.notice}<p role="status" class="mb-4 text-warn">{session.notice}</p>{/if}
+  <form onsubmit={submit} class="flex flex-col gap-4">
+    <Field label="Username">
+      <TextInput autocomplete="username" autocapitalize="none" spellcheck="false" bind:value={username} required />
+    </Field>
+    <Field label="Password">
+      <PasswordInput autocomplete="current-password" bind:value={password} required />
+    </Field>
+    <Button variant="primary" type="submit" loading={busy}>Sign in</Button>
   </form>
-  {#if error}<p role="alert" class="text-danger" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
-</main>
+  {#if error}<p role="alert" class="mt-4 text-danger" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
+  {#snippet below()}
+    <p class="mt-4 text-center text-fg-3">Need an account? Ask for an invite link.</p>
+  {/snippet}
+</AuthCard>

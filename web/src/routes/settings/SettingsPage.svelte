@@ -29,6 +29,7 @@
       <Diagnostics pc={voice.pc} capture={voice.capture} wsUrl={wsUrl()} mode={voice.mode} status={voice.joined ? 'joined' : 'not joined'} />
     {:else}
       <p class="text-fg-3">{UI_MESSAGES.sectionLater}</p>
+      {#if section === 'account'}<p class="mt-4"><a class="text-accent-fg underline underline-offset-2" href="/welcome">Run the welcome steps again</a></p>{/if}
     {/if}
   </div>
 </div>

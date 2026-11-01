@@ -1,28 +1,49 @@
 <script lang="ts">
-  import { tick } from 'svelte';
-  import { api, ApiFailure, errorText } from '../lib/api';
+  import { onMount, tick } from 'svelte';
+  import { api, API_MESSAGES, ApiFailure, errorText } from '../lib/api';
   import { navigate, session, takeInvite } from '../lib/session.svelte';
+  import Button from '../lib/ui/c/Button.svelte';
+  import Field from '../lib/ui/c/Field.svelte';
+  import PasswordInput from '../lib/ui/c/PasswordInput.svelte';
+  import TextInput from '../lib/ui/c/TextInput.svelte';
+  import AuthCard from './AuthCard.svelte';
   import type { Me } from '../lib/gen/Me';
 
   // The code lives in the URL fragment, which the browser never sends to the server. Only the signup body carries it.
-  // takeInvite removes it from the address bar and history at once.
-  const code = takeInvite();
-  const BAD_LINK = 'This invite link is not valid. Ask for a new one.';
-  let badLink = $state(!/^[0-9a-f]{64}$/.test(code));
+  // takeInvite removes it from the address bar and history at once. A used or expired code is only found on submit: the
+  // server answers every invite failure the same way, and asking earlier would put the code in a query string.
+  const valid = (c: string) => /^[0-9a-f]{64}$/.test(c);
+  let code = takeInvite();
+  let badLink = $state(!valid(code));
   let username = $state('');
   let displayName = $state('');
   let password = $state('');
   let error = $state('');
   let busy = $state(false);
   let errorEl = $state<HTMLElement>();
+  let badEl = $state<HTMLElement>();
+
+  // A second invite link opened in this tab changes only the fragment: take the new code and start over.
+  onMount(() => {
+    const onhash = () => {
+      if (!location.hash) return;
+      code = takeInvite();
+      badLink = !valid(code);
+      error = '';
+      password = '';
+    };
+    window.addEventListener('hashchange', onhash);
+    return () => window.removeEventListener('hashchange', onhash);
+  });
 
   async function submit(e: Event) {
     e.preventDefault();
+    if (busy) return;
     busy = true;
     error = '';
     try {
       session.state.me = await api<Me>('POST', '/api/signup', { invite: code, username, password, display_name: displayName });
-      navigate('/', true);
+      navigate('/welcome', true);
     } catch (err) {
       if (err instanceof ApiFailure && err.code === 'invite_invalid') badLink = true;
       else error = errorText(err);
@@ -30,34 +51,30 @@
       password = '';
       busy = false;
     }
-    if (error) {
-      await tick();
-      errorEl?.focus();
-    }
+    await tick();
+    (badLink ? badEl : error ? errorEl : undefined)?.focus();
   }
 </script>
 
-<main class="mx-auto max-w-sm space-y-4 p-6">
-  <h1 class="text-xl font-medium">Create your account</h1>
+<AuthCard>
+  <h1 class="text-xl font-semibold text-fg">Create your account</h1>
   {#if badLink}
-    <p role="alert" class="text-danger">{BAD_LINK}</p>
+    <p role="alert" class="mt-3 text-fg-2" tabindex="-1" bind:this={badEl}>{API_MESSAGES.invite_invalid}</p>
   {:else}
-    <form onsubmit={submit} class="space-y-3">
-      <label class="block">Username
-        <input class="w-full rounded bg-element p-2" autocomplete="username" aria-describedby="username-help"
-          bind:value={username} required minlength="3" maxlength="24" pattern="[A-Za-z0-9_]+" />
-      </label>
-      <p id="username-help" class="text-sm text-fg-3">3 to 24 letters, digits or _. You sign in with it.</p>
-      <label class="block">Display name
-        <input class="w-full rounded bg-element p-2" autocomplete="nickname" bind:value={displayName} required maxlength="32" />
-      </label>
-      <label class="block">Password
-        <input class="w-full rounded bg-element p-2" type="password" autocomplete="new-password" aria-describedby="password-help"
-          bind:value={password} required minlength="8" maxlength="128" />
-      </label>
-      <p id="password-help" class="text-sm text-fg-3">At least 8 characters.</p>
-      <button class="w-full rounded bg-selected p-2" disabled={busy}>Create account</button>
+    <p class="mt-1 mb-5 text-fg-2">You were invited to Vesper. Pick a username and a password.</p>
+    <form onsubmit={submit} class="flex flex-col gap-4">
+      <Field label="Username" help="3 to 24 characters: a to z, 0 to 9 or _. You sign in with it.">
+        <TextInput autocomplete="username" autocapitalize="none" spellcheck="false" bind:value={username}
+          required minlength={3} maxlength={24} pattern="[A-Za-z0-9_]+" />
+      </Field>
+      <Field label="Display name" help="What others see. You can change it later.">
+        <TextInput autocomplete="nickname" bind:value={displayName} required maxlength={32} />
+      </Field>
+      <Field label="Password" help="8 to 128 characters.">
+        <PasswordInput autocomplete="new-password" bind:value={password} required minlength={8} maxlength={128} />
+      </Field>
+      <Button variant="primary" type="submit" loading={busy}>Create account</Button>
     </form>
-    {#if error}<p role="alert" class="text-danger" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
+    {#if error}<p role="alert" class="mt-4 text-danger" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
   {/if}
-</main>
+</AuthCard>
