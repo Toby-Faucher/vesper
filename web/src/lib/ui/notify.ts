@@ -97,7 +97,7 @@ async function show(m: Message): Promise<void> {
     const n = new Notification(`${name} mentioned you in ${room}`, {
       body: plain(parse(m.body)).trim().slice(0, 120),
       tag: String(m.room_id),
-      icon: '/favicon.svg',
+      icon: '/icon-192.png',
     });
     n.onclick = () => {
       window.focus();
@@ -111,5 +111,5 @@ async function show(m: Message): Promise<void> {
 
 /** The test button in Settings. */
 export function testNotification(): void {
-  try { new Notification('Vesper', { body: 'Mentions show like this.', icon: '/favicon.svg' }); } catch { /* see show() */ }
+  try { new Notification('Vesper', { body: 'Mentions show like this.', icon: '/icon-192.png' }); } catch { /* see show() */ }
 }
