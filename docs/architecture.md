@@ -47,12 +47,35 @@ The "Not verified" list at the end says what was only read.
   retries a 429 once after a second and then says search is busy until Enter, drops the hits of a room you can no longer see and asks again,
   and a result jumps to the message with `around=`. New messages from others are read out by a polite live region; paste
   takes only PNG, JPEG, GIF and WebP images.
-- **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed elements:
-  bold, italic, strike, inline code, fenced code, one level of `> ` quote, `@name` and bare `http`/`https` links. Anything else is text, so raw
-  HTML shows as typed. A link is kept only when `new URL` parses it as http or https with no user name or password, and its text is the full parsed
+- **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed
+  elements. The server stores and searches the raw text; only the client formats it. This is the whole subset:
+
+  | Written | Shown |
+  |---|---|
+  | `**bold**`, `*italic*` or `_italic_`, `~~strike~~` | bold, italic, struck out; nesting stops at 4 levels; `_` inside a word (`snake_case`) is text |
+  | `` `code` `` | inline code |
+  | a line of ```` ``` ````, lines, a line of ```` ``` ```` | a code block. One word after the opening fence (`` ```rust ``) is the language, shown as the block's label. Other text on a fence line is shown as text |
+  | `# `, `## `, `### ` at the start of a line | a heading at 20, 16 or 14 px; `####` to `######` show as `###` |
+  | `> ` at the start of lines | one level of quote |
+  | `- `, `* ` or `+ `, and `1. ` or `1) ` at the start of lines | a bullet or numbered list, flat (no nesting); a numbered list starts at its first number |
+  | `---`, `***` or `___` alone on a line | a rule |
+  | a bare `http://` or `https://` URL | a link |
+  | `@name` | a mention |
+
+  Not supported, shown as typed: raw HTML, images (`![x](y)`), `[text](url)` links (the text could hide where a link goes),
+  tables, nested lists, task lists, backslash escapes, setext (underlined) headings and indented code. An unclosed marker is text.
+  A link is kept only when `new URL` parses it as http or https with no user name or password, and its text is the full parsed
   `href` (ASCII: other characters percent-encoded, hosts punycoded) so it cannot read differently from where it goes. Links get
   `rel="noopener noreferrer nofollow"`, `target="_blank"` and `dir="ltr"`. No `{@html}`, `innerHTML` or similar sink exists in `web/src`
   (`no-raw-html.test.ts` fails on one). The parser is one pass per line with a delimiter stack; a test parses 100k-character hostile inputs under 250 ms.
+  Code blocks with a known language (rust, js and ts, json, shell, python, html and xml, css: `langOf`) are coloured by `lib/highlight.ts`,
+  a small tokenizer in its own chunk (about 1.3 kB gzip), loaded the first time such a block is shown. Each block has a Copy button.
+  The colours are the `--syn-*` tokens (no amber). Reply quotes, the reply bar, pins, search results, notifications and announcements show
+  `plain(parse(body))`: the text without the syntax, on one line. The reply excerpt is the server's first 100 characters, so a marker cut
+  in half shows as typed.
+  The composer is a live preview: the textarea's text is transparent and a layer under it draws the same characters from `decorate()`,
+  which cuts the source into styled runs by the same rules, markers dimmed. The layer changes only colour, background, stroke and
+  decoration, so its glyphs keep the textarea's widths; italic is therefore not slanted there.
 
 ## Crates
 

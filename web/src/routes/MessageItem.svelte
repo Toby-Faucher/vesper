@@ -16,7 +16,7 @@
   import { chat, edit, pin, react, remove } from '../lib/chat.svelte';
   import type { Message } from '../lib/gen/Message';
   import * as I from '../lib/ui/icons';
-  import { isLong } from '../lib/ui/timeline';
+  import { isLong, plain } from '../lib/ui/timeline';
   import { isSendKey } from '../lib/ui/keys';
   import { copyText } from '../lib/ui/clipboard';
   import { toolMove } from '../lib/ui/menu';
@@ -166,7 +166,7 @@
     {@const r = m.reply_to}
     <button type="button" class="quote quiet" onclick={() => onjump(r.id)}>
       <Icon d={I.reply} />
-      <span class="truncate">Reply to <span class="text-fg-2">{user(r.author_id).display_name}</span>: {r.excerpt || 'a deleted message'}</span>
+      <span class="truncate">Reply to <span class="text-fg-2">{user(r.author_id).display_name}</span>: {plain(parse(r.excerpt)) || 'a deleted message'}</span>
     </button>
   {/if}
   <div class="gutter">

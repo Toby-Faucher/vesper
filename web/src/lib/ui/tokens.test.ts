@@ -30,7 +30,7 @@ const TEXT: [string, string][] = [
   ['--fg', '--bg-app'], ['--fg-2', '--bg-app'], ['--fg-2', '--bg-selected'], ['--fg-2', '--line'], ['--fg-3', '--bg-app'], ['--fg-3', '--bg-raised'],
   ['--fg-3', '--bg-sidebar'], ['--on-accent', '--accent'], ['--on-accent', '--accent-hover'], ['--accent-fg', '--bg-app'],
   ['--accent-fg', '--accent-subtle'], ['--on-danger', '--danger-solid'], ['--danger-fg', '--bg-app'], ['--warn-fg', '--bg-app'],
-  ['--ok-fg', '--bg-app'], ...slots.map((s): [string, string] => ['--on-avatar', s]),
+  ['--ok-fg', '--bg-app'], ...['--syn-kw', '--syn-str', '--syn-num', '--syn-ty', '--syn-com', '--fg-3'].map((s): [string, string] => [s, '--bg-element']), ...slots.map((s): [string, string] => ['--on-avatar', s]),
 ];
 const UI: [string, string][] = [
   ['--focus', '--bg-sidebar'], ['--focus', '--bg-app'], ['--focus', '--bg-raised'],
