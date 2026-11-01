@@ -39,7 +39,7 @@ The "Not verified" list at the end says what was only read.
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, the limit `MAX_MSG_BYTES` (64 KiB) and the close codes `CLOSE_SESSION_ENDED` (4001) and `CLOSE_DISCONNECTED` (4003). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`, `Unread`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
 | `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms and messages (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `api_messages.rs` (chat routes, body, mention and reaction rules), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -48,10 +48,11 @@ The "Not verified" list at the end says what was only read.
 All messages are JSON on one WebSocket per tab, tagged by `type` (`vesper-protocol/src/lib.rs`).
 
 Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `leave`, `check { offer }`,
-`typing { room_id }`. `typing` is ignored until text chat.
+`typing { room_id }`.
 Server to client: `hello { me, users, rooms, voice, unread }`, `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
 `peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `rooms_changed { rooms }`, `user_updated { user }`,
-`force_muted { muted }`, `error { code, message }`. `unread` is empty until text chat.
+`force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
+`read { room_id, last_read_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
 Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`.
 
 1. The client opens `/ws` with its session cookie. The upgrade gets 403 unless `Origin` equals `VESPER_ORIGIN`, 401 unless the
@@ -167,7 +168,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 ## HTTP API
 
-JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
+JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
 `ApiError { code, message }`, and the status follows the code: `bad_request` 400, `unauthorized` 401, `forbidden` 403,
 `not_found` and `invite_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
 `internal` 500, `quota_full` 507.
@@ -198,12 +199,40 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`).
 | `PATCH /api/rooms/{id}` (`RoomPatch`) | owner | the new `RoomInfo` |
 | `PUT /api/rooms/order` (`RoomOrder`) | owner | 204; `ids` must hold every room id once, else 409 |
 | `PUT /api/rooms/{id}/members` (`RoomMembers`) | owner | the new `RoomInfo`; the list replaces the old one, an unknown account is 404, a banned one 400 |
+| `GET /api/rooms/{id}/messages?before=\|after=\|around=&limit=` | sees the room | `MessagePage`, oldest first; at most one cursor (else 400), `limit` 1 to 100 (default 50) |
+| `GET /api/rooms/{id}/pins` | sees the room | `Message[]`, newest pin first |
+| `POST /api/rooms/{id}/messages` (`SendMessage`) | sees the room, Message limit by user | 201 `Message`; pushes `message_new` |
+| `PATCH /api/messages/{id}` (`EditMessage`) | sees the room, the author | the new `Message`; pushes `message_updated` |
+| `DELETE /api/messages/{id}` | sees the room, the author, or a moderator or the owner | 204; pushes `message_updated` with `deleted: true` |
+| `PUT /api/messages/{id}/reaction` (`ReactionReq`) | sees the room | the new `Message`; pushes `message_updated` |
+| `PUT /api/messages/{id}/pin` (`PinReq`) | sees the room | the new `Message`; pushes `message_updated` |
+| `PUT /api/rooms/{id}/read` (`ReadReq`) | sees the room | 204; sends `read` to every socket of the user |
 
 Rooms (`api_rooms.rs`, store `rooms.rs`): every room has text and voice. A fresh database has `general` and `hangout`
 (migration `0002_rooms.sql`). Room names follow the display name rule (NFC, 1 to 32 characters, no control or hidden format
 characters, else 400) and are unique ignoring case (409). A restricted room is seen only by the owner, the moderators and the
 accounts on its member list (`can_see`); `members` is filled only while the room is restricted. Opening a room clears its member list, so restricting it again
 starts empty. A banned account can not be put on a list (400). Every change pushes `rooms_changed` to open sockets.
+
+Chat (`api_messages.rs`, store `messages.rs`): a room you cannot see, and a message in one, is 404 on every route, the same as
+an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets that can see the room get them. Rules:
+
+- **Body.** NFC, trimmed, 1 to 4000 characters (not bytes), no control characters except newline and tab, else 400. The same
+  rule holds for an edit. Bodies are never logged.
+- **Who.** Anyone who can see the room posts, reacts and pins. Only the author edits (403 for anyone else, the owner too). The author
+  deletes, and a moderator or the owner deletes anyone's (403 for a member on someone else's). A delete is soft: the body is
+  emptied, and reactions, mentions and the pin go. A deleted message is 404 for edit, delete, reaction and pin.
+- **Send limit.** 10 messages, then 1 a second, per user (429). Edits, reactions and pins are not limited.
+- **Mentions.** `@name` at a word start, the name being `[a-z0-9_]{3,24}` after an ASCII lowercase, at most 20 per message, read again
+  on each edit. A name that is unknown, banned or cannot see the room is dropped, so it never counts as a mention.
+- **Reactions.** 1 to 32 bytes with no ASCII letter or digit, whitespace or control character (400). At most 20 different ones per message (409).
+- **Pins.** At most 50 per room (409).
+- **Read marker.** `last_read_id` is 0 or a message of that room (else 400), so it cannot be set past future messages. It never
+  moves back; `read` carries where it really is. Unread counts skip your own and deleted messages.
+- **Typing.** `typing { room_id }` on the socket goes to every other socket that can see the room (not back to the sender's
+  socket). Per user and room at most one every 3 s; more, an unknown room or a hidden one is dropped without an answer. It is never
+  stored and has no stop event: the client shows it for 5 s after the last one.
+- A banned user's messages stay. They cannot post, since their sessions are gone.
 
 A ban ends the user's sessions but does not revoke invites they already created; the owner revokes those by hand. `InviteCreate` needs all three fields (`role`, `max_uses`, `expires_hours`), so the web client must send them.
 
@@ -248,7 +277,7 @@ Rules every route keeps:
 - Handlers never log request bodies, and the request types with a password or invite code print `***` in `Debug`. A body that does
   not parse gets a fixed "invalid request body" message. The WebSocket upgrade takes the same session cookie and Origin check.
 
-Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs` and `tests/rooms.rs` (every route for every caller and target role), through
+Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs`, `tests/rooms.rs` (every route for every caller and target role) and `tests/chat.rs` (chat routes, pushes, typing, unread), through
 `tests/common/mod.rs`; the voice actions in `tests/signaling.rs` (`voice_actions_check_roles`).
 
 ## Static serving

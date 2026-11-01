@@ -20,7 +20,7 @@ use crate::api_accounts::ApiError;
 use crate::api_rooms::can_see;
 use crate::auth::{cookie_token, hash_token};
 use crate::hub::{Inbox, Outbox, outbox};
-use crate::limits::Bucket;
+use crate::limits::{Bucket, Kind};
 use crate::voice::JoinResult;
 
 /// Close code when the server cannot build `Hello` (1011, "internal error").
@@ -107,6 +107,8 @@ async fn hello(st: &WsState, user: &UserInfo, session_id: i64) -> Result<ServerM
     let mut rooms = st.app.store.rooms().await?;
     rooms.retain(|r| can_see(user, r));
     let voice = st.app.voice.peers(|id| rooms.iter().any(|r| r.id == id));
+    let ids: Vec<i64> = rooms.iter().map(|r| r.id).collect();
+    let unread = st.app.store.unread(&user.user_id, &ids).await?;
     Ok(ServerMsg::Hello {
         me: Me {
             user: user.clone(),
@@ -115,7 +117,7 @@ async fn hello(st: &WsState, user: &UserInfo, session_id: i64) -> Result<ServerM
         users,
         rooms,
         voice,
-        unread: vec![],
+        unread,
     })
 }
 
@@ -250,8 +252,10 @@ async fn handle(
                             Err(code) => Some(voice_error(&st, code)),
                         }
                     }
-                    // Typing goes out with text chat (Task 13).
-                    (Ok(ClientMsg::Typing { .. }), _) => None,
+                    (Ok(ClientMsg::Typing { room_id }), _) => {
+                        typing(&st, &user_id, room_id, &tx).await;
+                        None
+                    }
                     (Ok(ClientMsg::Answer { sdp }), Some(j)) => {
                         voice.answer(&j.user_id, j.session, sdp);
                         None
@@ -331,6 +335,32 @@ async fn join(
         .join(&user, room, offer, tx.clone())
         .await
         .map_err(|code| voice_error(st, code))
+}
+
+/// `typing` to everyone else who can see the room. Never stored and never answered: over the
+/// limit (1 per 3 s per room), an unknown or hidden room, or a store error drops it quietly.
+async fn typing(st: &WsState, user_id: &str, room_id: i64, tx: &Outbox) {
+    let key = format!("{user_id} {room_id}");
+    if st
+        .app
+        .limits
+        .check(Kind::Typing, &key, std::time::Instant::now())
+        .is_err()
+    {
+        return;
+    }
+    // Fresh user and room, so a role or member list change counts (like `join`).
+    let (Ok(user), Ok(rooms)) = tokio::join!(st.app.store.user(user_id), st.app.store.rooms())
+    else {
+        return;
+    };
+    if let Some(room) = rooms.iter().find(|r| r.id == room_id && can_see(&user, r)) {
+        let msg = ServerMsg::Typing {
+            room_id,
+            user_id: user_id.to_string(),
+        };
+        st.app.hub.broadcast_room_except(room, msg, &[tx]);
+    }
 }
 
 fn voice_error(st: &WsState, code: ErrorCode) -> (ErrorCode, String) {

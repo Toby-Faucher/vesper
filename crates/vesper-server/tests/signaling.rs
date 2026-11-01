@@ -349,7 +349,12 @@ async fn hello_is_first_message() {
     assert_eq!(me.user.user_id.len(), 32);
     assert!(rooms.iter().any(|r| r.name == "general"), "{rooms:?}");
     assert!(users.iter().any(|u| u.user_id == alice.user.user_id));
-    assert!(voice.is_empty() && unread.is_empty());
+    assert!(voice.is_empty());
+    // One entry per visible room, nothing unread on a fresh server.
+    let ids: Vec<i64> = rooms.iter().map(|r| r.id).collect();
+    let unread_ids: Vec<i64> = unread.iter().map(|u| u.room_id).collect();
+    assert_eq!(unread_ids, ids);
+    assert!(unread.iter().all(|u| u.unread == 0 && u.mentions == 0));
 }
 
 #[tokio::test]

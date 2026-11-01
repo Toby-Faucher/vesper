@@ -106,6 +106,27 @@ pub enum ServerMsg {
     ForceMuted {
         muted: bool,
     },
+    /// A new message in a room this user can see.
+    MessageNew {
+        message: Message,
+    },
+    /// An edit, delete, reaction or pin change: the whole message.
+    MessageUpdated {
+        message: Message,
+    },
+    /// Someone is typing in a room. There is no stop event: clients drop it after 5 s.
+    Typing {
+        #[ts(type = "number")]
+        room_id: i64,
+        user_id: String,
+    },
+    /// This user's read marker moved (sent to all of their sockets).
+    Read {
+        #[ts(type = "number")]
+        room_id: i64,
+        #[ts(type = "number")]
+        last_read_id: i64,
+    },
     Error {
         code: ErrorCode,
         message: String,

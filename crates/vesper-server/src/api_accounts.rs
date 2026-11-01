@@ -170,7 +170,7 @@ fn ip_key(ip: IpAddr) -> String {
     }
 }
 
-fn limit(st: &AppState, kind: Kind, key: &str) -> Result<(), ApiError> {
+pub(crate) fn limit(st: &AppState, kind: Kind, key: &str) -> Result<(), ApiError> {
     st.limits
         .check(kind, key, Instant::now())
         .map_err(ApiError::rate_limited)

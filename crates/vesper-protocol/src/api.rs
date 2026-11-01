@@ -283,6 +283,48 @@ pub struct MessagePage {
     pub more_after: bool,
 }
 
+/// `POST /api/rooms/{id}/messages`. `attachments` are upload ids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SendMessage {
+    pub body: String,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub reply_to: Option<i64>,
+    #[serde(default)]
+    pub attachments: Vec<String>,
+}
+
+/// `PATCH /api/messages/{id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct EditMessage {
+    pub body: String,
+}
+
+/// `PUT /api/messages/{id}/reaction`: add (`on`) or remove your own reaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReactionReq {
+    pub emoji: String,
+    pub on: bool,
+}
+
+/// `PUT /api/messages/{id}/pin`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PinReq {
+    pub on: bool,
+}
+
+/// `PUT /api/rooms/{id}/read`: the newest message id you have seen in that room.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReadReq {
+    #[ts(type = "number")]
+    pub last_read_id: i64,
+}
+
 /// `POST /api/rooms`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
