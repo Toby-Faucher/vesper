@@ -9,13 +9,13 @@
   import Field from '../lib/ui/c/Field.svelte';
   import TextInput from '../lib/ui/c/TextInput.svelte';
   import AuthCard from './AuthCard.svelte';
+  import Swatches from './Swatches.svelte';
   import MicCheck from './settings/MicCheck.svelte';
   import type { UserInfo } from '../lib/gen/UserInfo';
 
   // First run, after signup (and again from Settings > Account): name and colour, the mic, mentions. Every step can be
   // skipped with its button. No Esc: a stray Esc in the name field must not throw away what was typed. It renders in the
   // Shell's pane, so a call keeps running while it is open.
-  const COLOURS = ['Coral', 'Orange', 'Lime', 'Green', 'Teal', 'Sky', 'Blue', 'Pink'];
   const me = $derived(session.state.me!.user);
   let step = $state(1);
   let name = $state(session.state.me!.user.display_name);
@@ -82,16 +82,7 @@
       <Field label="Display name" help="1 to 32 characters." error={saveError || undefined}>
         <TextInput autocomplete="nickname" bind:value={name} required maxlength={32} />
       </Field>
-      <fieldset>
-        <legend class="mb-2 text-sm font-medium text-fg">Colour</legend>
-        <div class="flex gap-2.5">
-          {#each SLOT_HEX as _, i (i)}
-            <label class="swatch" style:--c="var(--avatar-{i + 1})">
-              <input type="radio" name="colour" class="absolute inset-0 m-0 cursor-pointer appearance-none rounded-full outline-none" aria-label={COLOURS[i]} value={i + 1} bind:group={slot} />
-            </label>
-          {/each}
-        </div>
-      </fieldset>
+      <Swatches bind:slot />
       <div class="flex items-center gap-2 pt-1">
         <span class="-ml-3"><Button variant="ghost" onclick={finish}>Skip for now</Button></span>
         <span class="ml-auto"></span>
@@ -133,17 +124,3 @@
   {/if}
 </AuthCard>
 
-<style>
-  .swatch {
-    position: relative;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: var(--c);
-    cursor: pointer;
-    box-shadow: 0 0 0 2px var(--bg-raised), 0 0 0 4px transparent;
-    transition: box-shadow var(--dur-1) var(--ease-out);
-  }
-  .swatch:has(:checked) { box-shadow: 0 0 0 2px var(--bg-raised), 0 0 0 4px var(--fg); }
-  .swatch:has(:focus-visible) { outline: 2px solid var(--focus); outline-offset: 5px; }
-</style>

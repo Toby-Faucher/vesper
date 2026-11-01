@@ -1105,11 +1105,27 @@ scene('settings', async (ctx) => {
   await ctx.shot(page, 'settings-reset-confirm', { fullPage: false });
   await page.getByRole('button', { name: 'Cancel' }).click();
   await page.getByLabel('Push to talk').uncheck();
-  for (const [name, file] of [['Notifications', 'settings-notifications'], ['Appearance', 'settings-appearance'], ['Account', 'settings-account']]) {
+  for (const [name, file] of [['Notifications', 'settings-notifications'], ['Appearance', 'settings-appearance']]) {
     await settingsPage(page, name);
     await rest(page);
     await ctx.shot(page, file);
   }
+  // Account, whole page, with a second device (a fresh browser signed in as alice) and a wrong current password.
+  const second = await ctx.open(`${ORIGIN}/login`);
+  await second.getByLabel('Username').fill('alice');
+  await second.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await second.getByRole('button', { name: 'Sign in' }).click();
+  await signedIn(second);
+  await settingsPage(page, 'Account');
+  await page.getByRole('list', { name: 'Signed-in devices' }).getByRole('listitem').nth(1).waitFor();
+  await page.getByLabel('Current password', { exact: true }).fill('test-password-9');
+  await page.getByLabel('New password', { exact: true }).fill('test-password-2');
+  await page.getByLabel('Confirm new password', { exact: true }).fill('test-password-2');
+  await page.getByRole('button', { name: 'Change password' }).click();
+  await page.getByText('Your current password is not right.').waitFor();
+  await tall(page, ctx, 'settings-account');
+  await page.getByRole('list', { name: 'Signed-in devices' }).getByRole('listitem').filter({ hasNotText: 'This device' }).getByRole('button', { name: 'Sign out' }).click();
+  await second.getByText('Your session ended. Sign in again.').waitFor();
 });
 // The meter at three levels, from the primitives gallery.
 scene('settings-meter', async ({ open }) => {

@@ -2,7 +2,7 @@
 // the address bar, a bad link, autocomplete attributes, passwords cleared and focus on the error after a failed
 // submit, routes, a room link surviving sign in, the call staying up while moving between rooms and settings,
 // force-mute (also on rejoin and from the person card), a kick ending the call, and a room that becomes private ending
-// the call and leaving bob's search.
+// the call and leaving bob's search; Settings > Account signing out a second device and changing the password.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -277,6 +277,55 @@ try {
   await b.keyboard.press('Escape');
   await b.waitForURL(`${ORIGIN}/r/${general}`);
   console.log('settings persist, close and Esc: ok');
+
+  // Settings > Account, devices: alice signs in on a second browser, the first lists both and signs the other out, and
+  // the second lands on the sign-in page with the session notice.
+  const alice2 = await browser('alice-2', []);
+  const a2 = alice2.page;
+  await a2.goto(`${ORIGIN}/login`);
+  await a2.getByLabel('Username').fill('alice');
+  await a2.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await a2.getByRole('button', { name: 'Sign in' }).click();
+  await signedIn(a2);
+  await a.goto(`${ORIGIN}/settings/account`);
+  const deviceRows = a.getByRole('list', { name: 'Signed-in devices' }).getByRole('listitem');
+  await deviceRows.nth(1).waitFor();
+  assert.equal(await deviceRows.count(), 2, 'alice should have two devices');
+  assert.match(await deviceRows.first().innerText(), /This device/, 'this device is not first');
+  const other = deviceRows.filter({ hasNotText: 'This device' });
+  assert.match(await other.innerText(), /Last seen just now/);
+  await other.getByRole('button', { name: 'Sign out' }).click();
+  await a2.waitForURL(/\/login/);
+  await a2.getByText('Your session ended. Sign in again.').waitFor();
+  await deviceRows.nth(1).waitFor({ state: 'detached' });
+  assert.equal(await deviceRows.count(), 1);
+  alice.errors.push(...alice2.errors);
+  console.log('account devices sign out: ok');
+
+  // Password: a wrong current password says so and empties that field; a right one changes it and says the others are
+  // signed out.
+  await b.goto(`${ORIGIN}/settings/account`);
+  const pw = (label) => b.getByLabel(label, { exact: true });
+  await pw('Current password').fill('test-password-9');
+  await pw('New password').fill('test-password-2');
+  await pw('Confirm new password').fill('test-password-2');
+  await b.getByRole('button', { name: 'Change password' }).click();
+  await b.getByText('Your current password is not right.').waitFor();
+  assert.equal(await pw('Current password').inputValue(), '', 'the wrong current password stayed in the field');
+  await pw('Current password').fill('test-password-1');
+  await pw('Confirm new password').fill('test-password-3');
+  await b.getByRole('button', { name: 'Change password' }).click();
+  await b.getByText('The two new passwords are not the same.').waitFor();
+  await pw('Confirm new password').fill('test-password-2');
+  await b.getByRole('button', { name: 'Change password' }).click();
+  await b.getByText('Password changed. Your other devices were signed out.').waitFor();
+  assert.equal(await pw('New password').inputValue(), '');
+  await b.getByRole('radio', { name: 'Blue' }).check();
+  await b.getByRole('button', { name: 'Save' }).click();
+  await b.getByRole('status').filter({ hasText: 'Saved.' }).waitFor();
+  assert.equal((await call(b, 'GET', '/api/me')).user.accent, '#6db0f4', 'colour not saved');
+  await openRoom(b, 'general');
+  console.log('account password change and profile save: ok');
 
   // The switcher: Ctrl+K works from the composer, a typed room name and Enter open that room, Esc closes and gives focus
   // back. Alt+Down and Alt+Up step through the rooms; Ctrl+\ hides the sidebar and focus moves to the Show button.

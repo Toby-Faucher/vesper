@@ -36,5 +36,24 @@ export const UI_MESSAGES = {
   pinsFailed: 'The pins did not load.',
   copyFailed: 'Could not copy. Select the text and copy it yourself.',
   adminLater: 'The admin pages are not built yet.',
-  sectionLater: 'Nothing to set here yet.',
+  devicesLoading: 'Loading devices...',
+  devicesFailed: 'Could not load your devices. Check your connection and try again.',
+  devicesNone: 'No devices are signed in.',
+  signOutFailed: 'Could not sign out that device. Try again.',
+  passwordWrong: 'Your current password is not right.',
+  passwordShort: 'Use 8 to 128 characters.',
+  passwordMismatch: 'The two new passwords are not the same.',
+  passwordChanged: 'Password changed. Your other devices were signed out.',
+  profileSaved: 'Saved.',
 } as const;
+
+/** How long ago `ms` was, from `now`: "just now", "5 min ago", "3 h ago", "2 days ago", then a date after a week. */
+export function relTime(ms: number, now: number): string {
+  const min = Math.floor((now - ms) / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  if (min < 24 * 60) return `${Math.floor(min / 60)} h ago`;
+  const days = Math.floor(min / (24 * 60));
+  if (days < 7) return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+  return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}

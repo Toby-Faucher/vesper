@@ -2,8 +2,9 @@
   import { SETTINGS_NAMES as NAMES, SETTINGS_SECTIONS, href, type SettingsSection } from '../../lib/route';
   import { wsUrl } from '../../lib/session.svelte';
   import { voice } from '../../lib/voice.svelte';
-  import { UI_MESSAGES } from '../../lib/ui/messages';
   import Diagnostics from '../Diagnostics.svelte';
+  import Account from './Account.svelte';
+  import Appearance from './Appearance.svelte';
   import Notifications from './Notifications.svelte';
   import Voice from './Voice.svelte';
   // A lazy chunk: the section list and the open section. A move inside Settings replaces the history entry (navigate), so
@@ -31,10 +32,10 @@
     {:else if section === 'diagnostics'}
       <Diagnostics pc={voice.pc} capture={voice.capture} wsUrl={wsUrl()} mode={voice.mode} reason={voice.modeReason}
         status={voice.joined ? 'joined' : 'not joined'} />
+    {:else if section === 'appearance'}
+      <Appearance />
     {:else}
-      <!-- Appearance and Account: Task 13 fills them. -->
-      <p class="text-fg-2">{UI_MESSAGES.sectionLater}</p>
-      {#if section === 'account'}<p class="mt-4"><a class="text-accent-fg underline underline-offset-2" href="/welcome">Run the welcome steps again</a></p>{/if}
+      <Account />
     {/if}
   </div>
 </div>
