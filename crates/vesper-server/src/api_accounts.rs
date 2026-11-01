@@ -14,7 +14,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use vesper_protocol::{
     ApiErrorCode, CLOSE_SESSION_ENDED, Device, InvitePreview, LoginReq, Me, PasswordChange,
-    ProfilePatch, Role, ServerMsg, SignupReq, UserInfo,
+    ProfilePatch, ResetReq, Role, ServerMsg, SignupReq, UserInfo,
 };
 use vesper_store::{NewAccount, NewSession, StoreError, now_ms};
 
@@ -28,6 +28,7 @@ use crate::limits::Kind;
 
 const WRONG_LOGIN: &str = "wrong username or password";
 const BAD_INVITE: &str = "invite not valid";
+const BAD_RESET: &str = "reset link not valid";
 
 /// A failed `/api` call: the wire body plus, for 429, how long to wait.
 #[derive(Debug)]
@@ -64,7 +65,9 @@ impl IntoResponse for ApiError {
             ApiErrorCode::BadRequest => StatusCode::BAD_REQUEST,
             ApiErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiErrorCode::Forbidden => StatusCode::FORBIDDEN,
-            ApiErrorCode::NotFound | ApiErrorCode::InviteInvalid => StatusCode::NOT_FOUND,
+            ApiErrorCode::NotFound | ApiErrorCode::InviteInvalid | ApiErrorCode::ResetInvalid => {
+                StatusCode::NOT_FOUND
+            }
             ApiErrorCode::Conflict => StatusCode::CONFLICT,
             ApiErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ApiErrorCode::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -201,6 +204,7 @@ pub fn routes() -> Router<AppState> {
         .route("/logout", post(logout))
         .route("/me", get(me).patch(patch_me))
         .route("/me/password", post(change_password))
+        .route("/reset", post(reset_password))
         .route("/sessions", get(sessions))
         .route("/sessions/{id}", delete(revoke))
 }
@@ -400,6 +404,37 @@ async fn change_password(
         .await?;
     st.hub
         .close_user_except(&a.user.user_id, Some(a.session_id), CLOSE_SESSION_ENDED);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Sets a new password with a reset code and ends every session of that account. Unknown, used,
+/// replaced and expired codes all get the same 404. It does not sign in: the person signs in next.
+async fn reset_password(
+    State(st): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    h: HeaderMap,
+    req: Result<Json<ResetReq>, JsonRejection>,
+) -> Result<StatusCode, ApiError> {
+    limit(&st, Kind::Reset, &ip_key(client_ip(peer, &h)))?;
+    let req = body(req)?;
+    if !valid_password(&req.password) {
+        return Err(bad("password: 8 to 128 characters"));
+    }
+    let invalid = || ApiError::new(ApiErrorCode::ResetInvalid, BAD_RESET);
+    let hash = hash_token(&req.code).ok_or_else(invalid)?;
+    // Cheap check first so a junk code costs no argon2 hash; use_reset checks again in its transaction.
+    if !st.store.reset_valid(&hash, now_ms()).await? {
+        return Err(invalid());
+    }
+    let phc = hash_password(req.password).await;
+    let id = st
+        .store
+        .use_reset(&hash, &phc, now_ms())
+        .await?
+        .ok_or_else(invalid)?;
+    st.voice.kick(&id);
+    st.hub.close_user(&id, CLOSE_SESSION_ENDED);
+    tracing::info!(user_id = %id, "password reset used");
     Ok(StatusCode::NO_CONTENT)
 }
 

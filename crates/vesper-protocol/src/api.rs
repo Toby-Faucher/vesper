@@ -76,6 +76,8 @@ pub enum ApiErrorCode {
     TooLarge,
     QuotaFull,
     InviteInvalid,
+    /// A reset code that is unknown, used, replaced or expired: all look the same.
+    ResetInvalid,
     Internal,
 }
 
@@ -186,6 +188,41 @@ impl std::fmt::Debug for InviteCreated {
         f.debug_struct("InviteCreated")
             .field("info", &self.info)
             .field("url", &"***")
+            .finish()
+    }
+}
+
+/// `POST /api/users/{id}/reset`: a one-use link to set a new password, shown once.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetCreated {
+    pub url: String,
+    #[ts(type = "number")]
+    pub expires_at: i64,
+}
+
+impl std::fmt::Debug for ResetCreated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetCreated")
+            .field("url", &"***")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+/// `POST /api/reset`: the code from the link and the new password (8 to 128 characters).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetReq {
+    pub code: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for ResetReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetReq")
+            .field("code", &"***")
+            .field("password", &"***")
             .finish()
     }
 }
@@ -484,6 +521,20 @@ mod tests {
                         revoked: false,
                     },
                     url: format!("http://x/invite#{secret}"),
+                }
+            ),
+            format!(
+                "{:?}",
+                ResetCreated {
+                    url: format!("http://x/reset#{secret}"),
+                    expires_at: 0,
+                }
+            ),
+            format!(
+                "{:?}",
+                ResetReq {
+                    code: secret.into(),
+                    password: secret.into(),
                 }
             ),
         ];

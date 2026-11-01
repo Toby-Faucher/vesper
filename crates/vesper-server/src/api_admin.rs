@@ -1,4 +1,4 @@
-//! Admin routes: the user list, invites, roles, bans and the voice actions.
+//! Admin routes: the user list, invites, roles, bans, reset links and the voice actions.
 //! Owner > moderator > member. Moderators mint and revoke member invites; only the owner mints
 //! moderator invites, changes roles and bans. The owner role only comes from the CLI, so it can
 //! never be granted, taken away or banned here. Kick from voice, force-mute and disconnect need
@@ -11,9 +11,9 @@ use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use vesper_protocol::{
     ApiErrorCode, CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ForceMute, InviteCreate, InviteCreated,
-    InviteInfo, Role, RolePatch, UserInfo,
+    InviteInfo, ResetCreated, Role, RolePatch, UserInfo,
 };
-use vesper_store::now_ms;
+use vesper_store::{RESET_TTL_MS, now_ms};
 
 use crate::api_accounts::body;
 use crate::auth::new_token;
@@ -53,6 +53,7 @@ pub fn routes() -> Router<AppState> {
         .route("/invites", get(invites).post(create_invite))
         .route("/invites/{id}", delete(revoke_invite))
         .route("/users/{id}/role", patch(set_role))
+        .route("/users/{id}/reset", post(create_reset))
         .route("/users/{id}/ban", post(ban))
         .route("/users/{id}/unban", post(unban))
         .route("/users/{id}/kick", post(kick))
@@ -121,6 +122,28 @@ async fn revoke_invite(
     }
     st.store.revoke_invite(id, now_ms()).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A one-use password reset link for `id`, valid 24 h; it replaces any older one. The owner may
+/// make one for anyone, a moderator only for a member. The code is only in the returned link.
+async fn create_reset(
+    State(st): State<AppState>,
+    a: Authed,
+    id: Result<Path<String>, PathRejection>,
+) -> Result<(StatusCode, Json<ResetCreated>), ApiError> {
+    require(&a.user, Role::Moderator)?;
+    let id = path(id)?;
+    if a.user.role != Role::Owner && st.store.user(&id).await?.role != Role::Member {
+        return Err(ApiError::new(ApiErrorCode::Forbidden, "not allowed"));
+    }
+    let (code, hash) = new_token();
+    let expires_at = now_ms() + RESET_TTL_MS;
+    st.store
+        .create_reset(&id, &hash, expires_at, Some(&a.user.user_id))
+        .await?;
+    tracing::info!(user_id = %id, by = %a.user.user_id, "password reset link created");
+    let url = format!("{}/reset#{code}", st.cfg.origin);
+    Ok((StatusCode::CREATED, Json(ResetCreated { url, expires_at })))
 }
 
 /// Owner only, and never on themselves or another owner, so the owner can not lock everyone out.

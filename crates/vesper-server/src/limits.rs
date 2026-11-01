@@ -12,6 +12,8 @@ pub enum Kind {
     LoginIp,
     /// Key: ip.
     Invite,
+    /// Using a password reset code. Key: ip.
+    Reset,
     /// Key: user id.
     Message,
     /// Key: user id.
@@ -32,6 +34,7 @@ impl Kind {
             Kind::Login => (5.0, s(60)),
             Kind::LoginIp => (20.0, s(15)),
             Kind::Invite => (10.0, s(6 * 60)),
+            Kind::Reset => (10.0, s(6 * 60)),
             Kind::Message => (10.0, s(1)),
             Kind::Upload => (10.0, s(30)),
             Kind::Typing => (1.0, s(3)),
