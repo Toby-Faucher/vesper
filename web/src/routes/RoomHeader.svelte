@@ -8,6 +8,7 @@
   import { UI_MESSAGES } from '../lib/ui/messages';
   import { layers } from '../lib/ui/layers.svelte';
   import { session } from '../lib/session.svelte';
+  import { voice } from '../lib/voice.svelte';
   // The open room's name, Pins, Search and its one primary action. The pins list (with the Markdown
   // renderer) loads on the first click, so it stays out of the first load.
   let { room, inCall, joining, onjoin }: { room: RoomInfo; inCall: boolean; joining: boolean; onjoin: () => void } = $props();
@@ -46,7 +47,8 @@
     <IconButton icon={I.search} label="Search" tip aria-haspopup="dialog" aria-controls="search" aria-expanded={layers.search} onclick={() => (layers.search = true)} />
     {#if !inCall}
       <!-- aria-disabled, not disabled: a dropped connection must not take focus away, and the reason stays reachable by Tab. -->
-      <Button variant="primary" loading={joining} onclick={onjoin} aria-disabled={!session.online || undefined}
+      <!-- Already in a call elsewhere: joining here leaves it, so it is not this view's primary action. -->
+      <Button variant={voice.joined ? 'secondary' : 'primary'} loading={joining} onclick={onjoin} aria-disabled={!session.online || undefined}
         aria-describedby={session.online ? undefined : offlineId} data-tip={session.online ? undefined : UI_MESSAGES.offlineAction} data-tip-end>Join voice</Button>
       {#if !session.online}<span id={offlineId} class="sr-only">{UI_MESSAGES.offlineAction}</span>{/if}
     {/if}
