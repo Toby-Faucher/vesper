@@ -1,11 +1,21 @@
 # Known issues
 
 Things found in review that were left on purpose, because they are small, rare or wait on a bigger piece of work.
-Last updated 2026-11-01. Nothing here was run in a real browser or a real deploy. Fix an item, then delete its line in the same commit.
+Last updated 2026-11-01. Nothing here was run in a headed browser or a real deploy (the e2e runs headless Chromium). Fix an item, then delete its line in the same commit.
 
 ## Security and abuse
 
 - **Plain HTTP connections before the upgrade are not limited.** A slow client can hold a connection on `/ws` or `/health`. The cap of 256 sockets counts upgraded sockets only.
+- **Only upload bodies have a read timeout** (30 s idle, 10 minutes in all). A slow client can still hold a JSON request open, but its body is
+  at most 32 KiB.
+- **Uploads in flight can pass the quota on disk for a while.** The quota is checked again under a lock before a file is kept, so it is never
+  passed for good, but each upload streams to `uploads/tmp` first: up to 25 MiB per upload in flight, so about 250 MiB for one user's burst
+  of 10. A `Content-Length` that cannot fit is refused before any byte is read.
+- **A request cancelled during the upload row insert can leave a row with no file.** It counts against the quota until the 24 h sweep
+  removes it (it is never attached, since the uploader's request failed).
+- **Search timing shows a little about hidden rooms.** Matches in rooms you cannot see are skipped one by one while the index is walked,
+  so many newer hidden matches make a search slower (measured 2 ms against 20 ms at 100k messages). A very weak signal at this scale,
+  and the search limit (10, then 1 a second) slows any probing.
 - **A very large `VESPER_MAX_SOCKETS` panics at start.** Keep it in the hundreds.
 - **The client address trusts headers from private peers.** When the TCP peer is loopback or private, the server takes a valid `CF-Connecting-IP`,
   else the last `X-Forwarded-For` entry, else the peer; from any other peer it ignores both. Through Cloudflare this is the real client, because

@@ -1,6 +1,7 @@
 //! Chat routes: history, pins, send, edit, delete, reactions, pins and read markers. Each one
 //! checks `can_see` first: a room you cannot see (or a message in one) is 404, never 403.
 //! Changes are pushed to the sockets that can see the room. Message bodies are never logged.
+//! Sends have their own rate limit; edits, reactions and pins share one (`Kind::Change`).
 
 use std::collections::HashSet;
 
@@ -15,7 +16,7 @@ use vesper_protocol::{
     ApiErrorCode, EditMessage, Message, MessagePage, PinReq, ReactionReq, ReadReq, Role, RoomInfo,
     SearchPage, SearchQuery, SendMessage, ServerMsg, UserInfo,
 };
-use vesper_store::{Cursor, NewMessage, now_ms};
+use vesper_store::{Cursor, NewMessage, StoreError, now_ms};
 
 use crate::api_accounts::{body, limit};
 use crate::api_admin::{bad, path, require};
@@ -228,6 +229,7 @@ async fn edit(
     if msg.author_id != a.user.user_id {
         return Err(ApiError::new(ApiErrorCode::Forbidden, "not allowed"));
     }
+    limit(&st, Kind::Change, &a.user.user_id)?;
     let text = body_text(&req.body)?;
     let mentions = mentions(&st, &room, &text).await?;
     let msg = st
@@ -252,7 +254,7 @@ async fn remove(
         .store
         .delete_message(id, now_ms(), &a.user.user_id)
         .await?;
-    crate::uploads::remove_files(&st.cfg.data_dir, &uploads);
+    crate::uploads::remove_files(&st.cfg.data_dir, &uploads).await;
     updated(&st, &room, msg);
     Ok(StatusCode::NO_CONTENT)
 }
@@ -269,6 +271,7 @@ async fn react(
     if !valid_reaction(&req.emoji) {
         return Err(bad("reaction: 1 to 32 bytes, no letters, digits or spaces"));
     }
+    limit(&st, Kind::Change, &a.user.user_id)?;
     let msg = st
         .store
         .set_reaction(id, &a.user.user_id, &req.emoji, req.on, now_ms())
@@ -285,6 +288,7 @@ async fn pin(
     let id = path(id)?;
     let req = body(req)?;
     let (_, room) = visible_message(&st, &a.user, id).await?;
+    limit(&st, Kind::Change, &a.user.user_id)?;
     let msg = st
         .store
         .set_pinned(id, &a.user.user_id, req.on, now_ms())
@@ -304,11 +308,12 @@ async fn read(
     let req = body(req)?;
     let room = visible_room(&st, &a.user, id).await?;
     let ok = req.last_read_id == 0
-        || st
-            .store
-            .message(req.last_read_id)
-            .await
-            .is_ok_and(|m| m.room_id == room.id);
+        || match st.store.message(req.last_read_id).await {
+            Ok(m) => m.room_id == room.id,
+            Err(StoreError::NotFound) => false,
+            // A database error is a logged 500, not the client's fault.
+            Err(e) => return Err(e.into()),
+        };
     if !ok {
         return Err(bad("last_read_id: not a message of this room"));
     }

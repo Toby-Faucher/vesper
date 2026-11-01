@@ -20,6 +20,8 @@ pub enum Kind {
     Typing,
     /// Key: user id.
     Search,
+    /// Edits, reactions and pins, shared. Key: user id.
+    Change,
 }
 
 impl Kind {
@@ -34,6 +36,7 @@ impl Kind {
             Kind::Upload => (10.0, s(30)),
             Kind::Typing => (1.0, s(3)),
             Kind::Search => (10.0, s(1)),
+            Kind::Change => (20.0, s(1)),
         }
     }
 }
@@ -74,17 +77,30 @@ impl Bucket {
 struct Buckets {
     map: HashMap<(Kind, String), Bucket>,
     pruned: Option<Instant>,
+    /// Added to the clock by [`Limiter::now`]; only tests move it.
+    skew: Duration,
 }
 
 #[derive(Clone, Default)]
 pub struct Limiter(Arc<Mutex<Buckets>>);
 
 impl Limiter {
+    /// The limiter's clock: `Instant::now()` plus what [`Limiter::advance`] added.
+    pub fn now(&self) -> Instant {
+        Instant::now() + self.0.lock().unwrap_or_else(PoisonError::into_inner).skew
+    }
+
+    /// Moves [`Limiter::now`] forward, so a test can wait for a refill without sleeping.
+    #[doc(hidden)]
+    pub fn advance(&self, by: Duration) {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).skew += by;
+    }
+
     /// Takes one token for `key`, or returns how long until one is free.
     pub fn check(&self, kind: Kind, key: &str, now: Instant) -> Result<(), Duration> {
         let (burst, per) = kind.budget();
         let mut guard = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let Buckets { map, pruned } = &mut *guard;
+        let Buckets { map, pruned, .. } = &mut *guard;
         let due = pruned.is_none_or(|t| now.saturating_duration_since(t) >= PRUNE_EVERY);
         if map.len() > PRUNE_ABOVE && due {
             // Only drop buckets that have refilled: a fresh one would be identical.

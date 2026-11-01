@@ -727,3 +727,61 @@ async fn upload_keeps_sandbox_csp() {
         assert!(res.contains(want), "{want}: {res}");
     }
 }
+
+/// A declared Content-Length that cannot fit is 507 before any byte is read: the body here
+/// never ends, so reading it would hang the test.
+#[tokio::test]
+async fn early_quota_check_skips_the_body() {
+    let server = quota_server().await;
+    let alice = server.account("alice", Role::Member).await;
+    let room = general(&server).await;
+    upload_ok(&server, &alice, room, &vec![1; 600 * KIB]).await;
+    let never = Body::from_stream(futures_util::stream::pending::<Result<Bytes, std::io::Error>>());
+    let mut req = upload_req(room, "big", never, &alice);
+    req.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        (600 * KIB).to_string().parse().unwrap(),
+    );
+    let (status, _, v) = tokio::time::timeout(std::time::Duration::from_secs(5), server.call(req))
+        .await
+        .expect("the body was read");
+    assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE, "{v}");
+    assert_eq!(v["code"], "quota_full");
+    assert!(entries(&tmp_dir(&server)).is_empty());
+    // A declared size that fits still goes through.
+    let mut req = upload_req(room, "ok", Body::from(vec![1u8; 100 * KIB]), &alice);
+    req.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        (100 * KIB).to_string().parse().unwrap(),
+    );
+    assert_eq!(server.call(req).await.0, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn orphan_files_are_swept() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let room = general(&server).await;
+    let kept = upload_ok(&server, &alice, room, b"kept").await;
+    // A file with no row (a failed delete, or a crash before the row insert).
+    let orphan = "ab".repeat(16);
+    let path = file_of(&server, &orphan);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"orphan").unwrap();
+    // Names this code never writes are left alone.
+    let odd = path.with_file_name("notes.txt");
+    std::fs::write(&odd, b"x").unwrap();
+    let day = std::time::Duration::from_secs(24 * 3600);
+    let now = std::time::SystemTime::now();
+    // Too new: kept.
+    assert_eq!(uploads::sweep_orphans(&server.state, now).await.unwrap(), 0);
+    assert!(path.exists());
+    let later = now + day + std::time::Duration::from_secs(60);
+    assert_eq!(
+        uploads::sweep_orphans(&server.state, later).await.unwrap(),
+        1
+    );
+    assert!(!path.exists() && odd.exists());
+    assert!(file_of(&server, &kept).exists(), "a file with a row stays");
+    assert_eq!(download(&server, &kept, &alice).await.0, StatusCode::OK);
+}

@@ -798,3 +798,295 @@ async fn search_hostile_input_and_rate_limit() {
     assert_eq!(codes[0], StatusCode::OK);
     assert_eq!(codes[9], StatusCode::TOO_MANY_REQUESTS, "{codes:?}");
 }
+
+/// Every room or message route answers a hidden room, a message in one, an unknown room and an
+/// unknown message with the very same 404 (status and whole body), so none can tell them apart.
+#[tokio::test]
+async fn hidden_and_unknown_404_bodies_are_identical() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let bob = server.account("bob", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let secret = restricted(&server, &owner, &[&bob]).await;
+    let hidden = sent(&server, secret, "psst", &bob).await;
+    const UNKNOWN: i64 = 999_999;
+    let room_routes = |id: i64| {
+        vec![
+            (Method::GET, format!("/api/rooms/{id}/messages"), None),
+            (
+                Method::GET,
+                format!("/api/rooms/{id}/messages?around={}", hidden.id),
+                None,
+            ),
+            (Method::GET, format!("/api/rooms/{id}/pins"), None),
+            (
+                Method::POST,
+                format!("/api/rooms/{id}/messages"),
+                Some(json!({ "body": "x" })),
+            ),
+            (
+                Method::PUT,
+                format!("/api/rooms/{id}/read"),
+                Some(json!({ "last_read_id": 0 })),
+            ),
+            (
+                Method::GET,
+                format!("/api/search?q=psst&room_id={id}"),
+                None,
+            ),
+        ]
+    };
+    let message_routes = |id: i64| {
+        vec![
+            (
+                Method::PATCH,
+                format!("/api/messages/{id}"),
+                Some(json!({ "body": "x" })),
+            ),
+            (Method::DELETE, format!("/api/messages/{id}"), None),
+            (
+                Method::PUT,
+                format!("/api/messages/{id}/reaction"),
+                Some(json!({ "emoji": "👍", "on": true })),
+            ),
+            (
+                Method::PUT,
+                format!("/api/messages/{id}/pin"),
+                Some(json!({ "on": true })),
+            ),
+        ]
+    };
+    let want = json!({ "code": "not_found", "message": "not found" });
+    let pairs = room_routes(secret)
+        .into_iter()
+        .zip(room_routes(UNKNOWN))
+        .chain(
+            message_routes(hidden.id)
+                .into_iter()
+                .zip(message_routes(UNKNOWN)),
+        );
+    for (h, u) in pairs {
+        let mut got = Vec::new();
+        for (method, path, body) in [h, u] {
+            let (status, _, v) = server
+                .call(request(
+                    method.clone(),
+                    &path,
+                    body.as_ref(),
+                    Some(&carol.cookie),
+                ))
+                .await;
+            got.push((status, v.clone()));
+            assert_eq!(
+                (status, &v),
+                (StatusCode::NOT_FOUND, &want),
+                "{method} {path}"
+            );
+        }
+        assert_eq!(got[0], got[1]);
+    }
+    // Nothing changed for the member who can see it.
+    assert_eq!(history(&server, secret, &bob).await, vec![hidden]);
+}
+
+/// Taken off a restricted room's list while connected: the socket gets nothing more from it.
+#[tokio::test]
+async fn removed_member_socket_stops_getting_room_events() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let bob = server.account("bob", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let secret = restricted(&server, &owner, &[&bob, &carol]).await;
+    let general = room(&server, "general").await;
+    let mut c = Sock::open(&server, &carol).await;
+    sent(&server, secret, "before", &bob).await;
+    c.until_new("before").await;
+
+    let (status, _, _) = put(
+        &server,
+        &format!("/api/rooms/{secret}/members"),
+        json!({ "user_ids": [bob.user.user_id] }),
+        &owner,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let b = Sock::open(&server, &bob).await;
+    let after = sent(&server, secret, "after removal", &bob).await;
+    let react = format!("/api/messages/{}/reaction", after.id);
+    put(&server, &react, json!({ "emoji": "👍", "on": true }), &bob).await;
+    b.typing(secret);
+    sent(&server, general, "public marker", &bob).await;
+    let seen = c.until_new("public marker").await;
+    assert!(
+        !seen.iter().any(|m| match m {
+            ServerMsg::MessageNew { message } | ServerMsg::MessageUpdated { message } =>
+                message.room_id == secret,
+            ServerMsg::Typing { room_id, .. } => *room_id == secret,
+            _ => false,
+        }),
+        "{seen:?}"
+    );
+    // And the REST side agrees.
+    let (status, _, _) = server
+        .call(get(&format!("/api/rooms/{secret}/messages"), &carol))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Two pins race for the 50th slot: one wins, the other is the cap's 409, never a 500.
+#[tokio::test]
+async fn pin_race_at_49() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let general = room(&server, "general").await;
+    let store = &server.state.store;
+    let mut ids = Vec::new();
+    // Straight into the store: the send limit would stop 51 posts.
+    for _ in 0..51 {
+        let m = store
+            .post_message(vesper_store::NewMessage {
+                room_id: general,
+                author_id: &alice.user.user_id,
+                body: "pin me",
+                reply_to: None,
+                mentions: &[],
+                attachments: &[],
+                now: 1,
+            })
+            .await
+            .unwrap();
+        ids.push(m.id);
+    }
+    for id in &ids[..49] {
+        store
+            .set_pinned(*id, &alice.user.user_id, true, 2)
+            .await
+            .unwrap();
+    }
+    let pin = |id: i64, s: &Session| {
+        let req = request(
+            Method::PUT,
+            &format!("/api/messages/{id}/pin"),
+            Some(&json!({ "on": true })),
+            Some(&s.cookie),
+        );
+        server.call(req)
+    };
+    let ((s1, _, v1), (s2, _, v2)) = tokio::join!(pin(ids[49], &alice), pin(ids[50], &bob));
+    let mut codes = [s1, s2];
+    codes.sort();
+    assert_eq!(codes, [StatusCode::OK, StatusCode::CONFLICT], "{v1} {v2}");
+    let (_, _, pins) = server
+        .call(get(&format!("/api/rooms/{general}/pins"), &alice))
+        .await;
+    assert_eq!(pins.as_array().unwrap().len(), 50);
+}
+
+/// Edits, reactions and pins share one bucket per user: 20, then 1 a second.
+#[tokio::test]
+async fn changes_are_rate_limited_per_user() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let general = room(&server, "general").await;
+    let m = sent(&server, general, "hi", &alice).await;
+    let react = format!("/api/messages/{}/reaction", m.id);
+    let pin = format!("/api/messages/{}/pin", m.id);
+    for i in 0..20 {
+        let (status, _, v) = match i % 3 {
+            0 => {
+                put(
+                    &server,
+                    &react,
+                    json!({ "emoji": "👍", "on": i % 2 == 0 }),
+                    &alice,
+                )
+                .await
+            }
+            1 => put(&server, &pin, json!({ "on": i % 2 == 0 }), &alice).await,
+            _ => {
+                let (s, v) = edit(&server, m.id, &format!("hi {i}"), &alice).await;
+                (s, Default::default(), v)
+            }
+        };
+        assert_eq!(status, StatusCode::OK, "{i}: {v}");
+    }
+    let (status, v) = edit(&server, m.id, "one more", &alice).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
+    let (status, _, _) = put(
+        &server,
+        &react,
+        json!({ "emoji": "👍", "on": true }),
+        &alice,
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    // Per user: bob is not held back. After a second, alice has one more.
+    let (status, _, _) = put(&server, &react, json!({ "emoji": "👍", "on": true }), &bob).await;
+    assert_eq!(status, StatusCode::OK);
+    server.state.limits.advance(Duration::from_secs(1));
+    assert_eq!(edit(&server, m.id, "later", &alice).await.0, StatusCode::OK);
+    assert_eq!(
+        edit(&server, m.id, "too soon", &alice).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+/// Burst of 10, then one per second, with the limiter's clock moved by hand.
+#[tokio::test]
+async fn search_rate_limit_refills() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let search = || server.call(get("/api/search?q=hel", &alice));
+    for i in 0..10 {
+        assert_eq!(search().await.0, StatusCode::OK, "{i}");
+    }
+    let (status, h, v) = search().await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(v["code"], "rate_limited", "{v}");
+    assert_eq!(h["retry-after"], "1");
+    server.state.limits.advance(Duration::from_millis(500));
+    assert_eq!(search().await.0, StatusCode::TOO_MANY_REQUESTS);
+    server.state.limits.advance(Duration::from_millis(500));
+    assert_eq!(search().await.0, StatusCode::OK);
+    assert_eq!(search().await.0, StatusCode::TOO_MANY_REQUESTS);
+    server.state.limits.advance(Duration::from_secs(60));
+    for i in 0..10 {
+        assert_eq!(search().await.0, StatusCode::OK, "refilled {i}");
+    }
+    assert_eq!(search().await.0, StatusCode::TOO_MANY_REQUESTS);
+}
+
+/// A member list change shows in search on the very next request.
+#[tokio::test]
+async fn search_follows_membership_changes() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let bob = server.account("bob", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let secret = restricted(&server, &owner, &[&bob]).await;
+    sent(&server, secret, "needle here", &bob).await;
+    let hits = |s: &Session| {
+        let req = get("/api/search?q=needle", s);
+        async {
+            let (status, _, v) = server.call(req).await;
+            assert_eq!(status, StatusCode::OK, "{v}");
+            v["hits"].as_array().unwrap().len()
+        }
+    };
+    assert_eq!(hits(&carol).await, 0);
+    let members = format!("/api/rooms/{secret}/members");
+    let ids = [&bob.user.user_id, &carol.user.user_id];
+    put(&server, &members, json!({ "user_ids": ids }), &owner).await;
+    assert_eq!(hits(&carol).await, 1);
+    put(
+        &server,
+        &members,
+        json!({ "user_ids": [bob.user.user_id] }),
+        &owner,
+    )
+    .await;
+    assert_eq!(hits(&carol).await, 0);
+    assert_eq!(hits(&bob).await, 1);
+}

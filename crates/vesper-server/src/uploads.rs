@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 use std::path::{Path as FsPath, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use axum::Json;
 use axum::Router;
@@ -35,6 +35,9 @@ pub const MAX_UPLOAD: u64 = 25 * 1024 * 1024;
 /// An upload not attached to a message within this long is swept.
 pub const STALE_MS: i64 = 24 * 3600 * 1000;
 const SWEEP_EVERY: Duration = Duration::from_secs(3600);
+/// An upload body that sends nothing for this long, or is not done after `READ_TOTAL`, is dropped.
+pub const READ_IDLE: Duration = Duration::from_secs(30);
+pub const READ_TOTAL: Duration = Duration::from_secs(600);
 const OCTET: &str = "application/octet-stream";
 const IMAGES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const MAX_NAME: usize = 200;
@@ -121,6 +124,10 @@ fn too_large() -> ApiError {
     ApiError::new(ApiErrorCode::TooLarge, "file over 25 MiB")
 }
 
+fn quota_full() -> ApiError {
+    ApiError::new(ApiErrorCode::QuotaFull, "upload quota is full")
+}
+
 fn io_error(e: std::io::Error) -> ApiError {
     tracing::error!("uploads: {e}");
     ApiError::new(ApiErrorCode::Internal, "server error")
@@ -164,9 +171,9 @@ pub fn clean_tmp(data_dir: &FsPath) -> std::io::Result<()> {
 }
 
 /// Deletes the files of `ids` (their rows are already gone). Errors are logged, not returned.
-pub fn remove_files(data_dir: &FsPath, ids: &[String]) {
+pub async fn remove_files(data_dir: &FsPath, ids: &[String]) {
     for p in ids.iter().filter_map(|id| upload_path(data_dir, id)) {
-        if let Err(e) = std::fs::remove_file(&p)
+        if let Err(e) = tokio::fs::remove_file(&p).await
             && e.kind() != std::io::ErrorKind::NotFound
         {
             tracing::warn!("remove upload {}: {e}", p.display());
@@ -181,11 +188,50 @@ pub async fn sweep(st: &AppState, now: i64) -> Result<usize, StoreError> {
         return Ok(0);
     }
     let gone = st.store.delete_uploads(&stale).await?;
-    remove_files(&st.cfg.data_dir, &gone);
+    remove_files(&st.cfg.data_dir, &gone).await;
     Ok(gone.len())
 }
 
-/// Runs `sweep` now and then every hour.
+/// Removes files under `uploads/<xx>/` last written `STALE_MS` before `now` that have no row: a
+/// delete that failed, or a crash between the rename and the row insert. Returns how many.
+pub async fn sweep_orphans(st: &AppState, now: SystemTime) -> std::io::Result<usize> {
+    let data_dir = &st.cfg.data_dir;
+    let stale = Duration::from_millis(STALE_MS as u64);
+    let mut dirs = match tokio::fs::read_dir(data_dir.join("uploads")).await {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        r => r?,
+    };
+    let mut n = 0;
+    while let Some(dir) = dirs.next_entry().await? {
+        if dir.file_name() == "tmp" || !dir.file_type().await?.is_dir() {
+            continue;
+        }
+        let mut files = tokio::fs::read_dir(dir.path()).await?;
+        while let Some(f) = files.next_entry().await? {
+            let id = f.file_name().to_string_lossy().into_owned();
+            // Only names this module writes, in their own dir.
+            if upload_path(data_dir, &id).as_deref() != Some(f.path().as_path()) {
+                continue;
+            }
+            if f.metadata().await?.modified()? + stale > now {
+                continue;
+            }
+            // `upload` renames and inserts the row under this lock: no row now means none is coming.
+            let _quota = QUOTA.lock().await;
+            match st.store.upload(&id).await {
+                Err(StoreError::NotFound) => {
+                    tokio::fs::remove_file(f.path()).await?;
+                    n += 1;
+                }
+                Ok(_) => {}
+                Err(e) => return Err(std::io::Error::other(e.to_string())),
+            }
+        }
+    }
+    Ok(n)
+}
+
+/// Runs `sweep` and `sweep_orphans` now and then every hour.
 pub fn spawn_sweep(st: AppState) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(SWEEP_EVERY);
@@ -195,6 +241,11 @@ pub fn spawn_sweep(st: AppState) {
                 Ok(0) => {}
                 Ok(n) => tracing::info!("swept {n} unattached uploads"),
                 Err(e) => tracing::error!("upload sweep: {e}"),
+            }
+            match sweep_orphans(&st, SystemTime::now()).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("removed {n} upload files with no row"),
+                Err(e) => tracing::error!("orphan upload sweep: {e}"),
             }
         }
     });
@@ -222,6 +273,13 @@ async fn upload(
     if declared.is_some_and(|n| n > MAX_UPLOAD) {
         return Err(too_large());
     }
+    // Saves reading a body that cannot fit. Only a hint: the check under QUOTA below decides.
+    if let Some(n) = declared {
+        let used = st.store.upload_bytes().await?.max(0) as u64;
+        if used.saturating_add(n) > st.cfg.upload_quota_bytes {
+            return Err(quota_full());
+        }
+    }
 
     let id = random_hex(16);
     let tmp_dir = st.cfg.data_dir.join("uploads").join("tmp");
@@ -235,22 +293,7 @@ async fn upload(
         .await
         .map_err(io_error)?;
     let mut cleanup = Cleanup(Some(tmp.clone()));
-    let mut body = body;
-    let mut size: u64 = 0;
-    let mut head: Vec<u8> = Vec::with_capacity(16);
-    while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|_| bad("upload interrupted"))?;
-        let Ok(chunk) = frame.into_data() else {
-            continue;
-        };
-        size += chunk.len() as u64;
-        if size > MAX_UPLOAD {
-            return Err(too_large());
-        }
-        let want = (16 - head.len()).min(chunk.len());
-        head.extend_from_slice(&chunk[..want]);
-        file.write_all(&chunk).await.map_err(io_error)?;
-    }
+    let (size, head) = read_body(body, &mut file, READ_IDLE, READ_TOTAL).await?;
     file.sync_all().await.map_err(io_error)?;
     drop(file);
 
@@ -270,10 +313,7 @@ async fn upload(
         let _quota = QUOTA.lock().await;
         let used = st.store.upload_bytes().await?.max(0) as u64;
         if used + size > st.cfg.upload_quota_bytes {
-            return Err(ApiError::new(
-                ApiErrorCode::QuotaFull,
-                "upload quota is full",
-            ));
+            return Err(quota_full());
         }
         private_dir(dest.parent().expect("has a parent")).map_err(io_error)?;
         tokio::fs::rename(&tmp, &dest).await.map_err(io_error)?;
@@ -289,6 +329,40 @@ async fn upload(
         size: row.size,
     };
     Ok((StatusCode::CREATED, Json(UploadDone { attachment })))
+}
+
+/// Streams `body` into `file` under the 25 MiB cap. Returns the size and the first 16 bytes. A
+/// gap of `idle` between chunks or a body not done after `total` is a 400, so a slow client
+/// cannot hold an upload open.
+pub async fn read_body(
+    mut body: Body,
+    file: &mut (impl tokio::io::AsyncWrite + Unpin),
+    idle: Duration,
+    total: Duration,
+) -> Result<(u64, Vec<u8>), ApiError> {
+    let deadline = tokio::time::Instant::now() + total;
+    let mut size: u64 = 0;
+    let mut head: Vec<u8> = Vec::with_capacity(16);
+    loop {
+        let next = (tokio::time::Instant::now() + idle).min(deadline);
+        let frame = tokio::time::timeout_at(next, body.frame())
+            .await
+            .map_err(|_| bad("upload too slow"))?;
+        let Some(frame) = frame else {
+            return Ok((size, head));
+        };
+        let frame = frame.map_err(|_| bad("upload interrupted"))?;
+        let Ok(chunk) = frame.into_data() else {
+            continue;
+        };
+        size += chunk.len() as u64;
+        if size > MAX_UPLOAD {
+            return Err(too_large());
+        }
+        let want = (16 - head.len()).min(chunk.len());
+        head.extend_from_slice(&chunk[..want]);
+        file.write_all(&chunk).await.map_err(io_error)?;
+    }
 }
 
 /// Attached: anyone who can see the message's room. Not attached yet: only the uploader.
@@ -373,6 +447,54 @@ async fn disk(State(st): State<AppState>, a: Authed) -> Result<Json<DiskUse>, Ap
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Bytes;
+    use futures_util::StreamExt;
+
+    type Chunk = Result<Bytes, std::io::Error>;
+
+    /// `n` chunks of 1 KiB, one every `every`, then the end.
+    fn trickle(n: usize, every: Duration) -> Body {
+        Body::from_stream(futures_util::stream::iter(0..n).then(move |_| async move {
+            tokio::time::sleep(every).await;
+            Chunk::Ok(Bytes::from(vec![7u8; 1024]))
+        }))
+    }
+
+    async fn read(body: Body, idle_ms: u64, total_ms: u64) -> Result<(u64, Vec<u8>), ApiError> {
+        let ms = Duration::from_millis;
+        read_body(body, &mut tokio::io::sink(), ms(idle_ms), ms(total_ms)).await
+    }
+
+    #[tokio::test]
+    async fn read_body_times_out_idle_and_total() {
+        let ms = Duration::from_millis;
+        // One chunk, then silence: the idle timer ends it.
+        let stalled = futures_util::stream::iter([Chunk::Ok(Bytes::from_static(b"x"))])
+            .chain(futures_util::stream::pending());
+        let t = std::time::Instant::now();
+        let e = read(Body::from_stream(stalled), 50, 10_000)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.body.code, e.body.message.as_str()),
+            (ApiErrorCode::BadRequest, "upload too slow")
+        );
+        assert!(t.elapsed() < ms(2000), "{:?}", t.elapsed());
+        // Steady but endless: never idle, the total timer ends it.
+        let t = std::time::Instant::now();
+        let e = read(trickle(usize::MAX, ms(10)), 200, 300)
+            .await
+            .unwrap_err();
+        assert_eq!(e.body.message, "upload too slow");
+        assert!(
+            t.elapsed() >= ms(300) && t.elapsed() < ms(2000),
+            "{:?}",
+            t.elapsed()
+        );
+        // A body that keeps moving and ends in time is read whole.
+        let (size, head) = read(trickle(5, ms(10)), 200, 5_000).await.unwrap();
+        assert_eq!((size, head), (5 * 1024, vec![7u8; 16]));
+    }
 
     #[test]
     fn upload_path_rejects_traversal() {

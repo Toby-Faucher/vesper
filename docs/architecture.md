@@ -215,10 +215,10 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `GET /api/rooms/{id}/messages?before=\|after=\|around=&limit=` | sees the room | `MessagePage`, oldest first; at most one cursor (else 400), `limit` 1 to 100 (default 50) |
 | `GET /api/rooms/{id}/pins` | sees the room | `Message[]`, newest pin first |
 | `POST /api/rooms/{id}/messages` (`SendMessage`) | sees the room, Message limit by user | 201 `Message`; pushes `message_new` |
-| `PATCH /api/messages/{id}` (`EditMessage`) | sees the room, the author | the new `Message`; pushes `message_updated` |
+| `PATCH /api/messages/{id}` (`EditMessage`) | sees the room, the author, Change limit by user | the new `Message`; pushes `message_updated` |
 | `DELETE /api/messages/{id}` | sees the room, the author, or a moderator or the owner | 204; pushes `message_updated` with `deleted: true` |
-| `PUT /api/messages/{id}/reaction` (`ReactionReq`) | sees the room | the new `Message`; pushes `message_updated` |
-| `PUT /api/messages/{id}/pin` (`PinReq`) | sees the room | the new `Message`; pushes `message_updated` |
+| `PUT /api/messages/{id}/reaction` (`ReactionReq`) | sees the room, Change limit by user | the new `Message`; pushes `message_updated` |
+| `PUT /api/messages/{id}/pin` (`PinReq`) | sees the room, Change limit by user | the new `Message`; pushes `message_updated` |
 | `PUT /api/rooms/{id}/read` (`ReadReq`) | sees the room | 204; sends `read` to every socket of the user |
 | `GET /api/search?q=&room_id=&author_id=&from=&to=&before=` (`SearchQuery`) | a session, Search limit by user | `SearchPage`, 20 hits, newest first, only rooms you can see; a `room_id` you cannot see is 404 |
 | `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past 25 MiB, 507 `quota_full` |
@@ -239,7 +239,9 @@ an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets th
 - **Who.** Anyone who can see the room posts, reacts and pins. Only the author edits (403 for anyone else, the owner too). The author
   deletes, and a moderator or the owner deletes anyone's (403 for a member on someone else's). A delete is soft: the body is
   emptied, and reactions, mentions and the pin go. A deleted message is 404 for edit, delete, reaction and pin.
-- **Send limit.** 10 messages, then 1 a second, per user (429). Edits, reactions and pins are not limited.
+- **Send limit.** 10 messages, then 1 a second, per user (429). Edits, reactions and pins share the Change limit: 20, then 1 a
+  second, per user (429). Deletes are not limited: each message is deleted once, so sends already bound them.
+- **Replies.** `reply_to` may name a deleted message of the room; the reply shows it as deleted. Allowed on purpose.
 - **Mentions.** `@name` at a word start, the name being `[a-z0-9_]{3,24}` after an ASCII lowercase, at most 20 per message, read again
   on each edit. A name that is unknown, banned or cannot see the room is dropped, so it never counts as a mention.
 - **Reactions.** 1 to 32 bytes with no ASCII letter or digit, whitespace or control character (400). At most 20 different ones per message (409).
@@ -247,7 +249,8 @@ an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets th
 - **Read marker.** `last_read_id` is 0 or a message of that room (else 400), so it cannot be set past future messages. It never
   moves back; `read` carries where it really is. Unread counts skip your own and deleted messages.
 - **Typing.** `typing { room_id }` on the socket goes to every other socket that can see the room (not back to the sender's
-  socket). Per user and room at most one every 3 s; more, an unknown room or a hidden one is dropped without an answer. It is never
+  socket). Per user and room at most one every 3 s; more, an unknown room or a hidden one is dropped without an answer (the room is
+  checked before the limit, so made-up room ids take no limiter entry; a store error is logged). It is never
   stored and has no stop event: the client shows it for 5 s after the last one.
 - A banned user's messages stay. They cannot post, since their sessions are gone.
 
@@ -255,7 +258,8 @@ Search (`GET /api/search`, store `search.rs`): FTS5 over `messages_fts`, tokeniz
 finds `Café`. Rules:
 
 - **Query.** `fts_query` splits `q` on whitespace and control characters, cuts each term to 64 characters, drops terms with no
-  letter or digit and keeps 16. Each term is quoted (inner `"` doubled) and the last one is a prefix (`"dog"*`). So `OR`, `NEAR(`,
+  letter or digit and keeps 16. Each term is quoted (inner `"` doubled) and the last one is a prefix (`"dog"*`), unless it is one
+  character: `a` matches the word `a` only, because the prefix `a*` is the slow case. The web client waits for 2 characters anyway. So `OR`, `NEAR(`,
   `body:x`, `^`, `-` and `*` are plain words and can not change the query or make it fail. A `q` with nothing left is 200 with no hits.
 - **Who sees what.** The server lists the rooms the user can see (`can_see`) and the store puts that list inside the SQL
   (`m.room_id IN (SELECT value FROM json_each(?))`), so a page is never cut short or filled by rows from hidden rooms.
@@ -278,9 +282,11 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
 
 - **Size.** At most 25 MiB (`MAX_UPLOAD`). A larger `Content-Length` is 413 before the body is read; a body with no length is
   counted while it streams to `uploads/tmp/<id>` and is cut off with 413 once it passes the cap. The partial file is deleted, also
-  when the client goes away mid-body. The Upload limit is 10, then 1 every 30 s, per user.
+  when the client goes away mid-body, sends nothing for 30 s (`READ_IDLE`) or is not done after 10 minutes (`READ_TOTAL`): 400
+  `upload too slow`. The Upload limit is 10, then 1 every 30 s, per user.
 - **Quota.** Uploads together stay under `VESPER_UPLOAD_QUOTA_MB` ([env.md](env.md)). The check, the move into place and the row
-  insert run under one lock, so uploads racing each other cannot pass it (507 `quota_full`).
+  insert run under one lock, so uploads racing each other cannot pass it (507 `quota_full`). A `Content-Length` that cannot fit
+  what is left is 507 before the body is read.
 - **On disk.** The file name is the id (32 random hex), under `uploads/<first 2>/`, dirs 0700 and files 0600. A request id that is
   not 32 lowercase hex is 404 before any path is built, so no client text ever reaches a path.
 - **Type.** Decided from the first bytes, never from the name or the request's `Content-Type`. Only png, jpeg, gif and webp count
@@ -294,8 +300,9 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
 - **Who.** Attaching (`SendMessage.attachments`) needs your own upload, not attached yet, in the same room (else 409). An attached
   file is served to anyone who can see the room; one not attached yet only to its uploader. Everything else is the same 404 as an
   unknown id.
-- **Removal.** Deleting a message deletes its files. Uploads still not attached after 24 h are swept every hour (and at start). A
-  file whose delete fails stays on disk with no row; nothing sweeps it.
+- **Removal.** Deleting a message deletes its files. Uploads still not attached after 24 h are swept every hour (and at start).
+  The same hourly pass deletes files under `uploads/<xx>/` with no row that were last written over 24 h ago (a delete that
+  failed, or a crash between the move and the row insert), checking under the upload lock (`sweep_orphans`).
 - **Disk use.** `DiskUse` holds the database plus WAL size, the sum of upload sizes, the quota, and the filesystem total and free
   space of the data dir (`statvfs`). `warn` is set when uploads pass 80% of the quota or the filesystem is over 80% full.
 
@@ -365,7 +372,7 @@ speed is not in these numbers. The box was not idle, so the numbers move a few m
 | Database size after a checkpoint | 37.5 MiB |
 
 The test fails if any of these is 50 ms or more. Not measured: the 1 GB VM (expect it slower), a database with years of real chat.
-A one-letter prefix is still the slow case; the client should not search on one character.
+A one-letter prefix (`a*`) was the slow case; the server now matches a one-character last term as a whole word, and the web client waits for 2 characters.
 
 ## Static serving
 
@@ -374,12 +381,15 @@ an extension or under `/api/` stays 404; `/assets/*` is `immutable`, `/api/*` `n
 
 ## Not verified
 
-Read from the code on 2026-10-30, not run:
+Last checked 2026-11-01. Run only in headless Chromium (`npm --prefix web run e2e`, fake microphones, plain http on 127.0.0.1); everything
+else here was read from the code, not run:
 
-- Behaviour in real Chrome and Firefox, including the `ontrack` stream id and `replaceTrack` during a mode swap.
+- Behaviour in real (headed) Chrome, Firefox and Safari, including the `ontrack` stream id and `replaceTrack` during a mode swap.
 - Everything in the SFU loop beyond its doc comments (`room.rs` forwarding, `client.rs` negotiation).
-- Chat, uploads and search in the browser: verified only in headless Chromium by `npm --prefix web run e2e` (send with Markdown and raw HTML,
-  reply, edit, a PNG shown inline, search that skips a hidden room). Not run in Firefox or Safari; scroll anchoring, paste, typing, unread
+- Chat, uploads and search in the browser: verified only in headless Chromium by the e2e (send with Markdown and raw HTML,
+  reply, edit, a PNG shown inline, search that skips a hidden room). Scroll anchoring, paste, typing, unread
   badges and the reconnect refetch are unit-tested through the pure helpers only.
-- The accounts and admin REST API is built and tested in process only (`tests/accounts.rs`, `tests/admin.rs`). No real browser run, and no https run of the
-  `Secure` `__Host-` cookie beyond the in-process test.
+- Sign up and sign in run in headless Chromium over http only. The `Secure` `__Host-` cookie and HSTS on https are tested in process only.
+- The CSP ([decision 0008](decisions/0008-csp.md)): no violation in headless Chromium through the e2e. The denoiser under the CSP runs
+  only when `web/dist/dsp/` is built (not in CI). Not checked through Caddy and Cloudflare, which may add or change headers.
+- Upload read timeouts are unit-tested with short timers (`read_body_times_out_idle_and_total`), not with a real slow client.

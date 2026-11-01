@@ -2,7 +2,7 @@
 //! Handlers never log request bodies: they hold passwords, tokens and invite codes.
 
 use std::net::{IpAddr, SocketAddr};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{ConnectInfo, FromRequestParts, Path, Query, State};
@@ -172,7 +172,7 @@ fn ip_key(ip: IpAddr) -> String {
 
 pub(crate) fn limit(st: &AppState, kind: Kind, key: &str) -> Result<(), ApiError> {
     st.limits
-        .check(kind, key, Instant::now())
+        .check(kind, key, st.limits.now())
         .map_err(ApiError::rate_limited)
 }
 

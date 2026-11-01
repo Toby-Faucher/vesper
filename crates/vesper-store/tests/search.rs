@@ -67,7 +67,11 @@ fn fts_query_quotes_operators() {
         fts_query("body:foo NEAR(x").unwrap(),
         r#""body:foo" "NEAR(x"*"#
     );
-    assert_eq!(fts_query("a\0b").unwrap(), r#""a" "b"*"#);
+    assert_eq!(fts_query("a\0bc").unwrap(), r#""a" "bc"*"#);
+    // A one-character last term is a whole word, never the slow `x*` prefix.
+    assert_eq!(fts_query("a\0b").unwrap(), r#""a" "b""#);
+    assert_eq!(fts_query("é").unwrap(), r#""é""#);
+    assert_eq!(fts_query("ab").unwrap(), r#""ab"*"#);
     let twenty: Vec<String> = (0..20).map(|i| format!("w{i}")).collect();
     let out = fts_query(&twenty.join(" ")).unwrap();
     assert_eq!(out.matches('"').count(), 32);

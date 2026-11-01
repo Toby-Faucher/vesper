@@ -338,29 +338,34 @@ async fn join(
 }
 
 /// `typing` to everyone else who can see the room. Never stored and never answered: over the
-/// limit (1 per 3 s per room), an unknown or hidden room, or a store error drops it quietly.
+/// limit (1 per 3 s per room), an unknown or hidden room, or a store error (logged) drops it.
 async fn typing(st: &WsState, user_id: &str, room_id: i64, tx: &Outbox) {
+    // Fresh user and room, so a role or member list change counts (like `join`).
+    let (user, rooms) = match tokio::join!(st.app.store.user(user_id), st.app.store.rooms()) {
+        (Ok(user), Ok(rooms)) => (user, rooms),
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::warn!("typing: store: {e}");
+            return;
+        }
+    };
+    let Some(room) = rooms.iter().find(|r| r.id == room_id && can_see(&user, r)) else {
+        return;
+    };
+    // Keyed only after the room checks out, so made-up room ids cannot grow the limiter's map.
     let key = format!("{user_id} {room_id}");
     if st
         .app
         .limits
-        .check(Kind::Typing, &key, std::time::Instant::now())
+        .check(Kind::Typing, &key, st.app.limits.now())
         .is_err()
     {
         return;
     }
-    // Fresh user and room, so a role or member list change counts (like `join`).
-    let (Ok(user), Ok(rooms)) = tokio::join!(st.app.store.user(user_id), st.app.store.rooms())
-    else {
-        return;
+    let msg = ServerMsg::Typing {
+        room_id,
+        user_id: user_id.to_string(),
     };
-    if let Some(room) = rooms.iter().find(|r| r.id == room_id && can_see(&user, r)) {
-        let msg = ServerMsg::Typing {
-            room_id,
-            user_id: user_id.to_string(),
-        };
-        st.app.hub.broadcast_room_except(room, msg, &[tx]);
-    }
+    st.app.hub.broadcast_room_except(room, msg, &[tx]);
 }
 
 fn voice_error(st: &WsState, code: ErrorCode) -> (ErrorCode, String) {

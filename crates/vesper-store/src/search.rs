@@ -18,20 +18,26 @@ const HIT_END: char = '\u{3}';
 
 /// Quoted FTS5 terms, the last one a prefix, or `None` when nothing searchable is left. Splits on
 /// whitespace and control characters (a NUL must not end the FTS5 parse early), cuts each term to
-/// 64 chars, drops terms with no letter or digit and keeps 16.
+/// 64 chars, drops terms with no letter or digit and keeps 16. A last term of one character is
+/// matched as a whole word, not a prefix: `a*` merges the doclist of every word starting with `a`,
+/// the slow case.
 pub fn fts_query(input: &str) -> Option<String> {
     let terms: Vec<String> = input
         .split(|c: char| c.is_whitespace() || c.is_control())
         .map(|t| t.chars().take(MAX_TERM_CHARS).collect::<String>())
         .filter(|t| t.chars().any(char::is_alphanumeric))
         .take(MAX_TERMS)
+        .collect();
+    let prefix = terms.last()?.chars().count() >= MIN_PREFIX_CHARS;
+    let quoted: Vec<String> = terms
+        .iter()
         .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
         .collect();
-    if terms.is_empty() {
-        return None;
-    }
-    Some(terms.join(" ") + "*")
+    Some(quoted.join(" ") + if prefix { "*" } else { "" })
 }
+
+/// Shortest last term that is searched as a prefix.
+const MIN_PREFIX_CHARS: usize = 2;
 
 /// Newest first, so FTS5 walks its doclist from the top and stops after one page (bm25 order
 /// would score every match first: 57 to 80 ms at 100k messages). With no sort, the snippet is
