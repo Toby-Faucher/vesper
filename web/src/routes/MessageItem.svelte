@@ -27,6 +27,7 @@
   import Icon from '../lib/ui/c/Icon.svelte';
   import Menu from '../lib/ui/c/Menu.svelte';
   import MenuItem from '../lib/ui/c/MenuItem.svelte';
+  import PersonButton from '../lib/ui/c/PersonButton.svelte';
   import Popover from '../lib/ui/c/Popover.svelte';
   import { motion } from '../lib/ui/motion';
 
@@ -76,6 +77,7 @@
   let saving = $state(false);
   let moreEl = $state<HTMLButtonElement | null>(null);
   let reactEl = $state<HTMLButtonElement | null>(null);
+  let nameEl = $state<HTMLButtonElement>();
   let menu = $state({ mounted: false, open: false });
   let picker = $state({ mounted: false, open: false });
   let confirm = $state({ mounted: false, open: false });
@@ -172,7 +174,8 @@
   {/if}
   <div class="gutter">
     {#if head}
-      <Avatar user={author} size={32} />
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: a mouse alias of the name button, which is the Tab stop -->
+      <div class="face" onclick={() => nameEl?.click()}><Avatar user={author} size={32} /></div>
     {:else}
       <time class="gtime" datetime={iso(m.created_at)} title={full(m.created_at)}>{short(m.created_at)}</time>
     {/if}
@@ -180,7 +183,7 @@
   <div class="content min-w-0">
     {#if head}
       <p class="meta">
-        <span class="font-medium text-fg">{author.display_name}</span>
+        <PersonButton id={m.author_id} name={author.display_name} class="font-medium text-fg" bind:el={nameEl}>{author.display_name}</PersonButton>
         <time class="quiet text-xs tabular-nums" datetime={iso(m.created_at)} title={full(m.created_at)}>{hm(m.created_at)}</time>
         {#if m.pinned}<span class="quiet flex items-center gap-1 text-xs"><Icon d={I.pin} size={16} />Pinned</span>{/if}
       </p>
@@ -289,6 +292,7 @@
   .msg.mentioned:hover, .msg.mentioned:focus-within { background: var(--accent-subtle); }
   .quote, .content { grid-column: 2; }
   .gutter { grid-column: 1; }
+  .face { display: flex; cursor: pointer; }
   .quote + .gutter { grid-row: 2; }
   /* Tertiary text: --fg-3 on the app background, --fg-2 once the row has a hover, selected or amber background. */
   .quiet { color: var(--fg-3); }

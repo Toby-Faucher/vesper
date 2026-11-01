@@ -286,7 +286,7 @@ try {
   await confirmBan.getByRole('button', { name: 'Ban' }).click();
   await c.getByText('Your session ended. Sign in again.').waitFor();
   await a.locator('tr[data-user="carol"]').getByText('Banned').waitFor();
-  const banned = await a.locator('tr[data-user="carol"]').getByText('Banned').evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e.closest('tr').querySelector('p')).color]);
+  const banned = await a.locator('tr[data-user="carol"]').getByText('Banned').evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e.closest('tr').querySelector('button span[title]')).color]);
   assert.notEqual(banned[0], banned[1], 'Banned is in the primary text colour');
   await a.getByRole('button', { name: 'Unban carol' }).waitFor();
   console.log('ban ends the session: ok');

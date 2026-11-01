@@ -640,6 +640,18 @@ scene('timeline', async (ctx) => {
   await ctx.shot(page, 'timeline-jump');
   await page.unrouteAll({ behavior: 'wait' }); // let a page in flight finish first
 });
+// A name in a message opens the person card next to it, with the bio.
+scene('person-card-message', async (ctx) => {
+  const page = await openPlans(ctx);
+  await ctx.api(ctx.bob.page, 'PATCH', '/api/me', { bio: 'Plays bass on Sundays. Ask me about the setlist.' });
+  await page.getByRole('main').getByRole('button', { name: /^Open profile of bob/i }).last().click();
+  await page.getByRole('dialog').getByText('Plays bass on Sundays', { exact: false }).waitFor();
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'person-card-message');
+  await page.keyboard.press('Escape');
+  await ctx.api(ctx.bob.page, 'PATCH', '/api/me', { bio: '' });
+});
 // Small pages: the room opens at the bottom with "N new messages. Show the first", and scrolling up shows the older
 // page loading (held back until the picture is taken).
 scene('timeline-older', async (ctx) => {
@@ -1178,7 +1190,7 @@ scene('admin-invite-created', async (ctx) => {
   await ctx.shot(page, 'admin-invite-created');
   await narrow(page, ctx, 'admin-invite-created-narrow');
 });
-// The owner's members table: bob in voice (so his row has Voice), erin banned, and the ban confirm.
+// The owner's members table: bob in voice, erin banned, the ban confirm, and erin's card from her name.
 scene('admin-members', async (ctx) => {
   const page = ctx.alice.page;
   const b = ctx.bob.page;
@@ -1192,7 +1204,6 @@ scene('admin-members', async (ctx) => {
   await home(page);
   await adminPage(page, 'Members');
   await page.locator('tr[data-user="erin"]').getByText('Banned').waitFor();
-  await page.getByRole('button', { name: 'Voice actions for bob' }).waitFor();
   await rest(page);
   await ctx.shot(page, 'admin-members');
   await narrow(page, ctx, 'admin-members-narrow');
@@ -1201,6 +1212,12 @@ scene('admin-members', async (ctx) => {
   await sleep(300);
   await ctx.shot(page, 'admin-members-ban-confirm', { fullPage: false });
   await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: 'Open profile of Erin Example' }).click();
+  await page.getByRole('dialog', { name: 'Erin Example' }).getByText(/Banned/).waitFor();
+  await rest(page);
+  await sleep(300);
+  await ctx.shot(page, 'admin-members-card', { fullPage: false });
+  await page.keyboard.press('Escape');
   if (joined) await b.getByRole('button', { name: 'Leave' }).click();
 });
 // bob as a moderator: no role or ban controls, the note that says why, and no Rooms or Disk use sections.
