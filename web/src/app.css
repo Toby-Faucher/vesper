@@ -136,5 +136,5 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-  [data-tip]::after { scale: none; }
+  [data-tip]::after { scale: none !important; }
 }

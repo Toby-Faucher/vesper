@@ -143,7 +143,7 @@ try {
   await cog.hover();
   assert.ok((await b.evaluate(() => document.getAnimations().map((x) => JSON.stringify(x.effect?.getKeyframes?.() ?? [])))).some((f) => f.includes('"transform"')),
     'the Settings gear does not turn on hover');
-  await sleep(500);
+  await sleep(700); // the tooltip waits 400 ms, then fades and scales in over 160 ms
   const inside = (r) => r.left >= 0 && r.top >= 0 && r.right <= 1024 && r.bottom <= 640;
   const tip = await cog.evaluate((el) => {
     const r = el.getBoundingClientRect(), s = getComputedStyle(el, '::after'), m = new DOMMatrix(s.transform);
@@ -500,7 +500,7 @@ try {
 
   // The message highlight fades (paint only: background, text colour, opacity) and never moves the row.
   const lastRow = k.locator('article').last();
-  const box = () => lastRow.evaluate((e) => JSON.stringify(e.getBoundingClientRect()));
+  const box = () => lastRow.evaluate((e) => [e.offsetTop, e.offsetLeft, e.offsetWidth, e.offsetHeight].join()); // layout, not scroll
   const still = await box();
   await lastRow.hover();
   const fades = await lastRow.evaluate((e) => e.getAnimations({ subtree: true }).map((a) => a.transitionProperty ?? 'script'));
