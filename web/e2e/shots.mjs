@@ -1167,6 +1167,102 @@ scene('settings-voice-in-call', async (ctx) => {
   await page.getByRole('button', { name: 'Leave' }).click();
 });
 
+// Admin. The account menu opens it; the sections are links in its nav.
+async function adminPage(page, name) {
+  const nav = page.getByRole('navigation', { name: 'Admin sections' });
+  if (!(await nav.count())) {
+    await page.getByRole('button', { name: /^Account, / }).click();
+    await page.getByRole('menuitem', { name: 'Admin' }).click();
+  }
+  await nav.getByRole('link', { name }).click();
+  await page.getByRole('heading', { level: 2, name }).waitFor();
+}
+async function narrow(page, ctx, name) {
+  await page.setViewportSize({ width: 1024, height: 640 });
+  await rest(page);
+  await ctx.shot(page, name, { fullPage: false });
+  await page.setViewportSize(VIEWPORT);
+}
+// The list with every status: a 5-use moderator invite, one revoked, one used up (bob's), plus whatever earlier scenes made.
+scene('admin-invites', async (ctx) => {
+  const page = ctx.alice.page;
+  await home(page);
+  await ctx.api(page, 'POST', '/api/invites', { role: 'moderator', max_uses: 5, expires_hours: 720 });
+  const gone = await ctx.api(page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 24 });
+  await ctx.api(page, 'DELETE', `/api/invites/${gone.info.id}`);
+  await ctx.api(page, 'POST', '/api/invites', { role: 'member', max_uses: 3, expires_hours: 1 });
+  await adminPage(page, 'Invites');
+  await page.locator('tr[data-invite]').first().waitFor();
+  await rest(page);
+  await ctx.shot(page, 'admin-invites');
+  await narrow(page, ctx, 'admin-invites-narrow');
+});
+// The link panel right after Create invite. The real link never reaches a picture: the response is swapped for a fake.
+scene('admin-invite-created', async (ctx) => {
+  const page = ctx.alice.page;
+  await home(page);
+  await adminPage(page, 'Invites');
+  await page.route('**/api/invites', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const res = await route.fetch();
+    const json = await res.json();
+    await route.fulfill({ response: res, json: { ...json, url: `${ORIGIN}/invite#example-not-a-real-code` } });
+  });
+  await page.getByLabel('Uses').fill('5');
+  await page.getByLabel('Role').selectOption('moderator');
+  await page.getByRole('button', { name: 'Create invite' }).click();
+  await page.getByText('This link is shown only now.', { exact: false }).waitFor();
+  await page.unroute('**/api/invites');
+  await rest(page);
+  await ctx.shot(page, 'admin-invite-created');
+  await narrow(page, ctx, 'admin-invite-created-narrow');
+});
+// The owner's members table: bob in voice (so his row has Voice), erin banned, and the ban confirm.
+scene('admin-members', async (ctx) => {
+  const page = ctx.alice.page;
+  const b = ctx.bob.page;
+  const { url } = await ctx.api(page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 });
+  const erin = await ctx.open(`${ORIGIN}/login`); // a fresh browser for the third person
+  await signup(erin, url, 'erin', 'Erin Example');
+  const erinId = (await ctx.api(erin, 'GET', '/api/me')).user.user_id;
+  await ctx.api(page, 'POST', `/api/users/${erinId}/ban`);
+  const joined = !(await b.getByRole('button', { name: 'Leave' }).count());
+  if (joined) { await home(b); await joinVoice(b); }
+  await home(page);
+  await adminPage(page, 'Members');
+  await page.locator('tr[data-user="erin"]').getByText('Banned').waitFor();
+  await page.getByRole('button', { name: 'Voice actions for bob' }).waitFor();
+  await rest(page);
+  await ctx.shot(page, 'admin-members');
+  await narrow(page, ctx, 'admin-members-narrow');
+  await page.getByRole('button', { name: 'Ban bob' }).click();
+  await page.getByRole('dialog', { name: 'Ban bob?' }).waitFor();
+  await sleep(300);
+  await ctx.shot(page, 'admin-members-ban-confirm', { fullPage: false });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  if (joined) await b.getByRole('button', { name: 'Leave' }).click();
+});
+// bob as a moderator: no role or ban controls, the note that says why, and no Rooms or Disk use sections.
+scene('admin-members-moderator-view', async (ctx) => {
+  const bobId = (await ctx.api(ctx.bob.page, 'GET', '/api/me')).user.user_id;
+  await ctx.api(ctx.alice.page, 'PATCH', `/api/users/${bobId}/role`, { role: 'moderator' });
+  const page = ctx.bob.page;
+  await home(page);
+  await adminPage(page, 'Members');
+  await page.locator('tr[data-user]').first().waitFor();
+  await rest(page);
+  await ctx.shot(page, 'admin-members-moderator-view');
+  await adminPage(page, 'Invites');
+  await rest(page);
+  await ctx.shot(page, 'admin-invites-moderator-view');
+  await ctx.api(ctx.alice.page, 'PATCH', `/api/users/${bobId}/role`, { role: 'member' });
+  // A member at /admin: the not-allowed page.
+  await page.goto(`${ORIGIN}/admin/invites`);
+  await page.getByText('You do not have access to admin pages.').waitFor();
+  await rest(page);
+  await ctx.shot(page, 'admin-denied');
+});
+
 // Main-thread CPU on bob's page in a two-person call: CDP TaskDuration over 10 s, printed, no picture. Run it three times
 // and take the median (docs/dev.md has the baseline).
 scene('cpu-baseline', async ({ alice, bob }) => {
@@ -1218,7 +1314,11 @@ const LINES = [
   'the co-op one again?', 'sure', 'I fixed my mic, tell me if it still crackles', 'sounds fine to me', 'link to the patch notes: https://example.com/notes',
 ];
 
-const GROUPS = { uploads: ['message-image', 'drop-overlay', 'upload-tray'] }; // npm run shots -- uploads
+// npm run shots -- uploads, or -- admin
+const GROUPS = {
+  uploads: ['message-image', 'drop-overlay', 'upload-tray'],
+  admin: ['admin-invites', 'admin-invite-created', 'admin-members', 'admin-members-moderator-view'],
+};
 const names = process.argv.slice(2).flatMap((n) => GROUPS[n] ?? [n]);
 for (const n of names) if (!scenes.has(n)) throw new Error(`unknown scene ${n}; known: ${[...scenes.keys()].join(' ')}`);
 const run = names.length ? names : [...scenes.keys()];

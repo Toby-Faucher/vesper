@@ -141,7 +141,12 @@ after a rejoin, and lifted), a kick ending the call, and a room made private end
 Ctrl+Shift+F after a failed chunk load and from the switcher, and picks a `from:` and an `in:` name from the box's lists with Enter and Tab. If `web/dist/dsp/` exists
 (`scripts/build-dsp.sh`, then `npm run build`), it also signs alice in with DeepFilterNet on and checks the denoiser starts.
 
-Both tests fail on any CSP block in a page: each page records `securitypolicyviolation` events and console lines about the Content
+`web/e2e/ui.mjs` runs third, on its own fresh server, and checks the admin pages: alice creates an invite in the form (one request
+for two clicks), copies the link and bob signs up with it; a revoked link shows the bad-link text; a member who opens `/admin` sees
+that it is not allowed; after a confirmed role change bob has the Admin menu entry and the moderator view without role or ban controls; a
+confirmed ban ends carol's session. It never prints an invite link.
+
+All three tests fail on any CSP block in a page: each page records `securitypolicyviolation` events and console lines about the Content
 Security Policy, through sign up, sign in, voice, chat, upload and search ([decision 0008](decisions/0008-csp.md)). A block inside a
 worker shows neither, so only the denoiser step above catches one (a missing `'wasm-unsafe-eval'`). CI has no wasm build and skips that step.
 

@@ -74,7 +74,7 @@ jobs:
       - run: npm audit --audit-level=high
         working-directory: web
 
-  # Two headless Chromium browsers join one room through the release server; web/e2e/two-browser.mjs, then web/e2e/flows.mjs.
+  # Two headless Chromium browsers join one room through the release server; web/e2e/two-browser.mjs, then flows.mjs and ui.mjs.
   # No wasm build here (that is dsp-wasm's slow path): the test picks browser suppression.
   e2e:
     runs-on: ubuntu-24.04
