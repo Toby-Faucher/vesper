@@ -57,6 +57,10 @@
   .stacked { position: relative; display: flex; }
   .stacked :global(.av) { box-shadow: 0 0 0 2px var(--bg-sidebar); }
   .stacked.speaking { z-index: 1; }
+  /* Folded: hover lifts the avatar over its neighbours and draws its ring in the border colour; focus lifts it too, so
+     the global focus ring is not cut by the next avatar. */
+  .stacked:hover, .stacked:focus-within { z-index: 2; }
+  .stacked button:hover :global(.av) { box-shadow: 0 0 0 2px var(--line-strong); }
   .person { transition: background-color var(--dur-1) var(--ease-out); }
   .person:hover { background: var(--bg-hover); color: var(--fg); }
   .person:focus-visible { outline-offset: -2px; } /* the ring draws over the next avatar, not under it */

@@ -38,12 +38,14 @@
   });
   const user = (p: Peer) => session.state.users[p.user_id] ?? { user_id: p.user_id, display_name: p.name, accent: '' };
   const LEVEL = { good: 3, fair: 2, poor: 1, unknown: 0 } as const;
-  const qText = $derived(voice.quality === 'good' ? 'Good connection' : qualityText(voice.quality, voice.diag));
+  const qText = $derived(voice.quality === 'good' ? 'Good connection' : voice.quality === 'unknown' ? 'Checking connection' : qualityText(voice.quality, voice.diag));
+  const [qWords, qFigure = ''] = $derived(qText.split(': '));
   const key = $derived(voice.settings.pushToTalk.key.replace(/^(Key|Digit)/, ''));
   const warning = $derived(
     voice.micWarning === 'mic' ? 'No sound from your microphone. Check the input device, its volume, and the mute switch.'
       : voice.micWarning === 'pipeline' ? 'The audio pipeline stopped. Leave and join again.' : '',
   );
+  const noise = $derived(`Noise suppression: ${voice.mode}${voice.modeReason ? ` (${voice.modeReason})` : ''}`);
   const notice = $derived(voice.deviceError || (voice.forceMuted ? 'A moderator muted you.' : '') || warning);
 </script>
 
@@ -53,23 +55,23 @@
       <!-- A fixed width, so the bar does not move when the quality text changes. -->
       <div class="mr-2 flex w-48 min-w-0 flex-col">
         <a class="truncate text-sm font-medium text-fg hover:underline" href={href({ name: 'room', id: voice.joinedRoom ?? 0 })} title={room?.name}>{room?.name}</a>
-        <span class="flex min-w-0 items-center gap-1.5 text-xs" class:text-fg-3={voice.quality !== 'poor'} class:text-warn={voice.quality === 'poor'} role="status">
+        <!-- Only the words are live; the figure changes every 2 s poll and would be read out each time. -->
+        <span class="flex min-w-0 items-center gap-1.5 text-xs" class:text-fg-3={voice.quality !== 'poor'} class:text-warn={voice.quality === 'poor'} title={qText}>
           <svg class="shrink-0" width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
             {#each [1, 2, 3] as n (n)}<rect x={n * 4 - 4} y={10 - n * 3} width="3" height={n * 3 + 1} rx="0.5" opacity={n <= LEVEL[voice.quality] ? 1 : 0.3} />{/each}
           </svg>
-          <span class="truncate" title={qText}>{voice.quality === 'unknown' ? 'Checking connection' : qText}</span>
+          <span class="truncate"><span role="status">{qWords}</span>{#if qFigure}<span>: {qFigure}</span>{/if}</span>
         </span>
       </div>
 
-      <span class="off" class:on={voice.muted}>
-        <IconButton icon={voice.muted ? I.micOff : I.mic} label={voice.muted ? 'Unmute' : 'Mute'} tip disabled={voice.forceMuted} onclick={toggleMute} />
-      </span>
-      <span class="off" class:on={voice.deafened}>
-        <IconButton icon={voice.deafened ? I.headphonesOff : I.headphones} label={voice.deafened ? 'Undeafen' : 'Deafen'} tip onclick={toggleDeafen} />
-      </span>
+      <!-- No aria-pressed: the label swap (Mute, Unmute) carries the state (plan Rulings). Tooltips open upwards: below the
+           bar there is only the screen edge. -->
+      <IconButton icon={voice.muted ? I.micOff : I.mic} label={voice.muted ? 'Unmute' : 'Mute'} tip="up" danger={voice.muted} disabled={voice.forceMuted} onclick={toggleMute} />
+      <IconButton icon={voice.deafened ? I.headphonesOff : I.headphones} label={voice.deafened ? 'Undeafen' : 'Deafen'} tip="up" danger={voice.deafened} onclick={toggleDeafen} />
       {#if voice.settings.pushToTalk.enabled}
-        <!-- Both texts share one grid cell, so the pill keeps its width while the key goes down and up. -->
-        <span class="ptt ml-1 grid h-7 shrink-0 items-center rounded-sm px-2 text-xs" class:held={voice.pttHeld} role="status">
+        <!-- Both texts share one grid cell, so the pill keeps its width while the key goes down and up. Not a live region:
+             it changes on every press, and the Mute state already speaks. -->
+        <span class="ptt ml-1 grid h-7 shrink-0 items-center rounded-sm px-2 text-xs" class:held={voice.pttHeld}>
           <span class="col-start-1 row-start-1 flex items-center justify-center gap-1.5" class:invisible={!voice.pttHeld}><span class="dot" aria-hidden="true"></span>Talking</span>
           <span class="col-start-1 row-start-1" class:invisible={voice.pttHeld}>Push to talk: hold {key}</span>
         </span>
@@ -95,7 +97,8 @@
       <Button variant="danger-ghost" onclick={leave}>Leave</Button>
     </div>
 
-    <!-- One status line, always the same height, so the bar does not jump when a notice comes and goes. -->
+    <!-- One status line, always the same height, so the bar does not jump when a notice comes and goes. The noise
+         suppression mode stays at its end, so a force-muted user still sees it. -->
     <div class="line flex h-7 min-w-0 items-center gap-2 border-t border-subtle px-3 text-xs text-fg-3">
       {#if voice.error}
         <p class="min-w-0 truncate text-danger" role="alert" title={voice.error}>{voice.error}</p>
@@ -105,9 +108,8 @@
         <p class="min-w-0 truncate text-fg-2" role="status">New microphone: {voice.offered.label || voice.offered.deviceId}</p>
         <button type="button" class="link" onclick={useOfferedMic}>Use it</button>
         <button type="button" class="link" onclick={dismissOffered}>Dismiss</button>
-      {:else}
-        <p class="min-w-0 truncate" role="status">Noise suppression: {voice.mode}{voice.modeReason ? ` (${voice.modeReason})` : ''}</p>
       {/if}
+      <p class="noise min-w-0 truncate" role="status" title={noise}>{noise}</p>
     </div>
   </section>
 </div>
@@ -115,7 +117,6 @@
 <style>
   /* The speaking ring's gap is drawn in the sidebar colour; on the bar it takes the bar's own. */
   .bar { --bg-sidebar: var(--bg-raised); }
-  .on :global(.ib) { color: var(--danger-fg); }
   .ptt { background: var(--bg-element); border: 1px solid var(--line-subtle); color: var(--fg-2); }
   .ptt.held { color: var(--fg); }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
@@ -125,8 +126,8 @@
   .details:hover { color: var(--fg); }
   .line :global(.status.warn) { min-width: 0; margin: 0 -8px; padding: 2px 8px; font-size: 12px; line-height: 16px; }
   .line :global(.status .mark) { height: 16px; }
+  /* Next to a notice the mode goes to the right and gives up its width first. */
+  .noise:not(:first-child) { margin-left: auto; flex-shrink: 4; }
   .link { flex-shrink: 0; color: var(--fg-2); text-decoration: underline; text-underline-offset: 2px; }
   .link:hover { color: var(--fg); }
-  /* Tooltips open upwards: below the bar there is only the screen edge. */
-  .bar :global([data-tip])::after { top: auto; bottom: calc(100% + 4px); }
 </style>

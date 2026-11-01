@@ -6,7 +6,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { ORIGIN, browser, cli, cspViolations, inVoice, logout, openRoom, roomId, roomLink, signedIn, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, cspViolations, inVoice, logout, openRoom, roomId, roomLink, signedIn, sleep, startServer } from './lib.mjs';
 
 // fetch from the page, so it sends the session cookie and the Origin header as the app does.
 const call = (page, method, path, body) =>
@@ -30,6 +30,8 @@ async function join(page, room) {
 }
 const focusedText = (page) => page.evaluate(() => document.activeElement?.textContent?.trim());
 const MUTED_NOTICE = 'A moderator muted you.';
+// The notice in the live call bar; the inert copy that fades out after Leave is aria-hidden, so the region query skips it.
+const mutedNotice = (page) => page.getByRole('region', { name: 'Call' }).getByText(MUTED_NOTICE);
 
 const stop = await startServer();
 try {
@@ -147,32 +149,51 @@ try {
   // Force-mute disables Mute, and still holds after Leave and a rejoin. Lifting it enables Mute again.
   await join(b, 'general');
   await call(a, 'POST', `/api/users/${bobId}/force-mute`, { muted: true });
-  await b.getByText(MUTED_NOTICE).waitFor();
+  await mutedNotice(b).waitFor();
   assert.ok(await b.getByRole('button', { name: 'Unmute' }).isDisabled(), 'Mute not disabled when force-muted');
   await b.getByRole('button', { name: 'Leave' }).click();
-  // The bar goes at once; an inert copy fades out for --dur-3, so wait for that copy too.
-  await b.getByText(MUTED_NOTICE).waitFor({ state: 'detached', timeout: 2000 });
+  // The bar and its notice go at once (an inert, aria-hidden copy fades out for --dur-3; role queries skip it).
+  assert.equal(await b.getByRole('region', { name: 'Call' }).count(), 0, 'the call bar is still there after Leave');
   await join(b, 'general');
-  await b.getByText(MUTED_NOTICE).waitFor();
+  await mutedNotice(b).waitFor();
   await call(a, 'POST', `/api/users/${bobId}/force-mute`, { muted: false });
-  await b.getByText(MUTED_NOTICE).waitFor({ state: 'detached' });
+  await mutedNotice(b).waitFor({ state: 'detached' });
   assert.ok(await b.getByRole('button', { name: 'Unmute' }).isEnabled(), 'Mute still disabled after the lift');
   console.log('force-mute: ok');
 
   // The same from the person card: alice (owner) opens bob from the sidebar presence list.
   await inVoice(a, 'bob').getByRole('button').click();
   const card = a.getByRole('dialog', { name: 'bob' });
-  await card.getByRole('button', { name: 'Mute for everyone' }).click();
-  await b.getByText(MUTED_NOTICE).waitFor();
+  // While the request runs the action is busy: a second click sends nothing.
+  const sent = [];
+  a.on('request', (r) => { if (r.method() === 'POST' && r.url().includes(`/api/users/${bobId}/`)) sent.push(r.url().split('/').at(-1)); });
+  await a.route('**/force-mute', async (r) => { await sleep(500); await r.continue(); });
+  const muteBtn = card.getByRole('button', { name: 'Mute for everyone' });
+  await muteBtn.click();
+  assert.equal(await muteBtn.getAttribute('aria-disabled'), 'true', 'the busy action is not aria-disabled');
+  await muteBtn.click({ force: true }); // force: Playwright would wait for aria-disabled to clear
+  await mutedNotice(b).waitFor();
+  await a.unroute('**/force-mute');
+  assert.deepEqual(sent, ['force-mute'], 'a busy action sent a second request');
   await card.getByRole('button', { name: 'Allow to speak' }).click();
-  await b.getByText(MUTED_NOTICE).waitFor({ state: 'detached' });
+  await mutedNotice(b).waitFor({ state: 'detached' });
+  // Disconnect asks first and sends nothing until confirmed; Cancel keeps bob connected.
+  await card.getByRole('button', { name: 'Disconnect' }).click();
+  const confirm = a.getByRole('dialog', { name: 'Disconnect bob?' });
+  await confirm.waitFor();
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await confirm.waitFor({ state: 'hidden' });
+  assert.deepEqual(sent.filter((x) => x === 'disconnect'), [], 'Disconnect called the server before the confirm');
   await a.keyboard.press('Escape');
   await card.waitFor({ state: 'hidden' });
   assert.ok(await inVoice(a, 'bob').getByRole('button').evaluate((e) => e === document.activeElement), 'focus did not go back to the person');
-  console.log('person card force-mute: ok');
+  console.log('person card force-mute, busy and disconnect confirm: ok');
 
-  // A kick sends peer_left with bob's own id: his call ends, the socket stays.
-  await call(a, 'POST', `/api/users/${bobId}/kick`);
+  // A kick, from the card and without a confirm, sends peer_left with bob's own id: his call ends, the socket stays.
+  await inVoice(a, 'bob').getByRole('button').click();
+  await card.getByRole('button', { name: 'Remove from voice' }).click();
+  await card.waitFor({ state: 'hidden' });
+  assert.deepEqual(sent.slice(-1), ['kick'], 'Remove from voice did not call the server at once');
   await b.getByText('Your call ended.', { exact: false }).waitFor();
   await b.getByRole('button', { name: 'Join' }).waitFor();
   console.log('kick ends the call: ok');

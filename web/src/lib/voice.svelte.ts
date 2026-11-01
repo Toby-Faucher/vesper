@@ -161,6 +161,7 @@ export function startVoice(): () => void {
     // Nothing from this call may reach the next sign-in (the 4001 close handler can run just before this).
     voice.error = '';
     voice.mode = 'deepfilter';
+    flushVolumes(); // now, before the map is emptied for the next account
     voice.volumes = {};
     voice.userId = '';
     voice.joinedBitrate = 64;
@@ -178,11 +179,18 @@ export function toggleDeafen(): void {
   playback?.setDeafened(voice.deafened);
   sendVoiceState();
 }
+// A slider drag sends about 60 values a second: save at most every 250 ms, always including the last one.
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
 export function setVolume(id: string, v: number): void {
   voice.volumes[id] = v;
   playback?.setVolume(id, v);
-  const m = new Map(Object.entries(voice.volumes));
-  saveVolumes(localStorage, m);
+  saveTimer ??= setTimeout(flushVolumes, 250);
+}
+function flushVolumes() {
+  if (saveTimer === undefined) return;
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  saveVolumes(localStorage, new Map(Object.entries(voice.volumes)));
 }
 export function leave(): void {
   session.sig?.leave();

@@ -1,9 +1,27 @@
-<script lang="ts">
-  import * as I from '../lib/ui/icons';
+<script lang="ts" module>
   import { api, errorText } from '../lib/api';
-  import type { ForceMute } from '../lib/gen/ForceMute';
   import type { UserInfo } from '../lib/gen/UserInfo';
   import { session } from '../lib/session.svelte';
+  // Someone who signed up after this tab connected is not in the hello's user list (no event announces them yet): ask the
+  // server once per signed-in account and keep the answer in the session, so every later card has it. A failure is retried.
+  let asked: { by: string; p: Promise<void> } | null = null;
+  function loadUsers(): Promise<void> {
+    const by = session.state.me?.user.user_id ?? '';
+    if (asked?.by !== by) {
+      const p = api<UserInfo[]>('GET', '/api/users').then(
+        (l) => { session.state.users = { ...Object.fromEntries(l.map((u) => [u.user_id, u])), ...session.state.users }; },
+        (e) => { asked = null; throw e; },
+      );
+      asked = { by, p };
+    }
+    return asked.p;
+  }
+</script>
+
+<script lang="ts">
+  import * as I from '../lib/ui/icons';
+  import type { ForceMute } from '../lib/gen/ForceMute';
+  import { canModerate } from '../lib/ui/person.svelte';
   import { setVolume, voice } from '../lib/voice.svelte';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
@@ -21,16 +39,15 @@
     onclose,
   }: { userId: string; anchor: HTMLElement | null; side?: 'right' | 'top'; asDialog?: boolean; onclose: () => void } = $props();
 
-  const RANK = { member: 0, moderator: 1, owner: 2 } as const;
   const ROLE = { member: 'Member', moderator: 'Moderator', owner: 'Owner' } as const;
   const me = $derived(session.state.me?.user);
   let busy = $state('');
   let error = $state('');
-  // Someone who signed up after this tab connected is not in the hello's user list (no event announces them): ask once.
-  let fetched = $state<UserInfo>();
-  const user = $derived(session.state.users[userId] ?? fetched);
+  let missing = $state(false); // the list could not be loaded, or does not have them: say so, and show no actions
+  const user = $derived(session.state.users[userId]);
   $effect(() => {
-    if (!session.state.users[userId]) api<UserInfo[]>('GET', '/api/users').then((l) => (fetched = l.find((u) => u.user_id === userId)), (e) => (error = errorText(e)));
+    if (session.state.users[userId]) return;
+    loadUsers().then(() => (missing = !session.state.users[userId]), () => (missing = true));
   });
   const self = $derived(userId === me?.user_id);
   // The server does not echo your own join, so your place comes from the call.
@@ -40,7 +57,7 @@
   const where = $derived(roomId === null ? 'Not in voice' : `In voice in ${session.state.rooms.find((r) => r.id === roomId)?.name ?? 'a room'}`);
   const inCall = $derived(!self && voice.joined && roomId === voice.joinedRoom);
   const volume = $derived(voice.volumes[userId] ?? 100);
-  const outranks = $derived(!!me && !!user && !self && RANK[me.role] > RANK[user.role] && me.role !== 'member');
+  const outranks = $derived(canModerate(me, user));
 
   let confirming = $state(false);
   async function act(what: 'force-mute' | 'kick' | 'disconnect', body?: ForceMute) {
@@ -78,17 +95,15 @@
 
     {#if inCall}
       <div class="flex flex-col gap-2 border-t border-subtle pt-3">
-        <div class="flex items-center justify-between">
-          <span class="text-fg-2">Volume</span>
-          <span class="flex items-center gap-2">
-            <span class="text-fg tabular-nums">{volume} %</span>
-            {#if volume !== 100}<button type="button" class="link" onclick={() => setVolume(userId, 100)}>Reset</button>{/if}
-          </span>
+        <!-- The note sits in the label row, so the card keeps its height (it is placed once, on open) and leaves no gap. -->
+        <div class="flex items-center gap-2">
+          <span class="mr-auto text-fg-2">Volume</span>
+          {#if volume > 100}<span class="text-xs text-fg-3">Can distort</span>{/if}
+          <span class="text-fg tabular-nums">{volume} %</span>
+          {#if volume !== 100}<button type="button" class="link" onclick={() => setVolume(userId, 100)}>Reset</button>{/if}
         </div>
-        <Range min={0} max={200} value={volume} aria-label="Volume for {name}" aria-valuetext="{volume} %"
+        <Range min={0} max={200} value={volume} aria-label="Volume for {name}" aria-valuetext="{volume} %{volume > 100 ? ', above 100 % can distort' : ''}"
           oninput={(e) => setVolume(userId, +e.currentTarget.value)} />
-        <!-- Always laid out, so the card does not grow under the slider (it is placed once, on open). -->
-        <p class="text-xs text-fg-3" class:invisible={volume <= 100}>Above 100 % can distort.</p>
       </div>
     {/if}
 
@@ -109,6 +124,7 @@
         {/snippet}
       </Dialog>
     {/if}
+    {#if missing}<p role="status" class="text-xs text-fg-3">Could not load this person's details.</p>{/if}
     {#if error}<p role="alert" class="text-danger">{error}</p>{/if}
   </div>
 {/snippet}

@@ -359,6 +359,13 @@ scene('call-ptt', async (ctx) => {
   await sleep(300);
   await ctx.shot(page, 'call-ptt');
   await page.keyboard.up('Space');
+  // The widest row at the narrowest main pane: the room block shrinks, nothing overflows.
+  await page.setViewportSize({ width: 1024, height: 640 });
+  await rest(page);
+  await ctx.shot(page, 'call-ptt-narrow');
+  const over = await bar(page).evaluate((e) => e.scrollWidth > e.clientWidth || e.getBoundingClientRect().right > innerWidth);
+  if (over) throw new Error('call-ptt-narrow: the bar overflows');
+  await page.setViewportSize(VIEWPORT);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByLabel('Push to talk').uncheck();
   await page.goBack();
@@ -394,7 +401,7 @@ scene('person-card', async (ctx) => {
   await bar(page).getByRole('button', { name: 'alice' }).click();
   const card = page.getByRole('dialog', { name: 'alice' });
   await card.getByRole('slider', { name: 'Volume for alice' }).fill('140');
-  await card.getByText('Above 100 % can distort.').waitFor();
+  await card.getByText('Can distort').waitFor();
   await page.mouse.move(1439, 899);
   await sleep(300);
   await ctx.shot(page, 'person-card');

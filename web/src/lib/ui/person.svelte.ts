@@ -13,3 +13,10 @@ export function closePerson(): void {
   person.id = null;
   person.anchor = null;
 }
+
+const RANK = { member: 0, moderator: 1, owner: 2 } as const;
+type Ranked = { role: keyof typeof RANK };
+/** The server's voice_target rule: a moderator acts on members, the owner on anyone lower; so never on yourself or an equal. */
+export function canModerate(me: Ranked | undefined, them: Ranked | undefined): boolean {
+  return !!me && !!them && RANK[me.role] > RANK[them.role];
+}

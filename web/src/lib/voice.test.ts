@@ -48,7 +48,8 @@ vi.stubGlobal('window', win);
 vi.stubGlobal('document', doc);
 vi.stubGlobal('navigator', { mediaDevices: md, locks: { request: vi.fn() } });
 const stored = new Map<string, string>();
-vi.stubGlobal('localStorage', { getItem: (k: string) => stored.get(k) ?? null, setItem: () => {}, removeItem: () => {} });
+const writes: string[] = [];
+vi.stubGlobal('localStorage', { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, x: string) => void writes.push(`${k}=${x}`), removeItem: () => {} });
 vi.stubGlobal('location', { pathname: '/', search: '', hash: '', protocol: 'http:', host: 'x' });
 
 const { session } = await import('./session.svelte');
@@ -283,5 +284,19 @@ it('20 joins and leaves leak no listeners, timers or socket handlers', async () 
     stop();
     expect([win.n, doc.n, md.n, sig.msg.size, sig.close.size, vi.getTimerCount()]).toEqual([0, 0, 0, 0, 0, 0]);
   }
+  stop = v.startVoice();
+});
+
+it('a volume drag saves at most every 250 ms, the last value included, and sign out saves at once', async () => {
+  writes.length = 0;
+  for (const x of [110, 120, 130]) v.setVolume('u1', x);
+  expect(writes).toEqual([]);
+  await vi.advanceTimersByTimeAsync(250);
+  expect(writes).toEqual(['vesper.volumes={"u1":130}']);
+  v.setVolume('u1', 90);
+  stop(); // signed out before the timer: written now, not lost and not overwritten by the next account's empty map
+  expect(writes.at(-1)).toBe('vesper.volumes={"u1":90}');
+  await vi.advanceTimersByTimeAsync(300);
+  expect(writes).toHaveLength(2);
   stop = v.startVoice();
 });
