@@ -3567,7 +3567,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vesper-audiolab"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-dsp"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "deep_filter",
  "ndarray",
@@ -3598,7 +3598,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-loadtest"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "futures-util",
  "serde_json",
@@ -3610,7 +3610,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-protocol"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3619,7 +3619,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-server"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "argon2",
  "axum",
@@ -3644,7 +3644,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-sfu"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "str0m",
  "tokio",
@@ -3654,7 +3654,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-store"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "getrandom 0.3.4",
  "serde_json",
