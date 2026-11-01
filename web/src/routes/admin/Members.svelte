@@ -19,17 +19,30 @@
   const owner = $derived(me.role === 'owner');
   let loaded = $state(false);
   let failed = $state(false);
+  let loading = $state(false);
+  let loadedAt = 0;
+  let tableEl = $state<HTMLElement>();
   async function load() {
+    if (loading) return;
+    [loading, loadedAt] = [true, Date.now()];
     try {
       const list = await api<UserInfo[]>('GET', '/api/users');
       session.state.users = { ...session.state.users, ...Object.fromEntries(list.map((u) => [u.user_id, u])) };
       [loaded, failed] = [true, false];
     } catch {
       failed = !loaded; // a failed reload keeps the table
+    } finally {
+      loading = false;
     }
   }
-  // Again when the tab comes back: no event announces a signup.
-  const back = () => document.visibilityState === 'visible' && void load();
+  // Try again unmounts its button on success: focus goes to the table, not the body.
+  async function retry() {
+    await load();
+    await tick();
+    if (!failed) tableEl?.focus();
+  }
+  // Again when the tab comes back (no event announces a signup), at most every 5 s.
+  const back = () => document.visibilityState === 'visible' && Date.now() - loadedAt > 5000 && void load();
   onMount(() => {
     void load();
     document.addEventListener('visibilitychange', back);
@@ -83,12 +96,12 @@
 {#if failed}
   <div class="flex items-center gap-3">
     <p role="alert" class="text-sm text-fg-2">{M.membersFailed}</p>
-    <Button size="sm" onclick={load}>Try again</Button>
+    <Button size="sm" {loading} onclick={retry}>Try again</Button>
   </div>
 {:else if !loaded}
   <p class="text-sm text-fg-2">{M.membersLoading}</p>
 {:else}
-  <table class="tbl table-fixed" aria-label="Members">
+  <table class="tbl table-fixed" aria-label="Members" tabindex="-1" bind:this={tableEl}>
     <thead>
       <tr><th scope="col">Name</th><th scope="col" class="w-36">Role</th><th scope="col" class="w-20">Status</th><th class="w-36"><span class="sr-only">Actions</span></th></tr>
     </thead>

@@ -27,7 +27,7 @@ const contrast = (a: string, b: string) => {
 const slots = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `--avatar-${n}`);
 // The pairs in the plan's "Measured contrast": text needs 4.5, UI parts (rings, swatches) 3.
 const TEXT: [string, string][] = [
-  ['--fg', '--bg-app'], ['--fg-2', '--bg-app'], ['--fg-2', '--bg-selected'], ['--fg-3', '--bg-app'], ['--fg-3', '--bg-raised'],
+  ['--fg', '--bg-app'], ['--fg-2', '--bg-app'], ['--fg-2', '--bg-selected'], ['--fg-2', '--line'], ['--fg-3', '--bg-app'], ['--fg-3', '--bg-raised'],
   ['--fg-3', '--bg-sidebar'], ['--on-accent', '--accent'], ['--on-accent', '--accent-hover'], ['--accent-fg', '--bg-app'],
   ['--accent-fg', '--accent-subtle'], ['--on-danger', '--danger-solid'], ['--danger-fg', '--bg-app'], ['--warn-fg', '--bg-app'],
   ['--ok-fg', '--bg-app'], ...slots.map((s): [string, string] => ['--on-avatar', s]),

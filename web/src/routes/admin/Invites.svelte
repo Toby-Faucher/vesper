@@ -61,18 +61,29 @@
   let invites = $state<InviteInfo[] | null>(null);
   let listFailed = $state(false);
   let now = $state(Date.now());
+  let loading = $state(false);
+  let loadedAt = 0;
   async function load() {
+    if (loading) return;
+    [loading, loadedAt] = [true, Date.now()];
     try {
       invites = await api<InviteInfo[]>('GET', '/api/invites'); // newest first
       listFailed = false;
       now = Date.now();
     } catch {
       listFailed = !invites; // a failed reload keeps the table
+    } finally {
+      loading = false;
     }
     void loadUsers().catch(() => {}); // only for the Created by names; a dash stands in without them
   }
-  // Again when the tab comes back: uses and signups happen elsewhere.
-  const back = () => document.visibilityState === 'visible' && void load();
+  // Try again unmounts its button on success: focus goes to the list heading, not the body.
+  async function retry() {
+    await load();
+    if (!listFailed) listHead?.focus();
+  }
+  // Again when the tab comes back (uses and signups happen elsewhere), at most every 5 s.
+  const back = () => document.visibilityState === 'visible' && Date.now() - loadedAt > 5000 && void load();
   onMount(() => {
     void load();
     document.addEventListener('visibilitychange', back);
@@ -155,7 +166,7 @@
     {#if listFailed}
       <div class="flex items-center gap-3">
         <p role="alert" class="text-sm text-fg-2">{M.invitesFailed}</p>
-        <Button size="sm" onclick={load}>Try again</Button>
+        <Button size="sm" {loading} onclick={retry}>Try again</Button>
       </div>
     {:else if !invites}
       <p class="text-sm text-fg-2">{M.invitesLoading}</p>

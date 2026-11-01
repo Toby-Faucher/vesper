@@ -91,6 +91,13 @@
     testing = false;
     peaks = [];
   }
+  // A test on the call's stream follows the call: it stops when the call ends and follows a new stream.
+  $effect(() => {
+    const live = liveStream;
+    if (!testing || test || !loop) return;
+    if (!live) stopTest();
+    else if (loop.srcObject !== live) loop.srcObject = live;
+  });
 
 </script>
 

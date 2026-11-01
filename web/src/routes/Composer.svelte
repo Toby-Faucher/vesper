@@ -382,7 +382,7 @@
     border-radius: var(--radius);
     cursor: pointer;
   }
-  .people li.on { background: var(--bg-selected); }
+  .people li.on { background: var(--line); } /* as the switcher's keyboard row: --bg-selected is too faint on --bg-raised */
   .help { width: 288px; padding: 8px; }
   .help dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; align-items: baseline; }
   .help dd { color: var(--fg-2); }
