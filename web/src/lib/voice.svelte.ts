@@ -16,7 +16,7 @@ import { summarize, type Diag } from './diag';
 import { quality, type Quality } from './ui/quality';
 import { callCue, type CallSnap } from './ui/cues';
 import { chime } from './ui/chime';
-import { loadPrefs } from './ui/notify';
+import { loadPrefs } from './ui/prefs';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();

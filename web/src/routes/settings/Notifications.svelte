@@ -63,7 +63,7 @@
 
   <section role="group" aria-labelledby="notify-sounds">
     <div class="flex h-8 items-center"><h3 id="notify-sounds" class="text-base font-medium text-fg">Sounds</h3></div>
-    <Switch label="Call sounds" help="Short, quiet tones on your speaker. The others in the call never hear them."
+    <Switch label="Call sounds" help="Short, quiet tones on your speaker. They are not sent into the call, but on open speakers your mic can pick them up. Echo cancellation removes most of that. With headphones nobody else hears them."
       checked={prefs.call} onchange={(e) => set({ call: e.currentTarget.checked })} />
     <ul class="groups flex flex-col gap-3">
       {#each GROUPS as g (g.key)}
