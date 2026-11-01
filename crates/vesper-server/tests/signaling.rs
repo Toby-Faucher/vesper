@@ -1513,10 +1513,9 @@ async fn full_queue_closes_only_that_socket() {
         got += 1;
     }
     assert!(got < N, "the stalled socket was not closed: got all {got}");
-    assert_eq!(
-        *slow.close_code.lock().unwrap(),
-        Some(vesper_server::hub::CLOSE_TOO_SLOW)
-    );
+    // The close code itself is asserted in the hub unit test. On the wire it is not reliable: a
+    // full TCP buffer can keep the close frame from arriving, and the kernel may reset the
+    // connection instead (the CI kernel did).
     // The other socket still works.
     let (status, _, _) = server
         .call(request(
