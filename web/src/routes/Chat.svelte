@@ -6,7 +6,7 @@
   import { ApiFailure, errorText } from '../lib/api';
   import { session } from '../lib/session.svelte';
   import {
-    anchorTop, chat, edit, jumpTo, loadLatest, loadNewer, loadOlder, markRead, marks, pin, react, remove, search, send, typers, upload,
+    anchorTop, chat, edit, jumpTo, loadNewer, loadOlder, markRead, marks, openRoom, pin, react, remove, search, send, typers, upload,
   } from '../lib/chat.svelte';
   import type { Attachment } from '../lib/gen/Attachment';
   import type { Message } from '../lib/gen/Message';
@@ -30,6 +30,9 @@
   let loadingOlder = false;
   let lastTyping = 0;
   const readSent: Record<number, number> = {};
+  const PASTE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']; // the types the server shows inline
+  let announce = $state(''); // the newest message from someone else, for screen readers
+  let lastId: number | null = null; // newest id shown; null right after a room switch, so its history is not announced
   let now = $state(Date.now());
 
   let query = $state('');
@@ -64,13 +67,13 @@
   $effect(() => {
     const room = roomId;
     untrack(() => {
-      chat.active = room;
       stick = jumpTarget === null;
+      lastId = null;
       replyTo = null;
       editingId = null;
       pending = [];
       error = '';
-      if (!chat.state.rooms[room]) loadLatest(room).catch((e) => (error = errorText(e)));
+      openRoom(room, jumpTarget !== null).catch((e) => (error = errorText(e)));
     });
   });
 
@@ -83,6 +86,11 @@
         jumpTarget = null;
         stick = false;
       } else if (stick) toBottom();
+      const last = log?.messages.at(-1);
+      if (last && lastId !== null && last.id > lastId && last.author_id !== myId && !last.deleted) {
+        announce = `${name(last.author_id)}: ${last.body}`;
+      }
+      if (last) lastId = last.id;
       maybeRead();
     });
   });
@@ -185,7 +193,7 @@
   }
 
   function onPaste(e: ClipboardEvent) {
-    const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
+    const files = [...(e.clipboardData?.files ?? [])].filter((f) => PASTE_TYPES.includes(f.type));
     if (!files.length) return;
     e.preventDefault();
     void attach(files);
@@ -198,6 +206,16 @@
       await edit(id, editText);
       editingId = null;
     });
+  }
+
+  function onEditKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      editingId = null;
+    } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      void saveEdit();
+    }
   }
 
   function onSearchInput() {
@@ -277,7 +295,8 @@
         {#if m.deleted}
           <p class="text-neutral-500 italic">Message deleted</p>
         {:else if editingId === m.id}
-          <textarea class="w-full rounded bg-neutral-800 p-1" aria-label="Edit message" bind:value={editText}></textarea>
+          <textarea class="w-full rounded bg-neutral-800 p-1" aria-label="Edit message" bind:value={editText}
+            onkeydown={onEditKey} {@attach (el) => el.focus()}></textarea>
           <button class="rounded bg-neutral-700 px-2 text-sm" onclick={saveEdit}>Save</button>
           <button class="px-2 text-sm" onclick={() => (editingId = null)}>Cancel</button>
         {:else}
@@ -293,7 +312,7 @@
             {#each emojis(m) as e (e)}
               {@const by = reacted(m, e)}
               <button class="rounded px-1 {by.includes(myId) ? 'bg-sky-900' : 'bg-neutral-800'}" aria-pressed={by.includes(myId)}
-                aria-label="React {e}" onclick={() => act(() => react(m.id, e, !by.includes(myId)))}>{e}{by.length ? ` ${by.length}` : ''}</button>
+                aria-label="React {e}{by.length ? `, ${by.length}` : ''}" onclick={() => act(() => react(m.id, e, !by.includes(myId)))}>{e}{by.length ? ` ${by.length}` : ''}</button>
             {/each}
             <button class="rounded bg-neutral-800 px-1" onclick={() => (replyTo = m)}>Reply</button>
             <button class="rounded bg-neutral-800 px-1" onclick={() => act(() => pin(m.id, !m.pinned))}>{m.pinned ? 'Unpin' : 'Pin'}</button>
@@ -315,6 +334,7 @@
   <p class="h-5 text-xs text-neutral-400" role="status">
     {typing.length ? `${typing.join(', ')} ${typing.length > 1 ? 'are' : 'is'} typing` : ''}
   </p>
+  <p class="sr-only" aria-live="polite">{announce}</p>
   {#if error}<p class="text-red-400" role="alert">{error}</p>{/if}
   <form class="space-y-1" onsubmit={submit}>
     {#if replyTo}

@@ -1,7 +1,10 @@
 import { expect, it } from 'vitest';
 
 // Every string the app shows goes through Svelte text nodes. These sinks would parse a string as HTML.
-const SINKS = ['{@html', 'innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write'];
+const SINKS = [
+  '{@html', 'innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'srcdoc', 'setHTMLUnsafe', 'parseHTMLUnsafe',
+  'createContextualFragment', 'DOMParser', 'eval(', 'new Function', 'javascript:',
+];
 const files = import.meta.glob(['../**/*.svelte', '../**/*.ts', '!../**/*.test.ts', '!./gen/**'], {
   query: '?raw', import: 'default', eager: true,
 }) as Record<string, string>;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { anchorTop, applyChatMsg, marks, mergeLatest, typers, type ChatState } from './chat.svelte';
+import { anchorTop, applyChatMsg, chat, loadLatest, marks, mergeLatest, openRoom, typers, type ChatState } from './chat.svelte';
 import type { Message } from './gen/Message';
 
 const msg = (id: number, over: Partial<Message> = {}): Message => ({
@@ -11,7 +11,11 @@ const loaded = (ids: number[], moreAfter = false): ChatState => ({
 });
 const ids = (s: ChatState) => s.rooms[1].messages.map((m) => m.id);
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  chat.state = { rooms: {}, typing: {} };
+});
 
 describe('applyChatMsg', () => {
   it('message_new appends in id order and ignores duplicates', () => {
@@ -77,6 +81,38 @@ describe('mergeLatest (refetch after a reconnect)', () => {
   it('a held copy newer than the fetched one wins', () => {
     const held = { messages: [msg(2, { deleted: true, body: '', updated_at: 9 })], moreBefore: false, moreAfter: false };
     expect(mergeLatest(held, page([msg(2)])).messages[0].deleted).toBe(true);
+  });
+
+  it('a held message newer than the page is kept', () => {
+    const held = { messages: [1, 2, 3, 4, 5].map((i) => msg(i)), moreBefore: false, moreAfter: false };
+    expect(mergeLatest(held, page([msg(2), msg(3), msg(4)])).messages.map((m) => m.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(mergeLatest(held, page([msg(60)])).messages.map((m) => m.id)).toEqual([60]);
+  });
+
+  it('a message pushed while the newest page is in flight is not lost', async () => {
+    for (const before of [undefined, [1, 2, 3, 4]]) {
+      // `before` undefined is the first open of the room, else a refetch after a reconnect.
+      chat.state = before ? loaded(before) : { rooms: {}, typing: {} };
+      let answer!: (r: Response) => void;
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((r) => (answer = r))));
+      const done = loadLatest(1);
+      chat.state = applyChatMsg(chat.state, { type: 'message_new', message: msg(5) });
+      answer(Response.json(page([msg(2), msg(3), msg(4)])));
+      await done;
+      expect(ids(chat.state)).toEqual(before ? [1, 2, 3, 4, 5] : [2, 3, 4, 5]);
+    }
+  });
+
+  it('re-entering a room left on an older slice shows the newest page', async () => {
+    const f = vi.fn(async () => Response.json(page([msg(9)])));
+    vi.stubGlobal('fetch', f);
+    chat.state = loaded([3], true); // left after a jump
+    await openRoom(1, true); // the jump's own switch keeps the slice
+    expect(ids(chat.state)).toEqual([3]);
+    await openRoom(1);
+    expect(ids(chat.state)).toEqual([9]);
+    expect(f).toHaveBeenCalledOnce();
+    expect(chat.active).toBe(1);
   });
 
   it('a gap or an older slice is replaced by the page', () => {

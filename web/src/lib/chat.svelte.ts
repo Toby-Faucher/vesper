@@ -34,18 +34,23 @@ export function upsert(list: Message[], m: Message, insert = true): Message[] {
   return i < 0 ? [...list, m] : [...list.slice(0, i), m, ...list.slice(i)];
 }
 
-/** The newest page merged into what is held. With a gap between them the held slice is dropped. */
+/**
+ * The newest page merged into what is held. With a gap between them the held slice is dropped. Held messages newer
+ * than the page are kept: they arrived live while the page was in flight.
+ */
 export function mergeLatest(log: RoomLog | undefined, page: MessagePage): RoomLog {
-  const fresh = { messages: page.messages, moreBefore: page.more_before, moreAfter: false };
+  const last = page.messages.at(-1)?.id ?? 0;
+  const newer = log && !log.moreAfter ? log.messages.filter((m) => m.id > last) : [];
   const first = page.messages[0];
-  if (!log || log.moreAfter || !first || !log.messages.some((m) => m.id >= first.id)) return fresh;
+  if (!log || log.moreAfter || !first || !log.messages.some((m) => m.id >= first.id))
+    return { messages: [...page.messages, ...newer], moreBefore: page.more_before, moreAfter: false };
   const held = new Map(log.messages.map((m) => [m.id, m]));
   const older = log.messages.filter((m) => m.id < first.id);
   const merged = page.messages.map((p) => {
     const h = held.get(p.id);
     return h && stale(h, p) ? h : p;
   });
-  return { messages: [...older, ...merged], moreBefore: older.length ? log.moreBefore : page.more_before, moreAfter: false };
+  return { messages: [...older, ...merged, ...newer], moreBefore: older.length ? log.moreBefore : page.more_before, moreAfter: false };
 }
 
 export function applyChatMsg(s: ChatState, m: ServerMsg): ChatState {
@@ -87,6 +92,8 @@ export function marks(snippet: string): { text: string; mark: boolean }[] {
 /** The scrollTop that keeps the same content in view after rows were added above it. */
 export const anchorTop = (oldTop: number, oldHeight: number, newHeight: number) => oldTop + (newHeight - oldHeight);
 
+// shortcut: history loaded by scrolling up and every visited room stay in memory until the next reconnect; cap each
+// room to its newest few hundred messages and drop other rooms on switch if long sessions get slow.
 export const chat = $state({
   state: { rooms: {}, typing: {} } as ChatState,
   /** The room shown, refetched after a reconnect. */
@@ -100,7 +107,19 @@ const history = (roomId: number, q = '') => api<MessagePage>('GET', `/api/rooms/
 
 /** Loads the newest page of a room, merged into what is held. */
 export async function loadLatest(roomId: number): Promise<void> {
-  const page = await history(roomId);
+  // An empty log first, so a message pushed while the page is in flight is held and then merged.
+  const placeholder = !chat.state.rooms[roomId];
+  if (placeholder) setLog(roomId, { messages: [], moreBefore: false, moreAfter: false });
+  let page: MessagePage;
+  try {
+    page = await history(roomId);
+  } catch (e) {
+    if (placeholder) {
+      const { [roomId]: _, ...rooms } = chat.state.rooms; // not loaded: the next open tries again
+      chat.state = { ...chat.state, rooms };
+    }
+    throw e;
+  }
   setLog(roomId, mergeLatest(chat.state.rooms[roomId], page));
 }
 
@@ -129,6 +148,14 @@ export async function loadNewer(roomId: number): Promise<void> {
   let messages = now.messages;
   for (const m of page.messages) messages = upsert(messages, m);
   setLog(roomId, { ...now, messages, moreAfter: page.more_after });
+}
+
+/** Shows a room: its newest page, unless it is cached or `jumping` (a jump just loaded a slice of it). */
+export function openRoom(roomId: number, jumping = false): Promise<void> {
+  chat.active = roomId;
+  const log = chat.state.rooms[roomId];
+  // Back in a room left on an older slice after a jump: show the newest page again, so live messages and mark-read work.
+  return !log || (log.moreAfter && !jumping) ? loadLatest(roomId) : Promise.resolve();
 }
 
 /** Shows the history around one message (a search hit). */

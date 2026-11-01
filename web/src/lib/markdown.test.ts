@@ -37,12 +37,20 @@ describe('markdown', () => {
     for (const h of [...links(parse('https://a.test/x​y')), ...idn]) expect(h).toMatch(/^[\x21-\x7e]+$/);
   });
 
+  it('text on a code fence line is shown', () => {
+    // The server counts @bob as a mention, so a reader must see it too.
+    expect(parse('```js hi @bob\nx\n```after\nnext')).toEqual([
+      text('js hi '), { t: 'mention', username: 'bob' }, { t: 'pre', v: 'x' }, text('after'), { t: 'br' }, text('next'),
+    ]);
+    expect(parse('a\n```js\nx\n```')).toEqual([text('a'), { t: 'br' }, text('js'), { t: 'pre', v: 'x' }]);
+  });
+
   it('markdown_basic', () => {
     expect(parse('**b** *i* _j_ ~~s~~ `c<d>`')).toEqual([
       { t: 'b', c: [text('b')] }, text(' '), { t: 'i', c: [text('i')] }, text(' '), { t: 'i', c: [text('j')] }, text(' '),
       { t: 's', c: [text('s')] }, text(' '), { t: 'code', v: 'c<d>' },
     ]);
-    expect(parse('a\n```js\n<b>**x**</b>\n```\nb')).toEqual([text('a'), { t: 'pre', v: '<b>**x**</b>' }, text('b')]);
+    expect(parse('a\n```\n<b>**x**</b>\n```\nb')).toEqual([text('a'), { t: 'pre', v: '<b>**x**</b>' }, text('b')]);
     expect(parse('> one **two**\n> > three\nafter')).toEqual([
       { t: 'quote', c: [text('one '), { t: 'b', c: [text('two')] }, { t: 'br' }, text('> three')] }, text('after'),
     ]);

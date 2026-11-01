@@ -51,6 +51,18 @@ const call = (page, method, path, body) =>
     [method, path, body],
   );
 
+// Sends a message through the API, waiting out a 429: the send limit is a burst of 10, then one a second.
+async function post(page, room, body) {
+  for (;;) {
+    try {
+      return await call(page, 'POST', `/api/rooms/${room}/messages`, { body, reply_to: null, attachments: [] });
+    } catch (e) {
+      if (!String(e).includes(': 429')) throw e;
+      await sleep(500);
+    }
+  }
+}
+
 const composer = (page) => page.getByPlaceholder('Message #general');
 // The message whose Markdown has a bold "bob" (a reply's quoted excerpt is plain text).
 const boldBob = (page) => page.locator('article').filter({ has: page.locator('strong', { hasText: 'bob' }) });
@@ -141,9 +153,16 @@ try {
   await composer(bob.page).fill('hi alice');
   await composer(bob.page).press('Enter');
   await alice.page.locator('article', { hasText: 'Reply to alice' }).filter({ hasText: 'hi alice' }).waitFor({ timeout: 5000 });
-  await boldBob(alice.page).getByRole('button', { name: 'Edit', exact: true }).click();
-  await alice.page.getByLabel('Edit message').fill('hello **bob** edited');
-  await alice.page.getByRole('button', { name: 'Save', exact: true }).click();
+  // Edit gets focus, Escape cancels it, Enter saves.
+  const editButton = boldBob(alice.page).getByRole('button', { name: 'Edit', exact: true });
+  await editButton.click();
+  const editBox = alice.page.getByLabel('Edit message');
+  assert.ok(await editBox.evaluate((el) => el === document.activeElement), 'the edit box did not get focus');
+  await editBox.press('Escape');
+  await editBox.waitFor({ state: 'detached', timeout: 2000 });
+  await editButton.click();
+  await editBox.fill('hello **bob** edited');
+  await editBox.press('Enter');
   await boldBob(bob.page).filter({ hasText: 'bob edited' }).filter({ hasText: '(edited)' }).waitFor({ timeout: 5000 });
   console.log('chat_roundtrip: ok');
 
@@ -155,6 +174,7 @@ try {
   console.log('upload_roundtrip: ok');
 
   // search_roundtrip: a restricted room bob is not in holds another "hello". Alice (owner) finds both, bob only his.
+  const room = Number(await bob.page.getByLabel('Room').inputValue()); // general
   const secret = await call(alice.page, 'POST', '/api/rooms', { name: 'secret' });
   await call(alice.page, 'PATCH', `/api/rooms/${secret.id}`, { restricted: true });
   await call(alice.page, 'POST', `/api/rooms/${secret.id}/messages`, { body: 'hello from the secret room', reply_to: null, attachments: [] });
@@ -169,9 +189,34 @@ try {
   assert.equal(await results(bob.page).locator('mark').first().innerText(), 'hello');
   const options = await bob.page.getByLabel('Room').locator('option').allInnerTexts();
   assert.ok(!options.some((o) => o.includes('secret')), 'bob sees the hidden room');
+  // The jump: enough newer messages that the hit is out of view and outside the newest page's newer half.
+  for (let i = 0; i < 30; i++) await post([alice, bob][i % 2].page, room, `filler ${i}`);
+  await bob.page.locator('article', { hasText: 'filler 29' }).waitFor({ timeout: 5000 });
+  const shown = (loc) => loc.evaluate((el) => {
+    const [r, l] = [el.getBoundingClientRect(), el.parentElement.getBoundingClientRect()];
+    return r.bottom > l.top && r.top < l.bottom;
+  });
+  assert.equal(await shown(boldBob(bob.page)), false, 'the hit was already in view before the jump');
   await results(bob.page).first().click();
-  await boldBob(bob.page).waitFor({ timeout: 5000 });
+  await bob.page.waitForFunction(() => {
+    const el = [...document.querySelectorAll('article')].find((a) => a.querySelector('strong')?.textContent === 'bob');
+    const [r, l] = [el.getBoundingClientRect(), el.parentElement.getBoundingClientRect()];
+    return r.bottom > l.top && r.top < l.bottom;
+  }, null, { timeout: 5000 });
+  const newer = bob.page.getByRole('button', { name: 'Load newer messages' });
+  await newer.waitFor({ timeout: 5000 });
   console.log('search_roundtrip: ok');
+
+  // rejoin_after_jump: leaving and re-entering the room shows the newest page again, with live messages.
+  const lobby = await call(alice.page, 'POST', '/api/rooms', { name: 'lobby' });
+  const roomSelect = bob.page.getByLabel('Room');
+  await roomSelect.locator(`option[value="${lobby.id}"]`).waitFor({ state: 'attached', timeout: 5000 });
+  await roomSelect.selectOption(String(lobby.id));
+  await roomSelect.selectOption(String(room));
+  await newer.waitFor({ state: 'detached', timeout: 5000 });
+  await post(alice.page, room, 'after the jump');
+  await bob.page.locator('article', { hasText: 'after the jump' }).waitFor({ timeout: 5000 });
+  console.log('rejoin_after_jump: ok');
 
   for (const p of [alice.page, bob.page]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
   console.log('no CSP violations: ok');

@@ -34,9 +34,11 @@ The "Not verified" list at the end says what was only read.
 - **The chat panel** (`web/src/routes/Chat.svelte`, store in `web/src/lib/chat.svelte.ts`) sits beside the voice controls and shows the room picked
   in the room list. History, sends, edits, deletes, reactions, pins, read markers, uploads and search go over REST; new and changed messages and
   typing come over the socket. A `message_updated` copy with a smaller `updated_at` than the one held is dropped, and after
-  every `hello` the shown room's newest page is fetched again and merged, so missed or reordered events heal. Unread counts come from `Hello.unread` and live events (`state.ts`); a room is
+  every `hello` the shown room's newest page is fetched again and merged, so missed or reordered events heal. A message pushed while that
+  page is in flight (also on a room's first open) is held and kept. Re-entering a room left on an older slice after a search jump shows its newest page. Unread counts come from `Hello.unread` and live events (`state.ts`); a room is
   marked read when its newest message is on screen in a visible tab. Typing is sent at most every 3 s and shown for 5 s. Drafts are kept in memory
-  only. Search waits 300 ms after the last key and needs 2 characters.
+  only. Search waits 300 ms after the last key and needs 2 characters. New messages from others are read out by a polite live region; paste
+  takes only PNG, JPEG, GIF and WebP images.
 - **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed elements:
   bold, italic, strike, inline code, fenced code, one level of `> ` quote, `@name` and bare `http`/`https` links. Anything else is text, so raw
   HTML shows as typed. A link is kept only when `new URL` parses it as http or https with no user name or password, and its text is the full parsed

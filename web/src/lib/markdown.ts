@@ -129,9 +129,16 @@ export function parse(src: string): Md[] {
       let e = k + 1;
       while (e < lines.length && !lines[e].startsWith('```')) e++;
       if (e < lines.length) {
+        // Text on a fence line (an info string, or a tail after the closing fence) is shown, so nothing is hidden.
+        const [head, tail] = [line.slice(3), lines[e].slice(3)];
+        if (head) {
+          if (prevInline) out.push({ t: 'br' });
+          pushAll(out, inline(head));
+        }
         out.push({ t: 'pre', v: lines.slice(k + 1, e).join('\n') });
+        pushAll(out, inline(tail));
         k = e;
-        prevInline = false;
+        prevInline = tail !== '';
         continue;
       }
     }

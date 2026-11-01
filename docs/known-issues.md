@@ -65,6 +65,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Stored per-person volumes are never pruned.** `navigator.locks` missing only logs a warning.
 - **Unhandled edge cases:** a teardown that races a joining call can leave a poll timer running, and an `AudioContext` constructor that throws is not caught. Both are rare.
 - **The connection test reports only the local candidate type.**
+- **Chat history is not trimmed.** Older pages loaded by scrolling up and every room visited stay in memory until the next reconnect, so a very long session grows the page.
 
 ## Denoiser
 
