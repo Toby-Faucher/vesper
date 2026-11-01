@@ -1063,7 +1063,7 @@ async function settingsPage(page, name) {
   const nav = page.getByRole('navigation', { name: 'Settings sections' });
   if (!(await nav.count())) await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await nav.getByRole('link', { name }).click();
-  await page.getByRole('heading', { level: 2, name }).waitFor();
+  await page.locator('#main').getByRole('heading', { level: 2, name }).waitFor();
 }
 async function tall(page, ctx, name) {
   const h = await page.locator('main .max-w-160').evaluate((e) => e.scrollHeight + 200);
@@ -1175,7 +1175,7 @@ async function adminPage(page, name) {
     await page.getByRole('menuitem', { name: 'Admin' }).click();
   }
   await nav.getByRole('link', { name }).click();
-  await page.getByRole('heading', { level: 2, name }).waitFor();
+  await page.locator('#main').getByRole('heading', { level: 2, name }).waitFor();
 }
 async function narrow(page, ctx, name) {
   await page.setViewportSize({ width: 1024, height: 640 });
@@ -1263,6 +1263,69 @@ scene('admin-members-moderator-view', async (ctx) => {
   await ctx.shot(page, 'admin-denied');
 });
 
+// The owner's room list: the seeded rooms plus one restricted to bob, then the same at 1024 and a name being renamed.
+async function roomsPage(ctx) {
+  await ctx.seed();
+  const page = ctx.alice.page;
+  const rooms = await ctx.api(page, 'GET', '/api/rooms');
+  let crew = rooms.find((r) => r.name === 'crew');
+  if (!crew) {
+    crew = await ctx.api(page, 'POST', '/api/rooms', { name: 'crew' });
+    const bobId = (await ctx.api(ctx.bob.page, 'GET', '/api/me')).user.user_id;
+    await ctx.api(page, 'PATCH', `/api/rooms/${crew.id}`, { restricted: true });
+    await ctx.api(page, 'PUT', `/api/rooms/${crew.id}/members`, { user_ids: [bobId] });
+  }
+  await home(page);
+  await adminPage(page, 'Rooms');
+  await page.locator('tr[data-room]').first().waitFor();
+  return page;
+}
+scene('admin-rooms', async (ctx) => {
+  const page = await roomsPage(ctx);
+  await rest(page);
+  await ctx.shot(page, 'admin-rooms');
+  await narrow(page, ctx, 'admin-rooms-narrow');
+  await page.getByRole('button', { name: 'Rename music' }).click();
+  await page.getByLabel('Name for music').fill('');
+  await page.keyboard.press('Enter');
+  await page.getByRole('alert').waitFor();
+  await ctx.shot(page, 'admin-rooms-rename', { fullPage: false });
+  await page.keyboard.press('Escape');
+});
+scene('admin-room-members', async (ctx) => {
+  const page = await roomsPage(ctx);
+  await page.getByRole('button', { name: 'Members of crew' }).click();
+  await page.getByRole('dialog', { name: 'Who can see crew?' }).getByRole('checkbox').first().waitFor();
+  await sleep(300);
+  await ctx.shot(page, 'admin-room-members', { fullPage: false });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+});
+async function diskPage(page) {
+  await home(page);
+  await adminPage(page, 'Disk use');
+  await page.getByRole('meter', { name: 'Uploads' }).waitFor();
+  await rest(page);
+}
+scene('admin-disk', async (ctx) => {
+  await diskPage(ctx.alice.page);
+  await ctx.shot(ctx.alice.page, 'admin-disk');
+  await narrow(ctx.alice.page, ctx, 'admin-disk-narrow');
+});
+// A 1 MiB quota and a 900 KB upload: the warn line. The server is started again without the quota after.
+scene('admin-disk-warn', async (ctx) => {
+  const page = ctx.alice.page;
+  await ctx.server.restart(async () => {}, { VESPER_UPLOAD_QUOTA_MB: '1' });
+  await home(page);
+  const general = (await ctx.api(page, 'GET', '/api/rooms')).find((r) => r.name === 'general');
+  const status = await page.evaluate(async (id) => (await fetch(`/api/rooms/${id}/uploads?name=big.bin`, { method: 'POST', body: new Uint8Array(900 * 1024) })).status, general.id);
+  if (status !== 201) throw new Error(`upload: ${status}`);
+  await diskPage(page);
+  await page.getByText('over 80 % full', { exact: false }).waitFor();
+  await ctx.shot(page, 'admin-disk-warn');
+  await ctx.server.restart(async () => {}, { VESPER_UPLOAD_QUOTA_MB: '' });
+  await home(page);
+});
+
 // Main-thread CPU on bob's page in a two-person call: CDP TaskDuration over 10 s, printed, no picture. Run it three times
 // and take the median (docs/dev.md has the baseline).
 scene('cpu-baseline', async ({ alice, bob }) => {
@@ -1317,7 +1380,7 @@ const LINES = [
 // npm run shots -- uploads, or -- admin
 const GROUPS = {
   uploads: ['message-image', 'drop-overlay', 'upload-tray'],
-  admin: ['admin-invites', 'admin-invite-created', 'admin-members', 'admin-members-moderator-view'],
+  admin: ['admin-invites', 'admin-invite-created', 'admin-members', 'admin-members-moderator-view', 'admin-rooms', 'admin-room-members', 'admin-disk', 'admin-disk-warn'],
 };
 const names = process.argv.slice(2).flatMap((n) => GROUPS[n] ?? [n]);
 for (const n of names) if (!scenes.has(n)) throw new Error(`unknown scene ${n}; known: ${[...scenes.keys()].join(' ')}`);

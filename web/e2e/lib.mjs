@@ -16,7 +16,8 @@ let env = null;
 const browsers = [];
 
 // Starts the server on 127.0.0.1:18090 (UDP 18091) with a new data dir and waits for /health. Returns stop(), which also
-// has stop.restart(during): it stops the server, awaits during() while it is down, then starts it again on the same data.
+// has stop.restart(during, extraEnv): it stops the server, awaits during() while it is down, then starts it again on the same
+// data, with extraEnv added to its environment.
 export async function startServer() {
   const dataDir = await mkdtemp(join(tmpdir(), 'vesper-e2e-'));
   env = {
@@ -59,9 +60,10 @@ export async function startServer() {
   };
   launch();
   await healthy();
-  stop.restart = async (during) => {
+  stop.restart = async (during, extraEnv = {}) => {
     await kill();
     await during();
+    Object.assign(env, extraEnv); // kept for later starts; '' unsets a VESPER_ variable
     launch();
     await healthy();
   };

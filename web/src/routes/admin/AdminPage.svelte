@@ -4,8 +4,10 @@
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
   import Button from '../../lib/ui/c/Button.svelte';
   import EmptyState from '../../lib/ui/c/EmptyState.svelte';
+  import Disk from './Disk.svelte';
   import Invites from './Invites.svelte';
   import Members from './Members.svelte';
+  import Rooms from './Rooms.svelte';
   // A lazy chunk, framed like Settings: moderators get Invites and Members, the owner also Rooms and Disk use. The server
   // enforces the same rules; this only keeps a member or moderator from a page that would answer 403 everywhere.
   let { section }: { section: AdminSection } = $props();
@@ -36,8 +38,10 @@
           <Invites />
         {:else if section === 'members'}
           <Members />
+        {:else if section === 'rooms'}
+          <Rooms />
         {:else}
-          <EmptyState title={M.adminLater} />
+          <Disk />
         {/if}
       {/if}
     </div>

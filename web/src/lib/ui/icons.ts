@@ -41,6 +41,7 @@ export const send = 'M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.
 export const help = 'M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01' as IconPath;
 export const x = 'M18 6 6 18M6 6l12 12' as IconPath;
 export const chevronDown = 'M6 9l6 6 6-6' as IconPath;
+export const chevronUp = 'M18 15l-6-6-6 6' as IconPath;
 export const chevronRight = 'M9 18l6-6-6-6' as IconPath;
 export const arrowDown = 'M12 5v14M19 12l-7 7-7-7' as IconPath;
 export const signal = 'M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 4v16' as IconPath;

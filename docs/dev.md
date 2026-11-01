@@ -144,7 +144,8 @@ Ctrl+Shift+F after a failed chunk load and from the switcher, and picks a `from:
 `web/e2e/ui.mjs` runs third, on its own fresh server, and checks the admin pages: alice creates an invite in the form (one request
 for two clicks), copies the link and bob signs up with it; a revoked link shows the bad-link text; a member who opens `/admin` sees
 that it is not allowed; after a confirmed role change bob has the Admin menu entry and the moderator view without role or ban controls; a
-confirmed ban ends carol's session. It never prints an invite link.
+confirmed ban ends carol's session. On Rooms alice creates, renames, moves (by button and by Alt+Up) and restricts a room to bob: bob's
+sidebar follows each change live and carol's never shows it once restricted; Disk use shows three meters. It never prints an invite link.
 
 All three tests fail on any CSP block in a page: each page records `securitypolicyviolation` events and console lines about the Content
 Security Policy, through sign up, sign in, voice, chat, upload and search ([decision 0008](decisions/0008-csp.md)). A block inside a

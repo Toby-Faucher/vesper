@@ -3,7 +3,7 @@
 // Admin menu entry and the moderator view; a member who opens /admin sees the not-allowed page; a ban of carol ends her
 // session. Invite links are never printed. Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
-import { ORIGIN, browser, cli, cspViolations, signedIn, signup, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, cspViolations, signedIn, signup, sleep, startServer } from './lib.mjs';
 
 const BAD_LINK = 'This invite link does not work. Ask the person who sent it for a new one.';
 const DENIED = 'You do not have access to admin pages.';
@@ -12,7 +12,7 @@ async function openAdmin(page, section) {
   await page.getByRole('button', { name: /^Account, / }).click();
   await page.getByRole('menuitem', { name: 'Admin' }).click();
   await page.getByRole('navigation', { name: 'Admin sections' }).getByRole('link', { name: section }).click();
-  await page.getByRole('heading', { level: 2, name: section }).waitFor();
+  await page.locator('#main').getByRole('heading', { level: 2, name: section }).waitFor();
 }
 // Creates an invite from the form and returns the link from the read-only field (kept in memory, never printed).
 async function createInvite(page) {
@@ -101,6 +101,79 @@ try {
   const carol = await browser('carol');
   const c = carol.page;
   await signup(c, carolLink, 'carol');
+
+  // Rooms: alice creates music (one request for two clicks), renames it, moves it up by button and by Alt+Up, and restricts
+  // it to bob. bob's sidebar follows each change live; carol, a member not listed, never sees it once restricted.
+  const order = (p, names) => p.waitForFunction(
+    (n) => JSON.stringify([...document.querySelectorAll('nav[aria-label="Rooms"] a[title]')].map((x) => x.title)) === JSON.stringify(n), names);
+  await openAdmin(a, 'Rooms');
+  await a.getByLabel('Room name').fill('   ');
+  await a.getByRole('button', { name: 'Create room' }).click();
+  await a.getByRole('alert').getByText('Room names are 1 to 32 characters, with no hidden characters.').waitFor();
+  await a.getByLabel('Room name').fill('General');
+  await a.getByRole('button', { name: 'Create room' }).click();
+  await a.getByRole('alert').getByText('That name is already taken.').waitFor();
+  const roomPosts = [];
+  a.on('request', (r) => r.method() === 'POST' && r.url().endsWith('/api/rooms') && roomPosts.push(1));
+  await a.route('**/api/rooms', async (r) => { if (r.request().method() === 'POST') await new Promise((ok) => setTimeout(ok, 400)); await r.continue(); });
+  await a.getByLabel('Room name').fill('music');
+  await a.getByRole('button', { name: 'Create room' }).click();
+  await a.getByRole('button', { name: 'Create room' }).click({ force: true });
+  await a.getByText('Created music.').waitFor();
+  await a.unroute('**/api/rooms');
+  assert.equal(roomPosts.length, 1, 'a second click on Create room sent a second request');
+  await order(b, ['general', 'hangout', 'music']);
+  await order(c, ['general', 'hangout', 'music']);
+
+  await a.getByRole('button', { name: 'Rename music' }).click();
+  await a.getByLabel('Name for music').fill('not this');
+  await a.keyboard.press('Escape');
+  assert.equal(await a.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Rename music', 'Esc did not give focus back to Rename');
+  await a.getByRole('button', { name: 'Rename music' }).click();
+  await a.getByLabel('Name for music').fill('music room');
+  await a.keyboard.press('Enter');
+  await a.getByRole('button', { name: 'Rename music room' }).waitFor();
+  await order(b, ['general', 'hangout', 'music room']);
+
+  await a.getByRole('button', { name: 'Move music room up' }).click();
+  await order(b, ['general', 'music room', 'hangout']);
+  // Alt+Up from the Move up button: at the top it is disabled, so focus must move to Move down in the same row.
+  await a.getByRole('button', { name: 'Move music room up' }).focus();
+  await a.keyboard.press('Alt+ArrowUp');
+  await order(b, ['music room', 'general', 'hangout']);
+  // alice's own row moves once her PUT answers, which can be after bob's event: wait for it, then the focus must be kept.
+  await order(a, ['music room', 'general', 'hangout']);
+  await a.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Move music room down', null, { timeout: 2000 })
+    .catch(() => assert.fail('Alt+Up lost the focus'));
+  assert.ok(await a.getByRole('button', { name: 'Move music room up' }).isDisabled(), 'the top room can still move up');
+  // A 409 (the list changed elsewhere) says so; nothing moves.
+  await a.route('**/api/rooms/order', (r) => r.fulfill({ status: 409, json: { code: 'conflict', message: 'the order must list every room once' } }));
+  await a.getByRole('button', { name: 'Move general down' }).click();
+  await a.getByRole('alert').getByText('The room list changed. Try again.').waitFor();
+  await a.unroute('**/api/rooms/order');
+  await order(a, ['music room', 'general', 'hangout']);
+
+  await a.getByRole('switch', { name: 'Restricted: music room' }).check();
+  await order(c, ['general', 'hangout']);
+  await order(b, ['general', 'hangout']);
+  await a.getByRole('button', { name: 'Members of music room' }).click();
+  const pick = a.getByRole('dialog', { name: 'Who can see music room?' });
+  await pick.getByRole('checkbox', { name: /^bob\b/ }).check();
+  await pick.getByRole('button', { name: 'Save' }).click();
+  await pick.waitFor({ state: 'hidden' });
+  await order(b, ['music room', 'general', 'hangout']);
+  await a.waitForFunction(() => document.querySelector('[aria-label="Members of music room"]')?.textContent.replace(/\s+/g, ' ').includes('Members 1'));
+  await sleep(500); // a late event would show it to carol here
+  await order(c, ['general', 'hangout']);
+  console.log('rooms: create, rename, reorder, restrict, live sidebars: ok');
+
+  // Disk use: three meters; uploads are counted against the default 10 GB quota.
+  await openAdmin(a, 'Disk use');
+  const uploads = a.getByRole('meter', { name: 'Uploads' });
+  assert.equal(await uploads.getAttribute('aria-valuetext'), '0 B of 10 GB');
+  assert.equal(await uploads.getAttribute('aria-valuenow'), '0');
+  assert.equal(await a.getByRole('meter').count(), 3);
+  console.log('disk use: ok');
 
   // The role change asks first and names bob; Cancel keeps him a member. Then bob is a moderator: the Admin entry, no role
   // or ban controls, no owner sections, and /admin/rooms says it is the owner's.

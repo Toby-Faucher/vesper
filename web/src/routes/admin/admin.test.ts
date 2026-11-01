@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { InviteInfo } from '../../lib/gen/InviteInfo';
-import { byRole, inviteStatus, untilText } from './admin';
+import { byRole, bytes, inviteStatus, moveRoom, untilText } from './admin';
 
 const NOW = 1_800_000_000_000;
 const inv = (o: Partial<InviteInfo> = {}): InviteInfo =>
@@ -37,5 +37,28 @@ describe('byRole', () => {
     const u = (display_name: string, role: InviteInfo['role']) => ({ display_name, role });
     const l = [u('zed', 'member'), u('amy', 'member'), u('bob', 'moderator'), u('tob', 'owner')].sort(byRole);
     expect(l.map((x) => x.display_name)).toEqual(['tob', 'bob', 'amy', 'zed']);
+  });
+});
+
+describe('moveRoom', () => {
+  it('swaps with the neighbour, keeps the ends', () => {
+    expect(moveRoom([1, 2, 3], 3, -1)).toEqual([1, 3, 2]);
+    expect(moveRoom([1, 2, 3], 1, 1)).toEqual([2, 1, 3]);
+    expect(moveRoom([1, 2, 3], 1, -1)).toEqual([1, 2, 3]);
+    expect(moveRoom([1, 2, 3], 3, 1)).toEqual([1, 2, 3]);
+    expect(moveRoom([1, 2, 3], 9, 1)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('bytes', () => {
+  it('1024 steps, one decimal under 10', () => {
+    expect(bytes(0)).toBe('0 B');
+    expect(bytes(1023)).toBe('1023 B');
+    expect(bytes(1536)).toBe('1.5 KB');
+    expect(bytes(12 * 1024 ** 2)).toBe('12 MB');
+    expect(bytes(2.14 * 1024 ** 3)).toBe('2.1 GB');
+    expect(bytes(10240 * 1024 ** 2)).toBe('10 GB');
+    expect(bytes(9.99 * 1024 ** 2)).toBe('10 MB');
+    expect(bytes(3 * 1024 ** 4)).toBe('3 TB');
   });
 });
