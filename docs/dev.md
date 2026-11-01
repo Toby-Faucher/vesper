@@ -139,7 +139,8 @@ address bar, autocomplete attributes, an empty password field and focus on the e
 after a rejoin, and lifted), a kick ending the call, and a room made private ending the call and dropping out of bob's search
 (alice still finds its message), and a room made private while bob's search is open dropping its hit from his list. It also opens search by
 Ctrl+Shift+F after a failed chunk load and from the switcher, and picks a `from:` and an `in:` name from the box's lists with Enter and Tab. If `web/dist/dsp/` exists
-(`scripts/build-dsp.sh`, then `npm run build`), it also signs alice in with DeepFilterNet on and checks the denoiser starts.
+(`scripts/build-dsp.sh`, then `npm run build`), it also signs up a new account from an invite with DeepFilterNet on and checks the denoiser
+starts (the call bar and Diagnostics say `deepfilter`). CI copies the dsp-wasm job's build into the e2e job, so it runs there.
 
 `web/e2e/ui.mjs` runs third, on its own fresh server. First it opens the dev-only `/_gallery?primitives` page from a Vite dev server on
 a spare port and checks the primitives by keyboard (`web/e2e/primitives.mjs`): a focus ring on every Tab stop, Dialog focus in and back
@@ -159,7 +160,7 @@ Ctrl+K to Settings and Esc back) checks a visible focus ring after every Tab.
 
 All three tests fail on any CSP block in a page: each page records `securitypolicyviolation` events and console lines about the Content
 Security Policy, through sign up, sign in, voice, chat, upload and search ([decision 0008](decisions/0008-csp.md)). A block inside a
-worker shows neither, so only the denoiser step above catches one (a missing `'wasm-unsafe-eval'`). CI has no wasm build and skips that step.
+worker shows neither, so only the denoiser step above catches one (a missing `'wasm-unsafe-eval'`). CI runs that step with the dsp-wasm job's build.
 
 The fixture is synthetic (voiced syllables with vowel formants), so it has no third-party licence. `node web/e2e/fixtures/make-speech.mjs` rebuilds it.
 Not checked: the inbound `audioLevel` stat. It stays 0 because the app plays remote audio through Web Audio with the `<audio>` element muted.
