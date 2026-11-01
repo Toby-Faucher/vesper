@@ -36,4 +36,6 @@
   --radius-sm: 4px; --radius: 6px; --radius-lg: 10px;
   --shadow-float: 0 4px 16px rgb(0 0 0 / 0.35);
   --dur-1: 100ms; --dur-2: 160ms; --dur-3: 220ms; --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  /* exits are shorter and ease in; --dur-calm is every preset under reduced motion; --ease-pop overshoots a little */
+  --dur-out: 120ms; --dur-calm: 80ms; --ease-in: cubic-bezier(0.4, 0, 1, 1); --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
