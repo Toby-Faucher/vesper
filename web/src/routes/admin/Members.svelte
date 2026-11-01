@@ -163,7 +163,7 @@
               </span>
             </PersonButton>
             {#if resets[u.user_id]}{@const line = resetLine(resets[u.user_id], resetBy(resets[u.user_id]), Date.now())}
-              <p class="mt-0.5 truncate pl-8 text-xs text-fg-2" title={line}>{line}</p>{/if}
+              <p class="mt-0.5 pl-8 text-xs text-fg-2">{line}</p>{/if}
           </td>
           <td>
             {#if editable(u)}
