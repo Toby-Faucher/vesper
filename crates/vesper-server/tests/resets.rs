@@ -16,11 +16,21 @@ async fn moderator(t: &TestServer, name: &str) -> Session {
     t.signup(&code, name).await
 }
 
-/// `POST /api/users/{id}/reset` as `by`: the status and the code from the link, if any.
+fn link_req(by: &Session, id: &str, password: &str, ip: &str) -> Request<Body> {
+    let mut req = post(
+        &format!("/api/users/{id}/reset"),
+        json!({ "password": password }),
+        by,
+    );
+    req.headers_mut()
+        .insert("x-forwarded-for", ip.parse().unwrap());
+    req
+}
+
+/// `POST /api/users/{id}/reset` as `by` (who types `PASSWORD`): the status and the code from the
+/// link, if any.
 async fn make_link(t: &TestServer, by: &Session, id: &str) -> (StatusCode, Option<String>) {
-    let (s, _, v) = t
-        .call(post(&format!("/api/users/{id}/reset"), json!({}), by))
-        .await;
+    let (s, _, v) = t.call(link_req(by, id, PASSWORD, "127.0.0.1")).await;
     let code = v["url"].as_str().map(|url| {
         let code = url
             .strip_prefix(&format!("{ORIGIN}/reset#"))
@@ -67,11 +77,11 @@ async fn who_may_make_a_reset_link() {
     let (o, m1, m2, a, b) = (&owner, &mod1, &mod2, &mem1, &mem2);
     let id = |s: &Session| s.user.user_id.clone();
     for (by, target, want) in [
-        (o, id(o), S::CREATED),
+        (o, id(o), S::BAD_REQUEST),
         (o, id(m1), S::CREATED),
         (o, id(a), S::CREATED),
         (m1, id(o), S::FORBIDDEN),
-        (m1, id(m1), S::FORBIDDEN),
+        (m1, id(m1), S::BAD_REQUEST),
         (m1, id(m2), S::FORBIDDEN),
         (m1, id(a), S::CREATED),
         (a, id(o), S::FORBIDDEN),
@@ -85,6 +95,7 @@ async fn who_may_make_a_reset_link() {
         assert_eq!(s, want, "{} -> {target}", by.user.username);
         assert_eq!(code.is_some(), want == S::CREATED);
     }
+    // Each target above got at most one link, made by whoever was allowed.
     // Signed out: 401.
     let req = request(
         Method::POST,
@@ -222,7 +233,11 @@ async fn reset_routes_need_our_origin() {
                 json!({ "code": code, "password": NEW_PASSWORD }),
                 None,
             ),
-            (path.as_str(), json!({}), Some(owner.cookie.as_str())),
+            (
+                path.as_str(),
+                json!({ "password": PASSWORD }),
+                Some(owner.cookie.as_str()),
+            ),
         ] {
             let mut b = Request::builder().method(Method::POST).uri(uri);
             if let Some(o) = origin {
@@ -313,4 +328,168 @@ async fn cli_reset_password_works_for_the_owner() {
             "{bad:?}"
         );
     }
+}
+
+/// The issuer types their own password: a wrong or missing one makes no link, and wrong ones
+/// draw on the issuer's sign-in limit.
+#[tokio::test]
+async fn making_a_link_needs_your_own_password() {
+    let t = TestServer::new().await;
+    let owner = t.owner().await;
+    let bob = t.member("bob").await;
+    let id = &bob.user.user_id;
+    for i in 0..5 {
+        let (s, _, v) = t
+            .call(link_req(&owner, id, "test-password-9", "203.0.113.7"))
+            .await;
+        assert_eq!(
+            (s, v["message"].as_str()),
+            (StatusCode::FORBIDDEN, Some("wrong password")),
+            "{i}"
+        );
+        assert!(v.get("url").is_none());
+    }
+    let (s, _, _) = t.call(link_req(&owner, id, PASSWORD, "203.0.113.7")).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    let (s, _, _) = t
+        .call(post(&format!("/api/users/{id}/reset"), json!({}), &owner))
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(t.state.store.resets().await.unwrap().is_empty());
+    // The right password from another address works.
+    assert_eq!(make_link(&t, &owner, id).await.0, StatusCode::CREATED);
+}
+
+/// 10 links per issuer, then 1 every 6 minutes, wherever they come from.
+#[tokio::test]
+async fn making_links_is_rate_limited_per_issuer() {
+    let t = TestServer::new().await;
+    let owner = t.owner().await;
+    let m = moderator(&t, "mod").await;
+    let bob = t.member("bob").await;
+    let id = &bob.user.user_id;
+    for i in 0..10 {
+        let ip: &'static str = Box::leak(format!("198.51.100.{i}").into_boxed_str());
+        let (s, _, v) = t.call(link_req(&m, id, PASSWORD, ip)).await;
+        assert_eq!(s, StatusCode::CREATED, "{i}: {v}");
+    }
+    let (s, h, v) = t.call(link_req(&m, id, PASSWORD, "198.51.100.99")).await;
+    assert_eq!(
+        (s, v["code"].as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited"))
+    );
+    assert!(h.contains_key(header::RETRY_AFTER));
+    // The owner has a budget of their own.
+    assert_eq!(make_link(&t, &owner, id).await.0, StatusCode::CREATED);
+}
+
+/// The owner sees the latest reset of each account: who made it, when, and whether it was used.
+#[tokio::test]
+async fn the_owner_sees_who_reset_whom() {
+    let t = TestServer::new().await;
+    let owner = t.owner().await;
+    let m = moderator(&t, "mod").await;
+    let bob = t.member("bob").await;
+    let code = make_link(&t, &m, &bob.user.user_id).await.1.unwrap();
+    assert_eq!(
+        reset(&t, &code, NEW_PASSWORD).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let (s, _, v) = t.call(get("/api/resets", &owner)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let r = &v.as_array().unwrap()[0];
+    assert_eq!(r["user_id"], bob.user.user_id.as_str());
+    assert_eq!(r["created_by"], m.user.user_id.as_str());
+    assert!(r["used_at"].as_i64().is_some());
+    assert_eq!(r["used_from"], "lan");
+    assert!(r.get("code").is_none() && r.get("code_hash").is_none());
+    for who in [&m, &t.member("carol").await] {
+        assert_eq!(
+            t.call(get("/api/resets", who)).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+}
+
+/// After a reset the person is told once who reset it.
+#[tokio::test]
+async fn the_member_is_told_once() {
+    let t = TestServer::new().await;
+    let _owner = t.owner().await;
+    let m = moderator(&t, "mod").await;
+    let bob = t.member("bob").await;
+    let code = make_link(&t, &m, &bob.user.user_id).await.1.unwrap();
+    assert_eq!(
+        reset(&t, &code, NEW_PASSWORD).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let body = json!({ "username": "bob", "password": NEW_PASSWORD });
+    let (s, h, _) = t
+        .call(request(Method::POST, "/api/login", Some(&body), None))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let cookie = common::set_cookie(&h);
+    let take = || request(Method::POST, "/api/me/reset-notices", None, Some(&cookie));
+    let (s, _, v) = t.call(take()).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v[0]["by"], "mod");
+    assert!(v[0]["at"].as_i64().is_some());
+    assert_eq!(t.call(take()).await.2, json!([]));
+}
+
+/// A link a moderator made for a member dies when that member becomes a moderator, is banned, or
+/// changes their own password.
+#[tokio::test]
+async fn role_change_ban_and_password_change_end_a_live_link() {
+    let t = TestServer::new().await;
+    let owner = t.owner().await;
+    let m = moderator(&t, "mod").await;
+    let bob = t.member("bob").await;
+    let id = bob.user.user_id.clone();
+    let code = make_link(&t, &m, &id).await.1.unwrap();
+    let role = json!({ "role": "moderator" });
+    let (s, _, _) = t
+        .call(request(
+            Method::PATCH,
+            &format!("/api/users/{id}/role"),
+            Some(&role),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        reset(&t, &code, NEW_PASSWORD).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let code = make_link(&t, &owner, &id).await.1.unwrap();
+    let (s, _, _) = t
+        .call(post(&format!("/api/users/{id}/ban"), json!({}), &owner))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _, _) = t
+        .call(post(&format!("/api/users/{id}/unban"), json!({}), &owner))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        reset(&t, &code, NEW_PASSWORD).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let code = make_link(&t, &owner, &id).await.1.unwrap();
+    let bob = t.login("bob").await;
+    let change = json!({ "old": PASSWORD, "new": "test-password-3" });
+    assert_eq!(
+        t.call(post("/api/me/password", change, &bob)).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        reset(&t, &code, NEW_PASSWORD).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        login_status(&t, "bob", "test-password-3").await,
+        StatusCode::OK
+    );
 }

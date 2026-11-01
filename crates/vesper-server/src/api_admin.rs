@@ -5,18 +5,21 @@
 //! moderator, and only work on a lower role (a moderator on members, the owner on anyone else).
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Path, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use vesper_protocol::{
     ApiErrorCode, CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ForceMute, InviteCreate, InviteCreated,
-    InviteInfo, ResetCreated, Role, RolePatch, UserInfo,
+    InviteInfo, ResetCreate, ResetCreated, ResetInfo, Role, RolePatch, UserInfo,
 };
 use vesper_store::{RESET_TTL_MS, now_ms};
 
-use crate::api_accounts::body;
-use crate::auth::new_token;
+use crate::api_accounts::{body, ip_key, limit};
+use crate::auth::{client_ip, new_token, verify_password};
+use crate::limits::Kind;
 use crate::{ApiError, AppState, Authed};
 
 const HOUR_MS: i64 = 3_600_000;
@@ -54,6 +57,7 @@ pub fn routes() -> Router<AppState> {
         .route("/invites/{id}", delete(revoke_invite))
         .route("/users/{id}/role", patch(set_role))
         .route("/users/{id}/reset", post(create_reset))
+        .route("/resets", get(resets))
         .route("/users/{id}/ban", post(ban))
         .route("/users/{id}/unban", post(unban))
         .route("/users/{id}/kick", post(kick))
@@ -124,17 +128,38 @@ async fn revoke_invite(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// A one-use password reset link for `id`, valid 24 h; it replaces any older one. The owner may
-/// make one for anyone, a moderator only for a member. The code is only in the returned link.
+/// A one-use password reset link for `id`, valid 24 h; it cancels any older one. The owner may
+/// make one for anyone else, a moderator only for a member; nobody for themself (a stolen cookie
+/// must not skip the old password check; the owner's own way back is the CLI). The caller types
+/// their own password again (Login limit, the same 403 as a password change), and each caller may
+/// make 10, then 1 every 6 minutes. The code is only in the returned link.
 async fn create_reset(
     State(st): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    h: HeaderMap,
     a: Authed,
     id: Result<Path<String>, PathRejection>,
+    req: Result<Json<ResetCreate>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ResetCreated>), ApiError> {
     require(&a.user, Role::Moderator)?;
     let id = path(id)?;
+    if id == a.user.user_id {
+        return Err(bad("change your own password in Settings > Account"));
+    }
     if a.user.role != Role::Owner && st.store.user(&id).await?.role != Role::Member {
         return Err(ApiError::new(ApiErrorCode::Forbidden, "not allowed"));
+    }
+    limit(&st, Kind::ResetCreate, &a.user.user_id)?;
+    let req = body(req)?;
+    let ip = ip_key(client_ip(peer, &h));
+    limit(&st, Kind::Login, &format!("{ip} {}", a.user.username))?;
+    let phc = st
+        .store
+        .login_row(&a.user.username)
+        .await?
+        .and_then(|r| r.password_phc);
+    if !verify_password(req.password, phc).await {
+        return Err(ApiError::new(ApiErrorCode::Forbidden, "wrong password"));
     }
     let (code, hash) = new_token();
     let expires_at = now_ms() + RESET_TTL_MS;
@@ -144,6 +169,12 @@ async fn create_reset(
     tracing::info!(user_id = %id, by = %a.user.user_id, "password reset link created");
     let url = format!("{}/reset#{code}", st.cfg.origin);
     Ok((StatusCode::CREATED, Json(ResetCreated { url, expires_at })))
+}
+
+/// The latest reset link of each account, so the owner sees who reset whom. Owner only.
+async fn resets(State(st): State<AppState>, a: Authed) -> Result<Json<Vec<ResetInfo>>, ApiError> {
+    require(&a.user, Role::Owner)?;
+    Ok(Json(st.store.resets().await?))
 }
 
 /// Owner only, and never on themselves or another owner, so the owner can not lock everyone out.

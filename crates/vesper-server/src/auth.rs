@@ -157,7 +157,7 @@ pub fn origin_ok(headers: &HeaderMap, origin: &str) -> bool {
         .is_some_and(|v| v.as_bytes() == origin.as_bytes())
 }
 
-fn is_private(ip: IpAddr) -> bool {
+pub fn is_private(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
         IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local(),

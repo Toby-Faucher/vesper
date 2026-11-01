@@ -1324,7 +1324,9 @@ async fn reset_link_closes_every_socket_of_that_account() {
     let mut a = Conn::open(&server, &bob).await;
     let mut o = Conn::open(&server, &owner).await;
     let path = format!("/api/users/{}/reset", bob.user.user_id);
-    let (status, _, v) = server.call(post(&path, json!({}), &owner)).await;
+    let (status, _, v) = server
+        .call(post(&path, json!({ "password": PASSWORD }), &owner))
+        .await;
     assert_eq!(status, StatusCode::CREATED, "{v}");
     let code = v["url"].as_str().unwrap().split_once('#').unwrap().1;
     let body = json!({ "code": code, "password": "test-password-2" });

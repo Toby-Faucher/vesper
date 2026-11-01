@@ -14,15 +14,15 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use vesper_protocol::{
     ApiErrorCode, CLOSE_SESSION_ENDED, Device, InvitePreview, LoginReq, Me, PasswordChange,
-    ProfilePatch, ResetReq, Role, ServerMsg, SignupReq, UserInfo,
+    ProfilePatch, ResetNotice, ResetReq, Role, ServerMsg, SignupReq, UserInfo,
 };
 use vesper_store::{NewAccount, NewSession, StoreError, now_ms};
 
 use crate::AppState;
 use crate::auth::{
-    clear_cookie, client_ip, cookie_token, device_label, hash_password, hash_token, new_token,
-    session_cookie, valid_accent, valid_bio, valid_display_name, valid_password, valid_username,
-    verify_password,
+    clear_cookie, client_ip, cookie_token, device_label, hash_password, hash_token, is_private,
+    new_token, session_cookie, valid_accent, valid_bio, valid_display_name, valid_password,
+    valid_username, verify_password,
 };
 use crate::limits::Kind;
 
@@ -162,7 +162,7 @@ async fn drop_presented_session(h: &HeaderMap, st: &AppState) -> Result<(), ApiE
 
 /// Rate-limit key for an address: IPv6 clients are keyed on their /64, as one host usually
 /// holds the whole prefix.
-fn ip_key(ip: IpAddr) -> String {
+pub(crate) fn ip_key(ip: IpAddr) -> String {
     match ip {
         IpAddr::V4(v4) => v4.to_string(),
         IpAddr::V6(v6) => {
@@ -205,6 +205,7 @@ pub fn routes() -> Router<AppState> {
         .route("/me", get(me).patch(patch_me))
         .route("/me/password", post(change_password))
         .route("/reset", post(reset_password))
+        .route("/me/reset-notices", post(reset_notices))
         .route("/sessions", get(sessions))
         .route("/sessions/{id}", delete(revoke))
 }
@@ -415,7 +416,8 @@ async fn reset_password(
     h: HeaderMap,
     req: Result<Json<ResetReq>, JsonRejection>,
 ) -> Result<StatusCode, ApiError> {
-    limit(&st, Kind::Reset, &ip_key(client_ip(peer, &h)))?;
+    let ip = client_ip(peer, &h);
+    limit(&st, Kind::Reset, &ip_key(ip))?;
     let req = body(req)?;
     if !valid_password(&req.password) {
         return Err(bad("password: 8 to 128 characters"));
@@ -427,15 +429,29 @@ async fn reset_password(
         return Err(invalid());
     }
     let phc = hash_password(req.password).await;
-    let id = st
+    let from = if is_private(ip) { "lan" } else { "internet" };
+    let (id, by) = st
         .store
-        .use_reset(&hash, &phc, now_ms())
+        .use_reset(&hash, &phc, now_ms(), from)
         .await?
         .ok_or_else(invalid)?;
     st.voice.kick(&id);
     st.hub.close_user(&id, CLOSE_SESSION_ENDED);
-    tracing::info!(user_id = %id, "password reset used");
+    let by = by.as_deref().unwrap_or("command line");
+    tracing::info!(user_id = %id, by, from, "password reset used");
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Resets of your password you were not told about yet; the sign-in page shows them once.
+async fn reset_notices(
+    State(st): State<AppState>,
+    a: Authed,
+) -> Result<Json<Vec<ResetNotice>>, ApiError> {
+    Ok(Json(
+        st.store
+            .take_reset_notices(&a.user.user_id, now_ms())
+            .await?,
+    ))
 }
 
 async fn sessions(State(st): State<AppState>, a: Authed) -> Result<Json<Vec<Device>>, ApiError> {
