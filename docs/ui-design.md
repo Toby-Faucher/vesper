@@ -64,7 +64,7 @@ To see every role, the type scale, the radii and the focus ring, run `npm --pref
 
 The primitives live in [`web/src/lib/ui/c/`](../web/src/lib/ui/c/): buttons, fields, switch, range, dialog, popover, menu, avatar,
 badge, status line, empty state. Dialogs are native `<dialog>` with `showModal()`; popovers and menus use the Popover API and
-`place()` in `web/src/lib/ui/place.ts`. Per-user colour is an avatar slot from `web/src/lib/ui/avatar.ts`. Icons are Lucide paths in
+`place()` in `web/src/lib/ui/place.ts`. Per-user colour is an avatar slot from `web/src/lib/ui/avatar.ts`. An avatar shows the person's picture when they set one (Settings > Account), else their initials on the slot colour; the speaking ring and the mute glyph draw the same around either. Icons are Lucide paths in
 `web/src/lib/ui/icons.ts`. `/_gallery?primitives` shows each one in its states.
 
 ## Checked

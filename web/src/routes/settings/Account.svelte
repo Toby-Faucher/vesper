@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { api, errorText } from '../../lib/api';
+  import { ApiFailure, api, errorText } from '../../lib/api';
   import { session } from '../../lib/session.svelte';
-  import { SLOT_HEX, avatarSlot, profilePatch } from '../../lib/ui/avatar';
+  import { MAX_BIO, MAX_PICTURE, PICTURE_TYPES, SLOT_HEX, avatarSlot, profilePatch, squarePicture } from '../../lib/ui/avatar';
   import { UI_MESSAGES as M, relTime } from '../../lib/ui/messages';
   import { type PwError, pwCheck, pwFailure } from './account';
   import Avatar from '../../lib/ui/c/Avatar.svelte';
@@ -13,24 +13,25 @@
   import Swatches from '../Swatches.svelte';
   import type { Device } from '../../lib/gen/Device';
   import type { UserInfo } from '../../lib/gen/UserInfo';
-  // Settings > Account: name and colour, the password, and the devices signed in to this account.
+  // Settings > Account: picture, name, colour and bio, the password, and the devices signed in to this account.
   const me = $derived(session.state.me!.user);
 
   let name = $state(session.state.me!.user.display_name);
   let slot = $state(avatarSlot(session.state.me!.user));
+  let bio = $state(session.state.me!.user.bio);
   let saving = $state(false);
   let profileError = $state('');
   let saved = $state(false);
   async function saveProfile(e: Event) {
     e.preventDefault();
     if (saving) return;
-    const patch = profilePatch(me, name, slot);
+    const patch = profilePatch(me, name, slot, bio);
     profileError = '';
     if (Object.keys(patch).length) {
       saving = true;
       try {
         const user = await api<UserInfo>('PATCH', '/api/me', patch);
-        session.state.me = { ...session.state.me!, user };
+        setMe(user);
       } catch (err) {
         profileError = errorText(err);
       } finally {
@@ -38,6 +39,60 @@
       }
     }
     saved = !profileError;
+  }
+
+  // The socket's user_updated does the same a moment later; this shows it at once.
+  const setMe = (user: UserInfo) => {
+    session.state.me = { ...session.state.me!, user };
+    session.state.users = { ...session.state.users, [user.user_id]: user };
+  };
+
+  // The picture is saved as soon as it is picked or dropped: cropped to the centre square and redrawn small first.
+  let picBusy = $state<'' | 'upload' | 'remove'>('');
+  let picError = $state('');
+  let picDone = $state('');
+  let dragging = $state(false);
+  let picInput: HTMLInputElement;
+  async function setPicture(file: File | undefined) {
+    if (!file || picBusy) return;
+    [picError, picDone, picBusy] = ['', '', 'upload'];
+    try {
+      const pic = await squarePicture(file);
+      if (pic.size > MAX_PICTURE) throw new Error('large');
+      setMe(await api<UserInfo>('PUT', '/api/me/avatar', pic));
+      picDone = M.pictureSaved;
+    } catch (err) {
+      const why = err instanceof Error ? err.message : '';
+      picError =
+        why === 'type' ? M.pictureType
+        : why === 'unreadable' ? M.pictureUnreadable
+        : why === 'large' || (err instanceof ApiFailure && err.code === 'too_large') ? M.pictureTooLarge
+        : err instanceof ApiFailure && err.code === 'bad_request' ? M.pictureRefused
+        : errorText(err);
+    } finally {
+      picBusy = '';
+      picInput.value = ''; // picking the same file again still fires change
+    }
+  }
+  async function removePicture() {
+    if (picBusy) return;
+    [picError, picDone, picBusy] = ['', '', 'remove'];
+    try {
+      setMe(await api<UserInfo>('DELETE', '/api/me/avatar'));
+      picDone = M.pictureRemoved;
+    } catch (err) {
+      picError = errorText(err);
+    } finally {
+      picBusy = '';
+    }
+  }
+  const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+  function onDrop(e: DragEvent) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragging = false;
+    void setPicture(e.dataTransfer!.files[0]);
   }
 
   let oldPw = $state('');
@@ -107,18 +162,39 @@
 <div class="sections">
   <section role="group" aria-labelledby="account-profile">
     <h3 id="account-profile" class="text-base font-medium text-fg">Profile</h3>
-    <form onsubmit={saveProfile} class="flex max-w-80 flex-col gap-5">
-      <div class="flex items-center gap-3 rounded-md bg-raised p-3" aria-hidden="true">
-        <Avatar user={{ user_id: me.user_id, display_name: name || me.username, accent: SLOT_HEX[slot - 1] }} size={40} />
-        <div class="min-w-0">
-          <p class="truncate text-base font-medium text-fg">{name || me.username}</p>
-          <p class="truncate text-xs text-fg-2">Signed in as {me.username}</p>
-        </div>
+    <div
+      class="pic flex max-w-80 items-center gap-3 rounded-md p-3"
+      class:dragging
+      role="group"
+      aria-label="Profile picture"
+      ondragover={(e) => { if (hasFiles(e)) { e.preventDefault(); dragging = true; } }}
+      ondragleave={() => (dragging = false)}
+      ondrop={onDrop}
+    >
+      <Avatar user={{ ...me, display_name: name || me.username, accent: SLOT_HEX[slot - 1] }} size={40} />
+      <div class="min-w-0 flex-1">
+        <p class="truncate text-base font-medium text-fg">{name || me.username}</p>
+        <p class="truncate text-xs text-fg-2">Signed in as {me.username}</p>
       </div>
+    </div>
+    <div class="flex max-w-80 flex-col gap-2">
+      <input bind:this={picInput} type="file" accept={PICTURE_TYPES.join(',')} hidden onchange={(e) => setPicture(e.currentTarget.files?.[0])} />
+      <div class="flex flex-wrap items-center gap-2">
+        <Button size="sm" loading={picBusy === 'upload'} onclick={() => picInput.click()}>{me.avatar ? 'Change picture' : 'Upload picture'}</Button>
+        {#if me.avatar}<Button size="sm" variant="ghost" loading={picBusy === 'remove'} onclick={removePicture}>Remove picture</Button>{/if}
+        <p role="status" class="text-sm text-fg-2">{picDone}</p>
+      </div>
+      <p class="text-xs text-fg-2">PNG, JPEG, WebP or GIF. You can also drop one on the card above. It is cropped to a square.</p>
+      {#if picError}<p role="alert" class="text-sm text-danger">{picError}</p>{/if}
+    </div>
+    <form onsubmit={saveProfile} class="flex max-w-80 flex-col gap-5">
       <Field label="Display name" help="1 to 32 characters." error={profileError || undefined}>
         <TextInput autocomplete="nickname" bind:value={name} oninput={() => (saved = false)} required maxlength={32} />
       </Field>
       <div onchange={() => (saved = false)}><Swatches bind:slot gap="var(--bg-app)" /></div>
+      <Field label="Bio" value="{[...bio].length} / {MAX_BIO}" help="Up to {MAX_BIO} characters, shown on your person card.">
+        <TextInput bind:value={bio} oninput={() => (saved = false)} maxlength={MAX_BIO} />
+      </Field>
       <div class="flex items-center gap-3">
         <Button type="submit" loading={saving}>Save</Button>
         <p role="status" class="text-sm text-fg-2">{saved ? M.profileSaved : ''}</p>
@@ -193,6 +269,8 @@
 
 <style>
   .sections { display: flex; flex-direction: column; gap: 32px; }
+  .pic { background: var(--bg-raised); outline: 2px dashed transparent; outline-offset: -2px; }
+  .pic.dragging { outline-color: var(--accent); }
   section { display: flex; flex-direction: column; gap: 16px; }
   section + section { padding-top: 24px; border-top: 1px solid var(--line-subtle); }
   .devices { border: 1px solid var(--line); border-radius: var(--radius); }

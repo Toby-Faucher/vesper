@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import tokens from '../../styles/tokens.css?raw';
-import { SLOT_HEX, avatarSlot, initials, profilePatch } from './avatar';
+import { SLOT_HEX, avatarSlot, avatarUrl, initials, profilePatch, squareCrop, squarePicture } from './avatar';
 
 // A fixed pseudo-random sequence of 32-hex ids, so the spread test cannot flake.
 function ids(n: number): string[] {
@@ -49,4 +49,32 @@ it('profile_patch_saves_the_hashed_slot_over_the_server_default', () => {
   expect(profilePatch(u, 'bob', slot)).toEqual({ accent: SLOT_HEX[slot - 1] });
   expect(profilePatch({ ...u, accent: SLOT_HEX[2].toUpperCase() }, ' bob ', 3)).toEqual({});
   expect(profilePatch({ ...u, accent: SLOT_HEX[2] }, 'Bobby', 3)).toEqual({ display_name: 'Bobby' });
+});
+
+it('profile_patch_sends_a_changed_bio_only', () => {
+  const u = { display_name: 'A', accent: SLOT_HEX[0], bio: 'plays bass' };
+  expect(profilePatch(u, 'A', 1, 'plays bass')).toEqual({});
+  expect(profilePatch(u, 'A', 1, '  plays   bass ')).toEqual({}); // the server collapses spaces the same way
+  expect(profilePatch(u, 'A', 1, 'drums')).toEqual({ bio: 'drums' });
+  expect(profilePatch(u, 'A', 1, '')).toEqual({ bio: '' });
+  expect(profilePatch(u, 'A', 1)).toEqual({}); // the welcome steps have no bio field
+});
+
+it('avatar_url_follows_the_version', () => {
+  const id = 'a'.repeat(32);
+  expect(avatarUrl({ user_id: id, avatar: null })).toBeNull();
+  expect(avatarUrl({ user_id: id })).toBeNull();
+  expect(avatarUrl({ user_id: id, avatar: '0123abcd' })).toBe(`/api/users/${id}/avatar?v=0123abcd`);
+});
+
+it('square_crop_takes_the_centre', () => {
+  expect(squareCrop(400, 300)).toEqual([50, 0, 300]);
+  expect(squareCrop(300, 401)).toEqual([0, 50, 300]);
+  expect(squareCrop(256, 256)).toEqual([0, 0, 256]);
+});
+
+it('square_picture_refuses_svg_and_other_types', async () => {
+  for (const type of ['image/svg+xml', 'text/html', '']) {
+    await expect(squarePicture(new Blob(['<svg/>'], { type }))).rejects.toThrow('type');
+  }
 });

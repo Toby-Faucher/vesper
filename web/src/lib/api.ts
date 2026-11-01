@@ -16,8 +16,9 @@ export async function api<T>(method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
     method,
     signal,
     credentials: 'same-origin',
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    // A Blob goes as the raw body (a profile picture); anything else as JSON.
+    headers: body === undefined ? undefined : { 'content-type': body instanceof Blob ? body.type : 'application/json' },
+    body: body === undefined ? undefined : body instanceof Blob ? body : JSON.stringify(body),
   });
   if (!r.ok) {
     const e = await r.json().catch(() => undefined);

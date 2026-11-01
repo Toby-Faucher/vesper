@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { avatarSlot, initials } from '../avatar';
+  import { avatarSlot, avatarUrl, initials } from '../avatar';
   import * as I from '../icons';
-  // Initials on the user's slot colour. Speaking draws the ring (2 px gap in --bg-sidebar, 2 px slot colour), toggled
+  // The user's picture when they have one, else initials on the user's slot colour (also while the picture loads or if
+  // it fails). Speaking draws the ring (2 px gap in --bg-sidebar, 2 px slot colour), toggled
   // instantly, with no fade (a fade repainted every frame while someone talked). Mute or deafen shows a glyph at the bottom right at 32 and 40 px; at
   // 20 px it would be a 10 px speck, so it is left out and the row shows the state after the name (an Icon plus the word,
   // as the gallery's sidebar mock does). Decorative: the row next to it carries the name and the state in words.
@@ -12,7 +13,7 @@
     muted = false,
     deafened = false,
   }: {
-    user: { user_id: string; display_name: string; accent: string };
+    user: { user_id: string; display_name: string; accent: string; avatar?: string | null };
     size: 20 | 32 | 40;
     speaking?: boolean;
     muted?: boolean;
@@ -21,6 +22,8 @@
   const slot = $derived(avatarSlot(user));
   // One letter at 20 px: two would not fit at the 12 px floor.
   const text = $derived([...new Intl.Segmenter().segment(initials(user.display_name) || '?')].slice(0, size === 20 ? 1 : 2).map((s) => s.segment).join(''));
+  const src = $derived(avatarUrl(user));
+  let failed = $state<string | null>(null); // the src that did not load; a new picture tries again
   const glyph = $derived(size === 20 ? null : deafened ? I.headphonesOff : muted ? I.micOff : null);
 </script>
 
@@ -31,6 +34,7 @@
   aria-hidden="true"
 >
   {text}
+  {#if src && failed !== src}<img {src} alt="" decoding="async" onerror={() => (failed = src)} />{/if}
   {#if glyph}
     <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d={glyph} /></svg></span>
   {/if}
@@ -58,6 +62,14 @@
     opacity: 0; /* an instant toggle: nothing animates because someone speaks (and a fade repaints every frame) */
   }
   .av[data-speaking]::before { opacity: 1; }
+  img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+  }
   .s20 { width: 20px; height: 20px; font-size: 12px; line-height: 16px; }
   .s32 { width: 32px; height: 32px; font-size: 13px; line-height: 20px; }
   .s40 { width: 40px; height: 40px; font-size: 16px; line-height: 24px; }
