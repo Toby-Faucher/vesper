@@ -598,7 +598,21 @@ async fn restricted_room_presence_is_private() {
     };
     assert_eq!(voice.len(), 1, "only alice: {voice:?}");
     c.join(secret);
-    c.expect_error(ErrorCode::Forbidden).await;
+    let hidden = c.next().await;
+    // An unknown room id is refused the same way, word for word.
+    c.join(999_999);
+    let unknown = c.next().await;
+    assert!(
+        matches!(
+            &hidden,
+            ServerMsg::Error {
+                code: ErrorCode::Forbidden,
+                ..
+            }
+        ),
+        "{hidden:?}"
+    );
+    assert_eq!(hidden, unknown);
 }
 
 /// Presence messages (peer_joined, peer_left, peer_state) up to, not including, `user_id`'s
@@ -1205,7 +1219,7 @@ async fn malformed_and_oversized_messages_do_not_crash() {
     x.send_raw(r#"{"type":"join","room":"main","name":"x","key":"k","offer":"o"}"#.into());
     x.expect_error(ErrorCode::BadMessage).await;
     x.join(999_999);
-    x.expect_error(ErrorCode::BadMessage).await;
+    x.expect_error(ErrorCode::Forbidden).await;
     x.mute(true);
     x.expect_error(ErrorCode::BadMessage).await;
     x.send(&ClientMsg::Join {

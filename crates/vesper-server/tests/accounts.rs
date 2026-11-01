@@ -463,3 +463,99 @@ async fn revoking_the_current_session_clears_the_cookie() {
     );
     assert_eq!(t.call(get("/api/me", &a)).await.0, StatusCode::UNAUTHORIZED);
 }
+
+/// The `(METHOD, /api path)` of every route in the server's source that is not GET, read from
+/// the `.route("...", post(..).delete(..))` lines, so a new route cannot miss the Origin test.
+fn mutating_routes() -> Vec<(String, String)> {
+    let sources = [
+        include_str!("../src/api_accounts.rs"),
+        include_str!("../src/api_admin.rs"),
+        include_str!("../src/api_rooms.rs"),
+        include_str!("../src/api_messages.rs"),
+        include_str!("../src/uploads.rs"),
+    ];
+    let mut out = Vec::new();
+    for line in sources.iter().flat_map(|s| s.lines()) {
+        let Some(rest) = line.trim().strip_prefix(".route(\"") else {
+            continue;
+        };
+        let (path, handlers) = rest.split_once('"').unwrap();
+        for m in ["post", "put", "patch", "delete"] {
+            if handlers.contains(&format!("{m}(")) {
+                out.push((m.to_uppercase(), format!("/api{path}")));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// CSRF: every non-GET `/api` route refuses a missing, foreign or `null` Origin before the handler
+/// runs, even for the owner with a valid session. (`/ws` is in tests/signaling.rs.)
+#[tokio::test]
+async fn every_mutating_route_needs_our_origin() {
+    let t = TestServer::new().await;
+    let owner = t.owner().await;
+    let routes = mutating_routes();
+    assert!(routes.len() >= 25, "parsed too few routes: {routes:?}");
+    let id = &owner.user.user_id;
+    for (method, path) in &routes {
+        let path = path.replace("{id}", id);
+        for origin in [None, Some("http://evil.example"), Some("null")] {
+            let mut b = Request::builder()
+                .method(method.as_str())
+                .uri(&path)
+                .header(header::COOKIE, &owner.cookie)
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(o) = origin {
+                b = b.header(header::ORIGIN, o);
+            }
+            let (s, _, v) = t.call(b.body(Body::from("{}")).unwrap()).await;
+            assert_eq!(
+                (s, v["code"].as_str()),
+                (StatusCode::FORBIDDEN, Some("forbidden")),
+                "{method} {path} {origin:?}: {v}"
+            );
+        }
+    }
+    // The owner's session still works: nothing above logged it out.
+    assert_eq!(t.call(get("/api/me", &owner)).await.0, StatusCode::OK);
+}
+
+/// Invite preview and signup share one limit per client address: 10, then 1 every 6 minutes.
+#[tokio::test]
+async fn invite_preview_and_signup_are_rate_limited() {
+    let t = TestServer::new().await;
+    let from = |ip: &'static str, mut req: Request<Body>| {
+        req.headers_mut()
+            .insert("x-forwarded-for", ip.parse().unwrap());
+        req
+    };
+    let preview = |ip: &'static str| {
+        let req = request(Method::GET, "/api/invites/preview?code=nope", None, None);
+        t.call(from(ip, req))
+    };
+    for i in 0..10 {
+        let (s, _, v) = preview("203.0.113.7").await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{i}: {v}");
+    }
+    let (s, h, v) = preview("203.0.113.7").await;
+    assert_eq!(
+        (s, v["code"].as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited"))
+    );
+    assert!(h.contains_key("retry-after"));
+    // Signup draws on the same bucket, even with a good invite.
+    let code = t.invite(&["invite"]).await;
+    let body = json!({
+        "invite": code, "username": "alice", "password": PASSWORD, "display_name": "alice",
+    });
+    let signup = |ip| from(ip, request(Method::POST, "/api/signup", Some(&body), None));
+    assert_eq!(
+        t.call(signup("203.0.113.7")).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(users(&t).await, 0);
+    // Another address is not held back.
+    assert_eq!(t.call(signup("198.51.100.9")).await.0, StatusCode::CREATED);
+}

@@ -26,6 +26,12 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
   still holds. Keep Caddy's default headers ([deploy.md](deploy.md#network)).
 - **Force-mute is enforced by the client only.** The server marks the user muted and tells everyone, but the SFU still forwards their audio,
   so a modified client can keep talking. A moderator then disconnects them, or the owner bans them. A server restart lifts every force-mute.
+- **No password reset.** A user who forgets their password needs a new account from a new invite; the owner can ban the old one.
+  An owner who forgets theirs has no way back in through the app.
+- **No backup command.** Back up the data dir by hand ([deploy.md](deploy.md)); nothing does it on a schedule.
+- **Uploads are not scanned for viruses.** Images are served inline only after their magic bytes match, everything else is a
+  download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
+- **No passkeys yet.** Sign in is username and password only (plan Task 6, a stretch goal, not built).
 - **A moderator disconnect does not keep anyone out.** The sessions stay valid and the client may reconnect at once; a ban is the way to keep someone out.
 
 ## Server behaviour

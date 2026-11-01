@@ -327,8 +327,9 @@ async fn join(
     };
     let user = st.app.store.user(user_id).await.map_err(internal)?;
     let rooms = st.app.store.rooms().await.map_err(internal)?;
+    // An unknown room gets the same refusal as a hidden one, so a join cannot probe room ids.
     let Some(room) = rooms.iter().find(|r| r.id == room_id) else {
-        return Err((ErrorCode::BadMessage, "no such room".into()));
+        return Err(voice_error(st, ErrorCode::Forbidden));
     };
     st.app
         .voice
