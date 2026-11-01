@@ -1,6 +1,6 @@
 # 0005. SQLite with sqlx for accounts and text chat
 
-Status: accepted (confirmed by Toby, 2026-10-30); not built yet
+Status: accepted, built in 2026-11-01 plan (confirmed by Toby, 2026-10-30)
 
 Context: Accounts, rooms, messages and uploads need storage for about ten users on one box. Postgres would add a second service to run and back up.
 

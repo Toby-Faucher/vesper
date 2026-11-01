@@ -29,7 +29,8 @@ The "Not verified" list at the end says what was only read.
 
 | Crate | Job |
 |---|---|
-| `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, and the limits `MAX_NAME_CHARS` (32) and `MAX_MSG_BYTES` (64 KiB). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
+| `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, and the limits `MAX_NAME_CHARS` (32) and `MAX_MSG_BYTES` (64 KiB). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
+| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions and invites (`accounts.rs`, `sessions.rs`, `invites.rs`). It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
 | `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher), `ws.rs` (one socket), `rooms.rs` (presence and session numbers), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |

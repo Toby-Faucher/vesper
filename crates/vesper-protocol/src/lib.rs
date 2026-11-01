@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+pub mod api;
+pub use api::*;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
