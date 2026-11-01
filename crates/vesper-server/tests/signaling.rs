@@ -1317,6 +1317,44 @@ async fn revoked_session_closes_socket() {
 }
 
 #[tokio::test]
+async fn reset_link_closes_every_socket_of_that_account() {
+    let server = TestServer::new().await;
+    let owner = server.owner().await;
+    let bob = server.member("bob").await;
+    let mut a = Conn::open(&server, &bob).await;
+    let mut o = Conn::open(&server, &owner).await;
+    let path = format!("/api/users/{}/reset", bob.user.user_id);
+    let (status, _, v) = server.call(post(&path, json!({}), &owner)).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    let code = v["url"].as_str().unwrap().split_once('#').unwrap().1;
+    let body = json!({ "code": code, "password": "test-password-2" });
+    let (status, _, v) = server
+        .call(request(Method::POST, "/api/reset", Some(&body), None))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{v}");
+    assert_eq!(
+        a.expect_closed_within(Duration::from_secs(1)).await,
+        Some(CLOSE_SESSION_ENDED)
+    );
+    // The owner's socket stays: it still hears a change.
+    let patch = json!({ "display_name": "Boss" });
+    let (status, _, _) = server
+        .call(request(
+            Method::PATCH,
+            "/api/me",
+            Some(&patch),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    o.until(
+        "UserUpdated",
+        |m| matches!(m, ServerMsg::UserUpdated { user } if user.display_name == "Boss"),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn password_change_closes_other_sessions_only() {
     let server = TestServer::new().await;
     let first = server.owner().await;
