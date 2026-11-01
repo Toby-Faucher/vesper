@@ -29,7 +29,7 @@
     ['ghost', 'Skip for now'],
     ['danger', 'Leave'],
   ] as const;
-  const states = ['Default', 'Hover', 'Focus', 'Disabled', 'Small'];
+  const states = ['Default', 'Hover', 'Focus', 'Disabled', 'Loading', 'Small'];
   const ibStates: [string, Record<string, unknown>][] = [
     ['Default', {}], ['Hover', { 'data-force': 'hover' }], ['Focus', { 'data-force': 'focus-visible' }], ['Disabled', { disabled: true }],
   ];
@@ -55,6 +55,7 @@
   let last = $state('Nothing yet');
 
   let dialogOpen = $state(false);
+  let confirmOpen = $state(false);
   let menuOpen = $state(false);
   let innerMenuOpen = $state(false);
   let cardOpen = $state(false);
@@ -67,13 +68,13 @@
 <div class="space-y-10">
   <section class="space-y-3">
     <h2 class="text-sm font-medium text-fg">Buttons</h2>
-    <div class="grid grid-cols-[96px_repeat(5,max-content)] items-center gap-x-6 gap-y-3">
+    <div class="grid grid-cols-[96px_repeat(6,max-content)] items-center gap-x-6 gap-y-3">
       <span></span>
       {#each states as s (s)}<span class="text-xs text-fg-3">{s}</span>{/each}
       {#each variants as [v, text] (v)}
         <span class="font-mono text-xs text-fg-3">{v}</span>
         {#each states as s (s)}
-          <Button variant={v} size={s === 'Small' ? 'sm' : 'md'} disabled={s === 'Disabled'} data-force={force(s)}>{text}</Button>
+          <Button variant={v} size={s === 'Small' ? 'sm' : 'md'} disabled={s === 'Disabled'} loading={s === 'Loading'} data-force={force(s)}>{text}</Button>
         {/each}
       {/each}
     </div>
@@ -147,8 +148,8 @@
               <Avatar user={p.u} size={20} speaking={p.speaking} muted={p.muted} deafened={p.deafened} />
               <span class="truncate">{p.u.display_name}</span>
               {#if p.speaking}<Speaking />{/if}
-              {#if p.muted}<span class="sr-only">muted</span>{/if}
-              {#if p.deafened}<span class="sr-only">deafened</span>{/if}
+              {#if p.deafened}<span class="text-danger"><Icon name="headphones-off" /></span><span class="sr-only">deafened</span>
+              {:else if p.muted}<span class="text-danger"><Icon name="mic-off" /></span><span class="sr-only">muted</span>{/if}
             </li>
           {/each}
         </ul>
@@ -175,8 +176,8 @@
             <span class="font-mono text-xs text-fg-3">{size}</span>
             <span><Avatar user={users[5]} {size} /></span>
             <span><Avatar user={users[5]} {size} speaking /></span>
-            <span><Avatar user={users[5]} {size} muted /></span>
-            <span><Avatar user={users[5]} {size} deafened /></span>
+            <span class="flex items-center gap-1"><Avatar user={users[5]} {size} muted />{#if size === 20}<span class="text-danger"><Icon name="mic-off" /></span>{/if}</span>
+            <span class="flex items-center gap-1"><Avatar user={users[5]} {size} deafened />{#if size === 20}<span class="text-danger"><Icon name="headphones-off" /></span>{/if}</span>
           {/each}
         </div>
       </div>
@@ -209,7 +210,7 @@
   <section class="space-y-3">
     <h2 class="text-sm font-medium text-fg">Layers</h2>
     <div class="flex items-center gap-3">
-      <Button onclick={() => (dialogOpen = true)}>Create invite</Button>
+      <Button aria-haspopup="dialog" aria-controls="invite-dialog" onclick={() => (dialogOpen = true)}>Create invite</Button>
       <IconButton bind:el={menuBtn} icon="more" label="Message actions" onclick={() => (menuOpen = !menuOpen)} />
       <Button bind:el={cardBtn} variant="ghost" onclick={() => (cardOpen = !cardOpen)}>Show person card</Button>
       <p role="status" class="text-xs text-fg-3">Last action: {last}</p>
@@ -239,7 +240,7 @@
   </div>
 </Popover>
 
-<Dialog open={dialogOpen} title="Create an invite" onclose={() => (dialogOpen = false)}>
+<Dialog id="invite-dialog" open={dialogOpen} title="Create an invite" onclose={() => (dialogOpen = false)}>
   <div class="space-y-4">
     <p>The link works once and expires after the time you pick.</p>
     <Field label="Role">
@@ -248,6 +249,10 @@
     <div class="flex items-end gap-2">
       <div class="flex-1"><Field label="Expires after (hours)"><TextInput value="24" inputmode="numeric" /></Field></div>
       <IconButton bind:el={innerBtn} icon="chevron-down" label="Presets" onclick={() => (innerMenuOpen = !innerMenuOpen)} />
+    </div>
+    <!-- -ml-2: the label lines up with the fields above, the ghost padding hangs into the margin. -->
+    <div class="-ml-2">
+      <Button variant="ghost" size="sm" aria-haspopup="dialog" aria-controls="revoke-dialog" onclick={() => (confirmOpen = true)}>Revoke all links</Button>
     </div>
   </div>
   <!-- Inside the dialog: a modal dialog makes everything outside it inert, popovers included. -->
@@ -262,3 +267,11 @@
   {/snippet}
 </Dialog>
 
+<!-- A dialog on top of a dialog: Esc closes only this one and focus goes back to "Revoke all links". -->
+<Dialog id="revoke-dialog" open={confirmOpen} title="Revoke all invite links?" onclose={() => (confirmOpen = false)}>
+  <p>Links already sent stop working. People who joined stay.</p>
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (confirmOpen = false)}>Cancel</Button>
+    <Button variant="danger" onclick={() => { last = 'Revoke'; confirmOpen = false; }}>Revoke</Button>
+  {/snippet}
+</Dialog>

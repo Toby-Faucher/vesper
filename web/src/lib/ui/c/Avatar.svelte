@@ -2,8 +2,9 @@
   import { avatarSlot, initials } from '../avatar';
   import { ICONS } from '../icons';
   // Initials on the user's slot colour. Speaking draws the ring (2 px gap in --bg-sidebar, 2 px slot colour), toggled
-  // instantly apart from a --dur-1 opacity change. Mute or deafen shows a glyph at the bottom right. Decorative: the row
-  // next to it carries the name and the state in words (see Speaking.svelte).
+  // instantly apart from a --dur-1 opacity change. Mute or deafen shows a glyph at the bottom right at 32 and 40 px; at
+  // 20 px it would be a 10 px speck, so it is left out and the row shows the state after the name (an Icon plus the word,
+  // as the gallery's sidebar mock does). Decorative: the row next to it carries the name and the state in words.
   let {
     user,
     size,
@@ -20,7 +21,7 @@
   const slot = $derived(avatarSlot(user));
   // One letter at 20 px: two would not fit at the 12 px floor.
   const text = $derived([...new Intl.Segmenter().segment(initials(user.display_name) || '?')].slice(0, size === 20 ? 1 : 2).map((s) => s.segment).join(''));
-  const glyph = $derived(deafened ? 'headphones-off' : muted ? 'mic-off' : null);
+  const glyph = $derived(size === 20 ? null : deafened ? 'headphones-off' : muted ? 'mic-off' : null);
 </script>
 
 <span
@@ -72,8 +73,6 @@
     background: var(--bg-sidebar);
     color: var(--danger-fg);
   }
-  .s20 .glyph { width: 14px; height: 14px; right: -6px; bottom: -5px; }
-  .s20 svg { width: 10px; height: 10px; }
   .s32 .glyph { width: 18px; height: 18px; right: -4px; bottom: -4px; }
   .s32 svg { width: 12px; height: 12px; }
   .s40 .glyph { width: 20px; height: 20px; }

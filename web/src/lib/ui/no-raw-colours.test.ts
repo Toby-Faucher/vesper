@@ -1,7 +1,8 @@
 import { expect, it } from 'vitest';
 
 // Colours come only from the roles in styles/tokens.css. Hex, rgb(), hsl(), oklch() and Tailwind palette classes elsewhere fail.
-// avatar.ts is the one exception: it holds the vesper swatch hexes that UserInfo.accent stores.
+// avatar.ts is the one exception: SLOT_HEX holds the vesper swatch hexes that UserInfo.accent stores, and avatar.test.ts
+// checks they equal --avatar-1..8 in tokens.css.
 const RULES = [
   /#[0-9a-fA-F]{3,8}\b/,
   /\brgba?\(/,

@@ -23,8 +23,6 @@
     e.preventDefault();
     list[next].focus();
   }
-
-  $effect(() => anchor?.setAttribute('aria-haspopup', 'menu'));
 </script>
 
 <Popover {anchor} {open} {onclose} {label} role="menu" onkeydown={keydown} onopen={(el) => (items(el)[0] ?? el).focus()}>

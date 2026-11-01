@@ -4,7 +4,7 @@
   import { place } from '../place';
   // A popover="auto" layer next to `anchor`: light dismiss (outside click, Esc) by the platform, placed by place().
   // On open it focuses itself (or what `onopen` picks); on close focus goes back to the anchor when it was inside.
-  // It sets aria-expanded on the anchor. Arrow keys are left to the children.
+  // It sets aria-haspopup (the role), aria-controls and aria-expanded on the anchor. Arrow keys are left to the children.
   let {
     anchor,
     open,
@@ -26,6 +26,7 @@
     onopen?: (el: HTMLElement) => void;
     children: Snippet;
   } = $props();
+  const id = $props.id();
   let el: HTMLElement;
   let downOnAnchor = false;
 
@@ -34,6 +35,14 @@
     const a = document.activeElement;
     if (anchor && (!a || a === document.body || el.contains(a))) anchor.focus();
   }
+
+  $effect(() => {
+    const a = anchor;
+    if (!a) return;
+    a.setAttribute('aria-haspopup', role);
+    a.setAttribute('aria-controls', id);
+    return () => ['aria-haspopup', 'aria-controls', 'aria-expanded'].forEach((n) => a.removeAttribute(n));
+  });
 
   $effect(() => {
     if (!anchor) return;
@@ -59,16 +68,20 @@
   $effect(() => {
     const a = anchor;
     if (!a) return;
+    const up = () => setTimeout(() => {
+      downOnAnchor = false;
+      if (open && !shown()) onclose();
+    });
     const down = () => {
       if (!open) return;
       downOnAnchor = true;
-      addEventListener('pointerup', () => setTimeout(() => {
-        downOnAnchor = false;
-        if (open && !shown()) onclose();
-      }), { once: true });
+      addEventListener('pointerup', up, { once: true });
     };
     a.addEventListener('pointerdown', down);
-    return () => a.removeEventListener('pointerdown', down);
+    return () => {
+      a.removeEventListener('pointerdown', down);
+      removeEventListener('pointerup', up);
+    };
   });
 
   function toggle(e: ToggleEvent) {
@@ -78,7 +91,7 @@
   }
 </script>
 
-<div bind:this={el} popover="auto" {role} aria-label={label} tabindex="-1" ontoggle={toggle} {onkeydown}>
+<div bind:this={el} {id} popover="auto" {role} aria-label={label} tabindex="-1" ontoggle={toggle} {onkeydown}>
   {@render children()}
 </div>
 

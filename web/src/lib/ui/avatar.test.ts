@@ -10,8 +10,12 @@ function ids(n: number): string[] {
   );
 }
 
+// SLOT_HEX must be exactly --avatar-1..8 of the vesper style, in order: parsed from tokens.css, not searched for.
 it('slot_hex_matches_the_vesper_tokens', () => {
-  SLOT_HEX.forEach((h, i) => expect(tokens).toContain(`--avatar-${i + 1}: ${h};`));
+  const block = tokens.slice(tokens.indexOf("[data-style='vesper']"));
+  const parsed = [...block.slice(0, block.indexOf('}')).matchAll(/--avatar-(\d+)\s*:\s*([^;]+);/g)];
+  expect(parsed.map((m) => Number(m[1]))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  expect(parsed.map((m) => m[2].trim().toLowerCase())).toEqual([...SLOT_HEX]);
 });
 
 it('swatch_hex_gives_its_slot', () => {

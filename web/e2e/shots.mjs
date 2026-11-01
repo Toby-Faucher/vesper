@@ -69,7 +69,7 @@ scene('tokens', async ({ open }) => {
 
 // The primitives. Checks the keyboard paths first (focus ring on every Tab stop, dialog and menu focus, Esc, arrows), then
 // forces :hover and :focus-visible on the [data-force] examples and takes `gallery`, then opens a dialog with a menu inside
-// it and takes `gallery-open`.
+// it and takes `gallery-open`, then a dialog on top of it and takes `gallery-nested`.
 scene('gallery', async ({ open, shot }) => {
   const page = await open(`${await devServer()}/_gallery?primitives`);
   await page.getByRole('heading', { name: 'Primitives' }).waitFor();
@@ -154,6 +154,61 @@ scene('gallery', async ({ open, shot }) => {
   await page.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
   await expectFocus('Show person card', 'after Esc on the popover');
 
+  // aria: each trigger names its popup kind and points aria-controls at the layer it opens.
+  for (const [name, popup, role] of [['Message actions', 'menu', 'menu'], ['Show person card', 'dialog', 'dialog'], ['Create invite', 'dialog', 'dialog']]) {
+    const t = page.getByRole('button', { name, exact: true });
+    must((await t.getAttribute('aria-haspopup')) === popup, `${name}: aria-haspopup is not ${popup}`);
+    const id = await t.getAttribute('aria-controls');
+    must(id && (await page.evaluate((id) => document.getElementById(id)?.getAttribute('role') ?? document.getElementById(id)?.tagName.toLowerCase(), id)) === role,
+      `${name}: aria-controls ${JSON.stringify(id)} does not point at a ${role}`);
+  }
+
+  // Nested dialogs and the scroll lock: the page does not scroll behind a modal, Esc closes only the top dialog and focus
+  // goes back to that dialog's opener; the lock goes with the last dialog.
+  const overflow = () => page.evaluate(() => getComputedStyle(document.documentElement).overflow);
+  const revoke = page.getByRole('dialog', { name: 'Revoke all invite links?' });
+  must((await overflow()) !== 'hidden', 'page locked before any dialog');
+  await opener.click();
+  await dialog.waitFor();
+  must((await overflow()) === 'hidden', 'no scroll lock with a dialog open');
+  const y = await page.evaluate(() => scrollY);
+  await page.mouse.wheel(0, 600);
+  await sleep(200);
+  must((await page.evaluate(() => scrollY)) === y, 'the page scrolled behind the dialog');
+  await page.getByRole('button', { name: 'Revoke all links' }).click();
+  await revoke.waitFor();
+  must(await revoke.evaluate((d) => d.contains(document.activeElement)), 'the inner dialog did not take focus');
+  await page.keyboard.press('Escape');
+  await revoke.waitFor({ state: 'hidden' });
+  must(await dialog.isVisible(), 'Esc on the inner dialog closed the outer one');
+  await expectFocus('Revoke all links', 'after Esc on the inner dialog');
+  must((await overflow()) === 'hidden', 'scroll lock released while the outer dialog is open');
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'hidden' });
+  await expectFocus('Create invite', 'after Esc on the outer dialog');
+  must((await overflow()) !== 'hidden', 'scroll lock kept after the last dialog closed');
+
+  // A browser without showPopover({ source }): light dismiss on the anchor's pointerdown must not reopen on its click.
+  const old = await open(`${await devServer()}/_gallery?primitives`);
+  await old.addInitScript(() => {
+    const show = HTMLElement.prototype.showPopover;
+    HTMLElement.prototype.showPopover = function () { return show.call(this); };
+  });
+  await old.reload();
+  const oldTrigger = old.getByRole('button', { name: 'Message actions' });
+  const oldMenu = old.getByRole('menu', { name: 'Message actions' });
+  await oldTrigger.click();
+  await oldMenu.waitFor();
+  await oldTrigger.click();
+  await oldMenu.waitFor({ state: 'hidden' });
+  await sleep(300);
+  must(!(await oldMenu.isVisible()), 'without source: a second click on the trigger reopened the menu');
+  await oldTrigger.click();
+  await oldMenu.waitFor().catch(() => must(false, 'without source: the third click did not open the menu'));
+  await old.keyboard.press('Escape');
+  await oldMenu.waitFor({ state: 'hidden' });
+  await old.close();
+
   // Closed layers, with hover and focus forced on the [data-force] examples.
   await page.evaluate(() => { document.activeElement?.blur(); scrollTo(0, 0); });
   const cdp = await page.context().newCDPSession(page);
@@ -179,6 +234,11 @@ scene('gallery', async ({ open, shot }) => {
   await page.getByRole('menu', { name: 'Presets' }).waitFor({ state: 'hidden' });
   must(await dialog.isVisible(), 'choosing in the inner menu closed the dialog');
   await expectFocus('Presets', 'after the inner menu');
+  await page.getByRole('button', { name: 'Revoke all links' }).click();
+  await revoke.waitFor();
+  await sleep(300);
+  await shot(page, 'gallery-nested', { fullPage: false });
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'hidden' });
 });

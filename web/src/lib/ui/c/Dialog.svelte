@@ -4,15 +4,19 @@
   import IconButton from './IconButton.svelte';
   // A modal on native <dialog>: showModal() traps focus and makes the page inert, Esc closes. A click on the backdrop closes
   // too. Focus goes back to the element that had it when the dialog opened. Initial focus is the first control in the body
-  // (the Close button comes last in the DOM, drawn top right).
+  // (the Close button comes last in the DOM, drawn top right). Dialogs stack: Esc closes the top one, and each gives focus
+  // back to its own opener. The page behind does not scroll while any modal is open (the :has rule below counts them all).
+  // `id` lets the opener point aria-controls at the dialog.
   let {
     open,
     title,
     onclose,
     children,
     footer,
-  }: { open: boolean; title: string; onclose: () => void; children: Snippet; footer?: Snippet } = $props();
-  const id = $props.id();
+    id: given,
+  }: { open: boolean; title: string; onclose: () => void; children: Snippet; footer?: Snippet; id?: string } = $props();
+  const uid = $props.id();
+  const id = $derived(given ?? uid);
   let el: HTMLDialogElement;
   let opener: HTMLElement | null = null;
   let downOnBackdrop = false;
@@ -34,6 +38,7 @@
 
 <dialog
   bind:this={el}
+  {id}
   aria-labelledby="{id}-title"
   onclose={closed}
   onpointerdown={(e) => (downOnBackdrop = e.target === el)}
@@ -59,5 +64,7 @@
     color: var(--fg);
     box-shadow: var(--shadow-float);
   }
+  /* A modal makes the page inert but wheel and touch still scroll it. Gone with the last open modal, also on destroy. */
+  :global(html:has(dialog:modal)) { overflow: hidden; }
   dialog::backdrop { background: color-mix(in oklab, var(--bg-app) 72%, transparent); }
 </style>
