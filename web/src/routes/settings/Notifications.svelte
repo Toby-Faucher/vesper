@@ -65,15 +65,13 @@
     <div class="flex h-8 items-center"><h3 id="notify-sounds" class="text-base font-medium text-fg">Sounds</h3></div>
     <Switch label="Call sounds" help="Short, quiet tones on your speaker. The others in the call never hear them."
       checked={prefs.call} onchange={(e) => set({ call: e.currentTarget.checked })} />
-    <ul class="groups flex flex-col gap-2">
+    <ul class="groups flex flex-col gap-3">
       {#each GROUPS as g (g.key)}
-        <li class="flex items-start gap-3">
-          <div class="min-w-0 flex-1">
-            <Switch label={g.label} help={g.help} checked={prefs[g.key]} disabled={!prefs.call}
-              onchange={(e) => set({ [g.key]: e.currentTarget.checked })} />
-          </div>
-          <Button variant="ghost" size="sm" aria-label="Play a sample: {g.label}" disabled={!prefs.call || !prefs.volume}
-            onclick={() => play(g.cues)}>Play a sample</Button>
+        <li>
+          <Switch label={g.label} help={g.help} checked={prefs[g.key]} disabled={!prefs.call}
+            onchange={(e) => set({ [g.key]: e.currentTarget.checked })} />
+          <span class="-ml-2"><Button variant="ghost" size="sm" aria-label="Play a sample: {g.label}" disabled={!prefs.call || !prefs.volume}
+            onclick={() => play(g.cues)}>Play a sample</Button></span>
         </li>
       {/each}
     </ul>
