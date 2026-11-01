@@ -44,7 +44,8 @@
       <Icon d={copied === 'Copied' ? I.check : I.copy} size={16} />{copied === 'Copied' ? 'Copied' : 'Copy'}
     </button>
   </div>
-  <pre><code>{#if toks}{#each toks as t}{#if t.k}<span class={t.k}>{t.v}</span>{:else}{t.v}{/if}{/each}{:else}{v}{/if}</code></pre>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex: a Tab stop, so keys can scroll a long line sideways (a named region) -->
+  <pre tabindex="0" role="region" aria-label={lang ? `Code, ${lang}` : 'Code'}><code>{#if toks}{#each toks as t}{#if t.k}<span class={t.k}>{t.v}</span>{:else}{t.v}{/if}{/each}{:else}{v}{/if}</code></pre>
   <span class="sr-only" role="status">{copied === 'failed' ? UI_MESSAGES.copyFailed : copied}</span>
 </div>
 

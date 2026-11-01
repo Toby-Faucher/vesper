@@ -3,7 +3,7 @@
   // empty box edits your last message), the reply bar, attachments, the @ mention list and the formatting help. One
   // 16 px line above the box holds, in order: the offline line, a send error, the too-long line, or who is typing, so
   // nothing moves when one appears. Drafts live in chat.drafts by room, in memory only. Names are untrusted: text nodes.
-  // Live preview: the textarea's own text is transparent and a mirror layer under it draws the same characters, styled by
+  // Live preview: the textarea's own text is transparent (only while the layer matches, see `live`) and a mirror layer under it draws the same characters, styled by
   // decorate() (markers dimmed, content styled). The textarea stays the real control, so IME, undo, paste, the caret and
   // selection are the browser's. The layer may only change colour, background and decoration, never glyph widths.
   import { tick, untrack } from 'svelte';
@@ -49,7 +49,20 @@
   const room = $derived(session.state.rooms.find((r) => r.id === roomId));
   const draft = $derived(chat.drafts[roomId] ?? '');
   const name = (id: string) => session.state.users[id]?.display_name ?? 'Someone';
-  const runs = $derived(decorate(draft));
+  // A parse that throws leaves the layer empty, and the check below then keeps the textarea's own text visible.
+  const runs = $derived.by(() => {
+    try {
+      return decorate(draft);
+    } catch {
+      return [];
+    }
+  });
+  // The textarea's text turns transparent only while the layer is in the page and shows exactly the draft.
+  let live = $state(false);
+  $effect(() => {
+    void runs;
+    live = !!mirror?.isConnected && mirror.textContent === `${draft} `;
+  });
   const count = $derived([...draft.trim().normalize('NFC')].length);
   const over = $derived(count - MAX);
   const online = $derived(session.online);
@@ -260,7 +273,7 @@
         <input type="file" multiple class="sr-only"
           onchange={(e) => { attach([...(e.currentTarget.files ?? [])]); e.currentTarget.value = ''; }} />
       </label>
-      <div class="field">
+      <div class="field" class:live>
       <!-- The trailing space keeps a last empty line as tall as the textarea's. -->
       <div class="mirror" aria-hidden="true" bind:this={mirror}>{#each runs as r}<span class={r.k}>{r.v}</span>{/each}{' '}</div>
       <textarea bind:this={el} rows="1" aria-label="Message" placeholder="Message {room?.name ?? ''}"
@@ -358,10 +371,12 @@
     width: 100%;
     resize: none;
     background: transparent;
-    color: transparent;
-    caret-color: var(--fg);
+    color: var(--fg);
   }
-  textarea::selection { background: var(--bg-selected); color: transparent; }
+  /* Only while the layer matches the draft (live): otherwise the textarea draws its own text and the layer hides. */
+  .live textarea { color: transparent; caret-color: var(--fg); }
+  .live textarea::selection { background: var(--bg-selected); color: transparent; }
+  .field:not(.live) .mirror { visibility: hidden; }
   /* Same box, same scroll range, so the same lines wrap; its scrollbar is hidden under the textarea's. */
   .mirror { position: absolute; inset: 0; color: var(--fg); pointer-events: none; scrollbar-color: transparent transparent; }
   .mirror :global(.mk) { color: var(--fg-3); }

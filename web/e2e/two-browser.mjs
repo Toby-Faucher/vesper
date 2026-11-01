@@ -249,6 +249,11 @@ try {
     return { ta: el.scrollHeight, m: m.scrollHeight, top: el.scrollTop, mtop: m.scrollTop };
   });
   assert.ok(fit.ta > 200 && fit.ta === fit.m && fit.top > 0 && fit.top === fit.mtop, `the layer does not line up: ${JSON.stringify(fit)}`);
+  // Fail-safe: without the layer the textarea draws its own text again.
+  const typedShown = () => mdBox.evaluate((el) => getComputedStyle(el).color !== 'rgba(0, 0, 0, 0)');
+  await alice.page.evaluate(() => document.querySelector('.mirror').remove());
+  await mdBox.pressSequentially('z');
+  assert.ok(await typedShown(), 'typed text is invisible with the layer gone');
   const md = ['# Plan', '## Details', 'Some **strong** and *soft* and ~~gone~~ with `tick`.', '> quoted line', '- one', '- two',
     '1. first', '2. second', '---', '```rust', 'fn main() { let x = 1; }', '```'].join('\n');
   await mdBox.fill(md);
@@ -266,6 +271,10 @@ try {
   assert.equal(await full.locator('pre').textContent(), 'fn main() { let x = 1; }');
   await full.getByRole('button', { name: 'Copy code' }).click();
   await full.getByRole('button', { name: 'Copied' }).waitFor({ timeout: 2000 });
+  // The code is a Tab stop after Copy, named, with a focus ring, so keys can scroll a long line.
+  await bob.page.keyboard.press('Tab');
+  const code = full.getByRole('region', { name: 'Code, rust' });
+  assert.ok(await code.evaluate((el) => el === document.activeElement && getComputedStyle(el).outlineStyle !== 'none'), 'the code block is not a focusable region with a ring');
   await full.hover();
   await full.getByRole('button', { name: 'Reply', exact: true }).click();
   const bar = bob.page.locator('form .bar');
