@@ -1,27 +1,10 @@
-<script lang="ts" module>
-  import { api, errorText } from '../lib/api';
-  import type { UserInfo } from '../lib/gen/UserInfo';
-  import { session } from '../lib/session.svelte';
-  // Someone who signed up after this tab connected is not in the hello's user list (no event announces them yet): ask the
-  // server once per signed-in account and keep the answer in the session, so every later card has it. A failure is retried.
-  let asked: { by: string; p: Promise<void> } | null = null;
-  function loadUsers(): Promise<void> {
-    const by = session.state.me?.user.user_id ?? '';
-    if (asked?.by !== by) {
-      const p = api<UserInfo[]>('GET', '/api/users').then(
-        (l) => { session.state.users = { ...Object.fromEntries(l.map((u) => [u.user_id, u])), ...session.state.users }; },
-        (e) => { asked = null; throw e; },
-      );
-      asked = { by, p };
-    }
-    return asked.p;
-  }
-</script>
-
 <script lang="ts">
   import * as I from '../lib/ui/icons';
   import type { ForceMute } from '../lib/gen/ForceMute';
+  import { api, errorText } from '../lib/api';
+  import { session } from '../lib/session.svelte';
   import { canModerate } from '../lib/ui/person.svelte';
+  import { loadUsers } from '../lib/ui/users';
   import { setVolume, voice } from '../lib/voice.svelte';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';

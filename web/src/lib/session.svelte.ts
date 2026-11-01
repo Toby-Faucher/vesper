@@ -1,6 +1,7 @@
 import { ApiFailure, api } from './api';
 import { applyChatMsg, chat, resync } from './chat.svelte';
 import { loginHref } from './route';
+import { recentKey } from './ui/recent';
 import { Signaling } from './signaling';
 import { applyServerMsg, emptyState, type AppState } from './state';
 
@@ -62,7 +63,7 @@ export const session = $state({
 
   async logout(): Promise<void> {
     const id = session.state.me?.user.user_id;
-    if (id) try { storage?.removeItem(lastRoomKey(id)); } catch { /* storage blocked */ }
+    if (id) try { storage?.removeItem(lastRoomKey(id)); storage?.removeItem(recentKey(id)); } catch { /* storage blocked */ }
     stop();
     await api('POST', '/api/logout').catch(() => {}); // signed out either way
     toLogin('');

@@ -20,3 +20,10 @@ type Ranked = { role: keyof typeof RANK };
 export function canModerate(me: Ranked | undefined, them: Ranked | undefined): boolean {
   return !!me && !!them && RANK[me.role] > RANK[them.role];
 }
+
+/** Opens the card for `id` as a dialog (from the switcher, where there is no button to hang it from). */
+export function openPerson(id: string): void {
+  person.id = id;
+  person.anchor = null;
+}
+

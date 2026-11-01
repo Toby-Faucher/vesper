@@ -3,9 +3,12 @@
   import { onMount, untrack } from 'svelte';
   import { href, parse } from '../lib/route';
   import { lastRoomKey, navigate, route, session } from '../lib/session.svelte';
-  import { startVoice, voice } from '../lib/voice.svelte';
+  import { startVoice, toggleDeafen, toggleMute, voice } from '../lib/voice.svelte';
   import { closePerson, person } from '../lib/ui/person.svelte';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
+  import { layers } from '../lib/ui/layers.svelte';
+  import { isMac, isTyping, nextUnread, shortcut, stepRoom } from '../lib/ui/keys';
+  import { loadRecent, pushRecent } from '../lib/ui/recent';
   import { UI_MESSAGES } from '../lib/ui/messages';
   import Button from '../lib/ui/c/Button.svelte';
   import EmptyState from '../lib/ui/c/EmptyState.svelte';
@@ -32,8 +35,11 @@
     const to = rooms.find((x) => x.id === last) ?? rooms[0];
     if (to) untrack(() => navigate(href({ name: 'room', id: to.id }), true));
   });
+  const uid = $derived(session.state.me?.user.user_id ?? '');
+  let recent = $state<number[]>([]);
   $effect(() => {
     if (room) try { storage?.setItem(LAST, String(room.id)); } catch { /* storage blocked */ }
+    recent = room ? pushRecent(storage, uid, room.id) : loadRecent(storage, uid);
   });
   // The open room left the list (deleted, or made private): go to the first room, without a history entry.
   let had: number | null = null;
@@ -50,6 +56,33 @@
     if (!a || a.target || a.hasAttribute('download') || a.origin !== location.origin || a.pathname.startsWith('/api/')) return;
     e.preventDefault();
     navigate(a.pathname + a.search + a.hash);
+  }
+  // The switcher (with the shortcuts list) loads on first use. Once loaded it stays mounted, so closing gives focus back.
+  let switcher = $state<Promise<typeof import('./Switcher.svelte')>>();
+  $effect(() => {
+    if (layers.switcher || layers.shortcuts) switcher ??= import('./Switcher.svelte');
+  });
+
+  const mac = isMac();
+  function onkeydown(e: KeyboardEvent) {
+    if (e.defaultPrevented || e.isComposing) return;
+    // Settings stops the keys itself while it waits for a new push-to-talk key, so they never reach this handler.
+    const s = shortcut(e, { typing: isTyping(e.target as Element | null), mac, capturingPtt: false });
+    if (!s || s === 'escape') return; // Esc: dialogs, menus and popovers close themselves; the timeline jump is Task 7's
+    if (e.repeat && s !== 'prev-room' && s !== 'next-room') return e.preventDefault(); // a held key toggles once
+    const ids = rooms.map((x) => x.id);
+    const to = (id: number | null) => id !== null && navigate(href({ name: 'room', id }));
+    if (s === 'search') {
+      const field = document.querySelector<HTMLInputElement>('input[aria-label="Search messages"]');
+      if (!field) return; // no room open: leave the key to the browser
+      field.focus();
+    } else if (s === 'switcher') layers.switcher = !layers.switcher;
+    else if (s === 'mute') { if (voice.joined) toggleMute(); }
+    else if (s === 'deafen') { if (voice.joined) toggleDeafen(); }
+    else if (s === 'sidebar') setCollapsed(!sidebar.collapsed);
+    else if (s === 'prev-room' || s === 'next-room') to(stepRoom(ids, room?.id ?? null, s === 'next-room' ? 1 : -1));
+    else if (s === 'next-unread') to(nextUnread(ids, room?.id ?? null, session.state.unread));
+    e.preventDefault();
   }
   let mainEl = $state<HTMLElement>();
   let barH = $state(0); // the pane keeps this much room below its content for the call bar
@@ -98,9 +131,18 @@
   </main>
 </div>
 
+<svelte:window {onkeydown} />
+
 {#if person.id}
   {#await import('./PersonCard.svelte') then m}
-    {#key person.anchor}<m.default userId={person.id} anchor={person.anchor} side={person.side} onclose={closePerson} />{/key}
+    {#key person.anchor}
+      <m.default userId={person.id} anchor={person.anchor} side={person.side} asDialog={!person.anchor} onclose={closePerson} />
+    {/key}
+  {/await}
+{/if}
+{#if switcher}
+  {#await switcher then m}
+    <m.default open={layers.switcher} current={room?.id ?? null} {recent} onclose={() => (layers.switcher = false)} />
   {/await}
 {/if}
 

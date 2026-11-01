@@ -1,0 +1,26 @@
+<script lang="ts">
+  import { SHORTCUTS, isMac, keysFor } from '../lib/ui/keys';
+  import Dialog from '../lib/ui/c/Dialog.svelte';
+  import Kbd from '../lib/ui/c/Kbd.svelte';
+  // Every shortcut, from the same table the keys are read with, plus the switcher's filters.
+  let { open, onclose }: { open: boolean; onclose: () => void } = $props();
+  const mac = isMac();
+  const FILTERS = [['r', 'Only rooms'], ['p', 'Only people'], ['>', 'Only actions']];
+</script>
+
+{#snippet row(label: string, keys: string[])}
+  <div class="flex h-8 items-center gap-4">
+    <dt class="min-w-0 flex-1 text-fg-2">{label}</dt>
+    <dd class="flex shrink-0 gap-1">{#each keys as k, i (i)}<Kbd>{k}</Kbd>{/each}</dd>
+  </div>
+{/snippet}
+
+<Dialog {open} title="Keyboard shortcuts" {onclose}>
+  <dl class="flex flex-col">
+    {#each SHORTCUTS as d (d.s)}{@render row(d.label, keysFor(d, mac))}{/each}
+  </dl>
+  <h3 class="mt-4 flex h-7 items-center text-xs font-medium text-fg-3">In the switcher, start with</h3>
+  <dl class="flex flex-col">
+    {#each FILTERS as [k, label] (k)}{@render row(label, [k, 'Space'])}{/each}
+  </dl>
+</Dialog>

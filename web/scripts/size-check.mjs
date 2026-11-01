@@ -16,7 +16,10 @@ import { gzipSync } from 'node:zlib';
 // Raised on 2026-11-01 for the Task 4 fix round (js 66.8 kB, was 65.2): icons became one export each (unused ones drop,
 // -0.5 kB) and Chat with the markdown renderer loads on the first room open. That cut the first load from 55.2 to 51.0 kB,
 // but Rolldown then moves the Svelte runtime into a shared chunk, which costs about 2 kB in this sum: about 10 percent headroom.
-const BUDGET_GZIP_KB = { js: 73.5, css: 8.2 };
+// Raised on 2026-11-01 for the Ctrl/Cmd+K switcher and the shortcuts (js 73.6 kB, was 67.0; first load 52.9 kB, was 51.1):
+// the switcher, its matcher and the shortcuts list are one lazy chunk (4.6 kB) loaded on the first Ctrl+K, and the dialog
+// code became a shared chunk. Ten percent would pass the 80 kB ceiling, so the budget is the ceiling: later tasks have 6.4 kB.
+const BUDGET_GZIP_KB = { js: 80, css: 8.2 };
 
 const dir = new URL('../dist/assets/', import.meta.url);
 const sums = { js: 0, css: 0 };

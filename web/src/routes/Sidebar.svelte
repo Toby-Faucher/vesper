@@ -6,6 +6,8 @@
   import { navigate, session } from '../lib/session.svelte';
   import { voice } from '../lib/voice.svelte';
   import { setCollapsed } from '../lib/ui/sidebar.svelte';
+  import { layers } from '../lib/ui/layers.svelte';
+  import { isMac } from '../lib/ui/keys';
   import { UI_MESSAGES } from '../lib/ui/messages';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
@@ -39,7 +41,11 @@
   <div class="flex h-12 shrink-0 items-center gap-2 pr-2 pl-4">
     <Mark size={20} />
     <span class="text-sm font-medium text-fg">Vesper</span>
-    <span class="ml-auto"><IconButton icon={I.sidebar} label="Hide sidebar" tip aria-expanded="true" aria-controls="sidebar" onclick={() => setCollapsed(true)} /></span>
+    <span class="ml-auto flex">
+      <IconButton icon={I.search} label="Switch to ({isMac() ? '⌘' : 'Ctrl'} K)" tip aria-haspopup="dialog" aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}
+        onclick={() => (layers.switcher = true)} />
+      <IconButton icon={I.sidebar} label="Hide sidebar" tip aria-expanded="true" aria-controls="sidebar" onclick={() => setCollapsed(true)} />
+    </span>
   </div>
 
   <nav aria-label="Rooms" class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">

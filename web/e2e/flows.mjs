@@ -126,6 +126,52 @@ try {
   await inVoice(a, 'bob').waitFor({ state: 'detached' });
   console.log('call survives navigation: ok');
 
+  // The switcher: Ctrl+K works from the composer, a typed room name and Enter open that room, Esc closes and gives focus
+  // back. Alt+Down and Alt+Up step through the rooms; Ctrl+\ hides the sidebar and focus moves to the Show button.
+  await openRoom(a, 'general');
+  const composer = a.getByRole('textbox', { name: 'Message' });
+  await composer.focus();
+  await a.keyboard.press('Control+k');
+  const box = a.getByRole('combobox', { name: 'Switch to' });
+  await box.waitFor();
+  assert.ok(await box.evaluate((e) => e === document.activeElement), 'the switcher field has no focus');
+  await box.fill('mus');
+  assert.equal(await a.getByRole('option', { selected: true }).innerText().then((t) => t.split('\n')[0]), 'music');
+  await a.keyboard.press('Enter');
+  await a.waitForURL(`${ORIGIN}/r/${music.id}`);
+  await a.getByRole('heading', { level: 1, name: 'music', exact: true }).waitFor();
+  await box.waitFor({ state: 'hidden' });
+  await composer.focus();
+  await a.keyboard.press('Control+k');
+  await box.waitFor();
+  assert.equal(await box.inputValue(), '', 'the switcher kept the last query');
+  await a.keyboard.press('Escape');
+  await box.waitFor({ state: 'hidden' });
+  assert.ok(await composer.evaluate((e) => e === document.activeElement), 'focus did not go back to the composer');
+  // `p ` scopes to people; a person opens their card as a dialog.
+  await a.keyboard.press('Control+k');
+  await box.fill('p bob');
+  assert.equal(await a.getByRole('option').count(), 1, 'p scoped to people');
+  await a.keyboard.press('Enter');
+  await a.getByRole('dialog', { name: 'bob' }).waitFor();
+  await a.keyboard.press('Escape');
+  await a.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
+  assert.ok(await composer.evaluate((e) => e === document.activeElement), 'focus did not go back after the person card');
+  // The room above music in the sidebar, whichever it is, then back.
+  const above = await a.getByRole('navigation', { name: 'Rooms' }).getByRole('link').evaluateAll((l) => l.map((x) => x.getAttribute('href')));
+  await a.keyboard.press('Alt+ArrowUp');
+  await a.waitForURL(`${ORIGIN}${above[above.indexOf(`/r/${music.id}`) - 1]}`);
+  await a.keyboard.press('Alt+ArrowDown');
+  await a.getByRole('heading', { level: 1, name: 'music', exact: true }).waitFor();
+  await a.getByRole('button', { name: 'Hide sidebar' }).focus();
+  await a.keyboard.press('Control+Backslash');
+  await a.getByRole('navigation', { name: 'Rooms' }).waitFor({ state: 'hidden' });
+  const show = a.getByRole('button', { name: 'Show sidebar' });
+  await a.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show sidebar');
+  await show.click();
+  await signedIn(a);
+  console.log('switcher and shortcuts: ok');
+
   // A room link opened signed out: sign in returns to that room (music), not to the first one; Back does not loop to
   // sign in. A room id nobody can see gives the plain missing state after sign in.
   const signInAs = async (page, path) => {

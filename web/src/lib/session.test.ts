@@ -185,8 +185,8 @@ describe('session', () => {
     await vi.advanceTimersByTimeAsync(30000);
     expect(FakeWS.all).toHaveLength(1);
   });
-  it('logout forgets the last room of this account only', async () => {
-    const store = new Map([['vesper.lastRoom.a', '5'], ['vesper.lastRoom.b', '7']]);
+  it('logout forgets the last and recent rooms of this account only', async () => {
+    const store = new Map([['vesper.lastRoom.a', '5'], ['vesper.lastRoom.b', '7'], ['vesper.recent.a', '[5]'], ['vesper.recent.b', '[7]']]);
     vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, removeItem: (k: string) => store.delete(k) });
     const { session, lastRoomKey } = await load();
     session.connect();
@@ -195,6 +195,7 @@ describe('session', () => {
     await session.logout();
     expect(store.has(lastRoomKey('a'))).toBe(false);
     expect(store.get(lastRoomKey('b'))).toBe('7');
+    expect([...store.keys()]).toEqual(['vesper.lastRoom.b', 'vesper.recent.b']);
     expect(calls.at(-1)).toBe('replace /login'); // signing out on purpose keeps no page to return to
   });
 });

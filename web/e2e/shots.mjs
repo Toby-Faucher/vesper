@@ -435,6 +435,34 @@ scene('person-card-mod', async (ctx) => {
 });
 
 // A restricted room: alice (owner) sees it with its label; bob (member) opening its address gets the plain missing state.
+// The Ctrl+K switcher on the full house: empty (unread rooms first, then people in voice, then actions), "gen" (rooms and
+// actions mixed), scoped to actions with "> ", no match, and the shortcuts list opened from it.
+async function switcher(ctx, query) {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  await rest(page);
+  await page.keyboard.press('Control+k');
+  const box = page.getByRole('combobox', { name: 'Switch to' });
+  await box.fill(query);
+  await sleep(700); // past the results count delay
+  return page;
+}
+const closeSwitcher = (page) => page.keyboard.press('Escape');
+for (const [name, query] of [['switcher-empty', ''], ['switcher-query', 'gen'], ['switcher-actions', '> '], ['switcher-none', 'zzq']])
+  scene(name, async (ctx) => {
+    const page = await switcher(ctx, query);
+    await ctx.shot(page, name);
+    await closeSwitcher(page);
+  });
+scene('shortcuts', async (ctx) => {
+  const page = await switcher(ctx, '> keyboard');
+  await page.keyboard.press('Enter');
+  await page.getByRole('dialog', { name: 'Keyboard shortcuts' }).waitFor();
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'shortcuts');
+  await page.keyboard.press('Escape');
+});
 scene('hidden-room', async ({ alice, bob, api, seed, shot }) => {
   await seed();
   const staff = await api(alice.page, 'POST', '/api/rooms', { name: 'staff' });

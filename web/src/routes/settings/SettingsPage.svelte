@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SETTINGS_SECTIONS, href, type SettingsSection } from '../../lib/route';
+  import { SETTINGS_NAMES as NAMES, SETTINGS_SECTIONS, href, type SettingsSection } from '../../lib/route';
   import { wsUrl } from '../../lib/session.svelte';
   import { updateSettings, voice } from '../../lib/voice.svelte';
   import { UI_MESSAGES } from '../../lib/ui/messages';
@@ -7,9 +7,6 @@
   import Diagnostics from '../Diagnostics.svelte';
   // A lazy chunk. Task 12 groups the voice controls into sections; until then Voice holds today's settings card.
   let { section }: { section: SettingsSection } = $props();
-  const NAMES: Record<SettingsSection, string> = {
-    voice: 'Voice', notifications: 'Notifications', appearance: 'Appearance', account: 'Account', diagnostics: 'Diagnostics',
-  };
 </script>
 
 <div class="flex min-h-0 flex-1 gap-8 overflow-y-auto px-4 py-6">
