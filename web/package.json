@@ -13,13 +13,14 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "size": "node scripts/size-check.mjs",
     "ci": "npm run check && npm test && npm run build && npm run size",
-    "e2e": "node e2e/two-browser.mjs && node e2e/flows.mjs"
+    "e2e": "node e2e/two-browser.mjs && node e2e/flows.mjs",
+    "shots": "node e2e/shots.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@tailwindcss/vite": "4.3.3",
     "@tsconfig/svelte": "5.0.8",
-    "bits-ui": "2.20.2",
+    "animejs": "4.5.0",
     "playwright-core": "1.64.1",
     "svelte": "5.57.3",
     "svelte-check": "4.7.7",

@@ -38,26 +38,26 @@
 </script>
 
 <main class="mx-auto max-w-sm space-y-4 p-6">
-  <h1 class="text-xl font-semibold">Create your account</h1>
+  <h1 class="text-xl font-medium">Create your account</h1>
   {#if badLink}
-    <p role="alert" class="text-red-400">{BAD_LINK}</p>
+    <p role="alert" class="text-danger">{BAD_LINK}</p>
   {:else}
     <form onsubmit={submit} class="space-y-3">
       <label class="block">Username
-        <input class="w-full rounded bg-neutral-900 p-2" autocomplete="username" aria-describedby="username-help"
+        <input class="w-full rounded bg-element p-2" autocomplete="username" aria-describedby="username-help"
           bind:value={username} required minlength="3" maxlength="24" pattern="[A-Za-z0-9_]+" />
       </label>
-      <p id="username-help" class="text-sm text-neutral-400">3 to 24 letters, digits or _. You sign in with it.</p>
+      <p id="username-help" class="text-sm text-fg-3">3 to 24 letters, digits or _. You sign in with it.</p>
       <label class="block">Display name
-        <input class="w-full rounded bg-neutral-900 p-2" autocomplete="nickname" bind:value={displayName} required maxlength="32" />
+        <input class="w-full rounded bg-element p-2" autocomplete="nickname" bind:value={displayName} required maxlength="32" />
       </label>
       <label class="block">Password
-        <input class="w-full rounded bg-neutral-900 p-2" type="password" autocomplete="new-password" aria-describedby="password-help"
+        <input class="w-full rounded bg-element p-2" type="password" autocomplete="new-password" aria-describedby="password-help"
           bind:value={password} required minlength="8" maxlength="128" />
       </label>
-      <p id="password-help" class="text-sm text-neutral-400">At least 8 characters.</p>
-      <button class="w-full rounded bg-neutral-700 p-2" disabled={busy}>Create account</button>
+      <p id="password-help" class="text-sm text-fg-3">At least 8 characters.</p>
+      <button class="w-full rounded bg-selected p-2" disabled={busy}>Create account</button>
     </form>
-    {#if error}<p role="alert" class="text-red-400" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
+    {#if error}<p role="alert" class="text-danger" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
   {/if}
 </main>

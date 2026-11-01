@@ -288,42 +288,42 @@
 <div class="space-y-4">
   <div class="flex items-center gap-2 text-sm">
     <span class="flex-1">Signed in as {session.state.me?.user.display_name}</span>
-    <button class="rounded bg-neutral-800 px-3 py-1" onclick={() => session.logout()}>Log out</button>
+    <button class="rounded bg-hover px-3 py-1" onclick={() => session.logout()}>Log out</button>
   </div>
   {#if session.notice}
-    <p role="alert" class="text-amber-400">
+    <p role="alert" class="text-warn">
       {session.notice}
-      <button class="rounded bg-neutral-700 px-2" onclick={() => session.connect()}>Reconnect</button>
+      <button class="rounded bg-selected px-2" onclick={() => session.connect()}>Reconnect</button>
     </p>
   {:else if !session.online}
-    <p role="status" class="text-neutral-400">Connecting to the server...</p>
+    <p role="status" class="text-fg-3">Connecting to the server...</p>
   {/if}
-  <select class="w-full rounded bg-neutral-900 p-2" aria-label="Room" bind:value={roomId}>
+  <select class="w-full rounded bg-element p-2" aria-label="Room" bind:value={roomId}>
     {#each session.state.rooms as r (r.id)}<option value={r.id}>{r.name}{badge(r.id)}</option>{/each}
   </select>
   {#if !joined}
     <form onsubmit={join} class="space-y-3">
-      <button class="w-full rounded bg-neutral-700 p-2" disabled={joining || !session.state.rooms.length}>
+      <button class="w-full rounded bg-selected p-2" disabled={joining || !session.state.rooms.length}>
         {joining ? 'Joining...' : 'Join'}
       </button>
     </form>
   {/if}
-  {#if error}<p class="text-red-400" role="alert" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
-  {#if deviceError}<p class="text-amber-400" role="alert">{deviceError}</p>{/if}
+  {#if error}<p class="text-danger" role="alert" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
+  {#if deviceError}<p class="text-warn" role="alert">{deviceError}</p>{/if}
   {#if offered}
     <p class="text-sm">
       New microphone: {offered.label || offered.deviceId}
-      <button class="rounded bg-neutral-700 px-2" onclick={() => { onSettings({ ...settings, micId: offered!.deviceId }); offered = null; }}>Use it</button>
-      <button class="px-2 text-neutral-400" onclick={() => (offered = null)}>Dismiss</button>
+      <button class="rounded bg-selected px-2" onclick={() => { onSettings({ ...settings, micId: offered!.deviceId }); offered = null; }}>Use it</button>
+      <button class="px-2 text-fg-3" onclick={() => (offered = null)}>Dismiss</button>
     </p>
   {/if}
-  <button class="rounded bg-neutral-800 px-3 py-1 text-sm" onclick={() => (showSettings = !showSettings)}>
+  <button class="rounded bg-hover px-3 py-1 text-sm" onclick={() => (showSettings = !showSettings)}>
     {showSettings ? 'Hide settings' : 'Audio settings'}
   </button>
   {#if showSettings}
     <Settings {settings} {joinedBitrate} {joined} onchange={onSettings} liveStream={mic} sinkSupported={'setSinkId' in AudioContext.prototype} />
   {/if}
-  <button class="rounded bg-neutral-800 px-3 py-1 text-sm" onclick={() => (showDiag = !showDiag)}>
+  <button class="rounded bg-hover px-3 py-1 text-sm" onclick={() => (showDiag = !showDiag)}>
     {showDiag ? 'Hide diagnostics' : 'Diagnostics'}
   </button>
   {#if showDiag}
@@ -332,21 +332,21 @@
   {#if joined}
     <p>In {joinedName}</p>
     <div class="flex gap-2">
-      <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleMute} disabled={forceMuted}>{muted ? 'Unmute' : 'Mute'}</button>
-      <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleDeafen}>{deafened ? 'Undeafen' : 'Deafen'}</button>
-      <button class="ml-auto rounded bg-red-900 px-3 py-1" onclick={leave}>Leave</button>
+      <button class="rounded bg-selected px-3 py-1" onclick={toggleMute} disabled={forceMuted}>{muted ? 'Unmute' : 'Mute'}</button>
+      <button class="rounded bg-selected px-3 py-1" onclick={toggleDeafen}>{deafened ? 'Undeafen' : 'Deafen'}</button>
+      <button class="ml-auto rounded bg-danger-solid text-on-danger px-3 py-1" onclick={leave}>Leave</button>
     </div>
-    {#if forceMuted}<p role="status" class="text-amber-400">A moderator muted you.</p>{/if}
-    <p class="rounded p-1 {speaking.has(userId) ? 'ring-2 ring-green-500' : ''}">You{muted ? ' (muted)' : ''}{deafened ? ' (deafened)' : ''}</p>
-    <p class="text-sm text-neutral-400" role="status">Noise suppression: {mode}{modeReason ? ` (${modeReason})` : ''}</p>
-    <p class="text-sm text-amber-400" role="status">
+    {#if forceMuted}<p role="status" class="text-warn">A moderator muted you.</p>{/if}
+    <p class="rounded p-1 {speaking.has(userId) ? 'speaking ring-2 ring-ok' : ''}">You{muted ? ' (muted)' : ''}{deafened ? ' (deafened)' : ''}</p>
+    <p class="text-sm text-fg-3" role="status">Noise suppression: {mode}{modeReason ? ` (${modeReason})` : ''}</p>
+    <p class="text-sm text-warn" role="status">
       {micWarning === 'mic' ? 'No sound from your microphone. Check the input device, its volume, and the mute switch.'
         : micWarning === 'pipeline' ? 'The audio pipeline stopped. Leave and join again.' : ''}
     </p>
   {/if}
   <ul class="space-y-1">
     {#each peers as p (p.user_id)}
-      <li class="flex items-center gap-2 rounded p-1 {speaking.has(p.user_id) ? 'ring-2 ring-green-500' : ''}">
+      <li class="flex items-center gap-2 rounded p-1 {speaking.has(p.user_id) ? 'speaking ring-2 ring-ok' : ''}">
         <span class="flex-1">{p.name}{p.muted ? ' (muted)' : ''}{p.deafened ? ' (deafened)' : ''}</span>
         <input type="range" min="0" max="200" aria-label="Volume for {p.name}"
           value={volumes[p.user_id] ?? 100}

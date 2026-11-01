@@ -1,6 +1,6 @@
 # UI design principles
 
-Principles only, so later work does not invent. The visual pass (theme, accent colours, motion) is a later plan. Last updated 2026-10-30.
+Principles only, so later work does not invent. Last updated 2026-11-01.
 
 Who it is for: a voice room for a few friends on desktop Chrome or Firefox. Dark only. No light theme and no mobile layout.
 
@@ -19,6 +19,16 @@ Who it is for: a voice room for a few friends on desktop Chrome or Firefox. Dark
 
 Anything that hides a failure. A spinner with no cause. Sound or visual effects on the mic path. Settings nobody asked for.
 
+## Tokens
+
+Colours, type, radii and motion live in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css), one block per style. The style is
+chosen in one place: `data-style` on `<html>`, set by `web/src/lib/ui/style.ts` before the app mounts. Components never read it.
+`web/src/app.css` maps the roles to Tailwind names (`bg-app`, `text-fg-3`, `bg-accent`, `text-danger` ...) and turns the default
+Tailwind palette off, so a class like `bg-neutral-800` does not exist. `web/src/lib/ui/no-raw-colours.test.ts` fails on a hex value,
+`rgb()`, `hsl()`, `oklch()` or a palette class outside `tokens.css`, and `tokens.test.ts` checks the contrast of each text and UI pair.
+
+To see every role, the type scale, the radii and the focus ring, run `npm --prefix web run dev` and open `/_gallery` (dev server only).
+
 ## Not done yet
 
-Design tokens, a linter or formatter for the web code, browser-driven tests and a screen reader pass. They are follow-ups, not part of this baseline.
+A linter or formatter for the web code and a screen reader pass.

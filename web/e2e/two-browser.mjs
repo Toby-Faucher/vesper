@@ -118,7 +118,7 @@ try {
   for (let i = 0; i < N; i++) {
     await sleep(250);
     last = await inbound(bob.page);
-    rings += await bob.page.locator('li.ring-green-500').count();
+    rings += await bob.page.locator('li.speaking').count();
   }
   console.log('bob inbound audio: first', JSON.stringify(first), 'last', JSON.stringify(last), `speaking ring on ${rings}/${N} samples`);
   assert.match(last.ice, /^(connected|completed)$/, 'ICE not connected');

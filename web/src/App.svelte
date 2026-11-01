@@ -6,8 +6,12 @@
   import Signup from './routes/Signup.svelte';
   import Room from './routes/Room.svelte';
   import type { Me } from './lib/gen/Me';
+  import type { Component } from 'svelte';
 
   let error = $state('');
+  // The token gallery at /_gallery, in the dev server only: the build drops this import.
+  let Gallery = $state<Component | null>(null);
+  if (import.meta.env.DEV) void import('./routes/dev/Gallery.svelte').then((m) => (Gallery = m.default));
 
   onMount(() => {
     const pop = () => (route.path = location.pathname);
@@ -26,7 +30,7 @@
       else error = errorText(e);
     }
   }
-  const home = $derived(route.path !== '/login' && route.path !== '/invite');
+  const home = $derived(route.path !== '/login' && route.path !== '/invite' && !(import.meta.env.DEV && route.path === '/_gallery'));
   $effect(() => {
     const path = route.path;
     if (!home) return;
@@ -40,7 +44,9 @@
   });
 </script>
 
-{#if route.path === '/login'}
+{#if import.meta.env.DEV && route.path === '/_gallery'}
+  {#if Gallery}<Gallery />{/if}
+{:else if route.path === '/login'}
   <Login />
 {:else if route.path === '/invite'}
   <Signup />
@@ -48,7 +54,7 @@
   <Room />
 {:else if error}
   <main class="mx-auto max-w-sm space-y-3 p-6">
-    <p role="alert" class="text-red-400">{error}</p>
-    <button class="rounded bg-neutral-700 px-3 py-1" onclick={load}>Try again</button>
+    <p role="alert" class="text-danger">{error}</p>
+    <button class="rounded bg-selected px-3 py-1" onclick={load}>Try again</button>
   </main>
 {/if}

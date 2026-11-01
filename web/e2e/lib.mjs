@@ -69,14 +69,15 @@ const hook = () => {
   window.RTCPeerConnection.prototype = Orig.prototype;
 };
 
-// A headless Chromium with a fake microphone; `args` are extra Chromium flags. Returns { page, errors }.
-export async function browser(name, args) {
+// A headless Chromium with a fake microphone; `args` are extra Chromium flags, `viewport` e.g. { width: 1440, height: 900 }.
+// Returns { page, errors }.
+export async function browser(name, args = [], { viewport } = {}) {
   const b = await chromium.launch({
     executablePath: process.env.E2E_CHROMIUM || undefined, // local only: a browser Playwright did not download
     args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', ...args],
   });
   browsers.push(b);
-  const page = await (await b.newContext({ permissions: ['microphone'] })).newPage();
+  const page = await (await b.newContext({ permissions: ['microphone'], ...(viewport && { viewport }) })).newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(`${name}: ${e}`));
   // The server sends a strict CSP: a blocked load in the page shows as a console error and an event. A block inside a worker

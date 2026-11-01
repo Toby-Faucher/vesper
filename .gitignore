@@ -30,3 +30,4 @@ research/experiments/*/*.log
 __pycache__/
 research/experiments/*/prompt.md
 research/listen-v2/
+web/e2e/shots/

@@ -85,8 +85,8 @@
   }
 </script>
 
-<section class="space-y-2 rounded bg-neutral-900 p-3 text-sm">
-  {#if !pc}<p class="text-neutral-400">Not in a call</p>{/if}
+<section class="space-y-2 rounded bg-element p-3 text-sm">
+  {#if !pc}<p class="text-fg-3">Not in a call</p>{/if}
   <dl class="grid grid-cols-2 gap-x-2">
     <dt>RTT</dt><dd>{f(diag?.rttMs ?? null, 'ms')}</dd>
     <dt>Jitter</dt><dd>{f(diag?.jitterMs ?? null, 'ms')}</dd>
@@ -97,13 +97,13 @@
     <dt>ICE</dt><dd>{diag?.iceState ?? 'n/a'}</dd>
     <dt>Path</dt><dd>{diag?.selectedPair ?? 'n/a'}</dd>
   </dl>
-  <h3 class="font-semibold">Audio pipeline</h3>
+  <h3 class="font-medium">Audio pipeline</h3>
   <dl class="grid grid-cols-2 gap-x-2">
     {#each rows as [k, v] (k)}<dt>{k}</dt><dd>{v}</dd>{/each}
   </dl>
   <div class="flex gap-2">
-    <button class="rounded bg-neutral-700 px-3 py-1" onclick={copy}>Copy report</button>
-    <button class="rounded bg-neutral-700 px-3 py-1" onclick={test} disabled={testing}>
+    <button class="rounded bg-selected px-3 py-1" onclick={copy}>Copy report</button>
+    <button class="rounded bg-selected px-3 py-1" onclick={test} disabled={testing}>
       {testing ? 'Testing...' : 'Test connection'}
     </button>
   </div>

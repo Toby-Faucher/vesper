@@ -258,46 +258,46 @@
 <svelte:document onvisibilitychange={maybeRead} />
 
 <section class="space-y-2" aria-label="Chat">
-  <input type="search" class="w-full rounded bg-neutral-900 p-2" aria-label="Search messages" placeholder="Search messages"
+  <input type="search" class="w-full rounded bg-element p-2" aria-label="Search messages" placeholder="Search messages"
     bind:value={query} oninput={onSearchInput} />
-  {#if searchError}<p class="text-amber-400" role="alert">{searchError}</p>{/if}
+  {#if searchError}<p class="text-warn" role="alert">{searchError}</p>{/if}
   {#if searched}
-    <div class="max-h-48 space-y-1 overflow-y-auto rounded bg-neutral-900 p-2 text-sm" aria-label="Search results">
+    <div class="max-h-48 space-y-1 overflow-y-auto rounded bg-element p-2 text-sm" aria-label="Search results">
       {#each hits as h (h.message.id)}
-        <button class="block w-full rounded p-1 text-left hover:bg-neutral-800" onclick={() => jump(h)}>
-          <span class="text-neutral-400">{name(h.message.author_id)} in #{roomName(h.message.room_id)}:</span>
+        <button class="block w-full rounded p-1 text-left hover:bg-hover" onclick={() => jump(h)}>
+          <span class="text-fg-2">{name(h.message.author_id)} in #{roomName(h.message.room_id)}:</span>
           {#each marks(h.snippet) as part}{#if part.mark}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}
         </button>
       {:else}
-        <p class="text-neutral-400">No messages found.</p>
+        <p class="text-fg-3">No messages found.</p>
       {/each}
       {#if nextBefore !== null}
-        <button class="rounded bg-neutral-800 px-2" onclick={() => runSearch(nextBefore)}>More results</button>
+        <button class="rounded bg-hover px-2" onclick={() => runSearch(nextBefore)}>More results</button>
       {/if}
     </div>
   {/if}
 
-  <div bind:this={list} onscroll={onScroll} class="h-[28rem] space-y-2 overflow-y-auto rounded bg-neutral-900 p-2">
+  <div bind:this={list} onscroll={onScroll} class="h-[28rem] space-y-2 overflow-y-auto rounded bg-element p-2">
     {#if log?.moreBefore}
-      <button class="rounded bg-neutral-800 px-2 text-sm" onclick={older}>Load older messages</button>
+      <button class="rounded bg-hover px-2 text-sm" onclick={older}>Load older messages</button>
     {/if}
     {#each log?.messages ?? [] as m (m.id)}
-      <article id="m{m.id}" class="rounded p-1 hover:bg-neutral-800/50">
-        <p class="text-xs text-neutral-400">
-          <span class="font-semibold text-neutral-200">{name(m.author_id)}</span>
+      <article id="m{m.id}" class="rounded p-1 hover:bg-hover">
+        <p class="text-xs text-fg-2">
+          <span class="font-medium text-fg">{name(m.author_id)}</span>
           {time(m.created_at)}{m.edited_at && !m.deleted ? ' (edited)' : ''}{m.pinned ? ' (pinned)' : ''}
         </p>
         {#if m.reply_to}
-          <p class="border-l-2 border-neutral-600 pl-2 text-xs text-neutral-400">
+          <p class="border-l-2 border-line pl-2 text-xs text-fg-2">
             Reply to {name(m.reply_to.author_id)}: {m.reply_to.excerpt || 'a deleted message'}
           </p>
         {/if}
         {#if m.deleted}
-          <p class="text-neutral-500 italic">Message deleted</p>
+          <p class="text-fg-2 italic">Message deleted</p>
         {:else if editingId === m.id}
-          <textarea class="w-full rounded bg-neutral-800 p-1" aria-label="Edit message" bind:value={editText}
+          <textarea class="w-full rounded bg-hover p-1" aria-label="Edit message" bind:value={editText}
             onkeydown={onEditKey} {@attach (el) => el.focus()}></textarea>
-          <button class="rounded bg-neutral-700 px-2 text-sm" onclick={saveEdit}>Save</button>
+          <button class="rounded bg-selected px-2 text-sm" onclick={saveEdit}>Save</button>
           <button class="px-2 text-sm" onclick={() => (editingId = null)}>Cancel</button>
         {:else}
           <Markdown nodes={parse(m.body)} />
@@ -305,40 +305,40 @@
             {#if a.image}
               <img src="/api/uploads/{a.id}" alt={a.name} class="max-h-64 rounded" onload={() => stick && toBottom()} />
             {:else}
-              <a href="/api/uploads/{a.id}" download={a.name} class="block text-sky-400 underline">{a.name} ({size(a.size)})</a>
+              <a href="/api/uploads/{a.id}" download={a.name} class="block text-fg underline">{a.name} ({size(a.size)})</a>
             {/if}
           {/each}
           <div class="mt-1 flex flex-wrap gap-1 text-xs">
             {#each emojis(m) as e (e)}
               {@const by = reacted(m, e)}
-              <button class="rounded px-1 {by.includes(myId) ? 'bg-sky-900' : 'bg-neutral-800'}" aria-pressed={by.includes(myId)}
+              <button class="rounded px-1 {by.includes(myId) ? 'bg-accent-subtle' : 'bg-hover'}" aria-pressed={by.includes(myId)}
                 aria-label="React {e}{by.length ? `, ${by.length}` : ''}" onclick={() => act(() => react(m.id, e, !by.includes(myId)))}>{e}{by.length ? ` ${by.length}` : ''}</button>
             {/each}
-            <button class="rounded bg-neutral-800 px-1" onclick={() => (replyTo = m)}>Reply</button>
-            <button class="rounded bg-neutral-800 px-1" onclick={() => act(() => pin(m.id, !m.pinned))}>{m.pinned ? 'Unpin' : 'Pin'}</button>
+            <button class="rounded bg-hover px-1" onclick={() => (replyTo = m)}>Reply</button>
+            <button class="rounded bg-hover px-1" onclick={() => act(() => pin(m.id, !m.pinned))}>{m.pinned ? 'Unpin' : 'Pin'}</button>
             {#if m.author_id === myId}
-              <button class="rounded bg-neutral-800 px-1" onclick={() => ([editingId, editText] = [m.id, m.body])}>Edit</button>
+              <button class="rounded bg-hover px-1" onclick={() => ([editingId, editText] = [m.id, m.body])}>Edit</button>
             {/if}
             {#if m.author_id === myId || isMod}
-              <button class="rounded bg-neutral-800 px-1" onclick={() => confirm('Delete this message?') && act(() => remove(m.id))}>Delete</button>
+              <button class="rounded bg-hover px-1" onclick={() => confirm('Delete this message?') && act(() => remove(m.id))}>Delete</button>
             {/if}
           </div>
         {/if}
       </article>
     {/each}
     {#if log?.moreAfter}
-      <button class="rounded bg-neutral-800 px-2 text-sm" onclick={() => act(() => loadNewer(roomId))}>Load newer messages</button>
+      <button class="rounded bg-hover px-2 text-sm" onclick={() => act(() => loadNewer(roomId))}>Load newer messages</button>
     {/if}
   </div>
 
-  <p class="h-5 text-xs text-neutral-400" role="status">
+  <p class="h-5 text-xs text-fg-3" role="status">
     {typing.length ? `${typing.join(', ')} ${typing.length > 1 ? 'are' : 'is'} typing` : ''}
   </p>
   <p class="sr-only" aria-live="polite">{announce}</p>
-  {#if error}<p class="text-red-400" role="alert">{error}</p>{/if}
+  {#if error}<p class="text-danger" role="alert">{error}</p>{/if}
   <form class="space-y-1" onsubmit={submit}>
     {#if replyTo}
-      <p class="text-xs text-neutral-400">
+      <p class="text-xs text-fg-3">
         Replying to {name(replyTo.author_id)}
         <button type="button" class="underline" onclick={() => (replyTo = null)}>Cancel reply</button>
       </p>
@@ -350,14 +350,14 @@
       </p>
     {/each}
     {#if progress !== null}<progress class="w-full" value={progress} max="1" aria-label="Upload progress"></progress>{/if}
-    <textarea class="w-full rounded bg-neutral-900 p-2" rows="2" aria-label="Message" placeholder="Message #{roomName(roomId)}"
+    <textarea class="w-full rounded bg-element p-2" rows="2" aria-label="Message" placeholder="Message #{roomName(roomId)}"
       bind:value={chat.drafts[roomId]} onkeydown={onKey} oninput={onInput} onpaste={onPaste}></textarea>
     <div class="flex items-center gap-2">
       <label class="flex-1 text-sm">
         Attach a file
         <input type="file" class="text-xs" onchange={(e) => { void attach([...(e.currentTarget.files ?? [])]); e.currentTarget.value = ''; }} />
       </label>
-      <button class="rounded bg-neutral-700 px-3 py-1" disabled={sending || progress !== null}>Send</button>
+      <button class="rounded bg-selected px-3 py-1" disabled={sending || progress !== null}>Send</button>
     </div>
   </form>
 </section>
