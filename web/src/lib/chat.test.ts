@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { anchorTop, applyChatMsg, chat, loadLatest, marks, mergeLatest, openRoom, typers, type ChatState } from './chat.svelte';
+import { CAP, anchorTop, applyChatMsg, cap, chat, loadLatest, marks, mergeLatest, openRoom, trimRooms, typers, type ChatState } from './chat.svelte';
 import type { Message } from './gen/Message';
 
 const msg = (id: number, over: Partial<Message> = {}): Message => ({
@@ -136,5 +136,28 @@ describe('helpers', () => {
     // 300 px of older messages arrived above; the reader stays on the same row.
     expect(anchorTop(40, 1000, 1300)).toBe(340);
     expect(anchorTop(0, 500, 500)).toBe(0);
+  });
+});
+
+describe('cap and trimRooms', () => {
+  const log = (n: number, from = 1) => ({ messages: Array.from({ length: n }, (_, i) => msg(from + i)), moreBefore: false, moreAfter: false });
+
+  it('keeps the newest CAP messages once a page past it, and says there is more before', () => {
+    const small = log(CAP + 50);
+    expect(cap(small)).toBe(small);
+    const big = cap(log(CAP + 51));
+    expect(big.messages.length).toBe(CAP);
+    expect(big.messages[0].id).toBe(52);
+    expect(big.messages.at(-1)!.id).toBe(CAP + 51);
+    expect(big.moreBefore).toBe(true);
+  });
+
+  it('trims the shown room only at the bottom, other rooms always', () => {
+    chat.state = { rooms: { 1: log(CAP + 60), 2: log(CAP + 60, 10_000) }, typing: {} };
+    trimRooms(1, false);
+    expect(chat.state.rooms[1].messages.length).toBe(CAP + 60);
+    expect(chat.state.rooms[2].messages.length).toBe(CAP);
+    trimRooms(1, true);
+    expect(chat.state.rooms[1].messages.length).toBe(CAP);
   });
 });

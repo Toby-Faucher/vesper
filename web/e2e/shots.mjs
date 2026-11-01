@@ -537,6 +537,133 @@ scene('skip-link', async ({ alice, shot }) => {
   if (!(await alice.page.evaluate(() => document.activeElement?.id === 'main'))) throw new Error('skip-link: focus did not move to main');
 });
 
+// The timeline: a room "plans" with three days of talk (the harness moves the older messages back a day or two, since
+// the server stamps them now), groups, a code block, a reply, an edited, a pinned and a deleted message, reactions, a
+// long message, a mention of alice and a New row (alice read up to the deleted one). alice opens it at the New row.
+let planned;
+function plans({ alice, bob, api }) {
+  planned ??= (async () => {
+    const room = await api(alice.page, 'POST', '/api/rooms', { name: 'plans' });
+    const by = { a: alice.page, b: bob.page };
+    const post = (who, body, reply_to = null) => api(by[who], 'POST', `/api/rooms/${room.id}/messages`, { body, reply_to, attachments: [] });
+    const longList = ['packing list for the trip, so nobody forgets anything this time:', ...['tent', 'two sleeping bags', 'the big cooler', 'camp stove and gas', 'water filter', 'head torches', 'first aid kit', 'rain jackets', 'spare socks', 'the card games', 'speaker and the good cable', 'power bank', 'sunscreen', 'bug spray', 'map, the paper one', 'rope', 'bin bags', 'coffee', 'mugs', 'a lighter', 'snacks for the drive', 'chairs'].map((x) => `- ${x}`)].join('\n');
+    const m = [];
+    m.push(await post('b', 'morning! the patch notes are out'));
+    m.push(await post('b', 'link to the patch notes: https://example.com/notes'));
+    m.push(await post('a', 'nice, reading them now'));
+    m.push(await post('a', longList));
+    m.push(await post('b', 'that is a **lot** of rope'));
+    m.push(await post('a', 'anyone up for a game tonight?'));
+    m.push(await post('b', 'I can do 9'));
+    m.push(await post('b', 'after dinner works better for me'));
+    m.push(await post('a', 'this is the config I use for voice:\n```\nbitrate = 64\nnoise = deepfilter\n```\nthe `deepfilter` mode helps a lot'));
+    m.push(await post('b', 'count me in', m[5].id));
+    const mic = await post('a', 'I fixed my mic, tell me if it still crackles');
+    m.push(mic);
+    await api(alice.page, 'PATCH', `/api/messages/${mic.id}`, { body: 'I fixed my mic, tell me if it still crackles at all' });
+    const gone = await post('b', 'wrong room, sorry');
+    m.push(gone);
+    await api(bob.page, 'DELETE', `/api/messages/${gone.id}`);
+    await api(alice.page, 'PUT', `/api/rooms/${room.id}/read`, { last_read_id: gone.id });
+    m.push(await post('b', '@alice can you host? my upload is slow'));
+    const coop = await post('b', 'the co-op one again?');
+    m.push(coop);
+    for (const [who, e] of [['a', '👍'], ['b', '👍'], ['b', '😂']]) await api(by[who], 'PUT', `/api/messages/${coop.id}/reaction`, { emoji: e, on: true });
+    const plan = await post('b', 'the plan: 9pm, co-op, bring snacks');
+    m.push(plan);
+    await api(bob.page, 'PUT', `/api/messages/${plan.id}/pin`, { on: true });
+    // Days: the first five two days back, the next three yesterday, the rest today.
+    const shift = new Map(m.slice(0, 5).map((x) => [x.id, 2]).concat(m.slice(5, 8).map((x) => [x.id, 1])));
+    return { room, shift };
+  })();
+  return planned;
+}
+// Rewrites history pages so the shifted messages look older; `limit` makes pages small (to show "Load older").
+async function backdate(page, shift, { limit, holdOlder } = {}) {
+  await page.route('**/api/rooms/*/messages?*', async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() !== 'GET') return route.continue();
+    if (limit) url.searchParams.set('limit', String(limit));
+    if (holdOlder && url.searchParams.has('before')) await holdOlder;
+    const res = await route.fetch({ url: url.href });
+    const body = await res.json();
+    for (const x of body.messages) x.created_at -= (shift.get(x.id) ?? 0) * 86_400_000;
+    await route.fulfill({ response: res, json: body });
+  });
+}
+async function openPlans(ctx, opts, page = ctx.alice.page) {
+  await ctx.seed();
+  const { shift } = await plans(ctx);
+  await backdate(page, shift, opts);
+  await page.goto(`${ORIGIN}/`);
+  await signedIn(page);
+  await openRoom(page, 'plans');
+  await page.locator('article').first().waitFor();
+  return page;
+}
+scene('timeline', async (ctx) => {
+  const page = await openPlans(ctx);
+  await page.mouse.move(1439, 899);
+  await sleep(400);
+  await ctx.shot(page, 'timeline');
+  // The toolbar on hover over a grouped message, and on keyboard focus (Tab into the row) with its More menu open.
+  await page.locator('article', { hasText: 'after dinner works better' }).hover();
+  await sleep(200);
+  await ctx.shot(page, 'timeline-hover');
+  const own = page.locator('article', { hasText: 'I fixed my mic' });
+  await own.getByRole('button', { name: 'More', exact: true }).focus();
+  await page.mouse.move(1439, 899);
+  await page.keyboard.press('Enter');
+  await page.getByRole('menuitem', { name: 'Edit', exact: true }).waitFor();
+  await sleep(300);
+  await ctx.shot(page, 'timeline-menu');
+  await page.keyboard.press('Escape');
+  // The long message expanded, scrolled into view.
+  const long = page.locator('article', { hasText: 'packing list' });
+  await long.evaluate((el) => (el.parentElement.scrollTop = el.offsetTop - 8)); // the list only, not the page
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'timeline-collapsed');
+  await long.getByRole('button', { name: 'Show more' }).click();
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'timeline-expanded');
+  // A reply quote jumps to the original and flashes it: the frame just after the click.
+  await page.getByRole('button', { name: /^Reply to alice/ }).click();
+  await page.mouse.move(1439, 899);
+  await sleep(120);
+  await ctx.shot(page, 'timeline-jump');
+  await page.unrouteAll({ behavior: 'wait' }); // let a page in flight finish first
+});
+// Small pages: the room opens at the bottom with "N new messages. Show the first", and scrolling up shows the older
+// page loading (held back until the picture is taken).
+scene('timeline-older', async (ctx) => {
+  // bob has never opened plans, so all of alice's messages there are unread for him.
+  let release;
+  const holdOlder = new Promise((r) => (release = r));
+  const page = await openPlans(ctx, { limit: 6, holdOlder }, ctx.bob.page);
+  await page.getByRole('button', { name: /new messages\. Show the first/ }).waitFor();
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'timeline-unread-pill');
+  await page.getByRole('button', { name: 'Load older messages' }).click(); // six short messages do not fill the pane
+  await page.locator('[aria-busy="true"]', { hasText: 'Load older messages' }).waitFor();
+  await sleep(200);
+  await ctx.shot(page, 'timeline-older');
+  release();
+  await page.unrouteAll({ behavior: 'wait' }); // let a page in flight finish first
+});
+scene('timeline-empty', async ({ alice, api }) => {
+  await api(alice.page, 'POST', '/api/rooms', { name: 'quiet' });
+  await alice.page.goto(`${ORIGIN}/`);
+  await signedIn(alice.page);
+  await openRoom(alice.page, 'quiet');
+  await alice.page.getByText('No messages yet.').waitFor();
+  await alice.page.mouse.move(1439, 899);
+  await sleep(300);
+  return alice.page;
+});
+
 scene('room', async ({ alice, bob, seed }) => {
   await seed();
   for (const p of [alice.page, bob.page]) {

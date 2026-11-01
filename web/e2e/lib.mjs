@@ -140,6 +140,13 @@ export const roomId = (page) => Number(new URL(page.url()).pathname.match(/^\/r\
 // A person in voice in the sidebar (a PresenceList item; the room row around it is an li too).
 export const inVoice = (page, name) => page.locator('li[data-speaking]', { hasText: name });
 
+// Picks an item ("Edit", "Copy text", "Delete") from a message's More menu. The toolbar shows on hover; the menu is a
+// popover outside the article, so the item is found on the page.
+export async function messageMenu(article, item) {
+  await article.getByRole('button', { name: 'More', exact: true }).click();
+  await article.page().getByRole('menuitem', { name: item, exact: true }).click();
+}
+
 // Opens the Account menu at the bottom of the sidebar and signs out.
 export async function logout(page) {
   await page.getByRole('button', { name: 'Account' }).click();

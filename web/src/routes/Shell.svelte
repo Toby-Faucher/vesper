@@ -7,6 +7,7 @@
   import { closePerson, person } from '../lib/ui/person.svelte';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
   import { layers } from '../lib/ui/layers.svelte';
+  import { chat } from '../lib/chat.svelte';
   import { isMac, isTyping, nextUnread, shortcut, stepRoom } from '../lib/ui/keys';
   import { loadRecent, pushRecent } from '../lib/ui/recent';
   import { UI_MESSAGES } from '../lib/ui/messages';
@@ -84,7 +85,12 @@
     // Settings stops the keys itself while it waits for a new push-to-talk key, so they never reach this handler.
     const ptt = { code: voice.settings.pushToTalk.enabled ? voice.settings.pushToTalk.key : null, held: voice.pttHeld };
     const s = shortcut(e, { typing: isTyping(e.target as Element | null), mac, capturingPtt: false, ptt });
-    if (!s || s === 'escape') return; // Esc: dialogs, menus and popovers close themselves; the timeline jump is Task 7's
+    if (!s) return;
+    if (s === 'escape') {
+      // Dialogs, menus and popovers close themselves on Esc; with none open, the timeline goes to the newest message.
+      if (room && !document.querySelector('dialog[open], :popover-open')) chat.latest++;
+      return;
+    }
     if (e.repeat && s !== 'prev-room' && s !== 'next-room') return e.preventDefault(); // a held key toggles once
     const ids = rooms.map((x) => x.id);
     const to = (id: number | null) => id !== null && navigate(href({ name: 'room', id }));

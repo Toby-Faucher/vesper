@@ -92,15 +92,40 @@ export function marks(snippet: string): { text: string; mark: boolean }[] {
 /** The scrollTop that keeps the same content in view after rows were added above it. */
 export const anchorTop = (oldTop: number, oldHeight: number, newHeight: number) => oldTop + (newHeight - oldHeight);
 
-// shortcut: history loaded by scrolling up and every visited room stay in memory until the next reconnect; cap each
-// room to its newest few hundred messages and drop other rooms on switch if long sessions get slow.
+/** Messages kept per room while it is read at the bottom; older ones are dropped and fetched again on scroll up. */
+export const CAP = 500;
+
+/** `log` with only its newest CAP messages. Waits for a page more than CAP, so not every new message trims. */
+export function cap(log: RoomLog, max = CAP): RoomLog {
+  if (log.messages.length <= max + PAGE) return log;
+  return { ...log, messages: log.messages.slice(-max), moreBefore: true };
+}
+
 export const chat = $state({
   state: { rooms: {}, typing: {} } as ChatState,
   /** The room shown, refetched after a reconnect. */
   active: null as number | null,
   /** Unsent text by room id, in memory only. */
   drafts: {} as Record<number, string>,
+  /** A message the timeline scrolls to and flashes once it is loaded (a search hit, a reply quote, a link). */
+  jump: null as number | null,
+  /** Raised by Esc: the timeline goes to the newest message. */
+  latest: 0,
 });
+
+/**
+ * Caps the rooms not shown, and the shown one when it is read at the bottom. A room scrolled up keeps what it has
+ * until the reader comes back down.
+ */
+export function trimRooms(shown: number | null, atBottom: boolean): void {
+  let rooms: Record<number, RoomLog> | null = null;
+  for (const [k, log] of Object.entries(chat.state.rooms)) {
+    if (Number(k) === shown && !atBottom) continue;
+    const c = cap(log);
+    if (c !== log) (rooms ??= { ...chat.state.rooms })[Number(k)] = c;
+  }
+  if (rooms) chat.state = { ...chat.state, rooms };
+}
 
 const setLog = (roomId: number, log: RoomLog) => (chat.state = { ...chat.state, rooms: { ...chat.state.rooms, [roomId]: log } });
 const history = (roomId: number, q = '') => api<MessagePage>('GET', `/api/rooms/${roomId}/messages?limit=${PAGE}${q}`);

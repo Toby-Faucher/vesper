@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
-import { browser, cli, cspViolations, inVoice, openRoom, roomId, roomLink, signup, sleep, startServer } from './lib.mjs';
+import { browser, cli, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, signup, sleep, startServer } from './lib.mjs';
 
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
@@ -145,6 +145,8 @@ try {
   await got.waitFor({ timeout: 5000 });
   assert.ok((await got.innerText()).includes('<b>x</b>'), 'raw HTML was not shown as text');
   assert.equal(await got.locator('b').count(), 0, 'raw HTML became an element');
+  // The screen reader hears the rendered text, not the Markdown.
+  await bob.page.waitForFunction(() => document.querySelector('p.sr-only[aria-live="polite"]')?.textContent === 'alice: hello bob <b>x</b> https://example.test/a', null, { timeout: 5000 });
   const link = got.getByRole('link', { name: 'https://example.test/a' });
   assert.equal(await link.getAttribute('href'), 'https://example.test/a');
   assert.equal(await link.getAttribute('rel'), 'noopener noreferrer nofollow');
@@ -153,14 +155,15 @@ try {
   await composer(bob.page).fill('hi alice');
   await composer(bob.page).press('Enter');
   await alice.page.locator('article', { hasText: 'Reply to alice' }).filter({ hasText: 'hi alice' }).waitFor({ timeout: 5000 });
-  // Edit gets focus, Escape cancels it, Enter saves.
-  const editButton = boldBob(alice.page).getByRole('button', { name: 'Edit', exact: true });
-  await editButton.click();
+  // Edit (in the More menu) gets focus, Escape cancels it and gives focus back to More, Enter saves.
+  await messageMenu(boldBob(alice.page), 'Edit');
   const editBox = alice.page.getByLabel('Edit message');
   assert.ok(await editBox.evaluate((el) => el === document.activeElement), 'the edit box did not get focus');
   await editBox.press('Escape');
   await editBox.waitFor({ state: 'detached', timeout: 2000 });
-  await editButton.click();
+  const more = boldBob(alice.page).getByRole('button', { name: 'More', exact: true });
+  assert.ok(await more.evaluate((el) => el === document.activeElement), 'focus did not go back to More after Escape');
+  await messageMenu(boldBob(alice.page), 'Edit');
   await editBox.fill('hello **bob** edited');
   await editBox.press('Enter');
   await boldBob(bob.page).filter({ hasText: 'bob edited' }).filter({ hasText: '(edited)' }).waitFor({ timeout: 5000 });
@@ -217,6 +220,17 @@ try {
   await post(alice.page, room, 'after the jump');
   await bob.page.locator('article', { hasText: 'after the jump' }).waitFor({ timeout: 5000 });
   console.log('rejoin_after_jump: ok');
+
+  // Scrolled up, "Jump to latest" shows; Esc (nothing focused that types) goes back to the newest message.
+  const list = bob.page.locator('[data-timeline]');
+  await list.evaluate((el) => (el.scrollTop = 0));
+  const latest = bob.page.getByRole('button', { name: 'Jump to latest' });
+  await latest.waitFor({ timeout: 5000 });
+  await list.focus();
+  await bob.page.keyboard.press('Escape');
+  await latest.waitFor({ state: 'detached', timeout: 5000 });
+  assert.ok(await list.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 8), 'Esc did not go to the newest message');
+  console.log('escape_to_latest: ok');
 
   for (const p of [alice.page, bob.page]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
   console.log('no CSP violations: ok');

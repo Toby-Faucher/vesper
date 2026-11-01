@@ -1,39 +1,28 @@
 <script lang="ts">
-  // The chat panel for the picked room. Rough on purpose: a later milestone redesigns it.
-  import { onMount, tick, untrack } from 'svelte';
-  import Markdown from './Markdown.svelte';
-  import { parse } from '../lib/markdown';
+  // The chat panel for the picked room: the timeline, the search field and the composer. Search and the composer are
+  // rebuilt in later tasks (8 and 10).
+  import { onMount, untrack } from 'svelte';
+  import Timeline from './Timeline.svelte';
   import { ApiFailure, errorText } from '../lib/api';
   import { href } from '../lib/route';
   import { navigate, session } from '../lib/session.svelte';
-  import {
-    anchorTop, chat, edit, jumpTo, loadNewer, loadOlder, markRead, marks, openRoom, pin, react, remove, search, send, typers, upload,
-  } from '../lib/chat.svelte';
+  import { chat, jumpTo, marks, search, send, typers, upload } from '../lib/chat.svelte';
   import type { Attachment } from '../lib/gen/Attachment';
   import type { Message } from '../lib/gen/Message';
   import type { SearchHit } from '../lib/gen/SearchHit';
 
   let { roomId }: { roomId: number } = $props();
 
-  const EMOJIS = ['👍', '😂', '❤️'];
   const TYPING_EVERY_MS = 3000; // the server takes one typing event per 3 s
 
-  let list = $state<HTMLElement>();
-  let stick = true; // scrolled to the bottom: follow new messages
-  let jumpTarget: number | null = null;
   let error = $state('');
   let replyTo = $state<Message | null>(null);
-  let editingId = $state<number | null>(null);
-  let editText = $state('');
+  let composer = $state<HTMLTextAreaElement>();
   let pending = $state<Attachment[]>([]);
   let progress = $state<number | null>(null);
   let sending = $state(false);
-  let loadingOlder = false;
   let lastTyping = 0;
-  const readSent: Record<number, number> = {};
   const PASTE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']; // the types the server shows inline
-  let announce = $state(''); // the newest message from someone else, for screen readers
-  let lastId: number | null = null; // newest id shown; null right after a room switch, so its history is not announced
   let now = $state(Date.now());
 
   let query = $state('');
@@ -44,109 +33,38 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchSeq = 0;
 
-  const log = $derived(chat.state.rooms[roomId]);
   const myId = $derived(session.state.me?.user.user_id ?? '');
-  const isMod = $derived(session.state.me?.user.role === 'owner' || session.state.me?.user.role === 'moderator');
   const roomName = (id: number) => session.state.rooms.find((r) => r.id === id)?.name ?? '';
   const name = (id: string) => session.state.users[id]?.display_name ?? 'Someone';
   const typing = $derived(typers(chat.state, roomId, now).filter((id) => id !== myId).map(name));
-  const time = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const size = (n: number) => (n < 1024 * 1024 ? `${Math.ceil(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
-  const reacted = (m: Message, e: string) => m.reactions.find((r) => r.emoji === e)?.user_ids ?? [];
-  const emojis = (m: Message) => [...EMOJIS, ...m.reactions.map((r) => r.emoji).filter((e) => !EMOJIS.includes(e))];
 
   onMount(() => {
     const t = setInterval(() => (now = Date.now()), 1000);
     return () => {
       clearInterval(t);
       clearTimeout(searchTimer);
-      chat.active = null;
     };
   });
 
-  // A new room: show its newest page, scrolled to the bottom. Reply, edit and uploads belong to the old room.
+  // A new room: reply and uploads belong to the old one.
   $effect(() => {
-    const room = roomId;
+    void roomId;
     untrack(() => {
-      stick = jumpTarget === null;
-      lastId = null;
       replyTo = null;
-      editingId = null;
       pending = [];
       error = '';
-      openRoom(room, jumpTarget !== null).catch((e) => (error = errorText(e)));
     });
   });
 
-  // After the list changed: scroll to a jump target, or follow the bottom, then mark read.
-  $effect(() => {
-    void log?.messages;
-    untrack(() => {
-      if (jumpTarget !== null) {
-        document.getElementById(`m${jumpTarget}`)?.scrollIntoView({ block: 'center' });
-        jumpTarget = null;
-        stick = false;
-      } else if (stick) toBottom();
-      const last = log?.messages.at(-1);
-      if (last && lastId !== null && last.id > lastId && last.author_id !== myId && !last.deleted) {
-        announce = `${name(last.author_id)}: ${last.body}`;
-      }
-      if (last) lastId = last.id;
-      maybeRead();
-    });
-  });
-
-  // The list fills the pane, so it shrinks when the call controls or the connection banner appear: keep the bottom in view.
-  $effect(() => {
-    if (!list) return;
-    const ro = new ResizeObserver(() => stick && toBottom());
-    ro.observe(list);
-    return () => ro.disconnect();
-  });
-
-  function toBottom() {
-    if (list) list.scrollTop = list.scrollHeight;
-  }
-  const atBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 8;
-
-  // Mark read only what the reader can see: the newest page, scrolled to the bottom, in a visible tab.
-  function maybeRead() {
-    const last = log?.messages.at(-1);
-    if (!last || log?.moreAfter || !stick || document.visibilityState !== 'visible') return;
-    if ((session.state.unread[roomId]?.last_read_id ?? 0) >= last.id || (readSent[roomId] ?? 0) >= last.id) return;
-    const room = roomId;
-    readSent[room] = last.id;
-    markRead(room, last.id).catch(() => (readSent[room] = 0));
-  }
-
-  async function older() {
-    if (loadingOlder || !list) return;
-    loadingOlder = true;
-    const [top, height] = [list.scrollTop, list.scrollHeight];
-    try {
-      await loadOlder(roomId);
-      await tick();
-      list.scrollTop = anchorTop(top, height, list.scrollHeight);
-    } catch (e) {
-      error = errorText(e);
-    } finally {
-      loadingOlder = false;
-    }
-  }
-
-  function onScroll() {
-    if (!list) return;
-    stick = atBottom(list);
-    if (list.scrollTop < 40 && log?.moreBefore) void older();
-    maybeRead();
-  }
-
-  async function act(f: () => Promise<unknown>) {
+  /** Runs an action and shows its error. True when it worked. */
+  async function act(f: () => Promise<unknown>): Promise<boolean> {
     error = '';
     try {
       await f();
+      return true;
     } catch (e) {
       error = errorText(e);
+      return false;
     }
   }
 
@@ -162,8 +80,7 @@
       chat.drafts[room] = '';
       replyTo = null;
       pending = [];
-      stick = true;
-      toBottom();
+      chat.latest++; // follow your own message, also from an older slice after a jump
     } catch (err) {
       error = err instanceof ApiFailure && err.code === 'conflict' ? 'That file could not be attached. Upload it again.' : errorText(err);
     } finally {
@@ -208,25 +125,6 @@
     void attach(files);
   }
 
-  async function saveEdit() {
-    const id = editingId;
-    if (id === null || !editText.trim()) return;
-    await act(async () => {
-      await edit(id, editText);
-      editingId = null;
-    });
-  }
-
-  function onEditKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      editingId = null;
-    } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      void saveEdit();
-    }
-  }
-
   function onSearchInput() {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => void runSearch(null), 300); // the server allows about one search a second
@@ -255,18 +153,29 @@
 
   async function jump(h: SearchHit) {
     const { room_id, id } = h.message;
-    jumpTarget = id; // before the load: the list effect runs as soon as the page lands
-    await act(async () => {
+    chat.jump = id; // before the load: the timeline scrolls to it and flashes it as soon as the page lands
+    const ok = await act(async () => {
       await jumpTo(room_id, id);
       navigate(href({ name: 'room', id: room_id })); // the shell passes the new room back in as roomId
     });
-    if (error) jumpTarget = null;
+    if (!ok) chat.jump = null;
+  }
+
+  // An empty room invites the first message: focus the composer, unless the reader already moved focus into the pane
+  // (a key press landing there must not be taken away when the load finishes).
+  function sayHello() {
+    const a = document.activeElement;
+    if (!a || a === document.body || !a.closest('main')) composer?.focus();
+  }
+
+  function reply(m: Message) {
+    replyTo = m;
+    composer?.focus();
   }
 </script>
 
-<svelte:document onvisibilitychange={maybeRead} />
-
-<section class="flex min-h-0 flex-1 flex-col gap-2 px-4 pt-3 pb-4" aria-label="Chat">
+<section class="flex min-h-0 flex-1 flex-col gap-2 pt-3 pb-4" aria-label="Chat">
+  <div class="space-y-2 px-4">
   <input type="search" class="w-full rounded bg-element p-2" aria-label="Search messages" placeholder="Search messages"
     bind:value={query} oninput={onSearchInput} />
   {#if searchError}<p class="text-warn" role="alert">{searchError}</p>{/if}
@@ -285,65 +194,14 @@
       {/if}
     </div>
   {/if}
-
-  <div bind:this={list} onscroll={onScroll} class="min-h-0 flex-1 space-y-2 overflow-y-auto">
-    {#if log?.moreBefore}
-      <button class="rounded bg-hover px-2 text-sm" onclick={older}>Load older messages</button>
-    {/if}
-    {#each log?.messages ?? [] as m (m.id)}
-      <article id="m{m.id}" class="rounded p-1 hover:bg-hover">
-        <p class="text-xs text-fg-2">
-          <span class="font-medium text-fg">{name(m.author_id)}</span>
-          {time(m.created_at)}{m.edited_at && !m.deleted ? ' (edited)' : ''}{m.pinned ? ' (pinned)' : ''}
-        </p>
-        {#if m.reply_to}
-          <p class="border-l-2 border-line pl-2 text-xs text-fg-2">
-            Reply to {name(m.reply_to.author_id)}: {m.reply_to.excerpt || 'a deleted message'}
-          </p>
-        {/if}
-        {#if m.deleted}
-          <p class="text-fg-2 italic">Message deleted</p>
-        {:else if editingId === m.id}
-          <textarea class="w-full rounded bg-hover p-1" aria-label="Edit message" bind:value={editText}
-            onkeydown={onEditKey} {@attach (el) => el.focus()}></textarea>
-          <button class="rounded bg-selected px-2 text-sm" onclick={saveEdit}>Save</button>
-          <button class="px-2 text-sm" onclick={() => (editingId = null)}>Cancel</button>
-        {:else}
-          <Markdown nodes={parse(m.body)} />
-          {#each m.attachments as a (a.id)}
-            {#if a.image}
-              <img src="/api/uploads/{a.id}" alt={a.name} class="max-h-64 rounded" onload={() => stick && toBottom()} />
-            {:else}
-              <a href="/api/uploads/{a.id}" download={a.name} class="block text-fg underline">{a.name} ({size(a.size)})</a>
-            {/if}
-          {/each}
-          <div class="mt-1 flex flex-wrap gap-1 text-xs">
-            {#each emojis(m) as e (e)}
-              {@const by = reacted(m, e)}
-              <button class="rounded px-1 {by.includes(myId) ? 'bg-accent-subtle' : 'bg-hover'}" aria-pressed={by.includes(myId)}
-                aria-label="React {e}{by.length ? `, ${by.length}` : ''}" onclick={() => act(() => react(m.id, e, !by.includes(myId)))}>{e}{by.length ? ` ${by.length}` : ''}</button>
-            {/each}
-            <button class="rounded bg-hover px-1" onclick={() => (replyTo = m)}>Reply</button>
-            <button class="rounded bg-hover px-1" onclick={() => act(() => pin(m.id, !m.pinned))}>{m.pinned ? 'Unpin' : 'Pin'}</button>
-            {#if m.author_id === myId}
-              <button class="rounded bg-hover px-1" onclick={() => ([editingId, editText] = [m.id, m.body])}>Edit</button>
-            {/if}
-            {#if m.author_id === myId || isMod}
-              <button class="rounded bg-hover px-1" onclick={() => confirm('Delete this message?') && act(() => remove(m.id))}>Delete</button>
-            {/if}
-          </div>
-        {/if}
-      </article>
-    {/each}
-    {#if log?.moreAfter}
-      <button class="rounded bg-hover px-2 text-sm" onclick={() => act(() => loadNewer(roomId))}>Load newer messages</button>
-    {/if}
   </div>
 
+  <Timeline {roomId} {act} onreply={reply} onempty={sayHello} />
+
+  <div class="space-y-1 px-4">
   <p class="h-5 text-xs text-fg-3" role="status">
     {typing.length ? `${typing.join(', ')} ${typing.length > 1 ? 'are' : 'is'} typing` : ''}
   </p>
-  <p class="sr-only" aria-live="polite">{announce}</p>
   {#if error}<p class="text-danger" role="alert">{error}</p>{/if}
   <form class="space-y-1" onsubmit={submit}>
     {#if replyTo}
@@ -359,7 +217,7 @@
       </p>
     {/each}
     {#if progress !== null}<progress class="w-full" value={progress} max="1" aria-label="Upload progress"></progress>{/if}
-    <textarea class="w-full rounded bg-element p-2" rows="2" aria-label="Message" placeholder="Message {roomName(roomId)}"
+    <textarea bind:this={composer} class="w-full rounded bg-element p-2" rows="2" aria-label="Message" placeholder="Message {roomName(roomId)}"
       bind:value={chat.drafts[roomId]} onkeydown={onKey} oninput={onInput} onpaste={onPaste}></textarea>
     <div class="flex items-center gap-2">
       <label class="flex-1 text-sm">
@@ -369,4 +227,5 @@
       <button class="rounded bg-selected px-3 py-1" disabled={sending || progress !== null}>Send</button>
     </div>
   </form>
+  </div>
 </section>

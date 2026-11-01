@@ -67,7 +67,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Stored per-person volumes are never pruned.** `navigator.locks` missing only logs a warning.
 - **Unhandled edge cases:** a teardown that races a joining call can leave a poll timer running, and an `AudioContext` constructor that throws is not caught. Both are rare.
 - **The connection test reports only the local candidate type.**
-- **Chat history is not trimmed.** Older pages loaded by scrolling up and every room visited stay in memory until the next reconnect, so a very long session grows the page.
+- **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
 
 ## Denoiser
 
