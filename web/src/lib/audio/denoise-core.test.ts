@@ -206,8 +206,8 @@ describe('DenoiseCore stats', () => {
     for (let i = 0; i < HALF_S; i++) render(t.core);
     expect(t.core.stats().inputRms).toBe(0);
     expect(t.core.stats().outputRms).toBe(0);
-    for (let i = 0; i < HALF_S; i++) render(t.core, i % 2 ? blk(0.6) : blk(-0.6));
-    expect(t.core.stats().inputRms).toBeCloseTo(0.6, 6);
+    for (let i = 0; i < HALF_S; i++) render(t.core, i % 2 ? blk(0.45) : blk(-0.45)); // under the limiter knee
+    expect(t.core.stats().inputRms).toBeCloseTo(0.45, 6);
   });
 
   it('stats are plain numbers and strings', () => {

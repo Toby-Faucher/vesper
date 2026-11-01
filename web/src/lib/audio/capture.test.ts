@@ -184,6 +184,9 @@ describe('createCapture', () => {
     t.workers[0].onmessage({ data: { type: 'ready' } });
     cap.setSettings(clampSettings({ attenDb: 30, postFilter: 0.01 }));
     expect(t.workers[0].postMessage).toHaveBeenLastCalledWith({ type: 'set', atten: 30, beta: 0.01 });
+    expect(t.worklets[0].port.postMessage).toHaveBeenLastCalledWith({ type: 'gate', on: false, thresholdDb: -50 });
+    cap.setSettings(clampSettings({ vad: { thresholdDb: -42, gate: true } })); // live, no rebuild
+    expect(t.worklets[0].port.postMessage).toHaveBeenLastCalledWith({ type: 'gate', on: true, thresholdDb: -42 });
     expect(t.mics).toHaveLength(1);
     const cb = vi.fn();
     cap.onModeChange(cb);
