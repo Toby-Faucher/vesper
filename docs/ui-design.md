@@ -19,6 +19,37 @@ Who it is for: a voice room for a few friends on desktop Chrome or Firefox. Dark
 
 Anything that hides a failure. A spinner with no cause. Sound or visual effects on the mic path. Settings nobody asked for.
 
+## Layout and components
+
+Written 2026-11-01, after the visual check of every screen.
+
+**The shell.** One left sidebar, the main pane, and nothing on the right. The sidebar is 248 px wide. Its header holds the
+mark, the word Vesper and the switcher button (Ctrl+K). Under it is the Rooms list. Each row is 28 px and shows the room name,
+an unread count and an amber `@n` pill for mentions. People in voice are listed under their room, with avatar, name, a mute or
+deafen icon and the speaking cue. Your own row with Settings sits at the bottom. The sidebar hides fully with `Ctrl+\`. It never
+shrinks to a row of icons. The main pane has a 48 px header with the room name, Pins, Search and Join voice. Join voice is the amber primary only when you are in no call. While you are in a
+call, a small call bar floats at the bottom centre of the main pane. The pane leaves room for it, so it covers nothing.
+Settings and Admin use the same shell: a list of sections on the left of the pane and one page of controls.
+
+**The tokens rule.** A component uses role names only (`bg-app`, `text-fg-2`, `bg-accent`, `text-danger`). Raw steps and
+hex values live only in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css). Sizes follow the 4 px scale. Text uses six
+sizes (12, 13, 14, 16, 20 and 24 px). Names, headings and unread rooms use the strong weight (600). Buttons, labels and
+table heads use 500, which Segoe UI and Liberation Sans draw as regular. The rest is 400. Counts, times and stats use
+tabular figures.
+
+**The colour rules.**
+- Amber means one of five things: the primary action, focus, a selection marker, a mention, or the unread line. A view has
+  one amber fill at most. Text on an amber fill is near-black.
+- Warnings use their own orange plus an icon and words. They never use amber.
+- A person's colour shows only on their avatar and their speaking ring. Names, text, row borders and messages stay grey.
+  There are no role colours.
+- Room names have no `#` in front.
+- Colour is never the only cue. Speaking also shows a static bar icon, and muted shows an icon.
+
+**The switch point.** The look is chosen in one place: `data-style` on `<html>`, set by `web/src/lib/ui/style.ts` before the app
+mounts. A new style is a new block in `tokens.css` with the same role names, plus one entry in `STYLES`. Components never read
+`data-style`.
+
 ## Tokens
 
 Colours, type, radii and motion live in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css), one block per style. The style is

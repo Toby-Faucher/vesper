@@ -237,6 +237,11 @@ scene('shell', async (ctx) => {
   await rest(page);
   await ctx.shot(page, 'shell-folded');
   await page.getByRole('button', { name: 'Show people in voice in music' }).click();
+  // The minimum supported window.
+  await page.setViewportSize({ width: 1024, height: 640 });
+  await rest(page);
+  await ctx.shot(page, 'shell-narrow', { fullPage: false });
+  await page.setViewportSize(VIEWPORT);
 });
 scene('shell-collapsed', async (ctx) => {
   await fullHouse(ctx);
@@ -1233,8 +1238,9 @@ const LINES = [
   'the co-op one again?', 'sure', 'I fixed my mic, tell me if it still crackles', 'sounds fine to me', 'link to the patch notes: https://example.com/notes',
 ];
 
-// npm run shots -- uploads, or -- admin
+// npm run shots -- uploads, -- admin, or -- all (every scene in order)
 const GROUPS = {
+  all: [...scenes.keys()],
   uploads: ['message-image', 'drop-overlay', 'upload-tray'],
   admin: ['admin-invites', 'admin-invite-created', 'admin-members', 'admin-members-moderator-view', 'admin-rooms', 'admin-room-members', 'admin-disk', 'admin-disk-warn'],
 };
