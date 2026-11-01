@@ -147,7 +147,7 @@
             {#if capturing}Press a key...{:else}Key: <Kbd>{keyName(settings.pushToTalk.key)}</Kbd>{/if}
           </Button></span>
         </div>
-        <p id="ptt-capture" role="status" class="text-xs text-fg-2 empty:hidden">{#if capturing}Press the key to use. Esc cancels.{/if}</p>
+        <p id="ptt-capture" role="status" class="text-xs text-fg-2 empty:sr-only">{#if capturing}Press the key to use. Esc cancels.{/if}</p>
         {#if savedKeyProblem && !capturing}<p id="ptt-saved" class="text-xs text-warn">Your saved key can get in the way. {savedKeyProblem}</p>{/if}
         {#if refused}<p class="text-xs text-warn" role="alert">{refused}</p>{/if}
         <p id="ptt-note" class="text-xs text-fg-3">Works only while this tab has focus. Browsers do not allow keys from other apps.</p>

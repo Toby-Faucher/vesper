@@ -72,10 +72,10 @@
   async function startTest() {
     testError = '';
     try {
-      // Same pipeline as the call, so this is what others will hear.
-      test = await createCapture(settings);
+      // Same pipeline as the call, so this is what others will hear. In a call, the call's own stream: no second mic.
+      if (!liveStream) test = await createCapture(settings);
       loop = new Audio();
-      loop.srcObject = test.stream;
+      loop.srcObject = test?.stream ?? liveStream!;
       void loop.play().catch(() => {});
       testing = true;
       void refresh(); // labels appear once permission is granted

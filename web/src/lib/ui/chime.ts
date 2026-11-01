@@ -10,6 +10,7 @@ const STEP = 0.09; // seconds per tone
 export function chime(kind: 'join' | 'leave', sinkId: string | null): void {
   try {
     ctx ??= new AudioContext();
+    if (ctx.state === 'suspended') void ctx.resume().catch(() => {}); // no user gesture yet: the tones are queued until it runs
     if (sinkId !== sinkNow) {
       sinkNow = sinkId;
       const sink = ctx as AudioContext & { setSinkId?: (id: string) => Promise<void> };
@@ -33,7 +34,7 @@ export function chime(kind: 'join' | 'leave', sinkId: string | null): void {
   }
   clearTimeout(idle);
   idle = setTimeout(() => {
-    void ctx?.close();
+    void ctx?.close().catch(() => {});
     [ctx, sinkNow] = [null, null];
   }, 10000);
 }

@@ -27,8 +27,9 @@
 {#each list as a (a.id)}
   {#if a.image}
     {@const s = shown[a.id]}
+    <!-- focus() first: Safari does not focus a clicked button, and the viewer gives focus back to the focused element. -->
     <button type="button" class="img" class:failed={s?.failed} aria-label="Open image {a.name}"
-      style:width={s ? `${s.w}px` : null} style:aspect-ratio={s ? `${s.w} / ${s.h}` : null} onclick={() => s?.failed || onview(a.id)}>
+      style:width={s ? `${s.w}px` : null} style:aspect-ratio={s ? `${s.w} / ${s.h}` : null} onclick={(e) => { e.currentTarget.focus(); if (!s?.failed) onview(a.id); }}>
       <img src="/api/uploads/{a.id}" alt={a.name} draggable="false"
         onload={(e) => settle(e.currentTarget as HTMLImageElement, a.id, false)} onerror={(e) => settle(e.currentTarget as HTMLImageElement, a.id, true)}
         {@attach (el) => { if (el.complete && el.naturalWidth) settle(el, a.id, false); }} />

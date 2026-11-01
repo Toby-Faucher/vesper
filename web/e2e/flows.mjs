@@ -42,6 +42,7 @@ const fakeNotifications = () => {
   let p = sessionStorage.getItem('fake-permission') ?? 'default';
   window.__asked = 0;
   window.__shown = [];
+  window.__notes = [];
   window.Notification = class {
     static get permission() { return p; }
     static async requestPermission() {
@@ -49,8 +50,8 @@ const fakeNotifications = () => {
       sessionStorage.setItem('fake-permission', (p = 'granted'));
       return p;
     }
-    constructor(title, o = {}) { window.__shown.push({ title, body: o.body, tag: o.tag }); }
-    close() {}
+    constructor(title, o = {}) { window.__shown.push({ title, body: o.body, tag: o.tag }); window.__notes.push(this); }
+    close() { this.closed = true; }
   };
 };
 
@@ -301,6 +302,12 @@ try {
     await sleep(500);
     assert.deepEqual(await shown(), [{ title: 'alice mentioned you in general', body: 'hey @bob can you look at this', tag: String(general) }]);
     await b.waitForFunction(() => document.title === '(1) Vesper');
+    // A click on the notification closes it and opens the room at the message.
+    await b.evaluate(() => window.__notes[0].onclick());
+    await b.waitForURL(`${ORIGIN}/r/${general}`);
+    await b.getByRole('heading', { level: 1, name: 'general', exact: true }).waitFor();
+    await b.locator('article').filter({ hasText: 'hey @bob can you look at this' }).waitFor();
+    assert.ok(await b.evaluate(() => window.__notes[0].closed), 'the clicked notification stayed open');
     await b.goto(`${ORIGIN}/settings/notifications`);
     const sw = b.getByRole('switch', { name: 'Notify me when someone mentions me' });
     await sw.waitFor();
