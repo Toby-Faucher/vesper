@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as I from '../lib/ui/icons';
   import type { Peer } from '../lib/gen/Peer';
   import { inRoom } from '../lib/peers';
   import { href } from '../lib/route';
@@ -13,7 +14,8 @@
   import Menu from '../lib/ui/c/Menu.svelte';
   import MenuItem from '../lib/ui/c/MenuItem.svelte';
   import RoomRow from './RoomRow.svelte';
-  // The one sidebar: the mark, the rooms in the owner's order with who is in voice, and you with the account menu.
+  // The one sidebar: the mark, the rooms in the owner's order with who is in voice, and you with the account menu (Admin,
+  // Log out) and the Settings gear.
   let { current }: { current: number | null } = $props();
 
   const rooms = $derived([...session.state.rooms].sort((a, b) => a.position - b.position));
@@ -37,7 +39,7 @@
   <div class="flex h-12 shrink-0 items-center gap-2 pr-2 pl-4">
     <Mark size={20} />
     <span class="text-sm font-medium text-fg">Vesper</span>
-    <span class="ml-auto"><IconButton icon="sidebar" label="Hide sidebar" tip onclick={() => setCollapsed(true)} /></span>
+    <span class="ml-auto"><IconButton icon={I.sidebar} label="Hide sidebar" tip aria-expanded="true" aria-controls="sidebar" onclick={() => setCollapsed(true)} /></span>
   </div>
 
   <nav aria-label="Rooms" class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
@@ -59,13 +61,12 @@
         class="account flex h-8 min-w-0 flex-1 items-center gap-2 rounded-sm px-2 text-left">
         <Avatar user={me} size={20} />
         <span class="min-w-0 truncate text-fg" title={me.display_name}>{me.display_name}</span>
-        <span class="ml-auto flex shrink-0 text-fg-2"><Icon name="chevron-down" /></span>
+        <span class="ml-auto flex shrink-0 text-fg-2"><Icon d={I.chevronDown} /></span>
       </button>
-      <IconButton icon="settings" label="Settings" onclick={() => navigate(href({ name: 'settings', section: 'voice' }))} />
+      <IconButton icon={I.settings} label="Settings" tip onclick={() => navigate(href({ name: 'settings', section: 'voice' }))} />
       <Menu anchor={accountEl} open={menuOpen} onclose={() => (menuOpen = false)} label="Account">
-        <MenuItem icon="settings" onselect={() => navigate(href({ name: 'settings', section: 'voice' }))}>Settings</MenuItem>
-        {#if staff}<MenuItem icon="shield" onselect={() => navigate(href({ name: 'admin', section: 'invites' }))}>Admin</MenuItem>{/if}
-        <MenuItem icon="log-out" onselect={() => session.logout()}>Log out</MenuItem>
+        {#if staff}<MenuItem icon={I.shield} onselect={() => navigate(href({ name: 'admin', section: 'invites' }))}>Admin</MenuItem>{/if}
+        <MenuItem icon={I.logOut} onselect={() => session.logout()}>Log out</MenuItem>
       </Menu>
     </div>
   {/if}

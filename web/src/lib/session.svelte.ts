@@ -1,16 +1,22 @@
 import { ApiFailure, api } from './api';
 import { applyChatMsg, chat, resync } from './chat.svelte';
+import { loginHref } from './route';
 import { Signaling } from './signaling';
 import { applyServerMsg, emptyState, type AppState } from './state';
 
-/** The current path. App.svelte renders from it. */
+/** The current path, without the query and the fragment. App.svelte renders from it. */
 export const route = $state({ path: location.pathname });
 
-/** Goes to `path`. `replace` swaps the current history entry, for redirects, so Back does not loop. */
-export function navigate(path: string, replace = false): void {
-  if (location.pathname !== path) history[replace ? 'replaceState' : 'pushState'](null, '', path);
-  route.path = path;
+/** Goes to `to` (a path, maybe with a query and a fragment). `replace` swaps the current history entry, for redirects, so
+ * Back does not loop. */
+export function navigate(to: string, replace = false): void {
+  if (location.pathname + location.search + location.hash !== to) history[replace ? 'replaceState' : 'pushState'](null, '', to);
+  route.path = to.split(/[?#]/)[0];
 }
+
+/** The localStorage key of the room `/` opens, per account, so a second account on this browser does not get it. */
+export const lastRoomKey = (userId: string) => `vesper.lastRoom.${userId}`;
+const storage = (() => { try { return localStorage; } catch { return null; } })();
 
 /** Reads the invite code from the URL fragment and removes it from the address bar and history. */
 export function takeInvite(): string {
@@ -55,6 +61,8 @@ export const session = $state({
   },
 
   async logout(): Promise<void> {
+    const id = session.state.me?.user.user_id;
+    if (id) try { storage?.removeItem(lastRoomKey(id)); } catch { /* storage blocked */ }
     stop();
     await api('POST', '/api/logout').catch(() => {}); // signed out either way
     toLogin('');
@@ -128,5 +136,5 @@ function toLogin(notice: string): void {
   session.state = emptyState();
   Object.assign(chat, { state: { rooms: {}, typing: {} }, active: null, drafts: {} }); // the next account sees none of it
   session.notice = notice;
-  navigate('/login', true);
+  navigate(notice ? loginHref(location.pathname) : '/login', true); // a sign in after a lost session returns to this page
 }

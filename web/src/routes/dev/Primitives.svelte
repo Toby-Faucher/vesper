@@ -1,8 +1,8 @@
 <script lang="ts">
+  import * as I from '../../lib/ui/icons';
   // Dev-only: every primitive in lib/ui/c in its states. Elements with data-force get :hover or :focus-visible forced by
   // the screenshot scene `gallery` (Chrome DevTools protocol); in a normal browser they look like the default.
   import { SLOT_HEX } from '../../lib/ui/avatar';
-  import { ICONS, type IconName } from '../../lib/ui/icons';
   import Avatar from '../../lib/ui/c/Avatar.svelte';
   import Badge from '../../lib/ui/c/Badge.svelte';
   import Button from '../../lib/ui/c/Button.svelte';
@@ -86,21 +86,21 @@
       {#each ibStates as [s, extra] (s)}
         <div class="flex w-16 flex-col items-center gap-2">
           <span class="text-xs text-fg-3">{s}</span>
-          <IconButton icon="settings" label="Settings ({s})" {...extra} />
+          <IconButton icon={I.settings} label="Settings ({s})" {...extra} />
         </div>
       {/each}
       <div class="flex w-16 flex-col items-center gap-2">
         <span class="text-xs text-fg-3">Pressed</span>
-        <IconButton icon={muted ? 'mic-off' : 'mic'} label="Mute" pressed={muted} onclick={() => (muted = !muted)} />
+        <IconButton icon={muted ? I.micOff : I.mic} label="Mute" pressed={muted} onclick={() => (muted = !muted)} />
       </div>
       <div class="flex w-16 flex-col items-center gap-2">
         <span class="text-xs text-fg-3">Tooltip</span>
-        <IconButton icon="search" label="Search messages" tip data-force="hover" />
+        <IconButton icon={I.search} label="Search messages" tip data-force="hover" />
       </div>
     </div>
     <ul class="grid grid-cols-8 gap-2">
-      {#each Object.keys(ICONS) as n (n)}
-        <li class="flex h-8 items-center gap-2 text-xs text-fg-2"><Icon name={n as IconName} /> {n}</li>
+      {#each Object.entries(I).filter((e): e is [string, I.IconPath] => typeof e[1] === 'string') as [n, d] (n)}
+        <li class="flex h-8 items-center gap-2 text-xs text-fg-2"><Icon {d} /> {n}</li>
       {/each}
     </ul>
   </section>
@@ -148,8 +148,8 @@
               <Avatar user={p.u} size={20} speaking={p.speaking} muted={p.muted} deafened={p.deafened} />
               <span class="truncate">{p.u.display_name}</span>
               {#if p.speaking}<Speaking />{/if}
-              {#if p.deafened}<span class="text-danger"><Icon name="headphones-off" /></span><span class="sr-only">deafened</span>
-              {:else if p.muted}<span class="text-danger"><Icon name="mic-off" /></span><span class="sr-only">muted</span>{/if}
+              {#if p.deafened}<span class="text-danger"><Icon d={I.headphonesOff} /></span><span class="sr-only">deafened</span>
+              {:else if p.muted}<span class="text-danger"><Icon d={I.micOff} /></span><span class="sr-only">muted</span>{/if}
             </li>
           {/each}
         </ul>
@@ -176,8 +176,8 @@
             <span class="font-mono text-xs text-fg-3">{size}</span>
             <span><Avatar user={users[5]} {size} /></span>
             <span><Avatar user={users[5]} {size} speaking /></span>
-            <span class="flex items-center gap-1"><Avatar user={users[5]} {size} muted />{#if size === 20}<span class="text-danger"><Icon name="mic-off" /></span>{/if}</span>
-            <span class="flex items-center gap-1"><Avatar user={users[5]} {size} deafened />{#if size === 20}<span class="text-danger"><Icon name="headphones-off" /></span>{/if}</span>
+            <span class="flex items-center gap-1"><Avatar user={users[5]} {size} muted />{#if size === 20}<span class="text-danger"><Icon d={I.micOff} /></span>{/if}</span>
+            <span class="flex items-center gap-1"><Avatar user={users[5]} {size} deafened />{#if size === 20}<span class="text-danger"><Icon d={I.headphonesOff} /></span>{/if}</span>
           {/each}
         </div>
       </div>
@@ -211,7 +211,7 @@
     <h2 class="text-sm font-medium text-fg">Layers</h2>
     <div class="flex items-center gap-3">
       <Button aria-haspopup="dialog" aria-controls="invite-dialog" onclick={() => (dialogOpen = true)}>Create invite</Button>
-      <IconButton bind:el={menuBtn} icon="more" label="Message actions" onclick={() => (menuOpen = !menuOpen)} />
+      <IconButton bind:el={menuBtn} icon={I.more} label="Message actions" onclick={() => (menuOpen = !menuOpen)} />
       <Button bind:el={cardBtn} variant="ghost" onclick={() => (cardOpen = !cardOpen)}>Show person card</Button>
       <p role="status" class="text-xs text-fg-3">Last action: {last}</p>
     </div>
@@ -219,12 +219,12 @@
 </div>
 
 <Menu anchor={menuBtn} open={menuOpen} onclose={() => (menuOpen = false)} label="Message actions">
-  <MenuItem icon="reply" onselect={did('Reply')}>Reply</MenuItem>
-  <MenuItem icon="edit" onselect={did('Edit')}>Edit</MenuItem>
-  <MenuItem icon="pin" onselect={did('Pin')}>Pin</MenuItem>
-  <MenuItem icon="copy" onselect={did('Copy link')}>Copy link</MenuItem>
-  <MenuItem icon="smile" disabled onselect={did('React')}>React</MenuItem>
-  <MenuItem icon="trash" danger onselect={did('Delete')}>Delete</MenuItem>
+  <MenuItem icon={I.reply} onselect={did('Reply')}>Reply</MenuItem>
+  <MenuItem icon={I.edit} onselect={did('Edit')}>Edit</MenuItem>
+  <MenuItem icon={I.pin} onselect={did('Pin')}>Pin</MenuItem>
+  <MenuItem icon={I.copy} onselect={did('Copy link')}>Copy link</MenuItem>
+  <MenuItem icon={I.smile} disabled onselect={did('React')}>React</MenuItem>
+  <MenuItem icon={I.trash} danger onselect={did('Delete')}>Delete</MenuItem>
 </Menu>
 
 <Popover anchor={cardBtn} open={cardOpen} onclose={() => (cardOpen = false)} label="bob">
@@ -248,7 +248,7 @@
     </Field>
     <div class="flex items-end gap-2">
       <div class="flex-1"><Field label="Expires after (hours)"><TextInput value="24" inputmode="numeric" /></Field></div>
-      <IconButton bind:el={innerBtn} icon="chevron-down" label="Presets" onclick={() => (innerMenuOpen = !innerMenuOpen)} />
+      <IconButton bind:el={innerBtn} icon={I.chevronDown} label="Presets" onclick={() => (innerMenuOpen = !innerMenuOpen)} />
     </div>
     <!-- -ml-2: the label lines up with the fields above, the ghost padding hangs into the margin. -->
     <div class="-ml-2">

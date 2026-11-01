@@ -1,6 +1,6 @@
 <script lang="ts">
   import { avatarSlot, initials } from '../avatar';
-  import { ICONS } from '../icons';
+  import * as I from '../icons';
   // Initials on the user's slot colour. Speaking draws the ring (2 px gap in --bg-sidebar, 2 px slot colour), toggled
   // instantly apart from a --dur-1 opacity change. Mute or deafen shows a glyph at the bottom right at 32 and 40 px; at
   // 20 px it would be a 10 px speck, so it is left out and the row shows the state after the name (an Icon plus the word,
@@ -21,7 +21,7 @@
   const slot = $derived(avatarSlot(user));
   // One letter at 20 px: two would not fit at the 12 px floor.
   const text = $derived([...new Intl.Segmenter().segment(initials(user.display_name) || '?')].slice(0, size === 20 ? 1 : 2).map((s) => s.segment).join(''));
-  const glyph = $derived(size === 20 ? null : deafened ? 'headphones-off' : muted ? 'mic-off' : null);
+  const glyph = $derived(size === 20 ? null : deafened ? I.headphonesOff : muted ? I.micOff : null);
 </script>
 
 <span
@@ -32,7 +32,7 @@
 >
   {text}
   {#if glyph}
-    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d={ICONS[glyph]} /></svg></span>
+    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d={glyph} /></svg></span>
   {/if}
 </span>
 

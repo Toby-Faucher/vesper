@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as I from '../lib/ui/icons';
   import type { RoomInfo } from '../lib/gen/RoomInfo';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
@@ -10,11 +11,11 @@
 
 <header class="flex h-12 shrink-0 items-center gap-3 border-b border-subtle px-4">
   {#if sidebar.collapsed}
-    <span class="-ml-2"><IconButton icon="sidebar" label="Show sidebar" tip onclick={() => setCollapsed(false)} /></span>
+    <span class="-ml-2"><IconButton icon={I.sidebar} label="Show sidebar" tip aria-expanded="false" aria-controls="sidebar" onclick={() => setCollapsed(false)} /></span>
   {/if}
   <h1 class="min-w-0 truncate text-base font-medium text-fg" title={room.name}>{room.name}</h1>
   {#if room.restricted}
-    <span class="flex shrink-0 items-center gap-1 text-xs text-fg-2"><Icon name="shield" />Restricted</span>
+    <span class="flex shrink-0 items-center gap-1 text-xs text-fg-2"><Icon d={I.shield} />Restricted</span>
   {/if}
   <div class="ml-auto flex shrink-0 items-center gap-2">
     {#if !inCall}<Button variant="primary" loading={joining} onclick={onjoin}>Join voice</Button>{/if}

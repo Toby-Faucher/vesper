@@ -3,6 +3,8 @@ export const UI_MESSAGES = {
   connecting: 'Connecting to the server...',
   reconnecting: (s: number) => `Connection lost. Trying again in ${s} s.`,
   reconnectingNow: 'Connection lost. Trying again now.',
+  reconnectingSr: 'Reconnecting to the server.', // read once per drop; the countdown above is not read
+  backOnline: 'Back online.',
   retryNow: 'Try now',
   reconnect: 'Reconnect',
   noRooms: 'No rooms yet.',
@@ -12,6 +14,8 @@ export const UI_MESSAGES = {
   pageMissing: 'There is no page at this address.',
   goHome: 'Go to your rooms',
   openFirstRoom: (name: string) => `Open ${name}`,
+  chatLoading: 'Loading messages...',
+  chatFailed: 'The chat did not load. Reload the page to try again.',
   adminLater: 'The admin pages are not built yet.',
   sectionLater: 'Nothing to set here yet.',
 } as const;

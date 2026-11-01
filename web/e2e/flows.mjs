@@ -1,7 +1,8 @@
 // UI flows test. Starts the release server like two-browser.mjs and checks, in real Chromium: the invite code leaves
 // the address bar, a bad link, autocomplete attributes, passwords cleared and focus on the error after a failed
-// submit, routes, the call staying up while moving between rooms and settings, force-mute (also on rejoin and from the
-// person card), a kick ending the call, and a room that becomes private ending the call.
+// submit, routes, a room link surviving sign in, the call staying up while moving between rooms and settings,
+// force-mute (also on rejoin and from the person card), a kick ending the call, and a room that becomes private ending
+// the call.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -122,6 +123,26 @@ try {
   await b.getByRole('button', { name: 'Leave' }).click();
   await inVoice(a, 'bob').waitFor({ state: 'detached' });
   console.log('call survives navigation: ok');
+
+  // A room link opened signed out: sign in returns to that room (music), not to the first one; Back does not loop to
+  // sign in. A room id nobody can see gives the plain missing state after sign in.
+  const signInAs = async (page, path) => {
+    await page.goto(`${ORIGIN}${path}`);
+    await page.waitForURL(`${ORIGIN}/login?next=${encodeURIComponent(path)}`);
+    await page.getByLabel('Username').fill('alice');
+    await page.getByLabel('Password').fill('test-password-1');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.waitForURL(`${ORIGIN}${path}`);
+  };
+  await logout(a);
+  await a.getByRole('button', { name: 'Sign in' }).waitFor();
+  await signInAs(a, `/r/${music.id}`);
+  await a.getByRole('heading', { name: 'music' }).waitFor();
+  await logout(a);
+  await a.getByRole('button', { name: 'Sign in' }).waitFor();
+  await signInAs(a, '/r/99999');
+  await a.getByText('This room is not here.').waitFor();
+  console.log('room link survives sign in: ok');
 
   // Force-mute disables Mute, and still holds after Leave and a rejoin. Lifting it enables Mute again.
   await join(b, 'general');

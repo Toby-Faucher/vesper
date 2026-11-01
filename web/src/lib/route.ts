@@ -25,7 +25,7 @@ export function parse(path: string): Route {
     case '':
       return { name: 'home' };
     case 'r':
-      return second && /^[1-9]\d{0,15}$/.test(second) ? { name: 'room', id: Number(second) } : { name: 'home' };
+      return second && /^[1-9]\d{0,14}$/.test(second) ? { name: 'room', id: Number(second) } : { name: 'home' };
     case 'settings':
       return { name: 'settings', section: pick(SETTINGS_SECTIONS, second) };
     case 'admin':
@@ -52,4 +52,23 @@ export function href(r: Route): string {
     default:
       return `/${r.name}`;
   }
+}
+
+const OUTSIDE = new Set<Route['name']>(['login', 'invite', 'gallery', 'notfound']);
+
+/** Where sign in returns to: `?next=` with the path, unless that is home. */
+export function loginHref(from: string): string {
+  const next = safeNext(from);
+  return next && next !== '/' ? `/login?next=${encodeURIComponent(next)}` : '/login';
+}
+
+/**
+ * The `next` of /login as an app path, or null. Only a path that starts with one `/` and parses to a page inside the app:
+ * never `//host` or `/\host` (browsers read both as another site), a backslash, a control character (the URL parser drops
+ * tabs and newlines, which can turn `/\t/host` into `//host`) or a scheme. The result is rebuilt from the parsed route.
+ */
+export function safeNext(raw: string | null): string | null {
+  if (!raw || raw[0] !== '/' || raw[1] === '/' || raw.includes('\\') || /[\x00-\x1f\x7f]/.test(raw) || raw.includes(':')) return null;
+  const r = parse(raw.split(/[?#]/)[0]);
+  return OUTSIDE.has(r.name) ? null : href(r);
 }

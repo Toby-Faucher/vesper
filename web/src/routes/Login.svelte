@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { api, ApiFailure, errorText } from '../lib/api';
+  import { safeNext } from '../lib/route';
   import { navigate, session } from '../lib/session.svelte';
   import type { Me } from '../lib/gen/Me';
 
@@ -17,7 +18,7 @@
     try {
       session.state.me = await api<Me>('POST', '/api/login', { username, password });
       session.notice = '';
-      navigate('/', true);
+      navigate(safeNext(new URLSearchParams(location.search).get('next')) ?? '/', true);
     } catch (err) {
       error = err instanceof ApiFailure && err.status === 401 ? 'Wrong username or password.' : errorText(err);
     } finally {

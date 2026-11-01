@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as I from '../lib/ui/icons';
   import type { Peer } from '../lib/gen/Peer';
   import type { RoomInfo } from '../lib/gen/RoomInfo';
   import { href } from '../lib/route';
@@ -25,7 +26,7 @@
     <a href={href({ name: 'room', id: room.id })} aria-current={current ? 'page' : undefined} aria-label={label} title={room.name}
       class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2">
       <span class="name min-w-0 truncate">{room.name}</span>
-      {#if room.restricted}<span class="meta flex shrink-0"><Icon name="shield" /></span>{/if}
+      {#if room.restricted}<span class="meta flex shrink-0"><Icon d={I.shield} /></span>{/if}
       <span class="ml-auto flex shrink-0 items-center gap-1 pl-1">
         {#if u?.unread}<Badge kind="count" n={u.unread} />{/if}
         {#if u?.mentions}<Badge kind="mention" n={u.mentions} />{/if}
@@ -34,7 +35,7 @@
     {#if peers.length}
       <button type="button" class="meta mr-1 flex size-5 shrink-0 items-center justify-center rounded-sm"
         aria-expanded={!folded} aria-label="{folded ? 'Show' : 'Hide'} people in voice in {room.name}" onclick={() => (fold = !folded)}>
-        <Icon name={folded ? 'chevron-right' : 'chevron-down'} />
+        <Icon d={folded ? I.chevronRight : I.chevronDown} />
       </button>
     {/if}
   </div>

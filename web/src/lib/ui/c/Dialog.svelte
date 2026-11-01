@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as I from '../icons';
   import type { Snippet } from 'svelte';
   import { enter } from '../motion';
   import IconButton from './IconButton.svelte';
@@ -48,7 +49,7 @@
     <h2 id="{id}-title" class="px-5 pt-4 pr-14 pb-2 text-lg font-medium text-fg">{title}</h2>
     <div class="min-h-0 overflow-y-auto px-5 pt-2 pb-5 text-sm text-fg-2">{@render children()}</div>
     {#if footer}<div class="flex justify-end gap-2 border-t border-subtle px-5 py-3">{@render footer()}</div>{/if}
-    <div class="absolute top-3 right-3"><IconButton icon="x" label="Close" onclick={() => el.close()} /></div>
+    <div class="absolute top-3 right-3"><IconButton icon={I.x} label="Close" onclick={() => el.close()} /></div>
   </div>
 </dialog>
 

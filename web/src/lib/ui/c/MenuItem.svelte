@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getContext, tick, type Snippet } from 'svelte';
-  import type { IconName } from '../icons';
+  import type { IconPath } from '../icons';
   import Icon from './Icon.svelte';
   let {
     onselect,
@@ -8,7 +8,7 @@
     danger = false,
     disabled = false,
     children,
-  }: { onselect: () => void; icon?: IconName; danger?: boolean; disabled?: boolean; children: Snippet } = $props();
+  }: { onselect: () => void; icon?: IconPath; danger?: boolean; disabled?: boolean; children: Snippet } = $props();
   const menu = getContext<{ close: () => void }>('vesper.menu');
 
   // Close first and let focus settle on the anchor, so a dialog opened by onselect returns focus there.
@@ -20,7 +20,7 @@
 </script>
 
 <button type="button" role="menuitem" tabindex="-1" {disabled} class:danger onclick={activate}>
-  {#if icon}<Icon name={icon} />{/if}
+  {#if icon}<Icon d={icon} />{/if}
   <span class="truncate">{@render children()}</span>
 </button>
 

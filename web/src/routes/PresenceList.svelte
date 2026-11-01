@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as I from '../lib/ui/icons';
   import type { Peer } from '../lib/gen/Peer';
   import { session } from '../lib/session.svelte';
   import { voice } from '../lib/voice.svelte';
@@ -20,7 +21,7 @@
   <ul class="flex h-7 items-center pr-2 pl-7" aria-label="In voice in {roomName}">
     {#each peers.slice(0, STACK) as p (p.user_id)}
       {@const s = speaking(p)}
-      <li class="stacked -mr-1" class:speaking={s} data-speaking={s ? 'true' : 'false'}>
+      <li class="stacked -mr-0.5" class:speaking={s} data-speaking={s ? 'true' : 'false'}>
         <button type="button" class="flex rounded-full" title={p.name} onclick={(e) => togglePerson(p.user_id, e.currentTarget)}>
           <Avatar user={user(p)} size={20} speaking={s} />
           <span class="sr-only">{p.name}{s ? ', speaking' : ''}{state(p) ? `, ${state(p)}` : ''}</span>
@@ -42,7 +43,7 @@
           {#if s}<Speaking />{/if}
           {#if st}
             <span class="flex shrink-0 items-center text-danger" title={st === 'deafened' ? 'Deafened' : 'Muted'}>
-              <Icon name={st === 'deafened' ? 'headphones-off' : 'mic-off'} /><span class="sr-only">{st}</span>
+              <Icon d={st === 'deafened' ? I.headphonesOff : I.micOff} /><span class="sr-only">{st}</span>
             </span>
           {/if}
         </button>

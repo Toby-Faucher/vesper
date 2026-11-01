@@ -1,10 +1,10 @@
 <script lang="ts">
+  import * as I from '../lib/ui/icons';
   import { api, errorText } from '../lib/api';
   import type { ForceMute } from '../lib/gen/ForceMute';
   import type { UserInfo } from '../lib/gen/UserInfo';
   import { session } from '../lib/session.svelte';
   import { setVolume, voice } from '../lib/voice.svelte';
-  import type { IconName } from '../lib/ui/icons';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
   import Dialog from '../lib/ui/c/Dialog.svelte';
@@ -58,10 +58,10 @@
   }
 </script>
 
-{#snippet action(icon: IconName, text: string, what: 'force-mute' | 'kick' | 'disconnect', run: () => void, danger = false)}
+{#snippet action(icon: I.IconPath, text: string, what: 'force-mute' | 'kick' | 'disconnect', run: () => void, danger = false)}
   <!-- Busy ignores clicks but stays focusable (not disabled), so focus is not dropped while a request runs. -->
   <button type="button" class="act" class:danger aria-busy={busy === what || undefined} aria-disabled={!!busy || undefined} onclick={() => busy || run()}>
-    <Icon name={icon} /><span class="truncate">{text}</span>
+    <Icon d={icon} /><span class="truncate">{text}</span>
   </button>
 {/snippet}
 
@@ -74,7 +74,7 @@
         <p class="truncate text-xs text-fg-2">{#if user}@{user.username} · {ROLE[user.role]}{/if}</p>
       </div>
     </div>
-    <p class="flex items-center gap-2 text-fg-2"><Icon name={roomId === null ? 'headphones-off' : 'headphones'} />{where}</p>
+    <p class="flex items-center gap-2 text-fg-2"><Icon d={roomId === null ? I.headphonesOff : I.headphones} />{where}</p>
 
     {#if inCall}
       <div class="flex flex-col gap-2 border-t border-subtle pt-3">
@@ -95,11 +95,11 @@
     {#if outranks}
       <div class="flex flex-col border-t border-subtle pt-2">
         {#if peer}
-          {@render action(peer.force_muted ? 'mic' : 'mic-off', peer.force_muted ? 'Allow to speak' : 'Mute for everyone', 'force-mute',
+          {@render action(peer.force_muted ? I.mic : I.micOff, peer.force_muted ? 'Allow to speak' : 'Mute for everyone', 'force-mute',
             () => act('force-mute', { muted: !peer.force_muted }))}
-          {@render action('phone-off', 'Remove from voice', 'kick', () => act('kick'))}
+          {@render action(I.phoneOff, 'Remove from voice', 'kick', () => act('kick'))}
         {/if}
-        {@render action('log-out', 'Disconnect', 'disconnect', () => (confirming = true), true)}
+        {@render action(I.logOut, 'Disconnect', 'disconnect', () => (confirming = true), true)}
       </div>
       <Dialog open={confirming} title="Disconnect {name}?" onclose={() => (confirming = false)}>
         Every open tab of theirs loses its connection to the server. They can connect again.

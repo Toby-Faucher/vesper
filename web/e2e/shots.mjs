@@ -450,6 +450,19 @@ scene('not-found', async ({ alice }) => {
   return alice.page;
 });
 
+// The first Tab stop on a fresh load is the skip link, shown over the sidebar; Enter moves focus to the main pane.
+scene('skip-link', async ({ alice, shot }) => {
+  await home(alice.page);
+  await alice.page.mouse.move(1439, 899);
+  await alice.page.keyboard.press('Tab');
+  const link = alice.page.getByRole('link', { name: 'Skip to main content' });
+  if (!(await link.evaluate((el) => el === document.activeElement))) throw new Error('skip-link: not the first Tab stop');
+  await sleep(300);
+  await shot(alice.page, 'skip-link', { fullPage: false });
+  await alice.page.keyboard.press('Enter');
+  if (!(await alice.page.evaluate(() => document.activeElement?.id === 'main'))) throw new Error('skip-link: focus did not move to main');
+});
+
 scene('room', async ({ alice, bob, seed }) => {
   await seed();
   for (const p of [alice.page, bob.page]) {

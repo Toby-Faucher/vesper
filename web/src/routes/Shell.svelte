@@ -1,7 +1,8 @@
 <script lang="ts">
+  import * as I from '../lib/ui/icons';
   import { onMount, untrack } from 'svelte';
   import { href, parse } from '../lib/route';
-  import { navigate, route, session } from '../lib/session.svelte';
+  import { lastRoomKey, navigate, route, session } from '../lib/session.svelte';
   import { startVoice, voice } from '../lib/voice.svelte';
   import { closePerson, person } from '../lib/ui/person.svelte';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
@@ -17,7 +18,7 @@
   // runs once here, and its cleanup (sign out) ends the call and resets its state.
   onMount(startVoice);
 
-  const LAST = 'vesper.lastRoom';
+  const LAST = $derived(lastRoomKey(session.state.me?.user.user_id ?? ''));
   const storage = (() => { try { return localStorage; } catch { return null; } })();
   const r = $derived(parse(route.path));
   const rooms = $derived([...session.state.rooms].sort((a, b) => a.position - b.position));
@@ -48,8 +49,9 @@
     const a = (e.target as Element).closest?.('a');
     if (!a || a.target || a.hasAttribute('download') || a.origin !== location.origin || a.pathname.startsWith('/api/')) return;
     e.preventDefault();
-    navigate(a.pathname);
+    navigate(a.pathname + a.search + a.hash);
   }
+  let mainEl = $state<HTMLElement>();
   let barH = $state(0); // the pane keeps this much room below its content for the call bar
   const title = $derived(r.name === 'settings' ? 'Settings' : r.name === 'admin' ? 'Admin' : '');
 </script>
@@ -57,14 +59,18 @@
 <!-- The handler only catches clicks on links, and Enter on a link is a click. -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="grid h-screen overflow-hidden {sidebar.collapsed ? 'grid-cols-[1fr]' : 'grid-cols-[248px_1fr]'}" {onclick}>
-  {#if !sidebar.collapsed}<Sidebar current={room?.id ?? null} />{/if}
-  <main class="relative flex h-screen min-w-0 flex-col" style:padding-bottom={voice.joined ? `${barH + 24}px` : null}>
+  <!-- First Tab stop. It focuses main itself, so the address does not gain a #main. -->
+  <a href="#main" class="skip" onclick={(e) => { e.preventDefault(); mainEl?.focus(); }}>Skip to main content</a>
+  <!-- Hidden, not removed, while collapsed, so the toggles' aria-controls always points at it. -->
+  <div id="sidebar" class="min-w-0" hidden={sidebar.collapsed}><Sidebar current={room?.id ?? null} /></div>
+  <main id="main" tabindex="-1" bind:this={mainEl} class="relative flex h-screen min-w-0 flex-col" style:padding-bottom={voice.joined ? `${barH + 24}px` : null}>
     <ConnectionBanner />
     {#if room}
       <RoomView {room} />
     {:else if r.name === 'room' || r.name === 'home' || r.name === 'welcome'}
       {#if loaded}
         {@render pageHeader('')}
+        <div class="center">
         {#if r.name === 'room'}
           <EmptyState title={UI_MESSAGES.roomMissing} body={UI_MESSAGES.roomMissingBody}>
             {#snippet action()}{#if rooms[0]}<Button onclick={() => navigate(href({ name: 'room', id: rooms[0].id }))}>{UI_MESSAGES.openFirstRoom(rooms[0].name)}</Button>{/if}{/snippet}
@@ -72,6 +78,7 @@
         {:else}
           <EmptyState title={UI_MESSAGES.noRooms} body={UI_MESSAGES.noRoomsBody} />
         {/if}
+        </div>
       {/if}
     {:else if r.name === 'settings'}
       {@render pageHeader(title, true)}
@@ -81,9 +88,11 @@
       {#await import('./admin/AdminPage.svelte') then m}<m.default section={r.section} />{/await}
     {:else}
       {@render pageHeader('')}
-      <EmptyState title={UI_MESSAGES.pageMissing}>
-        {#snippet action()}<Button onclick={() => navigate('/')}>{UI_MESSAGES.goHome}</Button>{/snippet}
-      </EmptyState>
+      <div class="center">
+        <EmptyState title={UI_MESSAGES.pageMissing}>
+          {#snippet action()}<Button onclick={() => navigate('/')}>{UI_MESSAGES.goHome}</Button>{/snippet}
+        </EmptyState>
+      </div>
     {/if}
     {#if voice.joined}<CallBar bind:height={barH} />{/if}
   </main>
@@ -95,14 +104,35 @@
   {/await}
 {/if}
 
+<style>
+  /* Off screen until focused, then a raised chip at the top left, over the sidebar. */
+  .skip {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    z-index: 60;
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+    color: var(--fg);
+    font-size: 14px;
+    transform: translateY(-200%);
+  }
+  .skip:focus { transform: none; }
+  /* Empty states sit in the middle of the pane; the bottom padding offsets the 48 px header, so they centre on the screen. */
+  .center { display: flex; flex: 1; flex-direction: column; justify-content: center; padding-bottom: 48px; }
+  main:focus-visible { outline: none; } /* the skip link's target: the whole pane, a ring there helps nobody */
+</style>
+
 {#snippet pageHeader(text: string, closable = false)}
   {#if text || sidebar.collapsed}
   <header class="flex h-12 shrink-0 items-center gap-3 border-b border-subtle px-4">
     {#if sidebar.collapsed}
-      <span class="-ml-2"><IconButton icon="sidebar" label="Show sidebar" tip onclick={() => setCollapsed(false)} /></span>
+      <span class="-ml-2"><IconButton icon={I.sidebar} label="Show sidebar" tip aria-expanded="false" aria-controls="sidebar" onclick={() => setCollapsed(false)} /></span>
     {/if}
     {#if text}<h1 class="min-w-0 truncate text-base font-medium text-fg">{text}</h1>{/if}
-    {#if closable}<span class="ml-auto"><Button variant="ghost" onclick={() => navigate('/')}>Close</Button></span>{/if}
+    {#if closable}<span class="ml-auto"><Button variant="ghost" onclick={() => navigate('/', true)}>Close</Button></span>{/if}
   </header>
   {/if}
 {/snippet}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { HTMLButtonAttributes } from 'svelte/elements';
-  import type { IconName } from '../icons';
+  import type { IconPath } from '../icons';
   import Icon from './Icon.svelte';
   // `pressed` given means a toggle (aria-pressed); `tip` shows the label as the CSS tooltip from app.css.
   let {
@@ -11,7 +11,7 @@
     el = $bindable(null),
     ...rest
   }: {
-    icon: IconName;
+    icon: IconPath;
     label: string;
     pressed?: boolean;
     tip?: boolean;
@@ -20,7 +20,7 @@
 </script>
 
 <button bind:this={el} type="button" {...rest} class="ib" aria-label={label} aria-pressed={pressed} data-tip={tip ? label : undefined}>
-  <Icon name={icon} />
+  <Icon d={icon} />
 </button>
 
 <style>

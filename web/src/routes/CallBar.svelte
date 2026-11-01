@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as I from '../lib/ui/icons';
   import type { Peer } from '../lib/gen/Peer';
   import { inRoom } from '../lib/peers';
   import { href } from '../lib/route';
@@ -61,10 +62,10 @@
       </div>
 
       <span class="off" class:on={voice.muted}>
-        <IconButton icon={voice.muted ? 'mic-off' : 'mic'} label={voice.muted ? 'Unmute' : 'Mute'} tip disabled={voice.forceMuted} onclick={toggleMute} />
+        <IconButton icon={voice.muted ? I.micOff : I.mic} label={voice.muted ? 'Unmute' : 'Mute'} tip disabled={voice.forceMuted} onclick={toggleMute} />
       </span>
       <span class="off" class:on={voice.deafened}>
-        <IconButton icon={voice.deafened ? 'headphones-off' : 'headphones'} label={voice.deafened ? 'Undeafen' : 'Deafen'} tip onclick={toggleDeafen} />
+        <IconButton icon={voice.deafened ? I.headphonesOff : I.headphones} label={voice.deafened ? 'Undeafen' : 'Deafen'} tip onclick={toggleDeafen} />
       </span>
       {#if voice.settings.pushToTalk.enabled}
         <!-- Both texts share one grid cell, so the pill keeps its width while the key goes down and up. -->

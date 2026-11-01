@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as I from '../icons';
   import type { Snippet } from 'svelte';
   import type { HTMLSelectAttributes } from 'svelte/elements';
   import { fieldCtx } from './Field.svelte';
@@ -16,5 +17,5 @@
     {...rest}
     bind:value
     class="control h-8 w-full appearance-none pr-8 pl-2.5">{@render children()}</select>
-  <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-fg-3"><Icon name="chevron-down" /></span>
+  <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-fg-3"><Icon d={I.chevronDown} /></span>
 </div>

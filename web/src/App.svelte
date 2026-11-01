@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { api, ApiFailure, errorText } from './lib/api';
-  import { parse } from './lib/route';
+  import { loginHref, parse } from './lib/route';
   import { navigate, route, session } from './lib/session.svelte';
   import Login from './routes/Login.svelte';
   import Signup from './routes/Signup.svelte';
@@ -27,7 +27,7 @@
       session.state.me = await api<Me>('GET', '/api/me');
       session.connect();
     } catch (e) {
-      if (e instanceof ApiFailure && e.status === 401) navigate('/login', true);
+      if (e instanceof ApiFailure && e.status === 401) navigate(loginHref(location.pathname), true); // sign in returns here, so a shared room link survives it
       else error = errorText(e);
     }
   }
