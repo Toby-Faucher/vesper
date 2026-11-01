@@ -11,7 +11,7 @@ Vesper uses `vMAJOR.MINOR.PATCH`. One number covers the whole app: the server, t
 ## Where we are
 
 - **v1.0**: accounts, invites, rooms, voice presence, text chat, search, uploads and the new UI (PR #18, merged and deployed on 2026-11-01).
-- **v1.1**: the first round of critique issues (logo, markdown, profile pictures, call sounds, noise gate and limiter, motion and fixes). The issues are tagged with the milestone `v1.1`.
+- **v1.1**: the first round of critique issues: logo, markdown with a live composer preview, profile pictures and bios, call sounds, a noise gate and soft limiter, motion with anime.js, visual fixes (milestone `v1.1`, PRs #32 to #42). It adds one database migration (0005, additive).
 
 ## How a release is cut
 
