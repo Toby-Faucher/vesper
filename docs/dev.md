@@ -47,13 +47,13 @@ Two terminals (hot reload for the web app):
 VESPER_ORIGIN=http://localhost:5173 VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
   cargo run -p vesper-server --release
 
-# terminal 2: Vite (proxies /ws to localhost:8080, prints a localhost URL)
+# terminal 2: Vite (proxies /ws and /api to localhost:8080, prints a localhost URL)
 npm --prefix web install
 npm --prefix web run dev
 ```
 
-Open the page and sign in. The login and signup pages are being built: until they land the web app does not build against the
-current server.
+Open the page. It sends you to `/login`. To make the first account, run `create-owner` (below) and open the link it prints.
+The page at `/invite` reads the code from the part after `#`, which the browser never sends to the server.
 
 ### Accounts
 
@@ -73,7 +73,7 @@ VESPER_DATA_DIR=/tmp/vesper-load cargo run -p vesper-server -- loadtest-accounts
 Links and tokens go to stdout. Logs go to stderr, so piping stdout stays clean.
 
 The links start with `VESPER_ORIGIN`. Set it to the address you open in the browser (`http://localhost:5173` with Vite).
-The link is printed once and never logged; the server keeps only a hash of it. The signup page that takes it comes with the web plan.
+The link is printed once and never logged; the server keeps only a hash of it.
 
 For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000` and
 `VESPER_PUBLIC_HOST=<address they can reach>`, and put HTTPS in front (their mic needs it). See [deploy.md](deploy.md).

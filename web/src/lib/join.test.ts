@@ -44,8 +44,8 @@ function setup() {
   let close: () => void = () => {};
   const sig = {
     send: (m: unknown) => sent.push(m),
-    onMessage: (cb: (m: ServerMsg) => void) => (msg = cb),
-    onClose: (cb: () => void) => (close = cb),
+    onMessage: (cb: (m: ServerMsg) => void) => ((msg = cb), () => (msg = () => {})),
+    onClose: (cb: () => void) => ((close = cb), () => (close = () => {})),
   } as unknown as Signaling;
   const stop = vi.fn();
   const stream = { getAudioTracks: () => [], getTracks: () => [{ stop }] } as unknown as MediaStream;
@@ -63,7 +63,7 @@ describe('joinRoom', () => {
   for (const dtx of [true, false]) {
     it(`tunes the server answer and sets maxBitrate at join (dtx ${dtx})`, async () => {
       const t = setup();
-      const p = joinRoom(t.sig, { room: 'r', name: 'n', key: 'k', stream: t.stream, bitrateKbps: 96, dtx });
+      const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 96, dtx });
       await tick();
       t.emit({ ...joined, answer: str0mSdp('recvonly') } as ServerMsg);
       await p;
@@ -77,7 +77,7 @@ describe('joinRoom', () => {
   }
   it('tunes SFU renegotiation offers before applying them', async () => {
     const t = setup();
-    const p = joinRoom(t.sig, { room: 'r', name: 'n', key: 'k', stream: t.stream, bitrateKbps: 64 });
+    const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64 });
     await tick();
     t.emit(joined);
     await p;
@@ -90,7 +90,7 @@ describe('joinRoom', () => {
 
   it('serializes offers; failure does not block the next', async () => {
     const t = setup();
-    const p = joinRoom(t.sig, { room: 'r', name: 'n', key: 'k', stream: t.stream, bitrateKbps: 64, onError: t.onError });
+    const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64, onError: t.onError });
     await tick();
     FakePC.last.failFirst = true;
     t.emit(joined);
@@ -105,7 +105,7 @@ describe('joinRoom', () => {
   });
   it('answers two good offers in order', async () => {
     const t = setup();
-    const p = joinRoom(t.sig, { room: 'r', name: 'n', key: 'k', stream: t.stream, bitrateKbps: 64 });
+    const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64 });
     await tick();
     t.emit(joined);
     await p;
@@ -117,12 +117,13 @@ describe('joinRoom', () => {
   });
   it('reports post-join errors and cleans up on close', async () => {
     const t = setup();
-    const p = joinRoom(t.sig, { room: 'r', name: 'n', key: 'k', stream: t.stream, bitrateKbps: 64, onError: t.onError });
+    const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64, onError: t.onError });
     await tick();
     t.emit(joined);
     await p;
     t.emit({ type: 'error', code: 'bad_message', message: 'x' });
     expect(t.onError).toHaveBeenCalledOnce();
+    expect(t.onError.mock.calls[0][0].message).not.toMatch(/bad_message/);
     t.close();
     expect(FakePC.last.closed).toBe(true);
     expect(t.stop).toHaveBeenCalled();

@@ -53,8 +53,7 @@ cargo run -p vesper-server -- create-owner   # prints a one-use link for the fir
 VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 VESPER_WEB_DIR=web/dist cargo run -p vesper-server --release
 ```
 
-Open the printed link to create the owner account, then sign in at http://127.0.0.1:8080. The login and signup pages are being
-built: until they land the web app does not build against the current server. More detail, tests and the hot-reload setup are in [docs/dev.md](docs/dev.md).
+Open the printed link to create the owner account, then sign in at http://127.0.0.1:8080. More detail, tests and the hot-reload setup are in [docs/dev.md](docs/dev.md).
 For friends on other machines, see [docs/deploy.md](docs/deploy.md): Docker or systemd, Caddy for HTTPS, and forwarding UDP 40000 on your router.
 
 ## Status

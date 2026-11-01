@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { Signaling, joinRoom } from '../lib/signaling';
-  import { applyPeerMsg } from '../lib/peers';
+  import { onMount, untrack } from 'svelte';
+  import { joinRoom } from '../lib/signaling';
+  import { inRoom } from '../lib/peers';
+  import { session, wsUrl } from '../lib/session.svelte';
   import { Playback } from '../lib/playback';
   import { restoreVolumes, saveVolumes } from '../lib/volume';
   import { createCapture, type Capture } from '../lib/audio/capture';
@@ -12,12 +13,12 @@
   import Settings from './Settings.svelte';
   import Diagnostics from './Diagnostics.svelte';
   import type { DenoiseMode } from '../lib/audio/mode';
-  import type { Peer } from '../lib/gen/Peer';
-  import type { ServerMsg } from '../lib/gen/ServerMsg';
 
-  let name = $state('');
-  let key = $state('');
-  let peers = $state<Peer[]>([]);
+  let roomId = $state(session.state.rooms[0]?.id ?? 0); // the room picked in the list
+  let joinedRoom = $state<number | null>(null);
+  let joining = $state(false);
+  let forceMuted = $state(false);
+  let callOff: (() => void) | undefined; // drops the call's handlers from the shared socket
   let joined = $state(false);
   let error = $state('');
   let userId = $state('');
@@ -42,7 +43,6 @@
   let known: MediaDeviceInfo[] = [];
   let mode = $state<DenoiseMode>('deepfilter');
   let modeReason = $state('');
-  let sig: Signaling | undefined;
   let poll: ReturnType<typeof setInterval> | undefined;
   let releaseLock: (() => void) | undefined;
   let silence = MIC_QUIET;
@@ -52,10 +52,14 @@
   function applyTrack() {
     capture?.setLive(trackLive(muted, settings.pushToTalk.enabled, pttDown));
   }
+  function sendVoiceState() {
+    session.sig?.send({ type: 'set_voice_state', muted, deafened });
+  }
   function toggleMute() {
+    if (forceMuted) return;
     muted = !muted;
     applyTrack();
-    sig?.send({ type: 'set_muted', muted });
+    sendVoiceState();
   }
   function onSettings(next: AudioSettings) {
     const prev = settings;
@@ -103,6 +107,7 @@
     });
     void navigator.mediaDevices.enumerateDevices().then((l) => { if (!known.length) known = l; }, () => {});
     return () => {
+      teardown();
       stop();
       window.removeEventListener('keydown', kd);
       window.removeEventListener('keyup', ku);
@@ -113,6 +118,7 @@
   function toggleDeafen() {
     deafened = !deafened;
     playback?.setDeafened(deafened);
+    sendVoiceState();
   }
   function setVolume(id: string, v: number) {
     volumes[id] = v;
@@ -121,12 +127,14 @@
     saveVolumes(localStorage, m);
   }
   function leave() {
-    sig?.leave();
-    sig = undefined;
+    session.sig?.leave();
     teardown();
     error = '';
   }
   function teardown() {
+    callOff?.();
+    callOff = undefined;
+    joinedRoom = null;
     clearInterval(poll);
     playback?.close();
     playback = undefined;
@@ -137,7 +145,6 @@
     sender = undefined;
     pc?.close();
     pc = undefined;
-    peers = [];
     deviceError = '';
     offered = null;
     mic = undefined;
@@ -150,11 +157,65 @@
     joined = false;
   }
 
-  const wsUrl = () => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+  // Call events on the shared socket. It is replaced after a reconnect, so this re-subscribes.
+  $effect(() => {
+    const s = session.sig;
+    if (!s) return;
+    const offMsg = s.onMessage((m) => {
+      if (m.type === 'peer_left') {
+        playback?.remove(m.user_id);
+        if (speaking.has(m.user_id)) speaking = new Set([...speaking].filter((i) => i !== m.user_id));
+        // Our own id: the call ended (another tab took it, a moderator kicked us, or access was lost).
+        if (joined && m.user_id === userId) {
+          teardown();
+          error = 'Your call ended. You may have joined from another tab, or a moderator removed you.';
+        }
+      } else if (m.type === 'force_muted') {
+        forceMuted = m.muted;
+        if (m.muted && !muted) {
+          muted = true; // lifting a force-mute does not unmute
+          applyTrack();
+        }
+      }
+    });
+    const offClose = s.onClose(() => {
+      if (!joined) return;
+      teardown();
+      error = 'Disconnected from the server.';
+    });
+    return () => {
+      offMsg();
+      offClose();
+    };
+  });
+
+  // Keep the picked room valid, and end the call if its room is no longer in the list.
+  $effect(() => {
+    const rooms = session.state.rooms;
+    untrack(() => {
+      if (rooms.length && !rooms.some((r) => r.id === roomId)) roomId = rooms[0].id;
+      if (joinedRoom !== null && !rooms.some((r) => r.id === joinedRoom)) {
+        session.sig?.leave();
+        teardown();
+        error = 'You no longer have access to that room.';
+      }
+    });
+  });
+
+  const myId = $derived(session.state.me?.user.user_id ?? '');
+  const peers = $derived(inRoom(session.state.voice, joinedRoom ?? roomId).filter((p) => !(joined && p.user_id === myId)));
+  const joinedName = $derived(session.state.rooms.find((r) => r.id === joinedRoom)?.name ?? '');
 
   async function join(e: Event) {
     e.preventDefault();
     error = '';
+    const sig = session.sig;
+    if (!sig || !session.online) {
+      error = 'Not connected to the server. Wait a moment and try again.';
+      return;
+    }
+    const room = roomId;
+    joining = true;
     muted = false;
     deafened = false;
     // Create and resume the AudioContext inside the click gesture, before any await.
@@ -173,28 +234,13 @@
       const stream = cap.stream;
       mic = stream;
       volumes = Object.fromEntries(restoreVolumes(localStorage));
-      const mine = (sig = new Signaling(wsUrl()));
-      const early: ServerMsg[] = []; // peer events that arrive before Joined
-      mine.onClose((byClient) => {
-        if (sig !== mine) return; // an old socket closing late must not tear down a newer call
-        const lostCall = joined && !byClient; // server restart, same-name takeover, ping timeout
-        teardown();
-        if (lostCall) error = 'Disconnected from the server';
-      });
-      sig.onMessage((m) => {
-        if (m.type === 'peer_left') {
-          playback?.remove(m.user_id);
-          if (speaking.has(m.user_id)) speaking = new Set([...speaking].filter((i) => i !== m.user_id));
-        }
-        if (joined) peers = applyPeerMsg(peers, m);
-        else early.push(m);
-      });
       const r = await joinRoom(sig, {
-        room: 'main', name, key, stream, bitrateKbps: settings.bitrateKbps, dtx: settings.dtx,
+        roomId: room, stream, bitrateKbps: settings.bitrateKbps, dtx: settings.dtx,
         onError: (err) => (error = err.message),
         onRemoteStream: (s) => playback?.addRemote(s.id, s),
         onRemoteStreamEnd: (id) => playback?.remove(id),
       });
+      callOff = r.off;
       userId = r.userId;
       pc = r.pc;
       joinedBitrate = settings.bitrateKbps;
@@ -220,22 +266,39 @@
         silence = micSilence(silence, performance.now(), capture?.getStats() ?? null, { gated, visible });
         micWarning = silence.show;
       }, 100);
-      peers = early.reduce(applyPeerMsg, r.peers);
+      joinedRoom = room;
       joined = true;
     } catch (err) {
-      sig?.close();
+      if (session.sig === sig) sig.leave(); // the server may have let us in before the failure
       teardown();
-      error = err instanceof DOMException ? DEVICE_MESSAGES[classifyMediaError(err)] : String(err);
+      error = err instanceof DOMException ? DEVICE_MESSAGES[classifyMediaError(err)] : err instanceof Error ? err.message : String(err);
+    } finally {
+      joining = false;
     }
   }
 </script>
 
 <main class="mx-auto max-w-sm space-y-4 p-6">
+  <div class="flex items-center gap-2 text-sm">
+    <span class="flex-1">Signed in as {session.state.me?.user.display_name}</span>
+    <button class="rounded bg-neutral-800 px-3 py-1" onclick={() => session.logout()}>Log out</button>
+  </div>
+  {#if session.notice}
+    <p role="alert" class="text-amber-400">
+      {session.notice}
+      <button class="rounded bg-neutral-700 px-2" onclick={() => session.connect()}>Reconnect</button>
+    </p>
+  {:else if !session.online}
+    <p role="status" class="text-neutral-400">Connecting to the server...</p>
+  {/if}
   {#if !joined}
     <form onsubmit={join} class="space-y-3">
-      <input class="w-full rounded bg-neutral-900 p-2" placeholder="Name" aria-label="Name" bind:value={name} required />
-      <input class="w-full rounded bg-neutral-900 p-2" placeholder="Key" aria-label="Key" type="password" bind:value={key} required />
-      <button class="w-full rounded bg-neutral-700 p-2">Join</button>
+      <select class="w-full rounded bg-neutral-900 p-2" aria-label="Room" bind:value={roomId}>
+        {#each session.state.rooms as r (r.id)}<option value={r.id}>{r.name}</option>{/each}
+      </select>
+      <button class="w-full rounded bg-neutral-700 p-2" disabled={joining || !session.state.rooms.length}>
+        {joining ? 'Joining...' : 'Join'}
+      </button>
     </form>
   {/if}
   {#if error}<p class="text-red-400" role="alert">{error}</p>{/if}
@@ -257,15 +320,17 @@
     {showDiag ? 'Hide diagnostics' : 'Diagnostics'}
   </button>
   {#if showDiag}
-    <Diagnostics {pc} {capture} wsUrl={wsUrl()} joinKey={key} {mode} status={joined ? 'joined' : 'not joined'} />
+    <Diagnostics {pc} {capture} wsUrl={wsUrl()} {mode} status={joined ? 'joined' : 'not joined'} />
   {/if}
   {#if joined}
+    <p>In {joinedName}</p>
     <div class="flex gap-2">
-      <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleMute}>{muted ? 'Unmute' : 'Mute'}</button>
+      <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleMute} disabled={forceMuted}>{muted ? 'Unmute' : 'Mute'}</button>
       <button class="rounded bg-neutral-700 px-3 py-1" onclick={toggleDeafen}>{deafened ? 'Undeafen' : 'Deafen'}</button>
       <button class="ml-auto rounded bg-red-900 px-3 py-1" onclick={leave}>Leave</button>
     </div>
-    <p class="rounded p-1 {speaking.has(userId) ? 'ring-2 ring-green-500' : ''}">You{muted ? ' (muted)' : ''}</p>
+    {#if forceMuted}<p role="status" class="text-amber-400">A moderator muted you.</p>{/if}
+    <p class="rounded p-1 {speaking.has(userId) ? 'ring-2 ring-green-500' : ''}">You{muted ? ' (muted)' : ''}{deafened ? ' (deafened)' : ''}</p>
     <p class="text-sm text-neutral-400" role="status">Noise suppression: {mode}{modeReason ? ` (${modeReason})` : ''}</p>
     <p class="text-sm text-amber-400" role="status">
       {micWarning === 'mic' ? 'No sound from your microphone. Check the input device, its volume, and the mute switch.'
@@ -275,7 +340,7 @@
   <ul class="space-y-1">
     {#each peers as p (p.user_id)}
       <li class="flex items-center gap-2 rounded p-1 {speaking.has(p.user_id) ? 'ring-2 ring-green-500' : ''}">
-        <span class="flex-1">{p.name}{p.muted ? ' (muted)' : ''}</span>
+        <span class="flex-1">{p.name}{p.muted ? ' (muted)' : ''}{p.deafened ? ' (deafened)' : ''}</span>
         <input type="range" min="0" max="200" aria-label="Volume for {p.name}"
           value={volumes[p.user_id] ?? 100}
           oninput={(e) => setVolume(p.user_id, +e.currentTarget.value)} />

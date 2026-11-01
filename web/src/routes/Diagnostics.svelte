@@ -3,9 +3,8 @@
   import { audioRows } from '../lib/audio/level';
   import type { Capture, CaptureStats } from '../lib/audio/capture';
 
-  // The key is used only for the connectivity check and never appears in the report.
-  let { pc, capture, wsUrl, joinKey, mode, status }: {
-    pc?: RTCPeerConnection; capture?: Capture; wsUrl: string; joinKey: string; mode: string; status: string;
+  let { pc, capture, wsUrl, mode, status }: {
+    pc?: RTCPeerConnection; capture?: Capture; wsUrl: string; mode: string; status: string;
   } = $props();
   let diag = $state<Diag | null>(null);
   let audio = $state.raw<CaptureStats | null>(null);
@@ -80,7 +79,7 @@
   async function test() {
     testing = true;
     result = '';
-    const r = await connectivityCheck(wsUrl, joinKey);
+    const r = await connectivityCheck(wsUrl);
     result = `${r.ok ? 'OK' : 'FAILED'} in ${r.ms} ms: ${r.reason}`;
     testing = false;
   }
@@ -104,11 +103,10 @@
   </dl>
   <div class="flex gap-2">
     <button class="rounded bg-neutral-700 px-3 py-1" onclick={copy}>Copy report</button>
-    <button class="rounded bg-neutral-700 px-3 py-1" onclick={test} disabled={testing || !joinKey}>
+    <button class="rounded bg-neutral-700 px-3 py-1" onclick={test} disabled={testing}>
       {testing ? 'Testing...' : 'Test connection'}
     </button>
   </div>
-  {#if !joinKey}<p class="text-neutral-400">Enter the key above to test the connection.</p>{/if}
   {#if copied}<p role="status">{copied}</p>{/if}
   {#if result}<p role="status">{result}</p>{/if}
 </section>

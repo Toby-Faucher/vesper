@@ -25,6 +25,11 @@ The "Not verified" list at the end says what was only read.
   `SfuHandle`. If the thread dies, `/health` returns 503 and the process exits with code 1 so Docker or systemd restarts it
   (`watch_sfu` in `lib.rs`).
 - **The browser** captures the mic, cleans it with DeepFilterNet in WASM, and sends Opus over WebRTC (`web/src/lib/audio/`, `signaling.ts`).
+- **The web app** has three pages (`web/src/App.svelte`): `/login`, `/invite` (signup; the code is read from the part after `#`) and
+  `/`, the voice screen, which needs a session (`GET /api/me`, else `/login`). `web/src/lib/session.svelte.ts` keeps one socket per
+  page and the state it pushes (`state.ts`). After a close it reconnects after 1, 2, 5, then every 10 s, asking `/api/me` first.
+  It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). A `peer_left` with your
+  own `user_id` ends the call in that tab; the socket stays open.
 
 ## Crates
 
