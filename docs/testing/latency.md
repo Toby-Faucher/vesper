@@ -26,7 +26,7 @@ kill $SERVER; rm -rf $DATA
 Options: `--speakers` and `--seconds` must be at least 1; one speaker is a trivial pass (no peers). Pass requires every speaker to get 95% of its peers' packets in aggregate AND from each individual peer (a dead peer fails at any room size). Each speaker sends about 48 packets/s in practice (not exactly 50), and the tool warns if one sent over 5% fewer than seconds*50. `--pid` is checked at start.
 
 Recorded result (debug build, 12 speakers x 30 s on loopback): loss 0.00% for every speaker, server CPU 54.9% of one core. A debug build is pessimistic; use `--release` as above for real numbers.
-With sessions (release build, 12 speakers x 10 s on loopback, 2026-11-01): loss 0.00% for every speaker, server CPU 16.7% of one core, PASS.
+With sessions (release build, 12 speakers on loopback, 2026-11-01, the commands above): 10 s run loss 0.00%, server CPU 16.7% of one core; 30 s run loss 0.00% for every speaker, server CPU 17.5% of one core. Both PASS.
 
 The server's `no advertised addresses` warning is expected on loopback; the fake clients use host candidates. Run the load test on the same machine as the server: client and server CPU are then both on that box, so read the CPU figure as an upper bound.
 

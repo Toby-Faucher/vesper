@@ -15,9 +15,9 @@ Steps:
   test      nextest, ci profile (the SFU ICE-timeout test alone takes about 20 s)
   bindings  fail if the committed ts-rs bindings in web/src/lib/gen differ from the Rust types
   deny      cargo deny check (advisories need network)
-  secrets   scripts/check-secrets.sh
+  secrets   scripts/check-secrets.sh and its test, scripts/test-check-secrets.sh
   wording   scripts/check-wording.sh (stock phrases and em dashes in docs and web strings)
-  scripts   every scripts/test-*.sh
+  scripts   every other scripts/test-*.sh
   shell     shellcheck scripts/*.sh (skipped with a note if shellcheck is missing)
   web       npm ci, then `npm run ci` in web/ (svelte-check, vitest, vite build, gzip size budget)
   dsp       not in the full run: fetches the models, runs the denoiser and audio lab tests, builds the wasm
@@ -60,10 +60,11 @@ run_step() {
       [ -z "$(git status --porcelain -- "$gen")" ] || { git status --short -- "$gen"; echo "untracked bindings above: commit them" >&2; exit 1; }
       ;;
     deny) step "cargo deny"; capped cargo deny --locked check ;;
-    secrets) step "check-secrets"; scripts/check-secrets.sh ;;
+    secrets) step "check-secrets"; scripts/check-secrets.sh && scripts/test-check-secrets.sh ;;
     wording) step "check-wording"; scripts/check-wording.sh ;;
     scripts)
       for t in scripts/test-*.sh; do
+        [ "$t" = scripts/test-check-secrets.sh ] && continue # run by the secrets step
         step "$t"
         # The tests stub systemd-run and expect the capped commands, so they never see VESPER_NO_CAP.
         env -u VESPER_NO_CAP timeout 300 "$t"

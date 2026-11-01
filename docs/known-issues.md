@@ -13,6 +13,8 @@ Last updated 2026-11-01. Nothing here was run in a real browser or a real deploy
   Cloudflare overwrites `CF-Connecting-IP`. If the app is ever reached on a private network without Cloudflare (the HTTP port open on the LAN, or
   Caddy without the tunnel), a LAN client can set `CF-Connecting-IP` itself and dodge or spend another address's login and invite limits. The
   login limit per username still allows each address only 5 tries for one name, then 1 a minute. Unit-tested (`client_ip` in `auth.rs`); not verified on the deploy.
+  If Caddy ever drops `CF-Connecting-IP`, every client looks like the tunnel's address and all share one per-IP limit; the per-username limit
+  still holds. Keep Caddy's default headers ([deploy.md](deploy.md#network)).
 - **Force-mute is enforced by the client only.** The server marks the user muted and tells everyone, but the SFU still forwards their audio,
   so a modified client can keep talking. A moderator then disconnects them, or the owner bans them. A server restart lifts every force-mute.
 - **A moderator disconnect does not keep anyone out.** The sessions stay valid and the client may reconnect at once; a ban is the way to keep someone out.

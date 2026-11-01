@@ -38,6 +38,7 @@ requests, so other GETs are not checked. Clients that are not browsers, such as 
 | Variable | Meaning | Where |
 |---|---|---|
 | `VESPER_ORIGIN`, `VESPER_PUBLIC_HOST` | Put them in a `.env` next to `deploy/compose.yaml`. Compose refuses to start without either one. | `deploy/compose.yaml` |
+| `VESPER_DATA_DIR` | Compose sets `/data`, a bind mount of `./data` next to `compose.yaml` (owned by uid 10001, mode 0700). The systemd unit sets `/var/lib/vesper` (`StateDirectory`). | `deploy/compose.yaml`, `deploy/vesper.service` |
 | `VESPER_TAG` | Image tag compose starts (default `latest`). Set it to roll back. | `deploy/compose.yaml` |
 | `VESPER_WEB_DIR` | The image sets it to `/srv/vesper/web`. The systemd unit sets `/opt/vesper/web`. | `deploy/Dockerfile`, `deploy/vesper.service` |
 | `VESPER_ORIGIN`, `VESPER_PUBLIC_HOST` (systemd) | Read from `/etc/vesper/vesper.env` (mode 600). The unit also sets `VESPER_HTTP_BIND=127.0.0.1:8080` and `VESPER_UDP_BIND=0.0.0.0:40000`. | `deploy/vesper.service` |
@@ -48,8 +49,8 @@ requests, so other GETs are not checked. Clients that are not browsers, such as 
 |---|---|---|---|
 | `VESPER_NO_CAP` | `1` runs builds and checks without the memory cap. CI sets it. | unset | `scripts/capped.sh` |
 | `VESPER_CAP_MIB` | Memory cap for capped commands, in MiB. | `8192` | `scripts/capped.sh` |
-| `VESPER_SERVER_BIN` | Server binary the two-browser test starts. Relative paths start from `web/`. | `../target/release/vesper-server` | `web/e2e/two-browser.mjs` |
-| `E2E_CHROMIUM` | Path to a Chromium the two-browser test launches instead of the one Playwright downloaded. Local use only. | unset | `web/e2e/two-browser.mjs` |
+| `VESPER_SERVER_BIN` | Server binary the two-browser test starts. Relative paths start from `web/`. | `../target/release/vesper-server` | `web/e2e/lib.mjs` |
+| `E2E_CHROMIUM` | Path to a Chromium the two-browser test launches instead of the one Playwright downloaded. Local use only. | unset | `web/e2e/lib.mjs` |
 
 ## Not environment variables
 

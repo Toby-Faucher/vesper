@@ -111,10 +111,12 @@ npx --prefix web playwright-core install chromium   # once; CI adds --with-deps 
 npm --prefix web run e2e
 ```
 
-`web/e2e/two-browser.mjs` starts `target/release/vesper-server` itself on 127.0.0.1:18090 (UDP 18091) with a throwaway key, and stops it at the end.
+`web/e2e/two-browser.mjs` starts `target/release/vesper-server` itself on 127.0.0.1:18090 (UDP 18091) on a new temp data dir with `VESPER_ORIGIN=http://127.0.0.1:18090`, and stops it and deletes the dir at the end
+(helpers in `web/e2e/lib.mjs`). It runs `vesper-server create-owner`, signs alice up through that link, has alice's page make bob's
+invite with `POST /api/invites`, signs bob up, and joins both to `general`.
 Those ports must be free. It opens two Chromium browsers with fake microphones: alice plays `web/e2e/fixtures/speech.wav`, bob uses the default fake
-device. It passes when bob's ICE is connected, his inbound audio packets and bytes rise, alice's speaking ring lights on bob's page, and neither page
-throws. The test sets the denoise mode to `browser`, so it needs no wasm build. Its two variables are in [env.md](env.md#dev-machine-only).
+device. It passes when bob's ICE is connected, his inbound audio packets and bytes rise, alice's speaking ring lights on bob's page, alice's inbound
+packets rise too, each page lists the other in the people list, and neither page throws. The test sets the denoise mode to `browser`, so it needs no wasm build. Its two variables are in [env.md](env.md#dev-machine-only).
 
 The fixture is synthetic (voiced syllables with vowel formants), so it has no third-party licence. `node web/e2e/fixtures/make-speech.mjs` rebuilds it.
 Not checked: the inbound `audioLevel` stat. It stays 0 because the app plays remote audio through Web Audio with the `<audio>` element muted.

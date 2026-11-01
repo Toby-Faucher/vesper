@@ -1,54 +1,17 @@
-// Two-browser voice test. Starts the release server with a throwaway key, opens two headless Chromium browsers
-// with fake microphones, joins both into the room, and checks that bob receives alice's audio and hears it. Stops the server.
+// Two-browser voice test. Starts the release server on a throwaway data dir, makes the owner invite with the CLI, signs
+// alice up, has her invite bob through the API, and joins both into `general` with fake microphones. Checks that audio
+// flows both ways, that bob hears alice, and that each sees the other in the people list. Stops the server.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { chromium } from 'playwright-core';
+import { fileURLToPath } from 'node:url';
+import { browser, cli, signup, sleep, startServer } from './lib.mjs';
 
-const web = fileURLToPath(new URL('..', import.meta.url));
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
-const BASE = 'http://127.0.0.1:18090/';
-const KEY = 'e2e-throwaway-key';
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const server = spawn(process.env.VESPER_SERVER_BIN || '../target/release/vesper-server', [], {
-  cwd: web,
-  stdio: ['ignore', 'inherit', 'inherit'],
-  env: { ...process.env, VESPER_DEV_KEY: KEY, VESPER_HTTP_BIND: '127.0.0.1:18090', VESPER_UDP_BIND: '127.0.0.1:18091', VESPER_WEB_DIR: 'dist' },
-});
-const exited = new Promise((r) => server.once('exit', r));
-const browsers = [];
-
-// Records every RTCPeerConnection so the test can read its stats.
-const hook = () => {
-  const Orig = window.RTCPeerConnection;
-  window.__pcs = [];
-  window.RTCPeerConnection = function (...a) {
-    const pc = new Orig(...a);
-    window.__pcs.push(pc);
-    return pc;
-  };
-  window.RTCPeerConnection.prototype = Orig.prototype;
-};
-
-async function join(name, args) {
-  const browser = await chromium.launch({
-    executablePath: process.env.E2E_CHROMIUM || undefined, // local only: a browser Playwright did not download
-    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', ...args],
-  });
-  browsers.push(browser);
-  const page = await (await browser.newContext({ permissions: ['microphone'] })).newPage();
-  const errors = [];
-  page.on('pageerror', (e) => errors.push(String(e)));
-  await page.addInitScript(hook);
-  // CI does not build the wasm denoiser, so use browser suppression instead of waiting for the fallback.
-  await page.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'browser' })));
-  await page.goto(BASE);
-  await page.getByLabel('Name').fill(name);
-  await page.getByLabel('Key').fill(KEY);
+async function join(page) {
+  await page.getByLabel('Room').selectOption({ label: 'general' });
   await page.getByRole('button', { name: 'Join' }).click();
-  return { page, errors };
+  await page.getByRole('button', { name: 'Leave' }).waitFor();
 }
 
 const inbound = (page) =>
@@ -62,17 +25,30 @@ const inbound = (page) =>
     return null;
   });
 
+const stop = await startServer();
 try {
-  let up = false;
-  for (let i = 0; i < 40 && !up && server.exitCode === null; i++) {
-    up = await fetch(BASE + 'health').then((r) => r.ok, () => false);
-    if (!up) await sleep(250);
-  }
-  assert.ok(up, 'server did not answer /health');
+  const ownerLink = await cli(['create-owner']);
+  assert.match(ownerLink, /\/invite#[0-9a-f]{64}$/, 'create-owner did not print an invite link');
 
-  const alice = await join('alice', [`--use-file-for-fake-audio-capture=${speech}`]);
+  const alice = await browser('alice', [`--use-file-for-fake-audio-capture=${speech}`]);
+  await signup(alice.page, ownerLink, 'alice');
+  // The page's fetch sends the session cookie and the Origin header, as the app does.
+  const bobLink = await alice.page.evaluate(async () => {
+    const r = await fetch('/api/invites', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'member', max_uses: 1, expires_hours: 1 }),
+    });
+    if (!r.ok) throw new Error(`POST /api/invites: ${r.status}`);
+    return (await r.json()).url;
+  });
+
+  const bob = await browser('bob', []);
+  await signup(bob.page, bobLink, 'bob');
+
+  await join(alice.page);
   await sleep(2000);
-  const bob = await join('bob', []);
+  await join(bob.page);
 
   let first = null;
   for (let i = 0; i < 40 && !(first?.packets > 0); i++) {
@@ -96,10 +72,21 @@ try {
   assert.ok(last.packets > first.packets, 'packetsReceived did not rise');
   assert.ok(last.bytes > first.bytes, 'bytesReceived did not rise');
   assert.ok(rings > 0, 'bob never saw alice speaking: received audio is silent');
+
+  // The other direction: bob's default fake device sends a beep, so alice's packets rise too.
+  const a1 = await inbound(alice.page);
+  await sleep(1000);
+  const a2 = await inbound(alice.page);
+  console.log('alice inbound audio:', JSON.stringify(a1), '->', JSON.stringify(a2));
+  assert.ok(a1?.packets > 0 && a2.packets > a1.packets, 'alice did not receive bob\'s audio');
+
+  // presence_seen_by_both: each page lists the other in the people list.
+  await alice.page.locator('li', { hasText: 'bob' }).waitFor({ timeout: 5000 });
+  await bob.page.locator('li', { hasText: 'alice' }).waitFor({ timeout: 5000 });
+  console.log('presence_seen_by_both: ok');
+
   assert.deepEqual([...alice.errors, ...bob.errors], [], 'page errors');
   console.log('e2e two-browser: PASS');
 } finally {
-  await Promise.all(browsers.map((b) => b.close()));
-  server.kill('SIGTERM');
-  await exited;
+  await stop();
 }

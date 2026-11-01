@@ -19,7 +19,11 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # Accounts, sessions and rooms (SQLite). Create ./data next to this file and give it to uid 10001
+    # with mode 0700 before the first start: a bind mount keeps its host owner and mode.
+    volumes: ["./data:/data"]
     environment:
+      VESPER_DATA_DIR: /data
       VESPER_ORIGIN: ${VESPER_ORIGIN:?set it in .env}
       VESPER_PUBLIC_HOST: ${VESPER_PUBLIC_HOST:?set it in .env}
       # VESPER_UDP_PORT_PUBLIC: 40000   # only if the router forwards a different external UDP port

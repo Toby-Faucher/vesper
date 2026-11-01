@@ -5,6 +5,9 @@ vesper.tfaucher.com {
 	# recompressed on every load, which costs a small host real CPU for little gain.
 	@compressible not path /dsp/*
 	encode @compressible zstd gzip
+	# Caddy sets X-Forwarded-For to its own peer (cloudflared) and passes Cloudflare's CF-Connecting-IP
+	# through unchanged; Vesper reads CF-Connecting-IP first (docs/deploy.md, Client address). Do not
+	# strip or rewrite either header here.
 	reverse_proxy 127.0.0.1:8080   # or vesper:8080 on a shared docker network
 
 	# HSTS makes browsers refuse plain HTTP for this name for a year: keep it only once HTTPS works.

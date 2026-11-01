@@ -1,9 +1,9 @@
 # Vesper runbook
 
 For the operator. Setup details: [deploy.md](deploy.md). Every env var: [env.md](env.md). This page is what you do when you run it and when it breaks.
-Nothing here was run against a real deploy (no Docker on the dev machine): treat the commands as not verified until you have used them once. Last updated 2026-10-30.
+Nothing here was run against a real deploy (no Docker on the dev machine): treat the commands as not verified until you have used them once. Last updated 2026-11-01.
 
-Shape: one server (`vesper-server`). HTTP/WebSocket on TCP 8080, media on UDP 40000. Caddy does HTTPS in front of 8080. Media never goes through Caddy. No state on disk: restarting loses only the live calls.
+Shape: one server (`vesper-server`). HTTP/WebSocket on TCP 8080, media on UDP 40000. Caddy does HTTPS in front of 8080. Media never goes through Caddy. Accounts, sessions and rooms live in one SQLite database in the data dir; restarting loses only the live calls.
 
 ## Where things are
 
@@ -12,7 +12,11 @@ Shape: one server (`vesper-server`). HTTP/WebSocket on TCP 8080, media on UDP 40
 | Config | `.env` next to `compose.yaml` (`chmod 600`) | `/etc/vesper/vesper.env` (mode 600, root) |
 | Logs | `docker compose logs vesper` | `journalctl -u vesper` |
 | Health | `curl -fsS http://127.0.0.1:8080/health` prints `ok` | same |
+| Data dir (database) | `data/` next to `compose.yaml`, mounted at `/data`, owned by uid 10001 | `/var/lib/private/vesper` (`StateDirectory`) |
+| Admin CLI | `docker compose exec vesper vesper-server <command>` | see [deploy.md](deploy.md#docker--dockge) (`systemd-run`) |
 | Binary / image | image `vesper:latest`, or the tag in `VESPER_TAG` | `/opt/vesper/vesper-server`, previous one as `.prev` |
+
+CLI commands: `create-owner` (one-use owner link, only while no owner exists), `invite [--role member|moderator] [--uses N] [--hours H]`, `help`. They print the link on stdout; it is a secret, send it only to the person it is for. Details: [deploy.md](deploy.md#first-owner-and-invites).
 
 Log level: set `RUST_LOG` (default `info`), for example `RUST_LOG=vesper_server=debug,info`, then recreate the container or restart the unit.
 
@@ -37,7 +41,9 @@ Quick end-to-end check from outside the LAN (phone on cellular): open the site, 
 
 ## Update
 
-1. On the host: `git pull`.
+Coming from the shared-key build: follow [deploy.md "Upgrade from the shared key"](deploy.md#upgrade-from-the-shared-key) once instead. In short: tag the image, `mkdir -m 700 data && sudo chown 10001:10001 data`, drop `VESPER_DEV_KEY` from `.env` and add `VESPER_ORIGIN=https://vesper.tfaucher.com`, `up -d --build`, `docker compose exec vesper vesper-server create-owner`, then send invites. The Proxmox snapshot must include `data/` from then on.
+
+1. On the host: `git pull`. Back up the data dir first ([deploy.md](deploy.md#backup)).
 2. Tag what runs now, so you can go back: `docker tag vesper:latest vesper:previous`.
 3. `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins.
 4. `docker compose -f deploy/compose.yaml ps` wants `healthy`, and `curl -fsS http://127.0.0.1:8080/health` wants `ok`.
@@ -63,6 +69,8 @@ Docker: start the image you tagged before the update. No rebuild.
 
 Binary: `mv -T /opt/vesper/vesper-server.prev /opt/vesper/vesper-server && systemctl restart vesper`.
 
+A shared-key image runs without the data dir and leaves it alone; an accounts image keeps using it. A database migrated by a newer build may not open in an older one; restore the backup in that case.
+
 Prune old images only when disk is short: `docker image prune`. Keep the `previous` tag.
 
 ## When something breaks
@@ -85,6 +93,8 @@ Start with: `ps` shows healthy? `/health` says `ok`? Logs for the last 100 lines
 | The app cannot connect, the browser shows the WebSocket refused with 403 | `VESPER_ORIGIN` is not the address in the browser bar | Set it to that address (for example `https://vesper.tfaucher.com`). `up -d` recreates the container with the new value. |
 | 502 from Caddy, or WebSocket fails only through the proxy | Caddy cannot reach 8080 | If Caddy is on another host, the compose mapping must be `8080:8080`, not `127.0.0.1:8080:8080`. Test `curl http://<vm>:8080/health` from the Caddy host. |
 | Join works, then the call drops after about 10 seconds | Proxy idle timeout | The server closes a socket only when it is silent for 2 x 25 s (the ping interval). Check the proxy does not cut idle WebSockets. |
+| Log says it cannot open or create the database (permission denied) | The `data` dir is not owned by uid 10001 | `sudo chown 10001:10001 data && chmod 700 data`, then `up -d`. |
+| Nobody can sign in after a move to a new VM | The data dir was not copied or not in the snapshot | Restore `data/` from the backup. Without it every account is gone: run `create-owner` again and send new invites. |
 | Disk filling on the VM | Container logs or old images | Compose caps logs at 3 x 10 MB. `docker image prune` for images. |
 
 ## Before you ask for help

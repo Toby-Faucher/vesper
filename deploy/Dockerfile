@@ -35,7 +35,8 @@ FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --no-create-home --uid 10001 vesper
+ && useradd --system --no-create-home --uid 10001 vesper \
+ && install -d -m 0700 -o 10001 -g 10001 /data
 COPY --from=server /src/target/release/vesper-server /usr/local/bin/vesper-server
 COPY --from=web /web/dist /srv/vesper/web
 ENV VESPER_WEB_DIR=/srv/vesper/web \

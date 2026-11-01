@@ -4,7 +4,7 @@ node_modules/
 crates/vesper-dsp/model/
 web/public/dsp/
 web/dist/
-# Secrets: deploy/compose.yaml reads the join key from a .env next to it.
+# Secrets: deploy/compose.yaml reads its settings from a .env next to it.
 .env
 .env.*
 !.env.example
@@ -16,6 +16,7 @@ web/dist/
 *.db-shm
 *.db-wal
 /data/
+deploy/data/
 .claude/worktrees/
 # Audio lab data (fetched by research/scripts/fetch-*.sh, built by audiolab).
 research/corpus/
