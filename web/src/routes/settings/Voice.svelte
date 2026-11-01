@@ -84,7 +84,7 @@
         <Range min={0} max={0.05} step={0.005} value={settings.postFilter} aria-valuetext={settings.postFilter.toFixed(3)}
           oninput={(e) => set({ postFilter: +e.currentTarget.value })} />
       </Field>
-      <Field label="Input boost" value="{settings.inputBoostDb} dB" help="Boost lifts the mic before the noise filter. High values can clip.">
+      <Field label="Input boost" value="{settings.inputBoostDb} dB" help="Boost lifts the mic before the noise filter. A limiter keeps loud peaks under -1 dBFS.">
         <Range min={0} max={12} value={settings.inputBoostDb} aria-valuetext="{settings.inputBoostDb} dB"
           oninput={(e) => set({ inputBoostDb: +e.currentTarget.value })} />
       </Field>
