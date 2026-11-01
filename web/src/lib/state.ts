@@ -43,6 +43,7 @@ export function applyServerMsg(s: AppState, m: ServerMsg): AppState {
       const ids = new Set(m.rooms.map((r) => r.id));
       return { ...s, rooms: m.rooms, voice: s.voice.filter((p) => ids.has(p.room_id)) };
     }
+    case 'user_created': // a signup: without it they showed as 'Someone' until a reload
     case 'user_updated': {
       const u = m.user;
       const me = s.me && s.me.user.user_id === u.user_id ? { ...s.me, user: u } : s.me;
