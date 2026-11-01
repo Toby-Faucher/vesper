@@ -98,7 +98,7 @@ Other test commands:
 |---|---|
 | `scripts/check.sh dsp` | The denoiser tests (4 tests behind the `tract` feature, so a plain workspace run skips them) and the wasm build. Fetches the model if missing. |
 | `npm --prefix web run e2e` | Two headless Chromium browsers join one room; checks that the second one receives and hears the first one's audio, then chat, upload and search. Then the UI flows test. The `e2e` CI job. See below. |
-| `npm --prefix web run shots -- [scene...]` | Screenshots for review, 1440x900, full page, in `web/e2e/shots/` (git-ignored). Starts the release server like the e2e tests (same ports, needs `dist/`), signs up alice (owner) and bob, seeds three rooms and 40 messages, then runs the named scenes, or all of them. Scenes: `tokens` (the dev-only `/_gallery` page, from a Vite dev server on a spare port), `gallery` (`/_gallery?primitives`: checks the keyboard paths of the dialog and menu and a focus ring on every Tab stop, then writes `gallery.png` and `gallery-open.png` with a dialog and a menu open), `login`, `signup`, `room`, `settings`, `diagnostics`. Prints each file path. |
+| `npm --prefix web run shots -- [scene...]` | Screenshots for review, 1440x900, full page, in `web/e2e/shots/` (git-ignored). Starts the release server like the e2e tests (same ports, needs `dist/`), signs up alice (owner) and bob, seeds three rooms and 40 messages, then runs the named scenes, or all of them. Scenes: `tokens` (the dev-only `/_gallery` page, from a Vite dev server on a spare port), `gallery` (`/_gallery?primitives`: checks the keyboard paths of the dialog and menu and a focus ring on every Tab stop, then writes `gallery.png` and `gallery-open.png` with a dialog and a menu open), `login`, `signup`, `room`, `settings`, `diagnostics`, and `cpu-baseline` (no picture: prints bob's main-thread CPU in a call, see below). Prints each file path. |
 | `node scripts/bench-wasm.mjs chromium` | Real-browser speed of the built denoiser (needs `web/public/dsp` and Playwright; `PW_PKG` points at a `package.json` that has it). Prints median, p95, max and RTF over 20 s. Add `firefox`, or a CPU throttle rate such as `4` (Chromium, main thread). |
 | `docs/testing/latency.md` | Load test (12 speakers), loopback delay, `tc netem` loss. Manual. |
 | `docs/testing/checkpoint.md` | The listening test against Discord. Manual, Toby signs off. |
@@ -136,6 +136,14 @@ worker shows neither, so only the denoiser step above catches one (a missing `'w
 The fixture is synthetic (voiced syllables with vowel formants), so it has no third-party licence. `node web/e2e/fixtures/make-speech.mjs` rebuilds it.
 Not checked: the inbound `audioLevel` stat. It stays 0 because the app plays remote audio through Web Audio with the `<audio>` element muted.
 Verified on the dev machine with Chromium 156 (Playwright 1.64.1). Firefox is not covered.
+
+### CPU baseline
+
+`npm --prefix web run shots -- cpu-baseline` puts alice (speech file mic) and bob in `general`, waits 2 s, then reads the CDP
+`Performance.getMetrics` `TaskDuration` on bob's page at the start and end of 10 s and prints the difference. Run it three times and take
+the median. Baseline, measured 2026-11-01 on the dev machine (headless Chromium, fake mics, browser noise suppression, with the 2 s
+connection quality poll): runs of 312, 261 and 238 ms, median **261 ms per 10 s**. The UI plan's Task 17 must stay within 25 percent of it
+(at most 326 ms). The runs vary by about 30 percent, so compare medians, not single runs.
 
 Debug-build note: `Cargo.toml` turns off debug assertions for `tract-core` only, because tract 0.21.4 trips one on the DeepFilterNet3 model
 ("duplicate name /convt3/Conv.bias"). Release builds are fine. Remove the override when tract moves past the bug.

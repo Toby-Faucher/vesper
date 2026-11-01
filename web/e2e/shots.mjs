@@ -221,6 +221,23 @@ scene('diagnostics', async ({ alice }) => {
   return alice.page;
 });
 
+// Main-thread CPU on bob's page in a two-person call: CDP TaskDuration over 10 s, printed, no picture. Run it three times
+// and take the median (docs/dev.md has the baseline).
+scene('cpu-baseline', async ({ alice, bob }) => {
+  await home(alice.page);
+  await home(bob.page);
+  await joinVoice(alice.page);
+  await joinVoice(bob.page);
+  await bob.page.locator('li', { hasText: 'alice' }).waitFor();
+  await sleep(2000); // let the call settle
+  const cdp = await bob.page.context().newCDPSession(bob.page);
+  await cdp.send('Performance.enable');
+  const task = async () => (await cdp.send('Performance.getMetrics')).metrics.find((m) => m.name === 'TaskDuration').value;
+  const t0 = await task();
+  await sleep(10000);
+  console.log(`cpu-baseline: ${Math.round((await task() - t0) * 1000)} ms per 10 s`);
+});
+
 const LINES = [
   'morning all', 'anyone up for a game tonight?', 'I can do 9', 'same, after dinner', 'what are we playing',
   'the co-op one again?', 'sure', 'I fixed my mic, tell me if it still crackles', 'sounds fine to me', 'link to the patch notes: https://example.com/notes',
