@@ -8,6 +8,7 @@
   import Meter from '../../lib/ui/c/Meter.svelte';
   import Range from '../../lib/ui/c/Range.svelte';
   import Select from '../../lib/ui/c/Select.svelte';
+  import Switch from '../../lib/ui/c/Switch.svelte';
   // The microphone picker, the input level meter and the mic test, for Settings > Voice and the welcome steps.
   // `devices` is bindable so Settings can list the speakers from the same list. `marker` shows the level marker slider.
   let { settings, onchange, liveStream, marker = true, devices = $bindable([]) }: {
@@ -120,10 +121,13 @@
   {#if hint === 'too-quiet'}<p class="text-xs text-warn">Very quiet or silent. Speak, check the mic, or try a little input boost.</p>{/if}
 </div>
 {#if marker}
-  <Field label="Level marker" value="{settings.vad.thresholdDb} dB" help="The white line on the meter. Display only: voice activity gating is not built yet.">
+  <Field label="Level marker" value="{settings.vad.thresholdDb} dB" help="The white line on the meter. With the noise gate on, sound below it is muted.">
     <Range min={-100} max={0} aria-valuetext="{settings.vad.thresholdDb} dB" value={settings.vad.thresholdDb}
-      oninput={(e) => set({ vad: { thresholdDb: +e.currentTarget.value } })} />
+      oninput={(e) => set({ vad: { ...settings.vad, thresholdDb: +e.currentTarget.value } })} />
   </Field>
+  <Switch label="Noise gate" checked={settings.vad.gate}
+    help="Mutes the hiss between your words when your level stays under the marker. DeepFilterNet mode only. The meter shows the gated sound, so turn it off to set the marker."
+    onchange={(e) => set({ vad: { ...settings.vad, gate: e.currentTarget.checked } })} />
 {/if}
 
 <div class="flex flex-wrap items-center gap-x-3 gap-y-1">

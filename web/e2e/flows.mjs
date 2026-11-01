@@ -279,6 +279,11 @@ try {
   await b2.close();
   await b.getByLabel('Auto gain').uncheck();
   assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).autoGain), false);
+  // The noise gate switch saves vad.gate and keeps the level marker.
+  await b.getByLabel('Noise gate').check();
+  assert.deepEqual(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad), { thresholdDb: -50, gate: true });
+  await b.getByLabel('Noise gate').uncheck();
+  assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad.gate), false);
   const depth = await b.evaluate(() => history.length);
   await b.getByRole('button', { name: 'Close' }).click();
   await b.waitForURL(`${ORIGIN}/r/${general}`);
@@ -648,7 +653,8 @@ try {
   if (existsSync(new URL('../dist/dsp/vesper_dsp_bg.wasm', import.meta.url))) {
     const dsp = await browser('alice-dsp', []);
     const d = dsp.page;
-    await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter' })));
+    // With the noise gate on, so its worklet message runs in a real browser too.
+    await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter', vad: { thresholdDb: -50, gate: true } })));
     await d.goto(`${ORIGIN}/login`);
     await d.getByLabel('Username').fill('alice');
     await d.getByLabel('Password', { exact: true }).fill('test-password-1');
