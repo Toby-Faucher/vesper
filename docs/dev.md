@@ -127,6 +127,9 @@ invite with `POST /api/invites`, signs bob up, and joins both to `general`.
 Those ports must be free. It opens two Chromium browsers with fake microphones: alice plays `web/e2e/fixtures/speech.wav`, bob uses the default fake
 device. It passes when bob's ICE is connected, his inbound audio packets and bytes rise, alice's speaking ring lights on bob's page, alice's inbound
 packets rise too (only that count: audio content is proven alice to bob through the speaking ring, not bob to alice), each page lists the other in the people list, and neither page throws.
+Then bob leaves and joins again three times (after 2 s, within a second, and after a page reload) while alice stays: each time both pages'
+inbound packets and bytes rise and the loudest sample of the other's track in the page's own playback graph is above 0.02 (a
+ScriptProcessor tap; the speaking ring misses most of the short fake beeps). Chromium only: the Firefox bug behind #45 is covered by `rejoin_plays_the_new_track` in `web/src/lib/join.test.ts`.
 Then chat on the same pages: alice sends `hello **bob** <b>x</b>` and a link, bob sees a bold `bob`, the `<b>x</b>` as text and a link with
 `rel="noopener noreferrer nofollow"`; bob replies, alice edits (the edit box has focus, Escape cancels, Enter saves), and bob sees both live. Alice attaches a 1x1 PNG built in the test (nothing committed)
 and bob's page shows it with `naturalWidth` 1. Alice makes a restricted room `secret` with a `hello` message: her search for `hello` (the
