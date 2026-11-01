@@ -55,6 +55,15 @@ const fakeNotifications = () => {
   };
 };
 
+// The call sounds are the app's only oscillators: record each tone's pitch as it starts, and let it play on.
+const recordTones = () => {
+  window.__tones = [];
+  const start = OscillatorNode.prototype.start;
+  OscillatorNode.prototype.start = function (...a) { window.__tones.push(Math.round(this.frequency.value)); return start.apply(this, a); };
+};
+// The pitches of each cue, as in web/src/lib/ui/chime.ts.
+const CUE = { connect: [587, 880], disconnect: [880, 587], mute: [1319, 880], unmute: [880, 1319] };
+
 // The three welcome steps once, with Back: the step count, the heading taking focus, the colour saved, and the browser
 // asked about notifications only from the button.
 async function walkWelcome(page) {
@@ -158,6 +167,7 @@ try {
   const bob = await browser('bob', []);
   const b = bob.page;
   await b.addInitScript(fakeNotifications);
+  await b.addInitScript(recordTones);
   await b.goto(bobLink);
   await b.getByLabel('Username').fill('alice');
   await b.getByLabel('Display name').fill('bob');
@@ -267,6 +277,18 @@ try {
   await inVoice(a, 'bob').waitFor({ state: 'detached' });
   console.log('call survives navigation: ok');
 
+  // Call sounds, on by default for my own call: join, mute, unmute and leave each play their cue once, in order.
+  await b.evaluate(() => (window.__tones = []));
+  await join(b, 'general');
+  await b.getByRole('button', { name: 'Mute', exact: true }).click();
+  await b.getByRole('button', { name: 'Unmute' }).click();
+  await b.getByRole('button', { name: 'Mute', exact: true }).waitFor();
+  await b.getByRole('button', { name: 'Leave' }).click();
+  await inVoice(a, 'bob').waitFor({ state: 'detached' });
+  await sleep(300);
+  assert.deepEqual(await b.evaluate(() => window.__tones), [...CUE.connect, ...CUE.mute, ...CUE.unmute, ...CUE.disconnect], 'call sound sequence');
+  console.log('call sounds: ok');
+
   // A Voice setting persists over a reload. Settings opened from its address closes to the last room, in place, and Esc
   // closes it too.
   await b.goto(`${ORIGIN}/settings/voice`);
@@ -315,7 +337,8 @@ try {
     await b.getByRole('status').filter({ hasText: 'Allowed' }).waitFor();
     await b.getByRole('button', { name: 'Send a test notification' }).waitFor();
     assert.equal(await b.evaluate(() => window.__asked), 0, 'permission asked on load');
-    assert.ok(!(await b.getByRole('switch', { name: 'Play a sound when someone joins or leaves your call' }).isChecked()), 'sounds on by default');
+    assert.ok(!(await b.getByRole('switch', { name: 'Others joining and leaving' }).isChecked()), 'join and leave sounds should be off by default');
+    assert.ok(await b.getByRole('switch', { name: 'Mute and deafen' }).isChecked(), 'mute and deafen sounds should be on by default');
     await sw.uncheck();
     assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.notify')).mentions), false);
     await post('@bob again, with the switch off');
