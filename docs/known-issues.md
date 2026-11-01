@@ -20,7 +20,9 @@ Last updated 2026-11-01. Nothing here was run in a real browser or a real deploy
 ## Server behaviour
 
 - **One lock serialises joins.** It is held while the SFU joins and while an old session closes (up to 2 s), for every room at once. Fine for 12 people. A signed-in user can slow others by rejoining in a loop, up to the socket limit of 5 messages a second.
-- **A voice join that races a member list or role change can keep access until the next change.** The join reads the room and role before it takes the join lock, and the change takes the user out of voice only if they were in it by then. The window is a few milliseconds.
+- **A voice join that races a role change can keep access until the next change.** The join reads the role before it takes the join lock, and the change takes the user out of voice only if they were in it by then. The window is a few milliseconds. A room change in that window is caught: the join checks the newest copy of the room before it enters the user.
+- **A second join refused by the SFU ends the first call.** The room cap, a dead SFU and a malformed offer are refused while the first call stays up. An offer that passes those checks but that the SFU still refuses, or a room change caught at the last check, comes after the old session ended, since the SFU keys sessions by user.
+- **A socket keeps the role it had at the upgrade until the next user update.** A role change between the upgrade and the hub add reaches that socket's room filter only with the next change to that user.
 - **A display name change does not reach voice presence** until the user joins again (`peer_joined` carries the name from the join).
 - **An open socket outlives a session that expires.** A session unused for 90 days stops working for requests, but a socket opened on it stays until it closes. Logout, revoke, password change and ban do close it.
 - **A changed public IP needs a rejoin.** The name is re-resolved every 60 s, but only new sessions use the new address. A failed lookup at start advertises nothing until the next refresh, with a warning every 60 s.

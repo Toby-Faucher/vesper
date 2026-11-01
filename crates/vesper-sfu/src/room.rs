@@ -204,6 +204,21 @@ fn handle_command(
     }
 }
 
+/// Untrusted input: a voice client needs exactly one audio m-line. More would let one client
+/// make the SFU hold (and offer others) arbitrarily many tracks.
+pub(crate) fn parse_offer(offer: &str) -> Result<SdpOffer, JoinError> {
+    let bad = |e: &dyn std::fmt::Display| JoinError::BadOffer(e.to_string());
+    let m_lines: Vec<&str> = offer.lines().filter(|l| l.starts_with("m=")).collect();
+    if m_lines.len() != 1 || !m_lines[0].starts_with("m=audio ") {
+        return Err(bad(&format!(
+            "expected exactly one audio m-line, got {} (first: {:?})",
+            m_lines.len(),
+            m_lines.first()
+        )));
+    }
+    SdpOffer::from_sdp_string(offer).map_err(|e| bad(&e))
+}
+
 fn new_client(
     room: &str,
     user: &str,
@@ -213,17 +228,7 @@ fn new_client(
     answer_timeout: Duration,
 ) -> Result<(Client, String, tmpsc::UnboundedReceiver<SfuEvent>), JoinError> {
     let bad = |e: &dyn std::fmt::Display| JoinError::BadOffer(e.to_string());
-    // Untrusted input: a voice client needs exactly one audio m-line. More would let one client
-    // make the SFU hold (and offer others) arbitrarily many tracks.
-    let m_lines: Vec<&str> = offer.lines().filter(|l| l.starts_with("m=")).collect();
-    if m_lines.len() != 1 || !m_lines[0].starts_with("m=audio ") {
-        return Err(bad(&format!(
-            "expected exactly one audio m-line, got {} (first: {:?})",
-            m_lines.len(),
-            m_lines.first()
-        )));
-    }
-    let offer = SdpOffer::from_sdp_string(offer).map_err(|e| bad(&e))?;
+    let offer = parse_offer(offer)?;
     let mut rtc = Rtc::builder()
         .clear_codecs()
         .enable_opus(true, false)

@@ -119,6 +119,12 @@ impl std::fmt::Display for JoinError {
 
 impl std::error::Error for JoinError {}
 
+/// The offer checks [`SfuHandle::join`] makes first, without the SFU: a caller can refuse a bad
+/// offer before it ends anything. `join` can still refuse an offer that passes.
+pub fn check_offer(offer_sdp: &str) -> Result<(), JoinError> {
+    room::parse_offer(offer_sdp).map(drop)
+}
+
 pub(crate) enum Command {
     Join {
         room: String,

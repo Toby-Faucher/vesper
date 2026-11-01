@@ -57,8 +57,10 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`.
 3. The client builds an SDP offer, then sends `join` with a room id. The server reads the user and the room again, so a role,
    ban or member list change counts (`bad_message` if the room is unknown). `Voice::join` (`voice.rs`) refuses a banned user or
    one who cannot see the room (`forbidden`).
-4. It takes the join lock, replaces any earlier voice session of the same account, checks the room cap (12, the same for
-   everyone), then asks the SFU to join SFU room `room-<id>` with the offer.
+4. It takes the join lock and checks the room cap (12, the same for everyone; the user's own place does not count), that the
+   SFU runs and that the offer is well formed. Only then does it end any earlier voice session of the same account, so a
+   join refused there leaves that call up. Then it asks the SFU to join SFU room `room-<id>` with the offer. Before it enters
+   the user, it checks access again against the newest copy of the room, in case the room changed meanwhile.
 5. The server replies `joined` with the SFU's SDP answer and the peers already in that room. `joined` is queued under the voice
    lock, so every later presence message for that room follows it.
 6. When tracks are added or stopped, the SFU makes a new offer. It arrives as `offer`; the client answers with `answer`, one at a time.
@@ -72,7 +74,9 @@ Presence goes to every socket whose user can see the room (`Hub::broadcast_room`
 is talking. `peer_joined` and `peer_state` skip the session's own socket. `peer_left` also reaches the session's own socket: that
 is how a tab learns its call ended (kick, another tab took over, lost access, SFU). The socket stays open for the rest.
 A restricted room's presence reaches only sockets that can see it. When a room's member list or a role changes, everyone in
-voice who can no longer see their room is taken out (`Voice::refresh`, called from `api_rooms::rooms_changed`).
+voice who can no longer see their room is taken out (`Voice::refresh`, called from `api_rooms::rooms_changed`). A socket that
+just lost sight of a room gets no `peer_left` for the people in it: the client drops the peers of every room missing from
+`rooms_changed`.
 
 The connection check: `check { offer }` starts an SFU session under a random 32 hex id in an SFU room of its own
 (`check-<id>`) and answers `joined` with that id and no peers. It is not in presence and does not touch the user's call, since

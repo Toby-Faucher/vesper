@@ -56,6 +56,8 @@ struct State {
     rooms: HashMap<i64, RoomInfo>,
     /// Force-muted account ids. Kept across leave and rejoin until lifted (not across restarts).
     force_muted: HashSet<String>,
+    /// SFU ids of the connection checks that run.
+    checks: HashSet<String>,
 }
 
 struct Member {
@@ -133,7 +135,8 @@ impl Voice {
 
     /// Check access, replace any earlier session of the same user, start the SFU session and
     /// enter `room`. `user` and `room` must be fresh from the store. On success `Joined` has
-    /// been queued on `tx`.
+    /// been queued on `tx`. The room cap, a dead SFU and a malformed offer are refused before
+    /// the user's earlier session ends; an SFU refusal after that ends it.
     pub async fn join(
         &self,
         user: &UserInfo,
@@ -147,6 +150,15 @@ impl Voice {
         let user_id = &user.user_id;
         let _serial = self.0.join_lock.lock().await;
 
+        // Under the join lock the room can only shrink until the insert below.
+        if self.room_size_without(room.id, user_id) >= self.0.max_room_size {
+            return Err(ErrorCode::RoomFull);
+        }
+        if !self.sfu_alive() {
+            return Err(sfu_error(user_id, JoinError::Shutdown));
+        }
+        vesper_sfu::check_offer(&offer).map_err(|e| sfu_error(user_id, e))?;
+
         if let Some(mut old) = self.remove(user_id, None, Some(&tx))
             && let Some(closed) = old.sfu_closed.take()
             && tokio::time::timeout(REPLACE_TIMEOUT, closed).await.is_err()
@@ -154,9 +166,6 @@ impl Voice {
             warn!("old session of {user_id} did not close in {REPLACE_TIMEOUT:?}");
         }
 
-        if self.room_size(room.id) >= self.0.max_room_size {
-            return Err(ErrorCode::RoomFull);
-        }
         let ok = self
             .0
             .sfu
@@ -168,7 +177,13 @@ impl Voice {
         let (closed_tx, closed_rx) = oneshot::channel();
         {
             let mut st = self.lock();
-            st.rooms.insert(room.id, room.clone());
+            // A change since `room` was read is already here (`refresh`): never put the old copy
+            // back, and check access against the new one.
+            let cached = st.rooms.entry(room.id).or_insert_with(|| room.clone());
+            if !can_see(user, cached) {
+                self.0.sfu.leave(user_id);
+                return Err(ErrorCode::Forbidden);
+            }
             let force_muted = st.force_muted.contains(user_id);
             let member = Member {
                 room: room.id,
@@ -226,6 +241,7 @@ impl Voice {
             .join(format!("check-{id}"), id.clone(), offer)
             .await
             .map_err(|e| sfu_error("a check", e))?;
+        self.lock().checks.insert(id.clone());
         // Events are dropped: alone in its room, the session gets no renegotiation offers.
         tx.send(ServerMsg::Joined {
             user_id: id.clone(),
@@ -239,7 +255,13 @@ impl Voice {
     }
 
     pub fn end_check(&self, id: &str) {
+        self.lock().checks.remove(id);
         self.0.sfu.leave(id);
+    }
+
+    /// How many connection checks run.
+    pub fn checks(&self) -> usize {
+        self.lock().checks.len()
     }
 
     /// Pump one session's SFU events to its socket until the SFU closes the session.
@@ -384,11 +406,12 @@ impl Voice {
         Some(m)
     }
 
-    fn room_size(&self, room: i64) -> usize {
+    /// People in voice in `room`, not counting `user_id`, whose join would replace their own.
+    fn room_size_without(&self, room: i64, user_id: &str) -> usize {
         self.lock()
             .members
-            .values()
-            .filter(|m| m.room == room)
+            .iter()
+            .filter(|(id, m)| m.room == room && *id != user_id)
             .count()
     }
 }
