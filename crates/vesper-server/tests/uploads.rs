@@ -776,11 +776,16 @@ async fn orphan_files_are_swept() {
     // Too new: kept.
     assert_eq!(uploads::sweep_orphans(&server.state, now).await.unwrap(), 0);
     assert!(path.exists());
+    // A dir the sweep cannot read is logged and skipped; the rest of the pass still runs.
+    use std::os::unix::fs::PermissionsExt;
+    let locked = file_of(&server, &"cd".repeat(16));
+    let locked = locked.parent().unwrap();
+    std::fs::create_dir_all(locked).unwrap();
+    std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o000)).unwrap();
     let later = now + day + std::time::Duration::from_secs(60);
-    assert_eq!(
-        uploads::sweep_orphans(&server.state, later).await.unwrap(),
-        1
-    );
+    let swept = uploads::sweep_orphans(&server.state, later).await;
+    std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(swept.unwrap(), 1);
     assert!(!path.exists() && odd.exists());
     assert!(file_of(&server, &kept).exists(), "a file with a row stays");
     assert_eq!(download(&server, &kept, &alice).await.0, StatusCode::OK);

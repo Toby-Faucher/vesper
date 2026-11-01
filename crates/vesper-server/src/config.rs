@@ -78,7 +78,7 @@ impl Config {
 
 /// `http(s)://host[:port]` with no path, query or user part, in the form browsers send as
 /// `Origin`: lowercase, no trailing slash, no default port.
-fn normalise_origin(s: &str) -> Result<String, &'static str> {
+pub(crate) fn normalise_origin(s: &str) -> Result<String, &'static str> {
     let lower = s.to_ascii_lowercase();
     let (scheme, rest, default_port) = if let Some(r) = lower.strip_prefix("https://") {
         ("https", r, "443")
@@ -99,8 +99,8 @@ fn normalise_origin(s: &str) -> Result<String, &'static str> {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
         None => (rest, None),
     };
-    if host.is_empty() {
-        return Err("host is empty");
+    if !valid_host(host) {
+        return Err("host must be letters, digits, '.' and '-', or an [IPv6] literal");
     }
     match port {
         Some(p)
@@ -112,6 +112,25 @@ fn normalise_origin(s: &str) -> Result<String, &'static str> {
         }
         Some(p) if p == default_port => Ok(format!("{scheme}://{host}")),
         _ => Ok(format!("{scheme}://{rest}")),
+    }
+}
+
+/// A lowercase host name of `[a-z0-9.-]`, or a bracketed IPv6 literal of hex digits, `:` and `.`.
+/// The origin goes into the CSP, so no `;`, quote, comma or space may get through.
+fn valid_host(host: &str) -> bool {
+    let ipv6 = |h: &str| {
+        !h.is_empty()
+            && h.bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
+    };
+    match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        Some(inner) => ipv6(inner),
+        None => {
+            !host.is_empty()
+                && host
+                    .bytes()
+                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-'))
+        }
     }
 }
 
@@ -179,6 +198,32 @@ mod tests {
             "http://x:080",
             "http://x:0",
             "http://x:99999",
+            // Anything that could add a CSP directive or source, or is not a bare origin.
+            "https://a;img-src",
+            "https://a;b",
+            "https://a'b",
+            "https://a,b",
+            "https://a\"b",
+            "https://a b",
+            "https://a\tb",
+            "https://a%62",
+            "https://a*b",
+            "https://*.example",
+            "https://a\\b",
+            "https://a\u{0}b",
+            "https://é.example",
+            "https://user@a",
+            "https://user:pw@a",
+            "https://a/path",
+            "https://a?q=1",
+            "https://a#frag",
+            "https://",
+            "https://:8080",
+            "https://[]",
+            "https://[::1;]",
+            "https://[::1",
+            "ftp://a",
+            "ws://a",
         ] {
             assert!(normalise_origin(bad).is_err(), "{bad}");
         }

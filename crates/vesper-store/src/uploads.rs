@@ -65,6 +65,17 @@ impl Store {
         .await?)
     }
 
+    /// The ids in `ids` that have a row, in one query.
+    pub async fn known_uploads(&self, ids: &[String]) -> Result<Vec<String>> {
+        let ids = serde_json::to_string(ids).expect("strings serialise");
+        Ok(sqlx::query_scalar(
+            "SELECT id FROM uploads WHERE id IN (SELECT value FROM json_each(?1))",
+        )
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// Deletes the rows of `ids` that are still unattached and returns those ids, so an upload
     /// attached after `stale_uploads` ran is kept (and its file with it).
     pub async fn delete_uploads(&self, ids: &[String]) -> Result<Vec<String>> {

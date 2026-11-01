@@ -59,18 +59,24 @@ fn ids(p: &SearchPage) -> Vec<i64> {
 #[test]
 fn fts_query_quotes_operators() {
     assert_eq!(fts_query("cat OR dog").unwrap(), r#""cat" "OR" "dog"*"#);
-    assert_eq!(fts_query("a\"b").unwrap(), r#""a""b"*"#);
+    assert_eq!(fts_query("a\"bc").unwrap(), r#""a""bc"*"#);
     assert_eq!(fts_query("  "), None);
     assert_eq!(fts_query("***"), None);
     assert_eq!(fts_query("- ^ * ( ) :"), None);
     assert_eq!(
-        fts_query("body:foo NEAR(x").unwrap(),
-        r#""body:foo" "NEAR(x"*"#
+        fts_query("body:foo NEAR(xy").unwrap(),
+        r#""body:foo" "NEAR(xy"*"#
     );
     assert_eq!(fts_query("a\0bc").unwrap(), r#""a" "bc"*"#);
     // A one-character last term is a whole word, never the slow `x*` prefix.
     assert_eq!(fts_query("a\0b").unwrap(), r#""a" "b""#);
     assert_eq!(fts_query("é").unwrap(), r#""é""#);
+    // Only letters and digits count: these all end in a one-letter token.
+    assert_eq!(fts_query("a.").unwrap(), r#""a.""#);
+    assert_eq!(fts_query("a-").unwrap(), r#""a-""#);
+    assert_eq!(fts_query("xy-a").unwrap(), r#""xy-a""#);
+    assert_eq!(fts_query("e\u{301}").unwrap(), "\"e\u{301}\"");
+    assert_eq!(fts_query("a-bc").unwrap(), r#""a-bc"*"#);
     assert_eq!(fts_query("ab").unwrap(), r#""ab"*"#);
     let twenty: Vec<String> = (0..20).map(|i| format!("w{i}")).collect();
     let out = fts_query(&twenty.join(" ")).unwrap();

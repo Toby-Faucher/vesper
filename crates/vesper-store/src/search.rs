@@ -18,9 +18,9 @@ const HIT_END: char = '\u{3}';
 
 /// Quoted FTS5 terms, the last one a prefix, or `None` when nothing searchable is left. Splits on
 /// whitespace and control characters (a NUL must not end the FTS5 parse early), cuts each term to
-/// 64 chars, drops terms with no letter or digit and keeps 16. A last term of one character is
-/// matched as a whole word, not a prefix: `a*` merges the doclist of every word starting with `a`,
-/// the slow case.
+/// 64 chars, drops terms with no letter or digit and keeps 16. When the last term ends in a token
+/// of one letter or digit (`a`, `a.`, `x-a`), it is matched as a whole word, not a prefix: `a*`
+/// merges the doclist of every word starting with `a`, the slow case.
 pub fn fts_query(input: &str) -> Option<String> {
     let terms: Vec<String> = input
         .split(|c: char| c.is_whitespace() || c.is_control())
@@ -28,7 +28,13 @@ pub fn fts_query(input: &str) -> Option<String> {
         .filter(|t| t.chars().any(char::is_alphanumeric))
         .take(MAX_TERMS)
         .collect();
-    let prefix = terms.last()?.chars().count() >= MIN_PREFIX_CHARS;
+    // FTS5 applies `*` to the last token of the phrase, which is the last run of letters and
+    // digits (`a.` and `x-a` both end in the token `a`).
+    let last_token = terms
+        .last()?
+        .split(|c: char| !c.is_alphanumeric())
+        .rfind(|r| !r.is_empty())?;
+    let prefix = last_token.chars().count() >= MIN_PREFIX_CHARS;
     let quoted: Vec<String> = terms
         .iter()
         .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))

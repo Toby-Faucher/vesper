@@ -212,7 +212,14 @@ async fn health(State(st): State<ws::WsState>) -> (StatusCode, &'static str) {
 /// some older browsers do not let `'self'` match `ws:` and `wss:`. `'wasm-unsafe-eval'` lets the
 /// DSP worker compile the denoiser; `'unsafe-inline'` is for styles only (Svelte writes `style`
 /// attributes). Scripts stay strict: no `'unsafe-eval'`, no inline script.
+///
+/// Panics unless `origin` is already a normalised origin: it is pasted into the policy, so a
+/// `;` or quote in it would add a directive or a source.
 pub fn csp(origin: &str) -> String {
+    assert!(
+        config::normalise_origin(origin).as_deref() == Ok(origin),
+        "csp: not a normalised origin"
+    );
     let ws = format!("ws{}", origin.strip_prefix("http").unwrap_or(origin));
     format!(
         "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; \

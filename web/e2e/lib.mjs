@@ -79,7 +79,8 @@ export async function browser(name, args) {
   const page = await (await b.newContext({ permissions: ['microphone'] })).newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(`${name}: ${e}`));
-  // The server sends a strict CSP: a blocked load shows as a console error (also from workers) and an event.
+  // The server sends a strict CSP: a blocked load in the page shows as a console error and an event. A block inside a worker
+  // shows neither; only the optional denoiser step in flows.mjs catches that, and CI skips it.
   page.on('console', (m) => /content security policy/i.test(m.text()) && errors.push(`${name}: ${m.text()}`));
   await page.addInitScript(hook);
   await page.addInitScript(() => {

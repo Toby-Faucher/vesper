@@ -128,8 +128,9 @@ address bar, autocomplete attributes, an empty password field and focus on the e
 after a rejoin, and lifted), a kick ending the call, and a room made private ending the call. If `web/dist/dsp/` exists
 (`scripts/build-dsp.sh`, then `npm run build`), it also signs alice in with DeepFilterNet on and checks the denoiser starts.
 
-Both tests fail on any CSP block: each page records `securitypolicyviolation` events and console lines about the Content Security
-Policy, through sign up, sign in, voice, chat, upload and search ([decision 0008](decisions/0008-csp.md)).
+Both tests fail on any CSP block in a page: each page records `securitypolicyviolation` events and console lines about the Content
+Security Policy, through sign up, sign in, voice, chat, upload and search ([decision 0008](decisions/0008-csp.md)). A block inside a
+worker shows neither, so only the denoiser step above catches one (a missing `'wasm-unsafe-eval'`). CI has no wasm build and skips that step.
 
 The fixture is synthetic (voiced syllables with vowel formants), so it has no third-party licence. `node web/e2e/fixtures/make-speech.mjs` rebuilds it.
 Not checked: the inbound `audioLevel` stat. It stays 0 because the app plays remote audio through Web Audio with the `<audio>` element muted.

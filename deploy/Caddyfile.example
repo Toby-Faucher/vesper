@@ -13,6 +13,7 @@ vesper.tfaucher.com {
 
 	# HSTS makes browsers refuse plain HTTP for this name for a year: keep it only once HTTPS works.
 	# Vesper sends the same HSTS and its own CSP, Referrer-Policy, Permissions-Policy, COOP and nosniff
-	# (docs/decisions/0008-csp.md): do not set those here, a second copy would conflict.
+	# (docs/decisions/0008-csp.md): do not set those here. HSTS is kept here on purpose with the same value, so
+	# it stays if the server's is lost; the browser then gets two identical copies, which is harmless.
 	header Strict-Transport-Security "max-age=31536000"
 }

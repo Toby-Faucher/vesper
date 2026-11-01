@@ -284,7 +284,7 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
 - **Size.** At most 25 MiB (`MAX_UPLOAD`). A larger `Content-Length` is 413 before the body is read; a body with no length is
   counted while it streams to `uploads/tmp/<id>` and is cut off with 413 once it passes the cap. The partial file is deleted, also
   when the client goes away mid-body, sends nothing for 30 s (`READ_IDLE`) or is not done after 10 minutes (`READ_TOTAL`): 400
-  `upload too slow`. The Upload limit is 10, then 1 every 30 s, per user.
+  `upload too slow`. So a 25 MiB file needs about 44 KB/s (350 kbit/s) on average. The Upload limit is 10, then 1 every 30 s, per user.
 - **Quota.** Uploads together stay under `VESPER_UPLOAD_QUOTA_MB` ([env.md](env.md)). The check, the move into place and the row
   insert run under one lock, so uploads racing each other cannot pass it (507 `quota_full`). A `Content-Length` that cannot fit
   what is left is 507 before the body is read.
@@ -373,7 +373,7 @@ speed is not in these numbers. The box was not idle, so the numbers move a few m
 | Database size after a checkpoint | 37.5 MiB |
 
 The test fails if any of these is 50 ms or more. Not measured: the 1 GB VM (expect it slower), a database with years of real chat.
-A one-letter prefix (`a*`) was the slow case; the server now matches a one-character last term as a whole word, and the web client waits for 2 characters.
+A one-letter prefix (`a*`) was the slow case; the server now matches a last term ending in a one-letter or one-digit token (`a`, `a.`, `x-a`) as a whole word, and the web client waits for 2 characters.
 
 ## Static serving
 

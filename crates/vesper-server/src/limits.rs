@@ -91,6 +91,8 @@ impl Limiter {
     }
 
     /// Moves [`Limiter::now`] forward, so a test can wait for a refill without sleeping.
+    /// Only tests may call this: it moves the clock of every rate limit. It is `pub`, not
+    /// `cfg(test)`, because the integration tests in `tests/` are a separate crate.
     #[doc(hidden)]
     pub fn advance(&self, by: Duration) {
         self.0.lock().unwrap_or_else(PoisonError::into_inner).skew += by;

@@ -193,7 +193,8 @@ pub async fn sweep(st: &AppState, now: i64) -> Result<usize, StoreError> {
 }
 
 /// Removes files under `uploads/<xx>/` last written `STALE_MS` before `now` that have no row: a
-/// delete that failed, or a crash between the rename and the row insert. Returns how many.
+/// delete that failed, or a crash between the rename and the row insert. Returns how many. A file
+/// or dir that fails (one deleted by a message delete mid-pass) is logged and skipped.
 pub async fn sweep_orphans(st: &AppState, now: SystemTime) -> std::io::Result<usize> {
     let data_dir = &st.cfg.data_dir;
     let stale = Duration::from_millis(STALE_MS as u64);
@@ -201,34 +202,63 @@ pub async fn sweep_orphans(st: &AppState, now: SystemTime) -> std::io::Result<us
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         r => r?,
     };
-    let mut n = 0;
+    let mut old = Vec::new();
     while let Some(dir) = dirs.next_entry().await? {
-        if dir.file_name() == "tmp" || !dir.file_type().await?.is_dir() {
+        if dir.file_name() == "tmp" || !dir.file_type().await.is_ok_and(|t| t.is_dir()) {
             continue;
         }
-        let mut files = tokio::fs::read_dir(dir.path()).await?;
-        while let Some(f) = files.next_entry().await? {
-            let id = f.file_name().to_string_lossy().into_owned();
-            // Only names this module writes, in their own dir.
-            if upload_path(data_dir, &id).as_deref() != Some(f.path().as_path()) {
-                continue;
-            }
-            if f.metadata().await?.modified()? + stale > now {
-                continue;
-            }
-            // `upload` renames and inserts the row under this lock: no row now means none is coming.
-            let _quota = QUOTA.lock().await;
-            match st.store.upload(&id).await {
-                Err(StoreError::NotFound) => {
-                    tokio::fs::remove_file(f.path()).await?;
-                    n += 1;
-                }
-                Ok(_) => {}
-                Err(e) => return Err(std::io::Error::other(e.to_string())),
-            }
+        if let Err(e) = old_files(data_dir, &dir.path(), now, stale, &mut old).await {
+            tracing::warn!("orphan upload sweep: {}: {e}", dir.path().display());
+        }
+    }
+    if old.is_empty() {
+        return Ok(0);
+    }
+    // `upload` renames and inserts the row under this lock, so no row now means none is coming
+    // for these ids (they are random, and a fresh rename has a new mtime anyway).
+    let known = {
+        let _quota = QUOTA.lock().await;
+        st.store.known_uploads(&old).await
+    }
+    .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let mut n = 0;
+    for id in old.iter().filter(|id| !known.contains(id)) {
+        let Some(p) = upload_path(data_dir, id) else {
+            continue;
+        };
+        match tokio::fs::remove_file(&p).await {
+            Ok(()) => n += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!("orphan upload sweep: {}: {e}", p.display()),
         }
     }
     Ok(n)
+}
+
+/// Pushes to `out` the ids of the upload files in `dir` last written `stale` before `now`.
+/// A file that vanishes while it is read is skipped.
+async fn old_files(
+    data_dir: &FsPath,
+    dir: &FsPath,
+    now: SystemTime,
+    stale: Duration,
+    out: &mut Vec<String>,
+) -> std::io::Result<()> {
+    let mut files = tokio::fs::read_dir(dir).await?;
+    while let Some(f) = files.next_entry().await? {
+        let id = f.file_name().to_string_lossy().into_owned();
+        // Only names this module writes, in their own dir.
+        if upload_path(data_dir, &id).as_deref() != Some(f.path().as_path()) {
+            continue;
+        }
+        match f.metadata().await.and_then(|m| m.modified()) {
+            Ok(t) if t + stale <= now => out.push(id),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!("orphan upload sweep: {}: {e}", f.path().display()),
+        }
+    }
+    Ok(())
 }
 
 /// Runs `sweep` and `sweep_orphans` now and then every hour.
