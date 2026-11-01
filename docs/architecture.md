@@ -189,6 +189,18 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
   `dsp.worker.ts`, `dsp-handler.ts`).
 - Buffers in `denoise-core.ts`: up to 4 frames at the worker, a 4 frame input ring, and an output queue that starts playing at 3 frames
   (30 ms) and holds at most 8 (80 ms); if it stays above 5 for 2 s it drops one frame a second down to 3. They absorb jitter in the worklet to worker messages. The delay they add is estimated, not measured.
+- Two steps run inside the worklet (`dynamics.ts`), so the order stays mic, echo cancellation, gain, DeepFilterNet, Opus:
+  - A limiter on the boosted input, before the denoiser, on only while the input boost is above 0 dB. A peak envelope (20 ms hold,
+    80 ms release) feeds a soft curve: gain 1 below -6 dBFS, and the denoiser input never passes -1 dBFS. It needs no lookahead, so
+    it adds no delay. At 0 dB boost (the default) it is off and the path is bit-identical to before; a boost change crossfades over
+    10 ms. The worklet reports the input peak before the limiter (`inputPeak`), and the Settings clipping hint reads that, since
+    the sent track can no longer reach full scale.
+  - The noise gate (`vad.gate`, off by default) on the denoised output. It reads each frame's peak when it arrives from the worker and
+    shapes the samples as they play, so the output queue (about 20 to 80 ms) is its lookahead. It opens on a peak above the level marker,
+    closes after 200 ms of frames under the marker minus 4 dB, and ramps the gain (2 ms up, 120 ms down) to 0. The hold counts
+    from frame arrival, so in played time the release starts 200 ms minus the queue depth after the sound drops. Turning it off
+    ramps it open. The switch is disabled outside DeepFilterNet mode. The passthrough before the model is
+    ready, and after a failure, is not gated.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
   suppression is on only in `browser` mode, or in `deepfilter` mode if the user turned it on.
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is

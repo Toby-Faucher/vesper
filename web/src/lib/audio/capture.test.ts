@@ -76,7 +76,8 @@ describe('createCapture', () => {
     expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
     const w = t.workers[0];
     expect(w.postMessage).toHaveBeenCalledWith({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: 100, beta: 0.02 });
-    expect(t.worklets[0].port.postMessage).not.toHaveBeenCalled(); // no frames before ready
+    // Before ready only the dynamics settings, no frame port. No boost by default, so no limiter.
+    expect(t.worklets[0].port.postMessage.mock.calls).toEqual([[{ type: 'dynamics', limit: false, gate: false, thresholdDb: -50 }]]);
     const cb = vi.fn();
     cap.onModeChange(cb);
     expect(cb).toHaveBeenLastCalledWith('deepfilter', 'loading, unfiltered');
@@ -84,7 +85,7 @@ describe('createCapture', () => {
     expect(cb).toHaveBeenLastCalledWith('deepfilter', '');
     const [msg, transfer] = w.postMessage.mock.calls[1];
     expect(msg).toEqual({ type: 'port' });
-    const [wmsg, wtransfer] = t.worklets[0].port.postMessage.mock.calls[0];
+    const [wmsg, wtransfer] = t.worklets[0].port.postMessage.mock.calls[1];
     expect(wmsg).toEqual({ type: 'port' });
     expect(transfer).toHaveLength(1);
     expect(wtransfer).toHaveLength(1);
@@ -184,6 +185,9 @@ describe('createCapture', () => {
     t.workers[0].onmessage({ data: { type: 'ready' } });
     cap.setSettings(clampSettings({ attenDb: 30, postFilter: 0.01 }));
     expect(t.workers[0].postMessage).toHaveBeenLastCalledWith({ type: 'set', atten: 30, beta: 0.01 });
+    expect(t.worklets[0].port.postMessage).toHaveBeenLastCalledWith({ type: 'dynamics', limit: false, gate: false, thresholdDb: -50 });
+    cap.setSettings(clampSettings({ vad: { thresholdDb: -42, gate: true }, inputBoostDb: 3 })); // live, no rebuild
+    expect(t.worklets[0].port.postMessage).toHaveBeenLastCalledWith({ type: 'dynamics', limit: true, gate: true, thresholdDb: -42 });
     expect(t.mics).toHaveLength(1);
     const cb = vi.fn();
     cap.onModeChange(cb);

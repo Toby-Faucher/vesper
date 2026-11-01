@@ -2,19 +2,22 @@
   import { onMount } from 'svelte';
   import { createCapture, type Capture } from '../../lib/audio/capture';
   import { clampSettings, type AudioSettings } from '../../lib/audio/settings';
-  import { DEVICE_MESSAGES, classifyMediaError, isBluetoothLabel, levelHint, watchDevices } from '../../lib/devices';
+  import { DEVICE_MESSAGES, classifyMediaError, hintLevelDb, isBluetoothLabel, levelHint, watchDevices } from '../../lib/devices';
   import Button from '../../lib/ui/c/Button.svelte';
   import Field from '../../lib/ui/c/Field.svelte';
   import Meter from '../../lib/ui/c/Meter.svelte';
   import Range from '../../lib/ui/c/Range.svelte';
   import Select from '../../lib/ui/c/Select.svelte';
+  import Switch from '../../lib/ui/c/Switch.svelte';
   // The microphone picker, the input level meter and the mic test, for Settings > Voice and the welcome steps.
   // `devices` is bindable so Settings can list the speakers from the same list. `marker` shows the level marker slider.
-  let { settings, onchange, liveStream, marker = true, devices = $bindable([]) }: {
+  let { settings, onchange, liveStream, liveCapture, marker = true, devices = $bindable([]) }: {
     settings: AudioSettings;
     onchange: (s: AudioSettings) => void;
     /** The call's capture stream, metered when no mic test runs. */
     liveStream?: MediaStream;
+    /** The call's capture, for the pre-limiter level behind the clipping hint. */
+    liveCapture?: Capture;
     marker?: boolean;
     devices?: MediaDeviceInfo[];
   } = $props();
@@ -57,7 +60,7 @@
       an.node!.getFloatTimeDomainData(buf);
       const peak = buf.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
       levelDb = peak > 0 ? 20 * Math.log10(peak) : -100;
-      peaks.push(levelDb);
+      peaks.push(hintLevelDb(levelDb, (test ?? liveCapture)?.getStats()));
       if (peaks.length > 30) peaks.shift();
       hint = peaks.length >= 30 ? levelHint(peaks) : 'ok';
     }, 100);
@@ -120,10 +123,15 @@
   {#if hint === 'too-quiet'}<p class="text-xs text-warn">Very quiet or silent. Speak, check the mic, or try a little input boost.</p>{/if}
 </div>
 {#if marker}
-  <Field label="Level marker" value="{settings.vad.thresholdDb} dB" help="The white line on the meter. Display only: voice activity gating is not built yet.">
+  <Field label="Level marker" value="{settings.vad.thresholdDb} dB" help="The white line on the meter. With the noise gate on, sound below it is muted.">
     <Range min={-100} max={0} aria-valuetext="{settings.vad.thresholdDb} dB" value={settings.vad.thresholdDb}
-      oninput={(e) => set({ vad: { thresholdDb: +e.currentTarget.value } })} />
+      oninput={(e) => set({ vad: { ...settings.vad, thresholdDb: +e.currentTarget.value } })} />
   </Field>
+  <Switch label="Noise gate" checked={settings.vad.gate} disabled={settings.mode !== 'deepfilter'}
+    help={settings.mode === 'deepfilter'
+      ? 'Mutes sound under the marker, like fan hiss between words. It mutes about 0.2 s after you stop. Turn it off while you set the marker: the meter shows the gated sound.'
+      : 'Works only with DeepFilterNet noise suppression.'}
+    onchange={(e) => set({ vad: { ...settings.vad, gate: e.currentTarget.checked } })} />
 {/if}
 
 <div class="flex flex-wrap items-center gap-x-3 gap-y-1">

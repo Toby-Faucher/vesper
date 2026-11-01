@@ -96,7 +96,7 @@
         <h1 bind:this={heading} tabindex="-1" class="text-xl font-semibold text-fg outline-none">Check your microphone</h1>
         <p class="mt-2 text-fg-2">Speak. The bar should move. If it does not, pick another microphone.</p>
       </div>
-      <MicCheck settings={voice.settings} onchange={updateSettings} liveStream={voice.mic} marker={false} />
+      <MicCheck settings={voice.settings} onchange={updateSettings} liveStream={voice.mic} liveCapture={voice.capture} marker={false} />
       <div class="flex items-center gap-2 pt-1">
         <span class="-ml-3"><Button variant="ghost" onclick={finish}>Skip for now</Button></span>
         <span class="ml-auto"></span>

@@ -315,6 +315,23 @@ try {
   await b2.close();
   await b.getByLabel('Auto gain').uncheck();
   assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).autoGain), false);
+  // The noise gate switch follows the saved mode, not whether the denoiser loaded, so this runs the same with and without
+  // dist/dsp. b saves browser mode (lib.mjs): disabled, and the help says why. In DeepFilterNet mode it saves vad.gate,
+  // keeps the level marker and persists to a new tab. b is not in a call here, so the mode change only saves.
+  const gate = b.getByRole('switch', { name: 'Noise gate' });
+  assert.ok(await gate.isDisabled(), 'the noise gate switch is enabled in browser mode');
+  assert.match(await b.getByText('Works only with DeepFilterNet noise suppression.').innerText(), /DeepFilterNet/);
+  await b.getByLabel('Noise suppression', { exact: true }).selectOption('deepfilter');
+  await gate.check();
+  assert.deepEqual(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad), { thresholdDb: -50, gate: true });
+  const b3 = await b.context().newPage();
+  await b3.goto(`${ORIGIN}/settings/voice`);
+  assert.ok(await b3.getByRole('switch', { name: 'Noise gate' }).isChecked(), 'the noise gate did not persist');
+  await b3.close();
+  await gate.uncheck();
+  await b.getByLabel('Noise suppression', { exact: true }).selectOption('browser');
+  assert.ok(await gate.isDisabled());
+  assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad.gate), false);
   const depth = await b.evaluate(() => history.length);
   await b.getByRole('button', { name: 'Close' }).click();
   await b.waitForURL(`${ORIGIN}/r/${general}`);
@@ -686,7 +703,8 @@ try {
   if (existsSync(new URL('../dist/dsp/vesper_dsp_bg.wasm', import.meta.url))) {
     const dsp = await browser('dana', []);
     const d = dsp.page;
-    await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter' })));
+    // With the noise gate on, so its worklet message runs in a real browser too.
+    await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter', vad: { thresholdDb: -50, gate: true } })));
     await signup(d, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, 'dana');
     await join(d, 'general');
     const line = d.getByText('Noise suppression:').first();
