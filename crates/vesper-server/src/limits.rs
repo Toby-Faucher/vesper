@@ -18,6 +18,8 @@ pub enum Kind {
     Upload,
     /// Key: user id and room id.
     Typing,
+    /// Key: user id.
+    Search,
 }
 
 impl Kind {
@@ -31,6 +33,7 @@ impl Kind {
             Kind::Message => (10.0, s(1)),
             Kind::Upload => (10.0, s(30)),
             Kind::Typing => (1.0, s(3)),
+            Kind::Search => (10.0, s(1)),
         }
     }
 }

@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
-use vesper_protocol::Role;
+use vesper_protocol::{Role, SearchQuery};
 use vesper_store::{Cursor, NewAccount, Store};
 
 const WORDS: &[&str] = &[
@@ -108,12 +108,45 @@ async fn perf_100k_messages() {
         "unread for 10 rooms: {unread:?} (counts {:?})",
         u.iter().map(|x| x.unread).collect::<Vec<_>>()
     );
-    println!("search: skipped until Task 15 adds it");
+    // p50 and p95 of 50 runs per query, over all 10 rooms, page of 20.
+    let mut searches = Vec::new();
+    // The last one is the worst case: only the oldest matches pass the filter, so the whole
+    // doclist is walked.
+    for (what, text, to) in [
+        ("1 word", "hello", None),
+        ("3 words", "voice game tonight", None),
+        ("prefix", "mu", None),
+        ("1 word, oldest 1000 only", "hello", Some(1000)),
+    ] {
+        let sq = SearchQuery {
+            q: text.into(),
+            room_id: None,
+            author_id: None,
+            from: None,
+            to,
+            before: None,
+        };
+        let hits = s.search(&sq, &rooms, 20).await.unwrap().hits.len();
+        assert_eq!(hits, 20, "{what}");
+        let mut runs = Vec::new();
+        for _ in 0..50 {
+            let t = Instant::now();
+            s.search(&sq, &rooms, 20).await.unwrap();
+            runs.push(t.elapsed());
+        }
+        runs.sort();
+        let (p50, p95) = (runs[24], runs[47]);
+        println!("search {what} ({text:?}): p50 {p50:?}, p95 {p95:?}");
+        searches.push((what, p95));
+    }
     println!(
         "db size after checkpoint: {:.1} MiB",
         size as f64 / 1_048_576.0
     );
-    for (what, d) in [("latest", latest), ("before", before), ("unread", unread)] {
+    for (what, d) in [("latest", latest), ("before", before), ("unread", unread)]
+        .into_iter()
+        .chain(searches)
+    {
         assert!(d < Duration::from_millis(50), "{what} took {d:?}");
     }
 }

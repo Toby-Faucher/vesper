@@ -699,3 +699,102 @@ async fn reaction_validation() {
         (StatusCode::BAD_REQUEST, Some("invalid request body"))
     );
 }
+
+#[tokio::test]
+async fn search_sees_only_visible_rooms() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let bob = server.account("bob", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let secret = restricted(&server, &owner, &[&bob]).await;
+    let general = room(&server, "general").await;
+    // Straight into the store: the send limit would stop 28 posts.
+    let post = |room: i64, body: &'static str| {
+        let s = server.state.store.clone();
+        let bob = bob.user.user_id.clone();
+        async move {
+            s.post_message(vesper_store::NewMessage {
+                room_id: room,
+                author_id: &bob,
+                body,
+                reply_to: None,
+                mentions: &[],
+                attachments: &[],
+                now: 1,
+            })
+            .await
+            .unwrap()
+            .id
+        }
+    };
+    let mut open_ids = Vec::new();
+    for _ in 0..3 {
+        open_ids.push(post(general, "needle in general").await);
+    }
+    // Newer matches in the hidden room must neither show nor shorten carol's page.
+    for _ in 0..25 {
+        post(secret, "needle").await;
+    }
+    let search = |q: String, s: &Session| {
+        let req = get(&format!("/api/search?{q}"), s);
+        async { server.call(req).await }
+    };
+    let (status, _, v) = search("q=needle".into(), &carol).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let hits: Vec<i64> = v["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["message"]["id"].as_i64().unwrap())
+        .collect();
+    open_ids.reverse();
+    assert_eq!(hits, open_ids);
+    assert_eq!(v["next_before"], Value::Null);
+    assert_eq!(v["hits"][0]["snippet"], "\u{2}needle\u{3} in general");
+    // bob sees both rooms: a full page of 20 and a cursor.
+    let (_, _, v) = search("q=needle".into(), &bob).await;
+    assert_eq!(v["hits"].as_array().unwrap().len(), 20);
+    assert!(v["next_before"].is_i64());
+
+    // A hidden room id is the same 404 as an unknown one.
+    let (status, _, hidden) = search(format!("q=needle&room_id={secret}"), &carol).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, _, unknown) = search("q=needle&room_id=999999".into(), &carol).await;
+    assert_eq!(hidden, unknown);
+    let (status, _, v) = search(format!("q=needle&room_id={secret}"), &bob).await;
+    assert_eq!(
+        (status, v["hits"].as_array().unwrap().len()),
+        (StatusCode::OK, 20)
+    );
+}
+
+#[tokio::test]
+async fn search_hostile_input_and_rate_limit() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let general = room(&server, "general").await;
+    sent(&server, general, "hello there", &alice).await;
+    // `***`, `NEAR(`, `"`, `body:x`, `^` and an empty query: 200, never 500.
+    for q in [
+        "q=%2A%2A%2A",
+        "q=NEAR%28",
+        "q=%22",
+        "q=body%3Ax",
+        "q=%5E",
+        "q=",
+    ] {
+        let (status, _, v) = server.call(get(&format!("/api/search?{q}"), &alice)).await;
+        assert_eq!(status, StatusCode::OK, "{q}: {v}");
+    }
+    let (status, _, _) = server
+        .call(get("/api/search?q=x&before=nope", &alice))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Burst of 10 per user, then 1 a second.
+    let mut codes = Vec::new();
+    for _ in 0..10 {
+        codes.push(server.call(get("/api/search?q=hel", &alice)).await.0);
+    }
+    assert_eq!(codes[0], StatusCode::OK);
+    assert_eq!(codes[9], StatusCode::TOO_MANY_REQUESTS, "{codes:?}");
+}

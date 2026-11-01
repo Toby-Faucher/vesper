@@ -37,7 +37,7 @@ The "Not verified" list at the end says what was only read.
 | Crate | Job |
 |---|---|
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, the limit `MAX_MSG_BYTES` (64 KiB) and the close codes `CLOSE_SESSION_ENDED` (4001) and `CLOSE_DISCONNECTED` (4003). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`, `Unread`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
-| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). It stores only hashes of session tokens and invite codes. |
+| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
 | `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
@@ -207,6 +207,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `PUT /api/messages/{id}/reaction` (`ReactionReq`) | sees the room | the new `Message`; pushes `message_updated` |
 | `PUT /api/messages/{id}/pin` (`PinReq`) | sees the room | the new `Message`; pushes `message_updated` |
 | `PUT /api/rooms/{id}/read` (`ReadReq`) | sees the room | 204; sends `read` to every socket of the user |
+| `GET /api/search?q=&room_id=&author_id=&from=&to=&before=` (`SearchQuery`) | a session, Search limit by user | `SearchPage`, 20 hits, newest first, only rooms you can see; a `room_id` you cannot see is 404 |
 | `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past 25 MiB, 507 `quota_full` |
 | `GET /api/uploads/{id}` | sees the room; an upload not attached yet needs the uploader | the file (Range works), else 404 |
 | `GET /api/admin/disk` | owner | `DiskUse` |
@@ -236,6 +237,29 @@ an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets th
   socket). Per user and room at most one every 3 s; more, an unknown room or a hidden one is dropped without an answer. It is never
   stored and has no stop event: the client shows it for 5 s after the last one.
 - A banned user's messages stay. They cannot post, since their sessions are gone.
+
+Search (`GET /api/search`, store `search.rs`): FTS5 over `messages_fts`, tokenizer `unicode61 remove_diacritics 2`, so `cafe`
+finds `Café`. Rules:
+
+- **Query.** `fts_query` splits `q` on whitespace and control characters, cuts each term to 64 characters, drops terms with no
+  letter or digit and keeps 16. Each term is quoted (inner `"` doubled) and the last one is a prefix (`"dog"*`). So `OR`, `NEAR(`,
+  `body:x`, `^`, `-` and `*` are plain words and can not change the query or make it fail. A `q` with nothing left is 200 with no hits.
+- **Who sees what.** The server lists the rooms the user can see (`can_see`) and the store puts that list inside the SQL
+  (`m.room_id IN (SELECT value FROM json_each(?))`), so a page is never cut short or filled by rows from hidden rooms.
+  Deleted messages are not in the index (the update trigger removes them); an edit is found by its new text only. A banned
+  author's messages stay searchable.
+- **Filters.** `room_id`, `author_id`, and `from` and `to` in unix ms, both inclusive. The server keeps no time zone: the client
+  turns a local day into ms.
+- **Order and pages.** Newest first; `next_before` is the last hit's id, sent back as `before`. Ids only grow, so a page never
+  repeats or skips a hit when messages arrive meanwhile. Not bm25: ranking scores every match before the limit and took 57 to
+  80 ms at 100k messages; newest first stops after one page.
+- **Snippet.** `snippet(messages_fts, 0, char(2), char(3), '...', 12)`: `\u0002` before and `\u0003` after each match, plain text,
+  never HTML. The client renders the marked parts as text in a `<mark>`. If a body itself holds either character, its snippet
+  comes back with none, so a message can not fake a highlight (the body rule refuses them anyway).
+- **Context.** The client opens a hit with `GET /api/rooms/{id}/messages?around=<id>`.
+- **Limit.** 10 searches, then 1 a second, per user (429).
+- `messages_fts` `integrity-check` reports a mismatch once any message is deleted, since deleted bodies are left out on purpose.
+  Do not use it as a health check.
 
 Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the raw body (no multipart). Rules:
 
@@ -305,8 +329,30 @@ Rules every route keeps:
 - Handlers never log request bodies, and the request types with a password or invite code print `***` in `Debug`. A body that does
   not parse gets a fixed "invalid request body" message. The WebSocket upgrade takes the same session cookie and Origin check.
 
-Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs`, `tests/rooms.rs` (every route for every caller and target role) `tests/chat.rs` (chat routes, pushes, typing, unread) and `tests/uploads.rs` (limits, quota race, served headers, the access matrix, sweep), through
+Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs`, `tests/rooms.rs` (every route for every caller and target role) `tests/chat.rs` (chat routes, pushes, typing, unread, search) and `tests/uploads.rs` (limits, quota race, served headers, the access matrix, sweep), through
 `tests/common/mod.rs`; the voice actions in `tests/signaling.rs` (`voice_actions_check_roles`).
+
+## Performance
+
+Measured on 2026-11-01 on bawn (Intel i7-12700, 20 threads), release build, by
+`scripts/capped.sh cargo test --release -p vesper-store --test perf -- --ignored --nocapture`: 100 000 messages in 10 rooms by
+10 authors, 10 to 300 characters from a 22-word list, so every word matches most messages (a hard case for search). Search runs
+over all 10 rooms with a page of 20; p50 and p95 of 50 runs. The database sat in `/tmp`, which is tmpfs (RAM) on bawn, so disk
+speed is not in these numbers. The box was not idle, so the numbers move a few ms between runs.
+
+| What | Time |
+|---|---|
+| Insert 100 000 messages in one transaction | 2.6 s |
+| `history` latest 50 / before the middle 50 | 0.38 ms / 0.31 ms |
+| `unread` for 10 rooms | 7.7 ms |
+| Search one word (`hello`) | p50 1.7 ms, p95 1.9 ms |
+| Search three words (`voice game tonight`) | p50 1.9 ms, p95 2.2 ms |
+| Search a prefix (`mu`) | p50 2.8 ms, p95 4.3 ms |
+| Search one word where only the oldest 1000 messages pass the `to` filter (the whole index is walked) | p50 19.5 ms, p95 20.1 ms |
+| Database size after a checkpoint | 37.5 MiB |
+
+The test fails if any of these is 50 ms or more. Not measured: the 1 GB VM (expect it slower), a database with years of real chat.
+A one-letter prefix is still the slow case; the client should not search on one character.
 
 ## Static serving
 

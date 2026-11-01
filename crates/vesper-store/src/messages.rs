@@ -44,13 +44,18 @@ const BEFORE: &str = concat!(
     msg_select!(),
     "WHERE m.room_id = ?1 AND m.id < ?2 ORDER BY m.id DESC LIMIT ?3"
 );
+/// Messages whose ids are in the JSON array `?1`, any order.
+pub(crate) const BY_IDS: &str = concat!(
+    msg_select!(),
+    "WHERE m.id IN (SELECT value FROM json_each(?1))"
+);
 const AFTER: &str = concat!(
     msg_select!(),
     "WHERE m.room_id = ?1 AND m.id > ?2 ORDER BY m.id ASC LIMIT ?3"
 );
 
 #[derive(FromRow)]
-struct MsgRow {
+pub(crate) struct MsgRow {
     id: i64,
     room_id: i64,
     author_id: String,
@@ -64,7 +69,7 @@ struct MsgRow {
     reply_excerpt: Option<String>,
 }
 
-fn json_ids(ids: impl IntoIterator<Item = i64>) -> String {
+pub(crate) fn json_ids(ids: impl IntoIterator<Item = i64>) -> String {
     let parts: Vec<String> = ids.into_iter().map(|i| i.to_string()).collect();
     format!("[{}]", parts.join(","))
 }
@@ -82,7 +87,7 @@ fn is_image(mime: &str) -> bool {
 }
 
 /// Fills reactions, mentions and attachments with one query each.
-async fn load(c: &mut SqliteConnection, rows: Vec<MsgRow>) -> Result<Vec<Message>> {
+pub(crate) async fn load(c: &mut SqliteConnection, rows: Vec<MsgRow>) -> Result<Vec<Message>> {
     if rows.is_empty() {
         return Ok(Vec::new());
     }

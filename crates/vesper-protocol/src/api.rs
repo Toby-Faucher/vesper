@@ -309,6 +309,48 @@ pub struct MessagePage {
     pub more_after: bool,
 }
 
+/// `GET /api/search?q=&room_id=&author_id=&from=&to=&before=`. `from` and `to` are unix ms, both
+/// inclusive (the client turns local dates into ms). For the next page send `before` =
+/// `SearchPage.next_before`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SearchQuery {
+    pub q: String,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub room_id: Option<i64>,
+    #[serde(default)]
+    pub author_id: Option<String>,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub from: Option<i64>,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub to: Option<i64>,
+    /// Page cursor: only messages with a smaller id.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub before: Option<i64>,
+}
+
+/// One search result. `snippet` marks each match with `\u0002` before and `\u0003` after; it is
+/// plain text, never HTML.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SearchHit {
+    pub message: Message,
+    pub snippet: String,
+}
+
+/// Newest first. `next_before` is set when there is more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SearchPage {
+    pub hits: Vec<SearchHit>,
+    #[ts(type = "number | null")]
+    pub next_before: Option<i64>,
+}
+
 /// `POST /api/rooms/{id}/messages`. `attachments` are upload ids.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

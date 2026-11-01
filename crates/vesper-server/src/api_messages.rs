@@ -13,7 +13,7 @@ use serde::Deserialize;
 use unicode_normalization::UnicodeNormalization;
 use vesper_protocol::{
     ApiErrorCode, EditMessage, Message, MessagePage, PinReq, ReactionReq, ReadReq, Role, RoomInfo,
-    SendMessage, ServerMsg, UserInfo,
+    SearchPage, SearchQuery, SendMessage, ServerMsg, UserInfo,
 };
 use vesper_store::{Cursor, NewMessage, now_ms};
 
@@ -26,6 +26,7 @@ use crate::{ApiError, AppState, Authed};
 pub const MAX_BODY_CHARS: usize = 4000;
 pub const MAX_MENTIONS: usize = 20;
 const PAGE: u32 = 50;
+const SEARCH_PAGE: u32 = 20;
 
 /// NFC, trimmed, 1 to 4000 chars, no control characters except `\n` and `\t`.
 pub fn valid_body(s: &str) -> Option<String> {
@@ -78,6 +79,7 @@ pub fn routes() -> Router<AppState> {
         .route("/messages/{id}", patch(edit).delete(remove))
         .route("/messages/{id}/reaction", put(react))
         .route("/messages/{id}/pin", put(pin))
+        .route("/search", get(search))
 }
 
 fn not_found() -> ApiError {
@@ -324,6 +326,29 @@ async fn read(
         );
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Search over the rooms the user can see, worked out here and applied inside the store's SQL.
+/// A `room_id` the user cannot see is the same 404 as an unknown room.
+async fn search(
+    State(st): State<AppState>,
+    a: Authed,
+    q: Result<Query<SearchQuery>, QueryRejection>,
+) -> Result<Json<SearchPage>, ApiError> {
+    let Query(q) = q.map_err(|_| bad("invalid query"))?;
+    limit(&st, Kind::Search, &a.user.user_id)?;
+    if let Some(id) = q.room_id {
+        visible_room(&st, &a.user, id).await?;
+    }
+    let visible: Vec<i64> = st
+        .store
+        .rooms()
+        .await?
+        .iter()
+        .filter(|r| can_see(&a.user, r))
+        .map(|r| r.id)
+        .collect();
+    Ok(Json(st.store.search(&q, &visible, SEARCH_PAGE).await?))
 }
 
 #[cfg(test)]
