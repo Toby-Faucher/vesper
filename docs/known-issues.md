@@ -1,31 +1,63 @@
 # Known issues
 
 Things found in review that were left on purpose, because they are small, rare or wait on a bigger piece of work.
-Last updated 2026-10-30. Nothing here was run in a real browser or a real deploy. Fix an item, then delete its line in the same commit.
+Last updated 2026-11-01. Nothing here was run in a headed browser or a real deploy (the e2e runs headless Chromium). Fix an item, then delete its line in the same commit.
 
-## Security and abuse (all need the join key, except where noted)
+## Security and abuse
 
-- **Anyone with the key can kick anyone.** A join under an existing name closes that name's earlier session before the new join is checked. This is the shared-key shortcut ([decision 0003](decisions/0003-shared-join-key.md)). Accounts remove it.
-- **Names are not normalised.** Lookalike names (Unicode forms, zero-width characters) count as different people.
-- **No Origin check on `/ws`.** Low risk while there are no cookies. It must land with accounts.
-- **No Content-Security-Policy.** See [decision 0004](decisions/0004-no-csp-yet.md).
-- **Failed joins are limited per socket, not per address.** After 5 bad messages a socket is closed, but reconnecting resets the count. Guessing the key is not throttled by address. Use a long key.
 - **Plain HTTP connections before the upgrade are not limited.** A slow client can hold a connection on `/ws` or `/health`. The cap of 256 sockets counts upgraded sockets only.
-- **A client that stops reading can grow memory.** Each socket has an unbounded outbound queue, and there is no send timeout.
-- **Pipelined messages after the 5th bad one may still be handled.** A correct join in that window can leave a ghost member for about 19 s until the session times out.
+- **An upload must average about 44 KB/s (350 kbit/s).** The 10 minute total limit means a 25 MiB file on a slower uplink fails near
+  the end with `upload too slow`.
+- **Only upload bodies have a read timeout** (30 s idle, 10 minutes in all). A slow client can still hold a JSON request open, but its body is
+  at most 32 KiB.
+- **Uploads in flight can pass the quota on disk for a while.** The quota is checked again under a lock before a file is kept, so it is never
+  passed for good, but each upload streams to `uploads/tmp` first: up to 25 MiB per upload in flight, so about 250 MiB for one user's burst
+  of 10. A `Content-Length` that cannot fit is refused before any byte is read.
+- **A request cancelled during the upload row insert can leave a row with no file.** It counts against the quota until the 24 h sweep
+  removes it (it is never attached, since the uploader's request failed).
+- **Search timing shows a little about hidden rooms.** Matches in rooms you cannot see are skipped one by one while the index is walked,
+  so many newer hidden matches make a search slower (measured 2 ms against 20 ms at 100k messages). A very weak signal at this scale,
+  and the search limit (10, then 1 a second) slows any probing.
 - **A very large `VESPER_MAX_SOCKETS` panics at start.** Keep it in the hundreds.
+- **The client address trusts headers from private peers.** When the TCP peer is loopback or private, the server takes a valid `CF-Connecting-IP`,
+  else the last `X-Forwarded-For` entry, else the peer; from any other peer it ignores both. Through Cloudflare this is the real client, because
+  Cloudflare overwrites `CF-Connecting-IP`. If the app is ever reached on a private network without Cloudflare (the HTTP port open on the LAN, or
+  Caddy without the tunnel), a LAN client can set `CF-Connecting-IP` itself and dodge or spend another address's login and invite limits. The
+  login limit per username still allows each address only 5 tries for one name, then 1 a minute. Unit-tested (`client_ip` in `auth.rs`); not verified on the deploy.
+  If Caddy ever drops `CF-Connecting-IP`, every client looks like the tunnel's address and all share one per-IP limit; the per-username limit
+  still holds. Keep Caddy's default headers ([deploy.md](deploy.md#network)).
+- **Force-mute is enforced by the client only.** The server marks the user muted and tells everyone, but the SFU still forwards their audio,
+  so a modified client can keep talking. A moderator then disconnects them, or the owner bans them. A server restart lifts every force-mute.
+- **No password reset.** A user who forgets their password needs a new account from a new invite; the owner can ban the old one.
+  An owner who forgets theirs has no way back in through the app.
+- **No backup command.** Back up the data dir by hand ([deploy.md](deploy.md)); nothing does it on a schedule.
+- **Uploads are not scanned for viruses.** Images are served inline only after their magic bytes match, everything else is a
+  download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
+- **Rooms cannot be deleted.** The server has no delete route for a room. The admin Rooms page says so: restrict a room and list nobody to hide it from members.
+- **No passkeys yet.** Sign in is username and password only (plan Task 6, a stretch goal, not built).
+- **A moderator disconnect does not keep anyone out.** The sessions stay valid and the client may reconnect at once; a ban is the way to keep someone out.
 
 ## Server behaviour
 
-- **One lock serialises joins.** It is held while the SFU joins and while an old session closes (up to 2 s). Fine for 12 people. A key holder can slow others by rejoining in a loop.
+- **One lock serialises joins.** It is held while the SFU joins and while an old session closes (up to 2 s), for every room at once. Fine for 12 people. A signed-in user can slow others by rejoining in a loop, up to the socket limit of 5 messages a second.
+- **A voice join that races a role change can keep access until the next change.** The join reads the role before it takes the join lock, and the change takes the user out of voice only if they were in it by then. The window is a few milliseconds. A room change in that window is caught: the join checks the newest copy of the room before it enters the user.
+- **A second join refused by the SFU ends the first call.** The room cap, a dead SFU and a malformed offer are refused while the first call stays up. An offer that passes those checks but that the SFU still refuses, or a room change caught at the last check, comes after the old session ended, since the SFU keys sessions by user.
+- **A socket keeps the role it had at the upgrade until the next user update.** A role change between the upgrade and the hub add reaches that socket's room filter only with the next change to that user.
+- **A display name change does not reach voice presence** until the user joins again (`peer_joined` carries the name from the join).
+- **An open socket outlives a session that expires.** A session unused for 90 days stops working for requests, but a socket opened on it stays until it closes. Logout, revoke, password change and ban do close it.
 - **A changed public IP needs a rejoin.** The name is re-resolved every 60 s, but only new sessions use the new address. A failed lookup at start advertises nothing until the next refresh, with a warning every 60 s.
 - **Without `VESPER_PUBLIC_HOST`, `VESPER_UDP_PORT_PUBLIC` is ignored**, and a `0.0.0.0` bind is advertised as is, with a warning.
-- **The ping interval (25 s) and the pre-join error cap (5) have no environment variable.**
+- **The ping interval (25 s) and the socket queue (256 messages) have no environment variable.**
 - **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are not pinned by digest, and assets are not precompressed.
 - **The SFU wakes every 10 ms when idle.** Cheap, but it is not zero.
-- **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof). A 300 ms deadline test could fail on a very slow machine.
+- **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof).
 
 ## Web client
+
+- **People who sign up after your page loaded show as "Someone"** in messages for a while. The server sends no event for a signup. The person card, the composer, the switcher, search and the admin pages ask for the user list again (at most every 30 s; Members and Invites also when the tab comes back), and the names update then; a reload always fixes them.
+- **"Your current password is not right." relies on the server's message.** A wrong current password is a 403 with the generic `forbidden` code; the client tells it apart from other 403s by the message text "wrong password". A server wording change would show the plain forbidden text instead.
+- **Image boxes change shape when the image loads.** `Attachment` has no width or height, so the timeline keeps a 360 x 280 box and resizes it on load; the reader's place is kept, but rows under an image in view can move.
+- **The keyboard, focus and motion checks run in headless Chromium only.** Safari does not focus a clicked button (the image viewer focuses it itself); other focus returns are not checked there.
 
 - **A very slow first visit can still fall back.** The denoiser files (about 23 MB) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
 - **Not tried in real Chrome or Firefox.** Firefox may refuse a mic and AudioContext rate mismatch, which forces the browser fallback every time.
@@ -41,6 +73,7 @@ Last updated 2026-10-30. Nothing here was run in a real browser or a real deploy
 - **Stored per-person volumes are never pruned.** `navigator.locks` missing only logs a warning.
 - **Unhandled edge cases:** a teardown that races a joining call can leave a poll timer running, and an `AudioContext` constructor that throws is not caught. Both are rare.
 - **The connection test reports only the local candidate type.**
+- **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
 
 ## Denoiser
 

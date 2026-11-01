@@ -1,23 +1,76 @@
-// Fails when the built JS or CSS in dist/assets grows past its gzip budget.
+// Fails when the built app passes its gzip budgets. Five numbers count (Rulings of 2026-11-01):
+// - first load JS: the entry chunk in dist/index.html, its modulepreloads and every chunk they import statically;
+// - the largest lazy chunk: any other JS file (dynamic import() chunks and the workers);
+// - the sum of all JS in dist/assets;
+// - first load CSS: the stylesheets dist/index.html links (Vite puts the CSS of the entry's static chunks there; a lazy
+//   chunk's CSS loads with that chunk), and the sum of all CSS.
 // The wasm and the model live in dist/dsp, not dist/assets, so they are not counted.
 // Raise a budget on purpose, in the same commit as the change that needs it.
 import { readdirSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
+import { posix } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-// Measured on 2026-10-30: js 29.5 kB, css 2.8 kB gzip. Budgets are those plus about 25 percent.
-const BUDGET_GZIP_KB = { js: 37, css: 3.5 };
+// History: the budget was one summed JS number (29.5 kB on 2026-10-30, 73.7 kB at Task 6) against an estimated 80 kB
+// ceiling. On 2026-11-01 (Task 6 fix round) it became first load / lazy chunk / sum / CSS, because with lazy chunks
+// the sum is not what a user waits for. Measured then: first load 52.9, largest lazy 6.0, sum 73.7, css 8.1 kB.
+// Ruling #2 (2026-11-01, UI Task 9 fix round): CSS is judged like JS, first load 12 and sum 20 (measured 11.1 then).
+export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 150, cssFirst: 12, css: 20 };
 
-const dir = new URL('../dist/assets/', import.meta.url);
-const sums = { js: 0, css: 0 };
-for (const f of readdirSync(dir)) {
-  const ext = f.endsWith('.js') ? 'js' : f.endsWith('.css') ? 'css' : null;
-  if (ext) sums[ext] += gzipSync(readFileSync(new URL(f, dir))).length;
+// Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
+// import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.
+const STATIC = /\b(?:import|export)\s*(?:[\w$*{}\s,]*?\bfrom\s*)?["']([^"']+\.js)["']/g;
+
+/** Paths (relative to dist, like "assets/index.js") of the JS a first visit loads before anything is clicked. */
+export function firstLoad(dist) {
+  const html = readFileSync(posix.join(dist, 'index.html'), 'utf8');
+  const roots = [...html.matchAll(/<(?:script[^>]*\bsrc|link[^>]*rel="modulepreload"[^>]*\bhref)="\/?([^"]+\.js)"/g)];
+  const seen = new Set();
+  const todo = roots.map((m) => m[1]);
+  while (todo.length) {
+    const f = todo.pop();
+    if (seen.has(f)) continue;
+    seen.add(f);
+    for (const m of readFileSync(posix.join(dist, f), 'utf8').matchAll(STATIC)) {
+      if (m[1].startsWith('.')) todo.push(posix.join(posix.dirname(f), m[1]));
+    }
+  }
+  return seen;
 }
-let bad = false;
-for (const [k, max] of Object.entries(BUDGET_GZIP_KB)) {
-  const kb = sums[k] / 1024;
-  console.log(`${k}: ${kb.toFixed(1)} kB gzip (budget ${max})`);
-  if (kb > max) bad = true;
+
+/** Paths of the stylesheets a first visit loads: the ones dist/index.html links. */
+export function firstCss(dist) {
+  const html = readFileSync(posix.join(dist, 'index.html'), 'utf8');
+  return new Set([...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*\bhref="\/?([^"]+\.css)"/g)].map((m) => m[1]));
 }
-if (bad) console.error('size-check: over budget');
-process.exit(bad ? 1 : 0);
+
+/** Gzip sizes in bytes: { first, lazy (largest), lazyName, sum, cssFirst, css }. */
+export function measure(dist) {
+  const first = firstLoad(dist);
+  const css = firstCss(dist);
+  const r = { first: 0, lazy: 0, lazyName: '', sum: 0, cssFirst: 0, css: 0 };
+  for (const name of readdirSync(posix.join(dist, 'assets'))) {
+    const f = `assets/${name}`;
+    const n = gzipSync(readFileSync(posix.join(dist, f))).length;
+    if (name.endsWith('.css')) r.css += n;
+    if (css.has(f)) r.cssFirst += n;
+    if (!name.endsWith('.js')) continue;
+    r.sum += n;
+    if (first.has(f)) r.first += n;
+    else if (n > r.lazy) Object.assign(r, { lazy: n, lazyName: name });
+  }
+  return r;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const r = measure(new URL('../dist/', import.meta.url).pathname);
+  let bad = false;
+  for (const [k, max] of Object.entries(BUDGET_GZIP_KB)) {
+    const kb = r[k] / 1024;
+    const label = { first: 'first load js', lazy: `largest lazy js (${r.lazyName})`, sum: 'all js', cssFirst: 'first load css', css: 'all css' }[k];
+    console.log(`${label}: ${kb.toFixed(1)} kB gzip (budget ${max})`);
+    if (kb > max) bad = true;
+  }
+  if (bad) console.error('size-check: over budget');
+  process.exit(bad ? 1 : 0);
+}

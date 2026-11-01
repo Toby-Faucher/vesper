@@ -1,5 +1,5 @@
 # Build from the repo root:  docker build -f deploy/Dockerfile -t vesper .
-# No secrets are baked in: VESPER_DEV_KEY is supplied at run time only.
+# No secrets are baked in: accounts and sessions live in the data dir, outside the image.
 
 # --- 1. denoiser wasm (scripts/build-dsp.sh) ---------------------------------------------------
 FROM rust:1-bookworm AS dsp
@@ -35,7 +35,8 @@ FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --no-create-home --uid 10001 vesper
+ && useradd --system --no-create-home --uid 10001 vesper \
+ && install -d -m 0700 -o 10001 -g 10001 /data
 COPY --from=server /src/target/release/vesper-server /usr/local/bin/vesper-server
 COPY --from=web /web/dist /srv/vesper/web
 ENV VESPER_WEB_DIR=/srv/vesper/web \

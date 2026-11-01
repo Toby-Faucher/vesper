@@ -1,7 +1,8 @@
 # Plain-binary install. Assumes: binary at /opt/vesper/vesper-server, web app (web/dist) at
 # /opt/vesper/web (world-readable: DynamicUser has no group/owner access), and /etc/vesper/vesper.env containing (mode 600, owned by root):
-#   VESPER_DEV_KEY=<the join passphrase>
+#   VESPER_ORIGIN=https://vesper.tfaucher.com
 #   VESPER_PUBLIC_HOST=vesper.tfaucher.com
+# The database lives in /var/lib/vesper (StateDirectory; with DynamicUser it is really /var/lib/private/vesper).
 [Unit]
 Description=Vesper voice chat server
 After=network-online.target
@@ -11,6 +12,9 @@ Wants=network-online.target
 DynamicUser=yes
 EnvironmentFile=/etc/vesper/vesper.env
 Environment=VESPER_WEB_DIR=/opt/vesper/web
+Environment=VESPER_DATA_DIR=/var/lib/vesper
+StateDirectory=vesper
+StateDirectoryMode=0700
 Environment=VESPER_HTTP_BIND=127.0.0.1:8080
 Environment=VESPER_UDP_BIND=0.0.0.0:40000
 ExecStart=/opt/vesper/vesper-server

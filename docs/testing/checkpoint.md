@@ -218,7 +218,7 @@ Run the 4 scenarios in each cell (at least `fan` and `quiet` on the laptop).
 
 Last updated 2026-10-30. Tick as you check. Use two tabs (or two machines) where a second participant is needed.
 
-- [ ] Two-tab join: a second tab joins; you hear yourself from the other tab; tab names show; leaving removes the entry.
+- [ ] Two-account join: a second account joins from a private window; you hear yourself from the other window; names show; leaving removes the entry. A second tab of the same account takes the call over instead.
 - [ ] Mute: the other side sees `(muted)` and hears nothing; unmute restores.
 - [ ] Deafen: you hear nobody; undeafen restores; your own mute state is unaffected.
 - [ ] Per-peer volume slider changes loudness and survives a reload and rejoin.
@@ -232,7 +232,7 @@ Last updated 2026-10-30. Tick as you check. Use two tabs (or two machines) where
 - [ ] Device switching mid-call: change Microphone and Speaker in Settings; audio follows (Firefox may not support Speaker choice: note the message).
 - [ ] Push to talk: enable, set a key, hold to talk, release to stop; switch window (alt-tab) while held and confirm the mic cuts off (does not stay open).
 - [ ] Connectivity check from a phone on cellular (Wi-Fi off): join, Diagnostics, Test connection, expect OK; note ICE path (relay or direct) and RTT.
-- [ ] Copy report button: paste into a text file, check it has user agent, mode, RTT, jitter, loss, codec, ICE state, the audio pipeline lines and no join key.
+- [ ] Copy report button: paste into a text file, check it has user agent, mode, RTT, jitter, loss, codec, ICE state, the audio pipeline lines and nothing secret (no cookie, no invite code).
 - [ ] Bitrate change mid-call: lower to 32 kbps while joined (applies now; Send kbps in Diagnostics drops); raise above the joined value (shows the "applies on rejoin" note).
 - [ ] DTX: with DTX on, Send kbps drops during silence.
 

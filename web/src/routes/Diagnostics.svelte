@@ -3,10 +3,13 @@
   import { audioRows } from '../lib/audio/level';
   import type { Capture, CaptureStats } from '../lib/audio/capture';
 
-  // The key is used only for the connectivity check and never appears in the report.
-  let { pc, capture, wsUrl, joinKey, mode, status }: {
-    pc?: RTCPeerConnection; capture?: Capture; wsUrl: string; joinKey: string; mode: string; status: string;
+  import { copyText } from '../lib/ui/clipboard';
+  import Button from '../lib/ui/c/Button.svelte';
+  // Settings > Diagnostics: the call's numbers, the audio pipeline, a copyable report and the connection test.
+  let { pc, capture, wsUrl, mode, reason = '', status }: {
+    pc?: RTCPeerConnection; capture?: Capture; wsUrl: string; mode: string; reason?: string; status: string;
   } = $props();
+  const noise = $derived(`Noise suppression: ${mode}${reason ? ` (${reason})` : ''}`);
   let diag = $state<Diag | null>(null);
   let audio = $state.raw<CaptureStats | null>(null);
   const rows = $derived(audioRows(capture ? audio : null));
@@ -49,12 +52,14 @@
   });
 
   const f = (v: number | null, u: string) => (v === null ? 'n/a' : `${v.toFixed(1)} ${u}`);
+  const show = (v: string) => (v === 'n/a' ? '–' : v); // the page shows a dash, the report keeps n/a
   function report(): string {
     const d = diag;
     return [
       `Vesper diagnostics ${new Date().toISOString()}`,
       `User agent: ${navigator.userAgent}`,
       `Mode: ${mode}`,
+      noise,
       `Status: ${status}`,
       `RTT: ${f(d?.rttMs ?? null, 'ms')}`,
       `Jitter: ${f(d?.jitterMs ?? null, 'ms')}`,
@@ -70,45 +75,53 @@
     ].filter(Boolean).join('\n');
   }
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(report());
-      copied = 'Copied';
-    } catch {
-      copied = 'Copy failed: select the text below instead';
-    }
+    copied = (await copyText(report())) ? 'Copied.' : 'Could not copy. This browser blocked the clipboard.';
   }
   async function test() {
     testing = true;
     result = '';
-    const r = await connectivityCheck(wsUrl, joinKey);
+    const r = await connectivityCheck(wsUrl);
     result = `${r.ok ? 'OK' : 'FAILED'} in ${r.ms} ms: ${r.reason}`;
     testing = false;
   }
 </script>
 
-<section class="space-y-2 rounded bg-neutral-900 p-3 text-sm">
-  {#if !pc}<p class="text-neutral-400">Not in a call</p>{/if}
-  <dl class="grid grid-cols-2 gap-x-2">
-    <dt>RTT</dt><dd>{f(diag?.rttMs ?? null, 'ms')}</dd>
-    <dt>Jitter</dt><dd>{f(diag?.jitterMs ?? null, 'ms')}</dd>
-    <dt>Loss (incoming)</dt><dd>{f(diag?.lossDownPct ?? null, '%')}</dd>
-    <dt>Loss (outgoing)</dt><dd>{f(diag?.lossUpPct ?? null, '%')}</dd>
-    <dt>Send</dt><dd>{f(diag?.sendKbps ?? null, 'kbps')}</dd>
-    <dt>Codec</dt><dd>{diag?.codec ?? 'n/a'}</dd>
-    <dt>ICE</dt><dd>{diag?.iceState ?? 'n/a'}</dd>
-    <dt>Path</dt><dd>{diag?.selectedPair ?? 'n/a'}</dd>
+{#snippet rows2(list: [string, string][])}
+  <dl class="grid grid-cols-[minmax(0,12rem)_1fr] gap-x-6 gap-y-1 tabular-nums">
+    {#each list as [k, v] (k)}<dt class="text-fg-2">{k}</dt><dd class="min-w-0 break-words text-fg">{show(v)}</dd>{/each}
   </dl>
-  <h3 class="font-semibold">Audio pipeline</h3>
-  <dl class="grid grid-cols-2 gap-x-2">
-    {#each rows as [k, v] (k)}<dt>{k}</dt><dd>{v}</dd>{/each}
-  </dl>
-  <div class="flex gap-2">
-    <button class="rounded bg-neutral-700 px-3 py-1" onclick={copy}>Copy report</button>
-    <button class="rounded bg-neutral-700 px-3 py-1" onclick={test} disabled={testing || !joinKey}>
-      {testing ? 'Testing...' : 'Test connection'}
-    </button>
-  </div>
-  {#if !joinKey}<p class="text-neutral-400">Enter the key above to test the connection.</p>{/if}
-  {#if copied}<p role="status">{copied}</p>{/if}
-  {#if result}<p role="status">{result}</p>{/if}
-</section>
+{/snippet}
+
+<div class="flex flex-col gap-8">
+  <section role="group" aria-labelledby="diag-call" class="flex flex-col gap-3">
+    <h3 id="diag-call" class="text-base font-medium text-fg">Call numbers</h3>
+    <p class="text-fg">{noise}</p>
+    {#if !pc}<p class="text-xs text-fg-3">Not in a call. A dash means no value: join voice in a room to see the numbers.</p>
+    {:else if !diag}<p class="text-xs text-fg-3">Waiting for the first numbers from the call.</p>
+    {:else}<p class="text-xs text-fg-3">A dash means no value yet. Jitter and incoming loss need sound from someone else in the call.</p>{/if}
+    {@render rows2([
+      ['RTT', f(diag?.rttMs ?? null, 'ms')],
+      ['Jitter', f(diag?.jitterMs ?? null, 'ms')],
+      ['Loss (incoming)', f(diag?.lossDownPct ?? null, '%')],
+      ['Loss (outgoing)', f(diag?.lossUpPct ?? null, '%')],
+      ['Send', f(diag?.sendKbps ?? null, 'kbps')],
+      ['Codec', diag?.codec ?? 'n/a'],
+      ['ICE', diag?.iceState ?? 'n/a'],
+      ['Path', diag?.selectedPair ?? 'n/a'],
+    ])}
+  </section>
+  <section role="group" aria-labelledby="diag-audio" class="flex flex-col gap-3 border-t border-subtle pt-6">
+    <h3 id="diag-audio" class="text-base font-medium text-fg">Audio pipeline</h3>
+    {@render rows2(rows)}
+  </section>
+  <section role="group" aria-labelledby="diag-tools" class="flex flex-col gap-3 border-t border-subtle pt-6">
+    <h3 id="diag-tools" class="text-base font-medium text-fg">Report and test</h3>
+    <p class="text-xs text-fg-3">Test connection checks the server and the UDP path the call uses. Copy report copies this page and your browser version, to paste into a bug report.</p>
+    <div class="flex gap-2">
+      <Button onclick={copy}>Copy report</Button>
+      <Button onclick={test} loading={testing}>Test connection</Button>
+    </div>
+    {#if copied}<p role="status" class="text-fg-2">{copied}</p>{/if}
+    {#if result}<p role="status" class="text-fg tabular-nums">{result}</p>{/if}
+  </section>
+</div>

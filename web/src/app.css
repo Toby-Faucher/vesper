@@ -1,8 +1,121 @@
-@import "tailwindcss";
+@import 'tailwindcss';
+@import './styles/tokens.css';
+
+/* Tailwind utilities map to roles only; the default palette is off, so a palette class does not exist.
+   --font-sans, --font-mono, --radius-sm, --radius-lg and --ease-out share Tailwind's names, so the tokens (unlayered) win. */
+@theme inline {
+  --color-*: initial;
+  --color-app: var(--bg-app); --color-sidebar: var(--bg-sidebar); --color-raised: var(--bg-raised);
+  --color-element: var(--bg-element); --color-hover: var(--bg-hover); --color-selected: var(--bg-selected);
+  --color-subtle: var(--line-subtle); --color-line: var(--line); --color-strong: var(--line-strong);
+  --color-fg: var(--fg); --color-fg-2: var(--fg-2); --color-fg-3: var(--fg-3); --color-fg-disabled: var(--fg-disabled);
+  --color-accent: var(--accent); --color-accent-hover: var(--accent-hover); --color-on-accent: var(--on-accent);
+  --color-accent-fg: var(--accent-fg); --color-accent-subtle: var(--accent-subtle); --color-accent-line: var(--accent-line);
+  --color-focus: var(--focus);
+  --color-danger: var(--danger-fg); --color-danger-solid: var(--danger-solid); --color-on-danger: var(--on-danger);
+  --color-danger-subtle: var(--danger-subtle); --color-warn: var(--warn-fg); --color-warn-subtle: var(--warn-subtle);
+  --color-ok: var(--ok-fg); --color-ok-subtle: var(--ok-subtle);
+  --color-avatar-1: var(--avatar-1); --color-avatar-2: var(--avatar-2); --color-avatar-3: var(--avatar-3);
+  --color-avatar-4: var(--avatar-4); --color-avatar-5: var(--avatar-5); --color-avatar-6: var(--avatar-6);
+  --color-avatar-7: var(--avatar-7); --color-avatar-8: var(--avatar-8); --color-on-avatar: var(--on-avatar);
+  --text-xs: 12px; --text-xs--line-height: 16px; --text-sm: 13px; --text-sm--line-height: 20px;
+  --text-base: 14px; --text-base--line-height: 20px; --text-lg: 16px; --text-lg--line-height: 24px;
+  --text-xl: 20px; --text-xl--line-height: 28px; --text-2xl: 24px; --text-2xl--line-height: 32px;
+  --radius-md: var(--radius);
+  --font-weight-medium: var(--weight-strong); --font-weight-ui: var(--weight-ui);
+}
+
+@layer base {
+  html {
+    scrollbar-color: var(--line-strong) var(--bg-app);
+    accent-color: var(--accent); /* native checkboxes and ranges */
+  }
+  body {
+    @apply bg-app font-sans text-sm text-fg antialiased;
+  }
+  ::selection {
+    background: var(--accent-subtle);
+  }
+}
+
+/* The text control look shared by TextInput and Select (lib/ui/c). */
+@layer components {
+  .control {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-element);
+    color: var(--fg);
+    transition: border-color var(--dur-1) var(--ease-out);
+  }
+  .control::placeholder { color: var(--fg-3); }
+  .control:hover:enabled { border-color: var(--line-strong); }
+  .control[aria-invalid='true'] { border-color: var(--danger-fg); }
+  .control:disabled { cursor: not-allowed; border-color: var(--line-subtle); color: var(--fg-disabled); }
+
+  /* Small actions inside a row: a 24 px icon button (.mini-x) and an icon with a word (.mini-act, .lined in a footer). */
+  .mini-x, .mini-act {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--fg-2);
+    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+  }
+  .mini-x { width: 24px; height: 24px; }
+  .mini-act { height: 28px; gap: 6px; padding: 0 8px; color: var(--fg); font-size: 12px; line-height: 16px; font-weight: var(--weight-ui); }
+  .mini-act.lined { height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; }
+  .mini-x:hover, .mini-act:hover { background: var(--bg-hover); color: var(--fg); }
+  .mini-act.lined:hover { border-color: var(--line-strong); }
+  /* The admin tables (Invites, Members, Rooms). In this layer, so a text colour utility on a cell wins. */
+  .tbl { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 20px; }
+  .tbl th { height: 32px; padding: 0 8px; border-bottom: 1px solid var(--line); color: var(--fg-2); font-weight: var(--weight-ui); text-align: left; white-space: nowrap; }
+  .tbl td { height: 48px; padding: 4px 8px; border-bottom: 1px solid var(--line-subtle); color: var(--fg); }
+  .tbl :is(th, td):first-child { padding-left: 12px; }
+}
 
 :focus-visible {
-  outline: 2px solid #fbbf24;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+/* CSS-only tooltip: data-tip="Mute" on a button. Shows after 400 ms of hover or on keyboard focus. */
+[data-tip] {
+  position: relative;
+}
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 4px);
+  z-index: 50;
+  padding: 4px 8px;
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+[data-tip-up]::after {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+[data-tip-end]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  opacity: 1;
+  transition-delay: 400ms;
 }
 
 @media (prefers-reduced-motion: reduce) {

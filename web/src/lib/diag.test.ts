@@ -89,7 +89,7 @@ describe('connectivityCheck', () => {
 
   it('fails 5 s after join naming UDP when ICE never connects', async () => {
     const s = setup();
-    const p = connectivityCheck('ws://x/ws', 'k', s.deps);
+    const p = connectivityCheck('ws://x/ws', s.deps);
     await vi.advanceTimersByTimeAsync(5000);
     const r = await p;
     expect(r.ok).toBe(false);
@@ -99,7 +99,7 @@ describe('connectivityCheck', () => {
   });
   it('slow join then ICE connecting 1 s later is ok', async () => {
     const s = setup({ joinDelay: 4000 });
-    const p = connectivityCheck('ws://x/ws', 'k', s.deps);
+    const p = connectivityCheck('ws://x/ws', s.deps);
     await vi.advanceTimersByTimeAsync(4000);
     await vi.advanceTimersByTimeAsync(1000);
     s.pc.iceConnectionState = 'connected';
@@ -112,7 +112,7 @@ describe('connectivityCheck', () => {
   it('slow join then no ICE reports UDP only after a full 5 s from join', async () => {
     const s = setup({ joinDelay: 4000 });
     let settled = false;
-    const p = connectivityCheck('ws://x/ws', 'k', s.deps).then((r) => ((settled = true), r));
+    const p = connectivityCheck('ws://x/ws', s.deps).then((r) => ((settled = true), r));
     await vi.advanceTimersByTimeAsync(8999);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
@@ -120,20 +120,22 @@ describe('connectivityCheck', () => {
     expect(r.reason).toMatch(/UDP/);
     cleaned(s.log);
   });
-  it('uses a fresh check-<random> user name per run so parallel checks do not replace each other', async () => {
-    const names: string[] = [];
-    for (let i = 0; i < 2; i++) {
-      const s = setup({ joinErr: new Error('x') });
-      const join = s.deps.joinRoom;
-      s.deps.joinRoom = (async (_sig: unknown, o: { name: string }) => (names.push(o.name), join())) as any;
-      await connectivityCheck('ws://x/ws', 'k', s.deps);
-    }
-    names.forEach((n) => expect(n).toMatch(/^check-[0-9a-z]+$/));
-    expect(names[0]).not.toBe(names[1]);
+  it('runs the check message, not a room join, with no key or name', async () => {
+    const s = setup();
+    const seen: unknown[] = [];
+    const join = s.deps.joinRoom;
+    s.deps.joinRoom = (async (_sig: unknown, o: unknown) => (seen.push(o), join())) as any;
+    const p = connectivityCheck('ws://x/ws', s.deps);
+    await vi.advanceTimersByTimeAsync(5000);
+    await p;
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ check: true, bitrateKbps: 32 });
+    expect(Object.keys(seen[0] as object)).not.toContain('key');
+    expect(Object.keys(seen[0] as object)).not.toContain('name');
   });
   it('succeeds when ICE connects', async () => {
     const s = setup();
-    const p = connectivityCheck('ws://x/ws', 'k', s.deps);
+    const p = connectivityCheck('ws://x/ws', s.deps);
     await vi.advanceTimersByTimeAsync(300);
     s.pc.iceConnectionState = 'connected';
     s.pc.fire();
@@ -143,8 +145,8 @@ describe('connectivityCheck', () => {
     cleaned(s.log);
   });
   it('reports signaling failure without claiming UDP', async () => {
-    const s = setup({ joinErr: new Error('unauthorized: bad key') });
-    const r = await connectivityCheck('ws://x/ws', 'k', s.deps);
+    const s = setup({ joinErr: new Error('You cannot join this room.') });
+    const r = await connectivityCheck('ws://x/ws', s.deps);
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/signaling/i);
     expect(r.reason).not.toMatch(/UDP/);
@@ -153,7 +155,7 @@ describe('connectivityCheck', () => {
   it('hung join is a signaling failure at 8 s', async () => {
     const s = setup();
     s.deps.joinRoom = () => new Promise(() => {});
-    const p = connectivityCheck('ws://x/ws', 'k', s.deps);
+    const p = connectivityCheck('ws://x/ws', s.deps);
     await vi.advanceTimersByTimeAsync(8000);
     const r = await p;
     expect(r.reason).toMatch(/signaling/i);
@@ -163,13 +165,13 @@ describe('connectivityCheck', () => {
   });
   it('ws closing mid-ICE has its own reason', async () => {
     const s = setup();
-    const p = connectivityCheck('ws://x/ws', 'k', s.deps);
+    const p = connectivityCheck('ws://x/ws', s.deps);
     await vi.advanceTimersByTimeAsync(1000);
     s.closeWs();
     const r = await p;
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/closed/i);
-    expect(r.reason).not.toMatch(/UDP|bad key/);
+    expect(r.reason).not.toMatch(/UDP|signed out/);
     cleaned(s.log);
   });
 });

@@ -1,0 +1,39 @@
+/* Design tokens. One block per style, chosen by data-style on <html> (src/lib/ui/style.ts).
+   Raw steps are hex so src/lib/ui/tokens.test.ts can check contrast; components use only the roles. */
+:root:not([data-style]),
+[data-style='vesper'] {
+  color-scheme: dark;
+  /* warm grey, oklch(L 0.0055 75), steps 1..12 */
+  --gray-1: #100e0c; --gray-2: #151311; --gray-3: #1a1816; --gray-4: #201e1b;
+  --gray-5: #262422; --gray-6: #2d2b29; --gray-7: #3a3835; --gray-8: #4f4d4a;
+  --gray-9: #767471; --gray-10: #888683; --gray-11: #b3b1ad; --gray-12: #eeecea;
+  /* amber from the logo; step 9 is the brand fill */
+  --amber-1: #1b1204; --amber-2: #231702; --amber-3: #2f1e00; --amber-4: #3c2500;
+  --amber-5: #482d00; --amber-6: #583900; --amber-7: #754c00; --amber-8: #a27000;
+  --amber-9: #f0b010; --amber-10: #ffbe15; --amber-11: #f7c243; --amber-12: #fae7b3;
+  /* roles */
+  --bg-app: var(--gray-1); --bg-sidebar: var(--gray-2); --bg-raised: var(--gray-3);
+  --bg-element: var(--gray-3); --bg-hover: var(--gray-4); --bg-selected: var(--gray-5);
+  --line-subtle: var(--gray-6); --line: var(--gray-7); --line-strong: var(--gray-8);
+  --fg: var(--gray-12); --fg-2: var(--gray-11); --fg-3: var(--gray-10); --fg-disabled: var(--gray-9);
+  --accent: var(--amber-9); --accent-hover: var(--amber-10); --on-accent: var(--gray-1);
+  --accent-fg: var(--amber-11); --accent-subtle: var(--amber-3); --accent-line: var(--amber-7);
+  --focus: var(--amber-9);
+  --danger-fg: #f66d67; --danger-solid: #ba2b2e; --on-danger: var(--gray-12); --danger-subtle: #3a1412;
+  --warn-fg: #f7945a; --warn-subtle: #371c0c;
+  --ok-fg: #68ca80; --ok-subtle: #102816;
+  /* avatar slots: oklch(0.74 0.12 h); text on them is --gray-1 */
+  --avatar-1: #ed8d7d; --avatar-2: #e5955d; --avatar-3: #99b860; --avatar-4: #6fc082;
+  --avatar-5: #31c3b5; --avatar-6: #41bae4; --avatar-7: #6db0f4; --avatar-8: #e68aaf;
+  --on-avatar: var(--gray-1);
+  /* type, shape, motion */
+  /* weights: names, headings and unread rooms use strong (600: Segoe UI and Liberation Sans have no 500 face, so 500
+     drew as regular and the hierarchy went flat); buttons, labels and table heads stay at ui (500, regular there) */
+  --weight-strong: 600; --weight-ui: 500;
+  --font-sans: ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
+  --font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+  --radius-sm: 4px; --radius: 6px; --radius-lg: 10px;
+  --shadow-float: 0 4px 16px rgb(0 0 0 / 0.35);
+  --dur-1: 100ms; --dur-2: 160ms; --dur-3: 220ms; --ease-out: cubic-bezier(0.2, 0, 0, 1);
+}

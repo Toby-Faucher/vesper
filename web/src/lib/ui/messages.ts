@@ -1,0 +1,80 @@
+// Texts for client-side states. Errors from the server and devices have their own tables (api.ts, devices.ts, call.ts).
+export const UI_MESSAGES = {
+  connecting: 'Connecting to the server...',
+  reconnecting: (s: number) => `Connection lost. Trying again in ${s} s.`,
+  reconnectingNow: 'Connection lost. Trying again now.',
+  reconnectingSr: 'Reconnecting to the server.', // read once per drop; the countdown above is not read
+  backOnline: 'Back online.',
+  retryNow: 'Try now',
+  reconnect: 'Reconnect',
+  noRooms: 'No rooms yet.',
+  noRoomsBody: 'The owner can add one in the admin pages.',
+  roomMissing: 'This room is not here.',
+  roomMissingBody: 'It was removed, or you do not have access to it.',
+  pageMissing: 'There is no page at this address.',
+  goHome: 'Go to your rooms',
+  openFirstRoom: (name: string) => `Open ${name}`,
+  chatLoading: 'Loading messages...',
+  chatFailed: 'The chat did not load. Reload the page to try again.',
+  switcherLoading: 'Loading...',
+  switcherFailed: 'Could not load the switcher. Check your connection and try again.',
+  searchFailed: 'Could not load search. Check your connection and try again.',
+  offlineAction: 'You are offline. This works again once the connection is back.',
+  composerOffline: 'You are offline. Your text is kept here, and Send works again once the connection is back.',
+  tooLong: (over: number) => `Too long by ${over} ${over === 1 ? 'character' : 'characters'}.`,
+  attachFailed: 'That file could not be attached. Upload it again.',
+  fileTooLarge: 'Files can be up to 25 MB.',
+  uploadQuota: 'The server has no room for more files. Ask the owner to free some space.',
+  uploadRate: 'Too many uploads in a short time. Wait a minute and try again.',
+  uploadNetwork: 'The upload stopped. Check your connection and try again.',
+  dropFiles: 'Drop files to attach',
+  uploading: (n: number) => `Uploading ${n} ${n === 1 ? 'file' : 'files'}.`,
+  filesReady: (n: number) => `${n} ${n === 1 ? 'file' : 'files'} ready to send.`,
+  waitUploads: 'Waiting for uploads',
+  imageFailed: 'The image did not load.',
+  viewerFailed: 'Could not open the image. Check your connection and try again.',
+  pinsFull: 'This room has 50 pins, the most it can hold. Unpin one first.',
+  pinsFailed: 'The pins did not load.',
+  copyFailed: 'Could not copy. Select the text and copy it yourself.',
+  adminDenied: 'You do not have access to admin pages.',
+  adminOwnerOnly: 'Only the owner can open this page.',
+  invitesLoading: 'Loading invites...',
+  invitesFailed: 'Could not load the invites. Check your connection and try again.',
+  invitesEmpty: 'No invites yet. Create one to bring a friend in.',
+  inviteOnce: (n: number, until: string) => `This link is shown only now. It works for ${n} ${n === 1 ? 'person' : 'people'} until ${until}.`,
+  inviteCopyFailed: 'Could not copy. Select the link and copy it.',
+  inviteCopied: 'Link copied.',
+  inviteModOnly: 'Only the owner can invite moderators.',
+  membersLoading: 'Loading members...',
+  membersFailed: 'Could not load the members. Check your connection and try again.',
+  membersOwnerOnly: 'Only the owner can change roles and ban people.',
+  banBody: 'They are signed out everywhere and cannot sign in.',
+  roomNameBad: 'Room names are 1 to 32 characters, with no hidden characters.',
+  roomOrderChanged: 'The room list changed. Try again.',
+  roomRestricted: 'Only listed people, moderators and the owner can see a restricted room.',
+  roomNoDelete: 'Rooms cannot be deleted. To hide one, restrict it and list nobody.',
+  roomMembersNone: 'Nobody matches that name.',
+  diskLoading: 'Loading disk use...',
+  diskFailed: 'Could not load the disk use. Check your connection and try again.',
+  diskWarn: 'Uploads or the disk are over 80 % full. Delete old files or raise the quota (VESPER_UPLOAD_QUOTA_MB).',
+  devicesLoading: 'Loading devices...',
+  devicesFailed: 'Could not load your devices. Check your connection and try again.',
+  devicesNone: 'No devices are signed in.',
+  signOutFailed: 'Could not sign out that device. Try again.',
+  passwordWrong: 'Your current password is not right.',
+  passwordShort: 'Use 8 to 128 characters.',
+  passwordMismatch: 'The two new passwords are not the same.',
+  passwordChanged: 'Password changed. Your other devices were signed out.',
+  profileSaved: 'Saved.',
+} as const;
+
+/** How long ago `ms` was, from `now`: "just now", "5 min ago", "3 h ago", "2 days ago", then a date after a week. */
+export function relTime(ms: number, now: number): string {
+  const min = Math.floor((now - ms) / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  if (min < 24 * 60) return `${Math.floor(min / 60)} h ago`;
+  const days = Math.floor(min / (24 * 60));
+  if (days < 7) return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+  return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}

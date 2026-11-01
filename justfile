@@ -3,8 +3,6 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 cap := "scripts/capped.sh"
-# throwaway key for run-local; set VESPER_DEV_KEY to use your own
-key := env("VESPER_DEV_KEY", "pick-a-passphrase")
 
 default:
     @just --list
@@ -43,7 +41,7 @@ web:
 # server on localhost serving web/dist at http://127.0.0.1:8080 (the mic works on localhost). Ctrl-C stops it.
 run-local: build web
     [ -f web/dist/dsp/model.tar.gz ] || { just dsp && just web; }
-    VESPER_DEV_KEY='{{key}}' VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
+    VESPER_HTTP_BIND=127.0.0.1:8080 VESPER_UDP_BIND=127.0.0.1:40000 \
       VESPER_WEB_DIR=web/dist RUST_LOG="${RUST_LOG:-info}" target/release/vesper-server
 
 # docs/testing/latency.md section 1: N speakers for S seconds against a throwaway local server
@@ -51,13 +49,15 @@ loadtest speakers="12" seconds="30":
     #!/usr/bin/env bash
     set -euo pipefail
     {{cap}} cargo build --release --locked -p vesper-server -p vesper-loadtest
-    VESPER_DEV_KEY=throwaway-lt VESPER_HTTP_BIND=127.0.0.1:47123 VESPER_UDP_BIND=127.0.0.1:47124 \
-      target/release/vesper-server &
+    data=$(mktemp -d)
+    VESPER_DATA_DIR=$data target/release/vesper-server loadtest-accounts --count {{speakers}} > $data/tokens
+    VESPER_DATA_DIR=$data VESPER_ORIGIN=http://127.0.0.1:47123 VESPER_HTTP_BIND=127.0.0.1:47123 \
+      VESPER_UDP_BIND=127.0.0.1:47124 target/release/vesper-server &
     srv=$!
-    trap 'kill $srv 2>/dev/null' EXIT
+    trap 'kill $srv 2>/dev/null; rm -rf $data' EXIT
     sleep 1
-    target/release/vesper-loadtest --url ws://127.0.0.1:47123/ws --key throwaway-lt \
-      --room lt --speakers {{speakers}} --seconds {{seconds}} --pid $srv
+    target/release/vesper-loadtest --url ws://127.0.0.1:47123/ws --origin http://127.0.0.1:47123 \
+      --tokens $data/tokens --room-id 1 --speakers {{speakers}} --seconds {{seconds}} --pid $srv
 
 # build outputs; the fetched model stays (delete crates/vesper-dsp/model by hand to refetch)
 clean:

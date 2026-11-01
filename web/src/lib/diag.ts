@@ -81,13 +81,11 @@ const ICE_TIMEOUT_MS = 5000; // starts only after joinRoom resolves
 
 export async function connectivityCheck(
   signalingUrl: string,
-  key: string,
   deps: CheckDeps = realDeps,
 ): Promise<{ ok: boolean; reason: string; ms: number }> {
   const t0 = Date.now();
   const done = (ok: boolean, reason: string) => ({ ok, reason, ms: Date.now() - t0 });
   const timers: ReturnType<typeof setTimeout>[] = [];
-  const rnd = () => Math.random().toString(36).slice(2);
   const after = <T>(ms: number, v: T) => new Promise<T>((res) => timers.push(setTimeout(() => res(v), ms)));
   let ctx: AudioContext | undefined;
   let sig: Pick<Signaling, 'close' | 'onClose'> | undefined;
@@ -100,7 +98,8 @@ export async function connectivityCheck(
     sig = deps.newSignaling(signalingUrl);
     const wsClosed = new Promise<'closed'>((res) => sig!.onClose(() => res('closed')));
     const joined = await Promise.race([
-      deps.joinRoom(sig, { room: `check-${rnd()}`, name: `check-${rnd()}`, key, stream, bitrateKbps: 32 }),
+      // `check` uses a hidden room on the server, so it never touches your own call.
+      deps.joinRoom(sig, { roomId: 0, check: true, stream, bitrateKbps: 32 }),
       after(JOIN_TIMEOUT_MS, 'timeout' as const),
     ]);
     if (joined === 'timeout')
@@ -119,7 +118,7 @@ export async function connectivityCheck(
     return done(false, 'Signaling worked but media did not connect within 5 s: UDP is probably blocked, or the forwarded UDP port is closed.');
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e);
-    return done(false, joining ? `Signaling failed: ${m} (bad key, or the WebSocket could not connect).` : `Check failed after joining: ${m}`);
+    return done(false, joining ? `Signaling failed: ${m} (signed out, or the WebSocket could not connect).` : `Check failed after joining: ${m}`);
   } finally {
     timers.forEach(clearTimeout);
     pc?.close();

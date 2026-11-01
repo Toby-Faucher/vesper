@@ -1,0 +1,439 @@
+// UI flows for the admin pages, in real Chromium against the release server: alice (owner) creates an invite in the UI,
+// copies the link, and bob signs up with it; a revoked link shows the bad-link text; making bob a moderator gives him the
+// Admin menu entry and the moderator view (no Revoke on a moderator invite); a member who opens /admin sees the not-allowed
+// page; a ban of carol ends her session. Invite links are never printed. Before those, the primitives' keyboard paths
+// (primitives.mjs, on the dev-only gallery page). After them: layout shift after a join, reduced motion, and a keyboard-only
+// walk with a focus ring on every Tab stop. Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
+import assert from 'node:assert/strict';
+import { ORIGIN, browser, cli, composer, cspViolations, devServer, openRoom, png1x1, searchHits, signedIn, signup, sleep, startServer } from './lib.mjs';
+import { checkPrimitives } from './primitives.mjs';
+
+const BAD_LINK = 'This invite link does not work. Ask the person who sent it for a new one.';
+const DENIED = 'You do not have access to admin pages.';
+
+async function openAdmin(page, section) {
+  await page.getByRole('button', { name: /^Account, / }).click();
+  await page.getByRole('menuitem', { name: 'Admin' }).click();
+  await page.getByRole('navigation', { name: 'Admin sections' }).getByRole('link', { name: section }).click();
+  await page.locator('#main').getByRole('heading', { level: 2, name: section }).waitFor();
+}
+// Creates an invite from the form and returns the link from the read-only field (kept in memory, never printed).
+async function createInvite(page) {
+  await page.getByRole('button', { name: 'Create invite' }).click();
+  await page.getByText('This link is shown only now.', { exact: false }).waitFor();
+  return page.getByLabel('Invite link', { exact: true }).inputValue();
+}
+
+// Records the keyframes of every Element.animate call (anime's WAAPI build uses it), for the motion checks.
+const recordMotion = () => {
+  window.__motion = [];
+  const animate = Element.prototype.animate;
+  Element.prototype.animate = function (k, o) { window.__motion.push(JSON.stringify(k)); return animate.call(this, k, o); };
+};
+// The keyframes animated since the last call: the recorded ones plus the CSS animations and transitions running now.
+const motionSince = (page) => page.evaluate(() => {
+  const all = [...window.__motion, ...document.getAnimations().map((a) => JSON.stringify(a.effect?.getKeyframes?.() ?? []))];
+  window.__motion = [];
+  return all;
+});
+const moves = (frames) => frames.filter((f) => /"(transform|translate|scale|rotate)"/.test(f));
+
+async function signIn(page, name) {
+  await page.goto(`${ORIGIN}/login`);
+  await page.getByLabel('Username').fill(name);
+  await page.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await signedIn(page);
+}
+
+const stop = await startServer();
+try {
+  // The primitives' keyboard paths, on the dev-only gallery page from a Vite dev server.
+  const gallery = await browser('gallery');
+  await checkPrimitives(async (u) => {
+    const p = await gallery.page.context().newPage();
+    p.on('pageerror', (e) => gallery.errors.push(`gallery: ${e}`));
+    await p.goto(u);
+    return p;
+  }, `${await devServer()}/_gallery?primitives`);
+  console.log('primitives keyboard paths: ok');
+
+  const alice = await browser('alice');
+  const a = alice.page;
+  await signup(a, await cli(['create-owner']), 'alice');
+  await a.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: ORIGIN });
+
+  // Create: one request for two quick clicks, the link is the field's value, Copy puts it on the clipboard, and it is in no
+  // storage of the page.
+  await openAdmin(a, 'Invites');
+  assert.equal(new URL(a.url()).pathname, '/admin/invites');
+  const posts = [];
+  a.on('request', (r) => r.method() === 'POST' && r.url().endsWith('/api/invites') && posts.push(1));
+  await a.route('**/api/invites', async (r) => { if (r.request().method() === 'POST') await new Promise((ok) => setTimeout(ok, 400)); await r.continue(); });
+  await a.getByRole('button', { name: 'Create invite' }).click();
+  await a.getByRole('button', { name: 'Create invite' }).click({ force: true });
+  await a.getByText('This link is shown only now. It works for 1 person until', { exact: false }).waitFor();
+  await a.unroute('**/api/invites');
+  assert.equal(posts.length, 1, 'a second click on Create invite sent a second request');
+  const link = await a.getByLabel('Invite link', { exact: true }).inputValue();
+  assert.ok(link.startsWith(`${ORIGIN}/invite#`), 'the field does not hold an invite link');
+  await a.getByRole('button', { name: 'Copy link' }).click();
+  await a.getByText('Link copied.').waitFor();
+  assert.equal(await a.evaluate(() => navigator.clipboard.readText()), link, 'Copy link did not copy the link');
+  const code = link.split('#')[1];
+  assert.ok(!(await a.evaluate((c) => JSON.stringify({ ...localStorage, ...sessionStorage }).includes(c), code)), 'the invite code is in storage');
+  await a.getByRole('row').filter({ hasText: 'Active' }).first().waitFor();
+  console.log('create invite, one request, copy, nothing stored: ok');
+
+  const bob = await browser('bob');
+  const b = bob.page;
+  await signup(b, link, 'bob');
+  console.log('signup with the copied link: ok');
+
+  // Revoke asks first, then the row says Revoked and the link no longer works.
+  await a.getByRole('button', { name: 'Done' }).click();
+  const second = await createInvite(a);
+  await a.getByRole('button', { name: 'Done' }).click();
+  const deletes = [];
+  a.on('request', (r) => r.method() === 'DELETE' && r.url().includes('/api/invites/') && deletes.push(1));
+  const row = a.locator('tr[data-invite]').first(); // newest first
+  await row.getByRole('button', { name: 'Revoke' }).click();
+  const dlg = a.getByRole('dialog', { name: 'Revoke this invite?' });
+  await dlg.getByRole('button', { name: 'Cancel' }).click();
+  await dlg.waitFor({ state: 'hidden' });
+  assert.equal(deletes.length, 0, 'Revoke called the server before the confirm');
+  await row.getByRole('button', { name: 'Revoke' }).click();
+  await dlg.getByRole('button', { name: 'Revoke' }).click();
+  await row.getByText('Revoked').waitFor();
+  assert.equal(await row.getByRole('button', { name: 'Revoke' }).count(), 0, 'a revoked invite still offers Revoke');
+  assert.equal(deletes.length, 1);
+  const stranger = await browser('stranger');
+  const s = stranger.page;
+  await s.goto(second);
+  await s.getByLabel('Username').fill('dave');
+  await s.getByLabel('Display name').fill('dave');
+  await s.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await s.getByRole('button', { name: 'Create account' }).click();
+  await s.getByText(BAD_LINK).waitFor();
+  console.log('revoke confirm and a revoked link: ok');
+
+  // A member: no Admin entry, and /admin says so with a way back.
+  await b.getByRole('button', { name: /^Account, / }).click();
+  await b.getByRole('menuitem', { name: 'Log out' }).waitFor();
+  assert.equal(await b.getByRole('menuitem', { name: 'Admin' }).count(), 0, 'a member sees the Admin entry');
+  await b.keyboard.press('Escape');
+  await b.goto(`${ORIGIN}/admin/members`);
+  await b.getByText(DENIED).waitFor();
+  assert.equal(await b.getByRole('navigation', { name: 'Admin sections' }).count(), 0);
+  assert.equal(await b.locator('tr[data-user]').count(), 0, 'a member sees the members table');
+  await b.getByRole('button', { name: 'Go to your rooms' }).click();
+  await b.waitForURL(/\/r\/\d+$/);
+  console.log('member at /admin: not allowed: ok');
+
+  // carol, a member, so the moderator view below has a lower row that must still show no controls.
+  const { url: carolLink } = await a.evaluate(async () =>
+    (await fetch('/api/invites', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: 'member', max_uses: 1, expires_hours: 1 }) })).json());
+  const carol = await browser('carol');
+  const c = carol.page;
+  await signup(c, carolLink, 'carol');
+
+  // Rooms: alice creates music (one request for two clicks), renames it, moves it up by button and by Alt+Up, and restricts
+  // it to bob. bob's sidebar follows each change live; carol, a member not listed, never sees it once restricted.
+  const order = (p, names) => p.waitForFunction(
+    (n) => JSON.stringify([...document.querySelectorAll('nav[aria-label="Rooms"] a[title]')].map((x) => x.title)) === JSON.stringify(n), names);
+  await openAdmin(a, 'Rooms');
+  await a.getByLabel('Room name').fill('   ');
+  await a.getByRole('button', { name: 'Create room' }).click();
+  await a.getByRole('alert').getByText('Room names are 1 to 32 characters, with no hidden characters.').waitFor();
+  await a.getByLabel('Room name').fill('General');
+  await a.getByRole('button', { name: 'Create room' }).click();
+  await a.getByRole('alert').getByText('That name is already taken.').waitFor();
+  const roomPosts = [];
+  a.on('request', (r) => r.method() === 'POST' && r.url().endsWith('/api/rooms') && roomPosts.push(1));
+  await a.route('**/api/rooms', async (r) => { if (r.request().method() === 'POST') await new Promise((ok) => setTimeout(ok, 400)); await r.continue(); });
+  await a.getByLabel('Room name').fill('music');
+  await a.getByRole('button', { name: 'Create room' }).click();
+  await a.getByRole('button', { name: 'Create room' }).click({ force: true });
+  await a.getByText('Created music.').waitFor();
+  await a.unroute('**/api/rooms');
+  assert.equal(roomPosts.length, 1, 'a second click on Create room sent a second request');
+  await order(b, ['general', 'hangout', 'music']);
+  await order(c, ['general', 'hangout', 'music']);
+
+  await a.getByRole('button', { name: 'Rename music' }).click();
+  await a.getByLabel('Name for music').fill('not this');
+  await a.keyboard.press('Escape');
+  assert.equal(await a.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Rename music', 'Esc did not give focus back to Rename');
+  await a.getByRole('button', { name: 'Rename music' }).click();
+  await a.getByLabel('Name for music').fill('music room');
+  await a.keyboard.press('Enter');
+  await a.getByRole('button', { name: 'Rename music room' }).waitFor();
+  await order(b, ['general', 'hangout', 'music room']);
+
+  await a.getByRole('button', { name: 'Move music room up' }).click();
+  await order(b, ['general', 'music room', 'hangout']);
+  // bob's event can land before alice's PUT answers, and a move is ignored while one is in flight: wait for her row.
+  await order(a, ['general', 'music room', 'hangout']);
+  // Alt+Up from the Move up button: at the top it is disabled, so focus must move to Move down in the same row.
+  await a.getByRole('button', { name: 'Move music room up' }).focus();
+  await a.keyboard.press('Alt+ArrowUp');
+  await order(b, ['music room', 'general', 'hangout']);
+  // alice's own row moves once her PUT answers, which can be after bob's event: wait for it, then the focus must be kept.
+  await order(a, ['music room', 'general', 'hangout']);
+  await a.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Move music room down', null, { timeout: 2000 })
+    .catch(() => assert.fail('Alt+Up lost the focus'));
+  assert.ok(await a.getByRole('button', { name: 'Move music room up' }).isDisabled(), 'the top room can still move up');
+  // A 409 (the list changed elsewhere) says so; nothing moves.
+  await a.route('**/api/rooms/order', (r) => r.fulfill({ status: 409, json: { code: 'conflict', message: 'the order must list every room once' } }));
+  await a.getByRole('button', { name: 'Move general down' }).click();
+  await a.getByRole('alert').getByText('The room list changed. Try again.').waitFor();
+  await a.unroute('**/api/rooms/order');
+  await order(a, ['music room', 'general', 'hangout']);
+
+  await a.getByRole('switch', { name: 'Restricted: music room' }).check();
+  await order(c, ['general', 'hangout']);
+  await order(b, ['general', 'hangout']);
+  await a.getByRole('button', { name: 'Members of music room' }).click();
+  const pick = a.getByRole('dialog', { name: 'Who can see music room?' });
+  await pick.getByRole('checkbox', { name: /^bob\b/ }).check();
+  await pick.getByRole('button', { name: 'Save' }).click();
+  await pick.waitFor({ state: 'hidden' });
+  await order(b, ['music room', 'general', 'hangout']);
+  await a.waitForFunction(() => document.querySelector('[aria-label="Members of music room"]')?.textContent.replace(/\s+/g, ' ').includes('Members 1'));
+  await sleep(500); // a late event would show it to carol here
+  await order(c, ['general', 'hangout']);
+  console.log('rooms: create, rename, reorder, restrict, live sidebars: ok');
+
+  // Disk use: two meters (the database shows its size only); uploads are counted against the default 10 GB quota.
+  await openAdmin(a, 'Disk use');
+  const uploads = a.getByRole('meter', { name: 'Uploads' });
+  assert.equal(await uploads.getAttribute('aria-valuetext'), '0 B of 10 GB');
+  assert.equal(await uploads.getAttribute('aria-valuenow'), '0');
+  assert.equal(await a.getByRole('meter').count(), 2);
+  await a.locator('#main').getByText('Database').waitFor();
+  console.log('disk use: ok');
+
+  // The role change asks first and names bob; Cancel keeps him a member. Then bob is a moderator: the Admin entry, no role
+  // or ban controls, no owner sections, and /admin/rooms says it is the owner's.
+  // A failed load says so and offers Try again.
+  await a.route('**/api/users', (r) => r.abort(), { times: 1 });
+  await openAdmin(a, 'Members');
+  await a.getByRole('alert').getByText('Could not load the members.', { exact: false }).waitFor();
+  await a.getByRole('button', { name: 'Try again' }).click();
+  await a.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Members', null, { timeout: 5000 })
+    .catch(() => assert.fail('Try again did not move focus to the members table'));
+  const roleFor = a.getByLabel('Role for bob');
+  await roleFor.selectOption('moderator');
+  const confirmRole = a.getByRole('dialog', { name: 'Make bob a moderator?' });
+  await confirmRole.getByRole('button', { name: 'Cancel' }).click();
+  await confirmRole.waitFor({ state: 'hidden' });
+  assert.equal(await roleFor.inputValue(), 'member', 'Cancel left the select on the new role');
+  await roleFor.selectOption('moderator');
+  await confirmRole.getByRole('button', { name: 'Change role' }).click();
+  await confirmRole.waitFor({ state: 'hidden' });
+  assert.equal(await roleFor.inputValue(), 'moderator');
+  await openAdmin(b, 'Members');
+  await b.getByText('Only the owner can change roles and ban people.').waitFor();
+  await b.locator('tr[data-user="carol"]').waitFor();
+  assert.equal(await b.getByRole('combobox', { name: /^Role for/ }).count(), 0, 'a moderator sees role selects');
+  assert.equal(await b.getByRole('button', { name: /^Ban / }).count(), 0, 'a moderator sees Ban');
+  assert.equal(await b.getByRole('navigation', { name: 'Admin sections' }).getByRole('link', { name: 'Rooms' }).count(), 0);
+  await b.goto(`${ORIGIN}/admin/rooms`);
+  await b.getByText('Only the owner can open this page.').waitFor();
+  // A moderator revokes member invites only: no Revoke on the owner's moderator invite, Revoke on his own member invite.
+  await a.evaluate(() => fetch('/api/invites', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: 'moderator', max_uses: 1, expires_hours: 1 }) }));
+  await b.goto(`${ORIGIN}/admin/invites`);
+  await createInvite(b);
+  const active = b.locator('tr[data-invite]').filter({ hasText: 'Active' });
+  await active.filter({ hasText: 'Moderator' }).waitFor();
+  assert.equal(await active.filter({ hasText: 'Moderator' }).getByRole('button', { name: 'Revoke' }).count(), 0, 'a moderator can revoke a moderator invite');
+  await active.filter({ hasText: 'Member' }).getByRole('button', { name: 'Revoke' }).waitFor();
+  console.log('role change confirm, moderator view: ok');
+
+  // A ban asks first and names carol; her open session ends; the row says Banned with Unban.
+  await a.getByRole('button', { name: 'Ban carol' }).click();
+  const confirmBan = a.getByRole('dialog', { name: 'Ban carol?' });
+  await confirmBan.getByText('They are signed out everywhere and cannot sign in.').waitFor();
+  await confirmBan.getByRole('button', { name: 'Ban' }).click();
+  await c.getByText('Your session ended. Sign in again.').waitFor();
+  await a.locator('tr[data-user="carol"]').getByText('Banned').waitFor();
+  const banned = await a.locator('tr[data-user="carol"]').getByText('Banned').evaluate((e) => [getComputedStyle(e).color, getComputedStyle(e.closest('tr').querySelector('p')).color]);
+  assert.notEqual(banned[0], banned[1], 'Banned is in the primary text colour');
+  await a.getByRole('button', { name: 'Unban carol' }).waitFor();
+  console.log('ban ends the session: ok');
+
+  // Layout shift on bob's page, from after his join: opening a room, a message arriving, an image loading, hovering the
+  // messages and the typing line. Every shift counts, also those right after his click (CLS drops those, but a room open
+  // is a click and the brief measures it).
+  await openRoom(a, 'general');
+  await openRoom(b, 'general');
+  await b.getByRole('button', { name: 'Join voice' }).click();
+  await b.getByRole('button', { name: 'Leave' }).waitFor();
+  await sleep(500);
+  await b.evaluate(() => {
+    window.__shift = [];
+    new PerformanceObserver((l) => window.__shift.push(...l.getEntries().map((e) => ({ v: e.value, input: e.hadRecentInput })))).observe({ type: 'layout-shift' });
+  });
+  await openRoom(b, 'hangout');
+  await openRoom(b, 'general');
+  await sleep(700);
+  const general = Number(new URL(b.url()).pathname.split('/').pop());
+  const post = (body, attachments = []) => a.evaluate(([room, body, attachments]) => fetch(`/api/rooms/${room}/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body, reply_to: null, attachments }),
+  }), [general, body, attachments]);
+  await post('a message arriving');
+  await b.getByText('a message arriving', { exact: true }).waitFor();
+  const img = await a.evaluate(async ([room, bytes]) => (await (await fetch(`/api/rooms/${room}/uploads?name=dot.png`, { method: 'POST', body: new Uint8Array(bytes) })).json()).attachment.id, [general, [...png1x1()]]);
+  await post('an image', [img]);
+  await b.getByRole('button', { name: 'Open image dot.png' }).waitFor();
+  await b.waitForFunction(() => [...document.querySelectorAll('img')].some((i) => i.alt === 'dot.png' && i.complete));
+  await sleep(500);
+  for (const t of ['a message arriving', 'an image']) { await b.getByText(t, { exact: true }).hover(); await sleep(300); }
+  await b.mouse.move(5, 5);
+  await composer(a).pressSequentially('typing');
+  await b.getByText('alice is typing').waitFor();
+  await composer(a).fill('');
+  await sleep(500);
+  const shifts = await b.evaluate(() => window.__shift);
+  const cls = shifts.reduce((n, x) => n + x.v, 0);
+  console.log(`layout shift after join: ${cls.toFixed(4)} (${shifts.length} entries, ${shifts.filter((x) => x.input).length} after input)`);
+  assert.ok(cls < 0.02, `layout shift ${cls} is 0.02 or more`);
+  await b.getByRole('button', { name: 'Leave' }).click();
+  console.log('layout shift: ok');
+
+  // Reduced motion: opening a dialog, the call bar and a jump move nothing (opacity only).
+  const calm = await browser('calm');
+  const r = calm.page;
+  await r.emulateMedia({ reducedMotion: 'reduce' });
+  await r.addInitScript(recordMotion);
+  await signIn(r, 'bob');
+  await openRoom(r, 'general');
+  await motionSince(r);
+  await r.getByRole('button', { name: 'Join voice' }).click();
+  await r.getByRole('button', { name: 'Leave' }).waitFor();
+  const barMotion = await motionSince(r);
+  await r.locator('main').focus();
+  await r.keyboard.press('Shift+Slash');
+  await r.getByRole('dialog', { name: 'Keyboard shortcuts' }).waitFor();
+  const dialogMotion = await motionSince(r);
+  await r.keyboard.press('Escape');
+  await r.getByRole('dialog', { name: 'Keyboard shortcuts' }).waitFor({ state: 'hidden' });
+  await r.getByRole('button', { name: 'Search', exact: true }).click();
+  await r.getByLabel('Search messages').fill('arriving');
+  await searchHits(r).first().click();
+  await r.getByRole('dialog', { name: 'Search' }).waitFor({ state: 'hidden' });
+  const jumpMotion = await motionSince(r);
+  assert.ok(dialogMotion.length && barMotion.length, 'no motion recorded: the hook missed the animations');
+  assert.deepEqual(moves([...dialogMotion, ...barMotion, ...jumpMotion]), [], 'something moves under reduced motion');
+  await r.getByRole('button', { name: 'Leave' }).click();
+  console.log('reduced motion: ok');
+
+  // Keyboard only after the first page load: sign in, Ctrl+K to a room, Join voice by Tab and Enter, Ctrl+Shift+M, send,
+  // Up edits, Esc cancels, Ctrl+Shift+F and Enter jumps, Ctrl+K Settings and Esc back. Every Tab stop shows an outline.
+  const keys = await browser('keys');
+  const k = keys.page;
+  await k.addInitScript(recordMotion);
+  // The socket goes through Playwright, so the walk can drop it: while `down`, a new socket opens but gets no hello.
+  let sock = null;
+  let down = false;
+  await k.routeWebSocket(/\/ws$/, (ws) => { sock = ws; if (!down) ws.connectToServer(); });
+  await k.goto(`${ORIGIN}/login`);
+  await k.getByLabel('Username').waitFor();
+  const tabTo = async (want) => {
+    for (let i = 0; i < 100; i++) {
+      await k.keyboard.press('Tab');
+      await sleep(150); // a border ring fades in over --dur-1
+      const at = await k.evaluate(() => {
+        const e = document.activeElement;
+        if (!e || e === document.body) return null;
+        const cs = getComputedStyle(e);
+        const name = (e.getAttribute('aria-label') || e.labels?.[0]?.innerText || e.innerText || '').trim().split('\n')[0];
+        // A ring is an outline, or (the composer) a parent's border in the focus colour.
+        const probe = document.body.appendChild(document.createElement('i'));
+        probe.style.color = 'var(--focus)';
+        const focus = getComputedStyle(probe).color;
+        probe.remove();
+        const parents = [e.parentElement, e.parentElement?.parentElement].filter(Boolean);
+        return { name, ring: (cs.outlineStyle !== 'none' && cs.outlineWidth !== '0px') || parents.some((p) => getComputedStyle(p).borderTopColor === focus) };
+      });
+      if (!at) continue;
+      assert.ok(at.ring, `no focus outline on ${JSON.stringify(at.name)}`);
+      if (at.name === want) return;
+    }
+    assert.fail(`Tab never reached ${want}`);
+  };
+  const focusedName = () => k.evaluate(() => document.activeElement?.getAttribute('aria-label'));
+  await tabTo('Username');
+  await k.keyboard.type('alice');
+  await tabTo('Password');
+  await k.keyboard.type('test-password-1');
+  await k.keyboard.press('Enter');
+  await signedIn(k);
+  // The skip link is the first Tab stop from the top and Enter moves focus to main.
+  await sleep(300); // the home view settles its own focus first
+  await k.evaluate(() => { const b = document.body; b.tabIndex = -1; b.focus(); b.removeAttribute('tabindex'); });
+  await k.keyboard.press('Tab');
+  const first = await k.evaluate(() => document.activeElement?.outerHTML.slice(0, 120));
+  assert.match(first, />Skip to main content<\/a>$/, `the skip link is not the first Tab stop: ${first}`);
+  await k.keyboard.press('Enter');
+  assert.equal(await k.evaluate(() => document.activeElement?.id), 'main', 'the skip link did not move focus to main');
+  await k.keyboard.press('Control+k');
+  await k.getByRole('combobox', { name: 'Switch to' }).waitFor();
+  await k.keyboard.type('general');
+  await k.keyboard.press('Enter');
+  await k.getByRole('heading', { level: 1, name: 'general', exact: true }).waitFor();
+  await tabTo('Join voice');
+  // Offline: Join voice keeps focus, says why (aria-describedby; the tip shows on focus) and Enter does nothing.
+  const join = k.getByRole('button', { name: 'Join voice' });
+  down = true;
+  sock.close();
+  await k.waitForFunction(() => document.activeElement?.getAttribute('aria-disabled') === 'true', null, { timeout: 5000 });
+  assert.equal(await join.evaluate((e) => e === document.activeElement), true, 'Join voice lost focus when the connection dropped');
+  assert.equal(await join.evaluate((e) => document.getElementById(e.getAttribute('aria-describedby'))?.textContent), 'You are offline. This works again once the connection is back.');
+  await k.keyboard.press('Enter');
+  await sleep(500);
+  assert.equal(await k.getByRole('button', { name: 'Leave' }).count(), 0, 'Join voice worked while offline');
+  down = false;
+  sock.close(); // the socket that got no hello: the next one reaches the server
+  await k.waitForFunction(() => document.activeElement?.textContent?.trim() === 'Join voice' && !document.activeElement.hasAttribute('aria-disabled'), null, { timeout: 15000 });
+  console.log('offline Join voice: ok');
+  await k.keyboard.press('Enter');
+  await k.getByRole('button', { name: 'Leave' }).waitFor();
+  assert.ok(moves(await motionSince(k)).length > 0, 'the call bar rose without moving: the reduced motion check proves nothing');
+  await k.keyboard.press('Control+Shift+M');
+  await k.getByRole('button', { name: 'Unmute' }).waitFor();
+  await tabTo('Message');
+  await k.keyboard.type('kiwi from the keyboard');
+  await k.keyboard.press('Enter');
+  await k.locator('article').filter({ hasText: 'kiwi from the keyboard' }).waitFor();
+  await k.keyboard.press('ArrowUp');
+  const edit = k.getByRole('textbox', { name: 'Edit message' });
+  await edit.waitFor();
+  assert.equal(await edit.inputValue(), 'kiwi from the keyboard');
+  await k.keyboard.press('Escape');
+  await edit.waitFor({ state: 'detached' });
+  assert.equal(await focusedName(), 'Message', 'Esc on the edit did not give focus back to the composer');
+  await k.keyboard.press('Control+Shift+F');
+  await k.getByLabel('Search messages').waitFor();
+  await k.keyboard.type('kiwi');
+  await searchHits(k).first().waitFor();
+  await k.keyboard.press('Enter');
+  await k.getByRole('dialog', { name: 'Search' }).waitFor({ state: 'hidden' });
+  await k.waitForURL(/\/r\/\d+/);
+  await k.keyboard.press('Control+k');
+  await k.keyboard.type('Settings');
+  await k.getByRole('option', { selected: true, name: /Settings: Voice/ }).waitFor();
+  await k.keyboard.press('Enter');
+  await k.locator('#main').getByRole('heading', { level: 2, name: 'Voice' }).waitFor();
+  await k.keyboard.press('Escape');
+  await k.getByRole('heading', { level: 1, name: 'general', exact: true }).waitFor();
+  await k.getByRole('button', { name: 'Leave' }).waitFor(); // still in the call
+  console.log('keyboard only: ok');
+
+  for (const p of [a, b, s, r, k]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
+  assert.deepEqual([gallery, alice, bob, carol, stranger, calm, keys].flatMap((x) => x.errors), [], 'page errors');
+  await signedIn(a);
+  console.log('e2e ui: PASS');
+} finally {
+  await stop();
+}

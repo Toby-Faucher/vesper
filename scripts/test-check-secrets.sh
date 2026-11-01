@@ -14,13 +14,11 @@ expect() {
   out=$(SECRETS_ROOT=$tmp "$here/check-secrets.sh" 2>&1); rc=$?
   if { [ "$1" = fail ] && [ $rc != 0 ]; } || { [ "$1" = pass ] && [ $rc = 0 ]; }; then ok "$1: $2"; else bad "$1: $2 ($out)"; fi
 }
-expect fail 'VESPER_DEV_KEY=hunter2real'
-expect fail 'VESPER_DEV_KEY="hunter2real"'
-expect fail "VESPER_DEV_KEY='hunter2real'"
-expect fail 'VESPER_DEV_KEY: hunter2real'
-expect pass 'VESPER_DEV_KEY=pick-a-passphrase'
-expect pass "VESPER_DEV_KEY='{{key}}'"
-expect pass 'VESPER_DEV_KEY=${KEY}'
-expect pass 'VESPER_DEV_KEY="${KEY}"'
-expect pass 'VESPER_DEV_KEY=<your key>'
+tok=$(printf '%064d' 7 | tr 0 a)
+expect fail "Cookie: vesper_session=$tok"
+expect fail "Set-Cookie: __Host-vesper_session=$tok; Secure"
+expect pass 'Cookie: vesper_session=<token>'
+expect pass "vesper_session=${tok:0:63}"
+expect fail "https://vesper.example/invite#$tok"
+expect pass 'https://vesper.example/invite#<code>'
 [ $fails = 0 ] && echo "all ok" || { echo "$fails failed"; exit 1; }

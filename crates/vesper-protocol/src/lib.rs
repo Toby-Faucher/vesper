@@ -1,26 +1,40 @@
 #![forbid(unsafe_code)]
 
+pub mod api;
+pub use api::*;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-pub const MAX_NAME_CHARS: usize = 32;
 pub const MAX_MSG_BYTES: usize = 64 * 1024;
 
+/// WebSocket close code: the session is over (logout, revoked device, password change, ban).
+/// The client should go back to the login page instead of reconnecting.
+pub const CLOSE_SESSION_ENDED: u16 = 4001;
+/// WebSocket close code: a moderator disconnected this user.
+pub const CLOSE_DISCONNECTED: u16 = 4003;
+
+/// Someone in a voice room. `user_id` is the account id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Peer {
     pub user_id: String,
     pub name: String,
+    #[ts(type = "number")]
+    pub room_id: i64,
     pub muted: bool,
+    pub deafened: bool,
+    pub force_muted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ErrorCode {
-    BadKey,
     RoomFull,
     BadMessage,
+    Forbidden,
+    RateLimited,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -28,24 +42,40 @@ pub enum ErrorCode {
 #[ts(export)]
 pub enum ClientMsg {
     Join {
-        room: String,
-        name: String,
-        key: String,
+        #[ts(type = "number")]
+        room_id: i64,
         offer: String,
     },
     Answer {
         sdp: String,
     },
-    SetMuted {
+    SetVoiceState {
         muted: bool,
+        deafened: bool,
     },
     Leave,
+    /// Connectivity check: a voice session that is not shown to anyone.
+    Check {
+        offer: String,
+    },
+    Typing {
+        #[ts(type = "number")]
+        room_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ServerMsg {
+    /// The first message on every socket. `rooms` and `voice` hold only what this user can see.
+    Hello {
+        me: Me,
+        users: Vec<UserInfo>,
+        rooms: Vec<RoomInfo>,
+        voice: Vec<Peer>,
+        unread: Vec<Unread>,
+    },
     Joined {
         user_id: String,
         answer: String,
@@ -60,9 +90,42 @@ pub enum ServerMsg {
     PeerLeft {
         user_id: String,
     },
-    PeerMuted {
+    PeerState {
         user_id: String,
         muted: bool,
+        deafened: bool,
+        force_muted: bool,
+    },
+    /// The rooms this user can see, after any change.
+    RoomsChanged {
+        rooms: Vec<RoomInfo>,
+    },
+    UserUpdated {
+        user: UserInfo,
+    },
+    ForceMuted {
+        muted: bool,
+    },
+    /// A new message in a room this user can see.
+    MessageNew {
+        message: Message,
+    },
+    /// An edit, delete, reaction or pin change: the whole message.
+    MessageUpdated {
+        message: Message,
+    },
+    /// Someone is typing in a room. There is no stop event: clients drop it after 5 s.
+    Typing {
+        #[ts(type = "number")]
+        room_id: i64,
+        user_id: String,
+    },
+    /// This user's read marker moved (sent to all of their sockets).
+    Read {
+        #[ts(type = "number")]
+        room_id: i64,
+        #[ts(type = "number")]
+        last_read_id: i64,
     },
     Error {
         code: ErrorCode,
@@ -77,9 +140,7 @@ mod tests {
     #[test]
     fn join_roundtrips_json() {
         let m = ClientMsg::Join {
-            room: "r".into(),
-            name: "n".into(),
-            key: "k".into(),
+            room_id: 1,
             offer: "o".into(),
         };
         let s = serde_json::to_string(&m).unwrap();

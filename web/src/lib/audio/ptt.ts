@@ -14,5 +14,6 @@ export function pttKeyEvent(held: boolean, e: PttEvent): { held: boolean; preven
   if (e.capturing || e.code !== e.pttKey) return { held, prevent: false };
   if (e.type === 'keyup') return { held: false, prevent: false };
   if (!e.enabled || e.typing) return { held, prevent: false };
-  return { held: true, prevent: true }; // prevent: Space would click a focused button
+  // prevent: Space would click a focused button. Never Tab: an older saved Tab key must not trap keyboard focus.
+  return { held: true, prevent: e.code !== 'Tab' };
 }

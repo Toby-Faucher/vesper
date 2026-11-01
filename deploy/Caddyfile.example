@@ -5,16 +5,15 @@ vesper.tfaucher.com {
 	# recompressed on every load, which costs a small host real CPU for little gain.
 	@compressible not path /dsp/*
 	encode @compressible zstd gzip
+	# Not verified with a real Caddy. By its documented defaults Caddy sets X-Forwarded-For to its own peer
+	# (cloudflared) and passes Cloudflare's CF-Connecting-IP through unchanged; a global `trusted_proxies`
+	# option changes the X-Forwarded-For handling; Vesper reads CF-Connecting-IP first (docs/deploy.md, Client address). Do not
+	# strip or rewrite either header here.
 	reverse_proxy 127.0.0.1:8080   # or vesper:8080 on a shared docker network
 
 	# HSTS makes browsers refuse plain HTTP for this name for a year: keep it only once HTTPS works.
-	header {
-		Strict-Transport-Security "max-age=31536000"
-		Referrer-Policy "no-referrer"
-		Permissions-Policy "microphone=(self)"
-		X-Content-Type-Options "nosniff"
-		# CSP is UNTESTED against the real app (a wrong CSP silently breaks WASM, the audio worklet
-		# or WebRTC). Try it in a browser with the console open before enabling:
-		# Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; connect-src 'self' wss://vesper.tfaucher.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; object-src 'none'; base-uri 'none'"
-	}
+	# Vesper sends the same HSTS and its own CSP, Referrer-Policy, Permissions-Policy, COOP and nosniff
+	# (docs/decisions/0008-csp.md): do not set those here. HSTS is kept here on purpose with the same value, so
+	# it stays if the server's is lost; the browser then gets two identical copies, which is harmless.
+	header Strict-Transport-Security "max-age=31536000"
 }

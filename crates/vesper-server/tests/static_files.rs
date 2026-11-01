@@ -25,17 +25,24 @@ fn site() -> std::path::PathBuf {
 }
 
 async fn start(web_dir: std::path::PathBuf) -> SocketAddr {
+    start_at(web_dir, "http://localhost:8080").await
+}
+
+async fn start_at(web_dir: std::path::PathBuf, origin: &str) -> SocketAddr {
+    let data_dir = web_dir.with_file_name("data");
     let (addr, _) = vesper_server::start(Config {
         http_bind: "127.0.0.1:0".parse().unwrap(),
         udp_bind: "127.0.0.1:0".parse().unwrap(),
         public_host: None,
         udp_port_public: 0,
-        dev_key: "k".into(),
         max_room_size: 12,
-        join_deadline: Duration::from_secs(30),
         ping_interval: Duration::from_secs(30),
         max_sockets: 4,
         web_dir,
+        data_dir,
+        origin: origin.into(),
+        secure_cookies: false,
+        upload_quota_bytes: 0,
     })
     .await
     .unwrap();
@@ -86,10 +93,11 @@ async fn health_and_ws_take_precedence() {
         !r.ends_with("INDEX") && !r.starts_with("HTTP/1.1 200"),
         "{r}"
     );
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
-        .await
-        .unwrap();
-    let _ = ws.close(None).await;
+    // A real upgrade reaches the ws route too: without Origin and session it is refused there.
+    match tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(r)) => assert_eq!(r.status(), 403),
+        other => panic!("expected 403, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -148,7 +156,7 @@ async fn cache_control_and_extension_paths_do_not_fall_back() {
         r.starts_with("HTTP/1.1 404") && !r.contains("INDEX") && !header_has(&r, "immutable"),
         "{r}"
     );
-    for p in ["/dsp/missing.wasm", "/dsp/model.tar.gz"] {
+    for p in ["/dsp/missing.wasm", "/dsp/model.tar.gz", "/api/missing"] {
         let r = get(addr, p).await;
         assert!(
             r.starts_with("HTTP/1.1 404") && !r.contains("INDEX"),
@@ -156,4 +164,83 @@ async fn cache_control_and_extension_paths_do_not_fall_back() {
         );
     }
     assert!(cc(&get(addr, "/dsp/g.js").await));
+    // API answers are per user: never stored by any cache.
+    let r = get(addr, "/api/me").await;
+    assert!(header_has(&r, "cache-control: no-store"), "{r}");
+}
+
+/// The value of header `name` (lowercase) in a raw response, or None. Panics if it appears twice.
+fn header_value(resp: &str, name: &str) -> Option<String> {
+    let head = resp.split("\r\n\r\n").next().unwrap();
+    let mut found = head.lines().filter_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        k.eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+    });
+    let v = found.next();
+    assert!(found.next().is_none(), "{name} twice: {resp}");
+    v
+}
+
+const PAGE_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; \
+    connect-src 'self' ws://localhost:8080; img-src 'self' blob:; media-src 'self' blob:; \
+    style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; \
+    form-action 'self'";
+
+#[tokio::test]
+async fn csp_on_html_and_api() {
+    let addr = start(site()).await;
+    // The page, an SPA path, an asset, a 404, an API answer, /health, a refused dotfile.
+    for p in [
+        "/",
+        "/room/abc",
+        "/assets/w.js",
+        "/assets/old.js",
+        "/api/me",
+        "/api/missing",
+        "/health",
+        "/.env",
+    ] {
+        let r = get(addr, p).await;
+        assert_eq!(
+            header_value(&r, "content-security-policy").as_deref(),
+            Some(PAGE_CSP),
+            "{p}: {r}"
+        );
+        for (name, want) in [
+            ("referrer-policy", "no-referrer"),
+            (
+                "permissions-policy",
+                "microphone=(self), camera=(), geolocation=()",
+            ),
+            ("cross-origin-opener-policy", "same-origin"),
+            ("x-content-type-options", "nosniff"),
+        ] {
+            assert_eq!(header_value(&r, name).as_deref(), Some(want), "{p}: {r}");
+        }
+        // Plain http origin: no HSTS (it would pin a name to https that may not have it).
+        assert_eq!(header_value(&r, "strict-transport-security"), None, "{p}");
+    }
+    // Scripts stay strict.
+    assert!(!PAGE_CSP.contains("'unsafe-eval'"));
+    let script = PAGE_CSP
+        .split(';')
+        .find(|d| d.trim().starts_with("script-src"))
+        .unwrap();
+    assert!(!script.contains("unsafe-inline"), "{script}");
+}
+
+#[tokio::test]
+async fn https_origin_adds_hsts_and_wss() {
+    let addr = start_at(site(), "https://vesper.example.test").await;
+    let r = get(addr, "/").await;
+    assert_eq!(
+        header_value(&r, "strict-transport-security").as_deref(),
+        Some("max-age=31536000"),
+        "{r}"
+    );
+    let csp = header_value(&r, "content-security-policy").unwrap();
+    assert!(
+        csp.contains("connect-src 'self' wss://vesper.example.test;"),
+        "{csp}"
+    );
 }

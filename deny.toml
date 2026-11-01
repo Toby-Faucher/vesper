@@ -28,6 +28,7 @@ allow = [
     "ISC",          # aws-lc-rs, aws-lc-sys
     "MIT",
     "Unicode-3.0",  # unicode-ident, unicode-normalization
+    "Zlib",         # foldhash, via sqlx-core's hashlink
 ]
 
 [bans]

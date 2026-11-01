@@ -10,15 +10,21 @@ Fixed, not configurable: the room size cap (12, `max_room_size`) and the WebSock
 
 | Variable | Meaning | Default | Read in |
 |---|---|---|---|
-| `VESPER_DEV_KEY` | The shared join key. Whatever you set is what people type into the join form. Required: unset or empty and the server refuses to start. Never logged (`Config`'s `Debug` prints `***`). Stands in for accounts until they exist. | none | `config.rs` |
 | `VESPER_HTTP_BIND` | HTTP listen address: the web app, `/health`, the `/ws` signaling WebSocket. | `0.0.0.0:8080` | `config.rs` |
 | `VESPER_UDP_BIND` | UDP address for all media. | `0.0.0.0:40000` | `config.rs` |
 | `VESPER_PUBLIC_HOST` | Hostname or IP clients are told to send media to. Resolved at start, then every 60 s (`public_addr.rs`). Unset: the server advertises its bound address and logs a warning if that is `0.0.0.0`. Empty counts as unset. | unset | `config.rs`, `public_addr.rs`, `lib.rs` |
 | `VESPER_UDP_PORT_PUBLIC` | UDP port clients reach from outside. Set it only if the router maps a different external port. | the `VESPER_UDP_BIND` port | `config.rs` |
 | `VESPER_WEB_DIR` | Directory with the built web app, served at `/`. Empty counts as unset. The server warns at start if `index.html` is missing. Serving rules (SPA fallback, cache headers, dotfiles hidden): `lib.rs` `guard`. | `web/dist` | `config.rs`, `lib.rs` |
-| `VESPER_JOIN_DEADLINE_SECS` | A socket that has not joined in this many seconds is closed. Whole seconds. | `10` | `config.rs`, `ws.rs` |
 | `VESPER_MAX_SOCKETS` | Concurrent WebSockets. More get HTTP 503. | `256` | `config.rs`, `ws.rs` |
-| `RUST_LOG` | Log filter in `tracing_subscriber` `EnvFilter` syntax, for example `info,vesper_sfu=debug`. | `info` | `main.rs` |
+| `VESPER_DATA_DIR` | Directory for the database (`vesper.db`, with its WAL files) and uploads (`uploads/<first 2 of id>/<id>`, plus `uploads/tmp/` for uploads in progress, emptied at start). Created if missing (new dirs 0700, `vesper.db` and upload files 0600). Empty counts as unset. | `data` | `config.rs`, `cli.rs`, `lib.rs`, `uploads.rs` |
+| `VESPER_ORIGIN` | The address people open in the browser: `http://` or `https://`, a host and an optional port, no path. Stored lowercase with no trailing slash and no default port, so it matches the browser's `Origin` header byte for byte. It is the base of every printed invite link. `https` turns on `Secure` cookies with the `__Host-` name. With Vite dev set it to `http://localhost:5173`. | `http://localhost:8080` | `config.rs`, `cli.rs`, `lib.rs`, `ws.rs` |
+| `VESPER_UPLOAD_QUOTA_MB` | Total size of all uploads, in MiB. An upload that would pass it gets 507 `quota_full`. Empty counts as unset. | `10240` | `config.rs`, `uploads.rs` |
+| `RUST_LOG` | Logs go to stderr. Log filter in `tracing_subscriber` `EnvFilter` syntax, for example `info,vesper_sfu=debug`. | `info` | `main.rs` |
+
+The Origin check applies to `/api` requests that change something (not GET or HEAD) and to the `/ws` upgrade; a missing or
+other `Origin` gets 403 (`require_origin` in `lib.rs`, `upgrade` in `ws.rs`). Browsers leave `Origin` out of same-origin GET
+requests, so other GETs are not checked. Clients that are not browsers, such as `curl` and `vesper-loadtest`, must send
+`Origin: <VESPER_ORIGIN>` themselves.
 
 ## Build and tooling
 
@@ -31,10 +37,11 @@ Fixed, not configurable: the room size cap (12, `max_room_size`) and the WebSock
 
 | Variable | Meaning | Where |
 |---|---|---|
-| `VESPER_DEV_KEY`, `VESPER_PUBLIC_HOST` | Put them in a `.env` next to `deploy/compose.yaml`. Compose refuses to start without either one. | `deploy/compose.yaml` |
+| `VESPER_ORIGIN`, `VESPER_PUBLIC_HOST` | Put them in a `.env` next to `deploy/compose.yaml`. Compose refuses to start without either one. | `deploy/compose.yaml` |
+| `VESPER_DATA_DIR` | Compose sets `/data`, a bind mount of `./data` next to `compose.yaml` (owned by uid 10001, mode 0700). The systemd unit sets `/var/lib/vesper` (`StateDirectory`). | `deploy/compose.yaml`, `deploy/vesper.service` |
 | `VESPER_TAG` | Image tag compose starts (default `latest`). Set it to roll back. | `deploy/compose.yaml` |
 | `VESPER_WEB_DIR` | The image sets it to `/srv/vesper/web`. The systemd unit sets `/opt/vesper/web`. | `deploy/Dockerfile`, `deploy/vesper.service` |
-| `VESPER_DEV_KEY`, `VESPER_PUBLIC_HOST` (systemd) | Read from `/etc/vesper/vesper.env` (mode 600). The unit also sets `VESPER_HTTP_BIND=127.0.0.1:8080` and `VESPER_UDP_BIND=0.0.0.0:40000`. | `deploy/vesper.service` |
+| `VESPER_ORIGIN`, `VESPER_PUBLIC_HOST` (systemd) | Read from `/etc/vesper/vesper.env` (mode 600). The unit also sets `VESPER_HTTP_BIND=127.0.0.1:8080` and `VESPER_UDP_BIND=0.0.0.0:40000`. | `deploy/vesper.service` |
 
 ## Dev machine only
 
@@ -42,12 +49,15 @@ Fixed, not configurable: the room size cap (12, `max_room_size`) and the WebSock
 |---|---|---|---|
 | `VESPER_NO_CAP` | `1` runs builds and checks without the memory cap. CI sets it. | unset | `scripts/capped.sh` |
 | `VESPER_CAP_MIB` | Memory cap for capped commands, in MiB. | `8192` | `scripts/capped.sh` |
-| `VESPER_SERVER_BIN` | Server binary the two-browser test starts. Relative paths start from `web/`. | `../target/release/vesper-server` | `web/e2e/two-browser.mjs` |
-| `E2E_CHROMIUM` | Path to a Chromium the two-browser test launches instead of the one Playwright downloaded. Local use only. | unset | `web/e2e/two-browser.mjs` |
+| `VESPER_SERVER_BIN` | Server binary the two-browser test starts. Relative paths start from `web/`. | `../target/release/vesper-server` | `web/e2e/lib.mjs` |
+| `E2E_CHROMIUM` | Path to a Chromium the two-browser test launches instead of the one Playwright downloaded. Local use only. | unset | `web/e2e/lib.mjs` |
 
 ## Not environment variables
 
-`vesper-loadtest` takes flags: `--url ws://127.0.0.1:PORT/ws --key K --room R --speakers N --seconds S [--pid PID]`
+`vesper-server` subcommands (`create-owner`, `invite`, `loadtest-accounts`, `help`) take flags, not variables. They read the
+same variables as the server. See [dev.md](dev.md#accounts) and `crates/vesper-server/src/cli.rs`.
+
+`vesper-loadtest` takes flags: `--url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--pid PID]`
 (`crates/vesper-loadtest/src/main.rs`; see `docs/testing/latency.md`).
 
 ## Keeping this file true
