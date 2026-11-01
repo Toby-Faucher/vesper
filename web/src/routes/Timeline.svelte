@@ -334,7 +334,7 @@
       <div class="flex h-full items-center justify-center"><EmptyState title="No messages yet." body="Say hello." /></div>
     {/if}
     {#if log?.moreBefore}
-      <div class="py-2 pl-15"><Button size="sm" variant="ghost" loading={loadingOlder} onclick={older}>Load older messages</Button></div>
+      <div class="py-2 pl-17"><Button size="sm" loading={loadingOlder} onclick={older}>Load older messages</Button></div>
     {/if}
     {#each items as r (r.key)}
       {#if r.kind === 'day'}

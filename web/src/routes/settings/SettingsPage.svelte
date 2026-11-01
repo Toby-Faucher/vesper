@@ -12,7 +12,7 @@
   let { section }: { section: SettingsSection } = $props();
 </script>
 
-<div class="flex min-h-0 flex-1 gap-8 overflow-y-auto px-4 py-6">
+<div class="flex min-h-0 flex-1 justify-center gap-8 overflow-y-auto px-4 py-6">
   <nav aria-label="Settings sections" class="sticky top-0 w-50 shrink-0 self-start">
     <ul class="flex flex-col gap-px">
       {#each SETTINGS_SECTIONS as s (s)}

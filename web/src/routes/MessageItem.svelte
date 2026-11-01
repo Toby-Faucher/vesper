@@ -197,12 +197,12 @@
     {:else}
       <div class="body" class:clamp={long && !expanded}>
         <Markdown {nodes} me={myName} />
+        {#if m.edited_at || (!head && m.pinned)}
+          <span class="note quiet">{m.edited_at ? '(edited)' : ''}{!head && m.pinned ? `${m.edited_at ? ' ' : ''}Pinned` : ''}</span>
+        {/if}
       </div>
       {#if long}
         <button type="button" class="more-link" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>{expanded ? 'Show less' : 'Show more'}</button>
-      {/if}
-      {#if m.edited_at || (!head && m.pinned)}
-        <p class="quiet text-xs">{m.edited_at ? '(edited)' : ''}{!head && m.pinned ? `${m.edited_at ? ' ' : ''}Pinned` : ''}</p>
       {/if}
       {#if m.attachments.length}<Attachments list={m.attachments} {onview} />{/if}
       {#if m.reactions.length}
@@ -323,6 +323,9 @@
     overflow: hidden;
     mask-image: linear-gradient(to bottom, var(--bg-app) 75%, transparent); /* a mask: only the alpha counts */
   }
+  /* The (edited) and Pinned note ends the text's last line instead of taking a line of its own. */
+  .body > :global(div) { display: inline; }
+  .note { margin-left: 4px; font-size: 12px; line-height: 16px; white-space: nowrap; }
   .more-link { justify-self: start; color: var(--fg-2); font-size: 12px; line-height: 16px; }
   .more-link:hover { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; }
   .pill {
