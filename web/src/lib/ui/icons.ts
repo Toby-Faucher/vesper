@@ -21,7 +21,7 @@ declare const icon: unique symbol;
 export type IconPath = string & { readonly [icon]: true };
 
 // Lucide names where they differ: more = ellipsis, edit = pencil, trash = trash-2, sidebar = panel-left, volume = volume-2,
-// headphonesOff = headphone-off, room = message-square, warn = triangle-alert, error = circle-alert.
+// headphonesOff = headphone-off, help = circle-help, room = message-square, warn = triangle-alert, error = circle-alert.
 export const mic = 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM19 10v2a7 7 0 0 1-14 0v-2M12 19L12 22' as IconPath;
 export const micOff = 'M2 2L22 22M18.89 13.23A7.12 7.12 0 0 0 19 12v-2M5 10v2a7 7 0 0 0 12 5M15 9.34V5a3 3 0 0 0-5.68-1.33M9 9v3a3 3 0 0 0 5.12 2.12M12 19L12 22' as IconPath;
 export const headphones = 'M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3' as IconPath;
@@ -37,6 +37,8 @@ export const edit = 'M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-
 export const trash = 'M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11L10 17M14 11L14 17' as IconPath;
 export const copy = 'M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2zM4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2' as IconPath;
 export const paperclip = 'M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48' as IconPath;
+export const send = 'M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11zM21.854 2.147l-10.94 10.939' as IconPath;
+export const help = 'M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01' as IconPath;
 export const x = 'M18 6 6 18M6 6l12 12' as IconPath;
 export const chevronDown = 'M6 9l6 6 6-6' as IconPath;
 export const chevronRight = 'M9 18l6-6-6-6' as IconPath;

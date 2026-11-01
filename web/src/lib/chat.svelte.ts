@@ -111,7 +111,18 @@ export const chat = $state({
   jump: null as number | null,
   /** Raised by Esc: the timeline goes to the newest message. */
   latest: 0,
+  /** A message to open for editing (Up in an empty composer); the row takes it and clears it. */
+  edit: null as number | null,
+  /** Raised when that edit ends: focus goes back to the composer. */
+  refocus: 0,
 });
+
+/** Your newest loaded message in a room that is not deleted, for Up in an empty composer. */
+export function lastOwn(roomId: number, myId: string): Message | null {
+  const list = chat.state.rooms[roomId]?.messages ?? [];
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].author_id === myId && !list[i].deleted) return list[i];
+  return null;
+}
 
 /**
  * Caps the rooms not shown, and the shown one when it is read at the bottom. A room scrolled up keeps what it has
@@ -202,6 +213,8 @@ export const remove = (id: number) => api<void>('DELETE', `/api/messages/${id}`)
 export const react = async (id: number, emoji: string, on: boolean) =>
   apply(await api<Message>('PUT', `/api/messages/${id}/reaction`, { emoji, on }));
 export const pin = async (id: number, on: boolean) => apply(await api<Message>('PUT', `/api/messages/${id}/pin`, { on }));
+/** A room's pinned messages, newest pin first. */
+export const pins = (roomId: number) => api<Message[]>('GET', `/api/rooms/${roomId}/pins`);
 export const markRead = (roomId: number, lastReadId: number) =>
   api<void>('PUT', `/api/rooms/${roomId}/read`, { last_read_id: lastReadId });
 

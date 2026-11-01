@@ -1,29 +1,20 @@
 <script lang="ts">
-  // The chat panel for the picked room: the timeline, the search field and the composer. Search and the composer are
-  // rebuilt in later tasks (8 and 10).
-  import { onMount, untrack } from 'svelte';
+  // The chat panel for the picked room: the timeline, the composer and the search field. Search is rebuilt in Task 10.
+  import { onMount } from 'svelte';
+  import Composer from './Composer.svelte';
   import Timeline from './Timeline.svelte';
   import { ApiFailure, errorText } from '../lib/api';
   import { href } from '../lib/route';
   import { navigate, session } from '../lib/session.svelte';
-  import { chat, jumpTo, marks, search, send, typers, upload } from '../lib/chat.svelte';
-  import type { Attachment } from '../lib/gen/Attachment';
+  import { chat, jumpTo, marks, search } from '../lib/chat.svelte';
   import type { Message } from '../lib/gen/Message';
   import type { SearchHit } from '../lib/gen/SearchHit';
 
   let { roomId }: { roomId: number } = $props();
 
-  const TYPING_EVERY_MS = 3000; // the server takes one typing event per 3 s
-
   let error = $state('');
   let replyTo = $state<Message | null>(null);
-  let composer = $state<HTMLTextAreaElement>();
-  let pending = $state<Attachment[]>([]);
-  let progress = $state<number | null>(null);
-  let sending = $state(false);
-  let lastTyping = 0;
-  const PASTE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']; // the types the server shows inline
-  let now = $state(Date.now());
+  let composer = $state<Composer>();
 
   let query = $state('');
   let hits = $state<SearchHit[]>([]);
@@ -33,96 +24,27 @@
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchSeq = 0;
 
-  const myId = $derived(session.state.me?.user.user_id ?? '');
   const roomName = (id: number) => session.state.rooms.find((r) => r.id === id)?.name ?? '';
   const name = (id: string) => session.state.users[id]?.display_name ?? 'Someone';
-  const typing = $derived(typers(chat.state, roomId, now).filter((id) => id !== myId).map(name));
 
-  onMount(() => {
-    const t = setInterval(() => (now = Date.now()), 1000);
-    return () => {
-      clearInterval(t);
-      clearTimeout(searchTimer);
-    };
-  });
+  onMount(() => () => clearTimeout(searchTimer));
 
-  // A new room: reply and uploads belong to the old one.
+  // A new room: an action error belongs to the old one.
   $effect(() => {
     void roomId;
-    untrack(() => {
-      replyTo = null;
-      pending = [];
-      error = '';
-    });
+    error = '';
   });
 
-  /** Runs an action and shows its error. True when it worked. */
-  async function act(f: () => Promise<unknown>): Promise<boolean> {
+  /** Runs an action and shows its error (`conflict` replaces the table's text for a 409). True when it worked. */
+  async function act(f: () => Promise<unknown>, conflict?: string): Promise<boolean> {
     error = '';
     try {
       await f();
       return true;
     } catch (e) {
-      error = errorText(e);
+      error = conflict && e instanceof ApiFailure && e.status === 409 ? conflict : errorText(e);
       return false;
     }
-  }
-
-  async function submit(e?: Event) {
-    e?.preventDefault();
-    const room = roomId;
-    const body = (chat.drafts[room] ?? '').trim() || pending.map((a) => a.name).join(', '); // a body is required
-    if (!body || sending || progress !== null) return;
-    sending = true;
-    error = '';
-    try {
-      await send(room, body, replyTo?.id ?? null, pending.map((a) => a.id));
-      chat.drafts[room] = '';
-      replyTo = null;
-      pending = [];
-      chat.latest++; // follow your own message, also from an older slice after a jump
-    } catch (err) {
-      error = err instanceof ApiFailure && err.code === 'conflict' ? 'That file could not be attached. Upload it again.' : errorText(err);
-    } finally {
-      sending = false;
-    }
-  }
-
-  function onKey(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      void submit();
-    }
-  }
-
-  function onInput() {
-    const t = Date.now();
-    if (!chat.drafts[roomId]?.trim() || t - lastTyping < TYPING_EVERY_MS) return;
-    lastTyping = t;
-    session.sig?.send({ type: 'typing', room_id: roomId });
-  }
-
-  async function attach(files: File[]) {
-    const room = roomId;
-    for (const f of files) {
-      error = '';
-      progress = 0;
-      try {
-        const a = await upload(room, f, (p) => (progress = p));
-        if (room === roomId) pending = [...pending, a];
-      } catch (e) {
-        error = e instanceof ApiFailure && e.status === 413 ? 'Files can be up to 25 MB.' : errorText(e);
-      } finally {
-        progress = null;
-      }
-    }
-  }
-
-  function onPaste(e: ClipboardEvent) {
-    const files = [...(e.clipboardData?.files ?? [])].filter((f) => PASTE_TYPES.includes(f.type));
-    if (!files.length) return;
-    e.preventDefault();
-    void attach(files);
   }
 
   function onSearchInput() {
@@ -174,7 +96,7 @@
   }
 </script>
 
-<section class="flex min-h-0 flex-1 flex-col gap-2 pt-3 pb-4" aria-label="Chat">
+<section class="flex min-h-0 flex-1 flex-col pt-3" aria-label="Chat">
   <div class="space-y-2 px-4">
   <input type="search" class="w-full rounded bg-element p-2" aria-label="Search messages" placeholder="Search messages"
     bind:value={query} oninput={onSearchInput} />
@@ -198,34 +120,6 @@
 
   <Timeline {roomId} {act} onreply={reply} onempty={sayHello} />
 
-  <div class="space-y-1 px-4">
-  <p class="h-5 text-xs text-fg-3" role="status">
-    {typing.length ? `${typing.join(', ')} ${typing.length > 1 ? 'are' : 'is'} typing` : ''}
-  </p>
-  {#if error}<p class="text-danger" role="alert">{error}</p>{/if}
-  <form class="space-y-1" onsubmit={submit}>
-    {#if replyTo}
-      <p class="text-xs text-fg-3">
-        Replying to {name(replyTo.author_id)}
-        <button type="button" class="underline" onclick={() => (replyTo = null)}>Cancel reply</button>
-      </p>
-    {/if}
-    {#each pending as a (a.id)}
-      <p class="text-xs">
-        Attached: {a.name}
-        <button type="button" class="underline" onclick={() => (pending = pending.filter((p) => p.id !== a.id))}>Remove</button>
-      </p>
-    {/each}
-    {#if progress !== null}<progress class="w-full" value={progress} max="1" aria-label="Upload progress"></progress>{/if}
-    <textarea bind:this={composer} class="w-full rounded bg-element p-2" rows="2" aria-label="Message" placeholder="Message {roomName(roomId)}"
-      bind:value={chat.drafts[roomId]} onkeydown={onKey} oninput={onInput} onpaste={onPaste}></textarea>
-    <div class="flex items-center gap-2">
-      <label class="flex-1 text-sm">
-        Attach a file
-        <input type="file" class="text-xs" onchange={(e) => { void attach([...(e.currentTarget.files ?? [])]); e.currentTarget.value = ''; }} />
-      </label>
-      <button class="rounded bg-selected px-3 py-1" disabled={sending || progress !== null}>Send</button>
-    </div>
-  </form>
-  </div>
+  {#if error}<p class="shrink-0 px-5 pt-1 text-xs text-danger" role="alert">{error}</p>{/if}
+  <Composer {roomId} bind:this={composer} bind:replyTo />
 </section>

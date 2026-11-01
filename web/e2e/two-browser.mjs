@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
-import { browser, cli, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, signup, sleep, startServer } from './lib.mjs';
+import { browser, cli, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, signup, sleep, startServer } from './lib.mjs';
 
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
@@ -63,7 +63,6 @@ async function post(page, room, body) {
   }
 }
 
-const composer = (page) => page.getByPlaceholder('Message general');
 // The message whose Markdown has a bold "bob" (a reply's quoted excerpt is plain text).
 const boldBob = (page) => page.locator('article').filter({ has: page.locator('strong', { hasText: 'bob' }) });
 
@@ -143,7 +142,8 @@ try {
   await composer(alice.page).press('Enter');
   const got = boldBob(bob.page);
   await got.waitFor({ timeout: 5000 });
-  assert.ok((await got.innerText()).includes('<b>x</b>'), 'raw HTML was not shown as text');
+  // innerText, not textContent: what is drawn. A row just added may not be painted yet (content-visibility), so poll.
+  await bob.page.waitForFunction((el) => el.innerText.includes('<b>x</b>'), await got.elementHandle(), { timeout: 5000 }).catch(() => assert.fail('raw HTML was not shown as text'));
   assert.equal(await got.locator('b').count(), 0, 'raw HTML became an element');
   // The screen reader hears the rendered text, not the Markdown.
   await bob.page.waitForFunction(() => document.querySelector('p.sr-only[aria-live="polite"]')?.textContent === 'alice: hello bob <b>x</b> https://example.test/a', null, { timeout: 5000 });
@@ -168,6 +168,53 @@ try {
   await editBox.press('Enter');
   await boldBob(bob.page).filter({ hasText: 'bob edited' }).filter({ hasText: '(edited)' }).waitFor({ timeout: 5000 });
   console.log('chat_roundtrip: ok');
+
+  // composer: bob's typing shows for alice; an Enter during IME composition does not send; @ offers people and Enter
+  // inserts the username; Esc cancels a reply; Up in an empty box edits your last message and Esc gives focus back.
+  const aBox = composer(alice.page);
+  const bBox = composer(bob.page);
+  await bBox.fill('');
+  await sleep(3000); // bob's last typing event (for "hi alice") may be under 3 s old: the client sends one per 3 s
+  await bBox.pressSequentially('hey @al');
+  await alice.page.getByRole('status').filter({ hasText: 'bob is typing' }).waitFor({ timeout: 5000 });
+  const option = bob.page.getByRole('option', { name: /alice/ });
+  await option.waitFor({ timeout: 2000 });
+  assert.equal(await bBox.getAttribute('aria-activedescendant'), await option.getAttribute('id'), 'the first person is not active');
+  await bBox.press('Enter');
+  assert.equal(await bBox.inputValue(), 'hey @alice ', 'Enter did not insert the username');
+  await bBox.evaluate((el) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true })));
+  await sleep(300);
+  assert.equal(await bBox.inputValue(), 'hey @alice ', 'an Enter during IME composition sent the message');
+  await bBox.fill('');
+  await got.getByRole('button', { name: 'Reply', exact: true }).click();
+  await bob.page.getByRole('button', { name: 'Cancel reply' }).waitFor();
+  await bBox.press('Escape');
+  await bob.page.getByRole('button', { name: 'Cancel reply' }).waitFor({ state: 'detached', timeout: 2000 });
+  await aBox.fill('');
+  await aBox.press('ArrowUp');
+  assert.equal(await editBox.inputValue(), 'hello **bob** edited', 'Up did not edit the last own message');
+  await editBox.press('Escape');
+  await editBox.waitFor({ state: 'detached', timeout: 2000 });
+  assert.ok(await aBox.evaluate((el) => el === document.activeElement), 'focus did not go back to the composer after Esc');
+  // A draft belongs to its room: it is not shown in another room and is there again on the way back.
+  await call(alice.page, 'POST', '/api/rooms', { name: 'drafts' });
+  await aBox.fill('only for general');
+  await openRoom(alice.page, 'drafts');
+  assert.equal(await aBox.inputValue(), '', 'the general draft showed in another room');
+  await openRoom(alice.page, 'general');
+  assert.equal(await aBox.inputValue(), 'only for general', 'the draft was lost');
+  await aBox.fill('');
+  // Pins: pin from the toolbar, find it in the header's list, unpin it there, then the empty state.
+  await boldBob(alice.page).getByRole('button', { name: 'Pin', exact: true }).click();
+  await boldBob(alice.page).getByText('Pinned').first().waitFor({ timeout: 5000 });
+  await alice.page.getByRole('button', { name: 'Pins', exact: true }).click();
+  const pinsBox = alice.page.getByRole('dialog', { name: 'Pinned messages' });
+  await pinsBox.getByRole('button', { name: /^Jump to the message from alice/ }).waitFor({ timeout: 5000 });
+  await pinsBox.getByRole('button', { name: 'Unpin', exact: true }).click();
+  await pinsBox.getByText('Nothing is pinned yet.').waitFor({ timeout: 5000 });
+  await alice.page.keyboard.press('Escape');
+  await pinsBox.waitFor({ state: 'hidden' });
+  console.log('composer_and_pins: ok');
 
   // upload_roundtrip: alice attaches a PNG and sends; bob sees it inline and it decodes as 1x1.
   await alice.page.getByLabel('Attach a file').setInputFiles({ name: 'dot.png', mimeType: 'image/png', buffer: png1x1() });

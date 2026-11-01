@@ -1,6 +1,7 @@
 // The rows of the timeline: day rows, the New row and messages grouped by author. Pure, so it is tested without a DOM.
 import type { Message } from '../gen/Message';
 import type { Md } from '../markdown';
+import { score } from './switcher';
 
 export type Row =
   | { kind: 'day'; label: string; key: string }
@@ -96,3 +97,50 @@ export function plain(nodes: Md[]): string {
 
 /** Bodies above about 20 lines collapse behind "Show more". Counted from the text, so no row is measured. */
 export const isLong = (body: string) => (body.match(/\n/g)?.length ?? 0) > 20 || body.length > 2000;
+
+/**
+ * The `@` mention being typed at `caret`: where the `@` is and the text after it. Null when the `@` does not start a
+ * word (as in an email address), when a space comes after it, or inside inline code or a code block.
+ */
+export function mentionQuery(text: string, caret: number): { start: number; q: string } | null {
+  const before = text.slice(0, caret);
+  const at = before.lastIndexOf('@');
+  if (at < 0) return null;
+  const q = before.slice(at + 1);
+  if (q.length > 32 || /\s|@/u.test(q)) return null;
+  const prev = before[at - 1];
+  if (prev !== undefined && !/[\s([{"'>]/u.test(prev)) return null;
+  const lines = before.slice(0, at).split('\n');
+  const fences = lines.slice(0, -1).filter((l) => l.startsWith('```')).length;
+  if (fences % 2 || (lines.at(-1)!.split('`').length - 1) % 2) return null;
+  return { start: at, q };
+}
+
+type Person = { user_id: string; username: string; display_name: string; role: string; banned: boolean };
+type Seen = { restricted: boolean; members: string[] };
+
+/** True when the person can read the room: anyone for an open room; the owner, moderators and listed members for a restricted one. */
+export const canSee = (u: Person, room: Seen) => !room.restricted || u.role === 'owner' || u.role === 'moderator' || room.members.includes(u.user_id);
+
+/**
+ * People to offer for `@q` in `room`, best match first: only those who can see the room, not banned, not me. Matches the
+ * username and the display name with the switcher's scorer (code points, so any script works). At most `max`.
+ */
+export function mentionable<U extends Person>(q: string, users: U[], room: Seen, myId: string, max = 8): U[] {
+  const out: { u: U; s: number }[] = [];
+  for (const u of users) {
+    if (u.banned || u.user_id === myId || !canSee(u, room)) continue;
+    const s = Math.max(score(q, u.username) ?? -Infinity, score(q, u.display_name) ?? -Infinity);
+    if (s > -Infinity) out.push({ u, s });
+  }
+  out.sort((a, b) => b.s - a.s || a.u.display_name.localeCompare(b.u.display_name));
+  return out.slice(0, max).map((x) => x.u);
+}
+
+/** "Sam is typing", "Sam and Alex are typing", "Several people are typing", or '' for nobody. */
+export function typingLine(names: string[]): string {
+  if (!names.length) return '';
+  if (names.length === 1) return `${names[0]} is typing`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing`;
+  return 'Several people are typing';
+}

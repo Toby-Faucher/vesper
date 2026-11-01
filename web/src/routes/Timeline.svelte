@@ -25,7 +25,7 @@
     onempty,
   }: {
     roomId: number;
-    act: (f: () => Promise<unknown>) => Promise<boolean>;
+    act: (f: () => Promise<unknown>, conflict?: string) => Promise<boolean>;
     onreply: (m: Message) => void;
     onempty: () => void;
   } = $props();

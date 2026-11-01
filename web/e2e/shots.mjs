@@ -664,6 +664,92 @@ scene('timeline-empty', async ({ alice, api }) => {
   return alice.page;
 });
 
+// The composer in general, above the call bar (alice is in the music call): empty, a multi-line draft, the @ list with
+// three people, the reply bar, Up editing the last message, two people typing, the formatting help, a failed send and
+// the counter past the limit.
+scene('composer', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  const box = page.getByRole('textbox', { name: 'Message', exact: true });
+  const still = async () => { await page.mouse.move(1439, 899); await sleep(300); };
+  await openRoom(page, 'general');
+  await rest(page);
+  await ctx.shot(page, 'composer-empty');
+  await box.fill('three things for friday:\nbring the **good** cable\nsomeone check the `deepfilter` mode\n> last time it crackled\nand snacks');
+  await still();
+  await ctx.shot(page, 'composer-multiline');
+  await box.fill('');
+  await box.pressSequentially('can someone check @a');
+  await page.getByRole('option').nth(2).waitFor();
+  await still();
+  await ctx.shot(page, 'composer-mention');
+  await box.press('Escape');
+  await box.fill('sure, I can bring it');
+  const theirs = page.locator('article', { hasText: 'sounds fine to me' }).last();
+  await theirs.hover();
+  await theirs.getByRole('button', { name: 'Reply', exact: true }).click();
+  await still();
+  await ctx.shot(page, 'composer-reply');
+  await box.press('Escape');
+  await box.fill('');
+  await box.press('ArrowUp');
+  await page.getByLabel('Edit message').waitFor();
+  await still();
+  await ctx.shot(page, 'composer-edit-last');
+  await page.getByLabel('Edit message').press('Escape');
+  for (const p of [ctx.bob.page, extra[0].page]) {
+    await openRoom(p, 'general');
+    await p.getByRole('textbox', { name: 'Message', exact: true }).pressSequentially('on my way');
+  }
+  await page.getByText('bob and carol are typing').waitFor({ timeout: 10000 });
+  await rest(page);
+  await ctx.shot(page, 'composer-typing');
+  for (const p of [ctx.bob.page, extra[0].page]) await p.getByRole('textbox', { name: 'Message', exact: true }).fill('');
+  await page.getByRole('button', { name: 'Formatting help' }).click();
+  await still();
+  await ctx.shot(page, 'composer-help');
+  await page.keyboard.press('Escape');
+  await page.route('**/api/rooms/*/messages', (r) => r.request().method() === 'POST' ? r.fulfill({ status: 429, json: { code: 'rate_limited', message: 'slow down' } }) : r.fallback());
+  await box.fill('see you at nine');
+  await box.press('Enter');
+  await page.getByRole('alert').filter({ hasText: 'Too many tries' }).waitFor();
+  await still();
+  await ctx.shot(page, 'composer-error');
+  await page.unrouteAll({ behavior: 'wait' });
+  await box.fill('a long story. '.repeat(287)); // 4018 characters, 4017 after the trim
+  await still();
+  await ctx.shot(page, 'composer-limit');
+  await box.fill('');
+});
+// The header's pins list with three pins in plans, then a room with none.
+scene('pins', async (ctx) => {
+  await ctx.seed();
+  const { room } = await plans(ctx);
+  // Pinned before the room opens: a pin pushes the message with its real time, which would undo the harness's backdating.
+  const msgs = (await ctx.api(ctx.alice.page, 'GET', `/api/rooms/${room.id}/messages?limit=50`)).messages;
+  for (const body of ['anyone up for a game tonight?', 'I can do 9']) {
+    const m = msgs.find((x) => x.body === body);
+    if (!m.pinned) await ctx.api(ctx.alice.page, 'PUT', `/api/messages/${m.id}/pin`, { on: true });
+  }
+  const page = await openPlans(ctx);
+  await page.getByRole('button', { name: 'Pins', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Pinned messages' }).getByText('of 50 pins').waitFor();
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'pins');
+  await page.keyboard.press('Escape');
+  await page.unrouteAll({ behavior: 'wait' });
+  const rooms = await ctx.api(page, 'GET', '/api/rooms');
+  if (!rooms.some((r) => r.name === 'nopins')) await ctx.api(page, 'POST', '/api/rooms', { name: 'nopins' });
+  await openRoom(page, 'nopins');
+  await page.getByRole('button', { name: 'Pins', exact: true }).click();
+  await page.getByText('Nothing is pinned yet.').waitFor();
+  await page.mouse.move(1439, 899);
+  await sleep(300);
+  await ctx.shot(page, 'pins-empty');
+  await page.keyboard.press('Escape');
+});
+
 scene('room', async ({ alice, bob, seed }) => {
   await seed();
   for (const p of [alice.page, bob.page]) {
@@ -709,6 +795,22 @@ scene('cpu-baseline', async ({ alice, bob }) => {
   const t0 = await task();
   await sleep(10000);
   console.log(`cpu-baseline: ${Math.round((await task() - t0) * 1000)} ms per 10 s`);
+});
+
+// Offline: the composer keeps the draft and says Send waits for the connection. Restarts the server like reconnecting.
+scene('composer-offline', async ({ alice, server, shot }) => {
+  await home(alice.page);
+  const box = alice.page.getByRole('textbox', { name: 'Message', exact: true });
+  await box.fill('is the server down again?');
+  await server.restart(async () => {
+    await alice.page.getByText(/You are offline/).waitFor({ timeout: 10000 });
+    await alice.page.mouse.move(1439, 899);
+    await sleep(300);
+    await shot(alice.page, 'composer-offline');
+  });
+  await alice.page.getByRole('button', { name: 'Try now' }).click().catch(() => {});
+  await alice.page.getByText('Connection lost').waitFor({ state: 'detached', timeout: 30000 });
+  await box.fill('');
 });
 
 // The server goes away: the banner counts down to the next try; it comes back and the banner goes. Runs last.

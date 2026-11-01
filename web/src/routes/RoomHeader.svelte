@@ -5,8 +5,22 @@
   import Button from '../lib/ui/c/Button.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
-  // The open room's name and its one primary action. Pins and Search join it in Tasks 8 and 10.
+  import { UI_MESSAGES } from '../lib/ui/messages';
+  // The open room's name, Pins and its one primary action. Search joins it in Task 10. The pins list (with the Markdown
+  // renderer) loads on the first click, so it stays out of the first load.
   let { room, inCall, joining, onjoin }: { room: RoomInfo; inCall: boolean; joining: boolean; onjoin: () => void } = $props();
+  let pinsEl = $state<HTMLButtonElement | null>(null);
+  let pins = $state<Promise<typeof import('./PinsPopover.svelte')> | null>(null);
+  let pinsOpen = $state(false);
+  let pinsFailed = false;
+  function togglePins() {
+    if (pinsFailed) [pins, pinsFailed] = [null, false]; // the chunk did not load: try again
+    pins ??= import('./PinsPopover.svelte').catch((e) => {
+      [pinsOpen, pinsFailed] = [false, true];
+      throw e;
+    });
+    pinsOpen = !pinsOpen;
+  }
 </script>
 
 <header class="flex h-12 shrink-0 items-center gap-3 border-b border-subtle px-4">
@@ -18,6 +32,19 @@
     <span class="flex shrink-0 items-center gap-1 text-xs text-fg-2"><Icon d={I.shield} />Restricted</span>
   {/if}
   <div class="ml-auto flex shrink-0 items-center gap-2">
+    <span class="pins"><IconButton icon={I.pin} label="Pins" tip bind:el={pinsEl} onclick={togglePins} /></span>
+    {#if pins}
+      {#await pins then m}
+        <m.default roomId={room.id} anchor={pinsEl} open={pinsOpen} onclose={() => (pinsOpen = false)} />
+      {:catch}
+        <span class="sr-only" role="alert">{UI_MESSAGES.pinsFailed}</span>
+      {/await}
+    {/if}
     {#if !inCall}<Button variant="primary" loading={joining} onclick={onjoin}>Join voice</Button>{/if}
   </div>
 </header>
+
+<style>
+  .pins { display: contents; }
+  .pins :global([aria-expanded='true']) { background: var(--bg-selected); color: var(--fg); }
+</style>

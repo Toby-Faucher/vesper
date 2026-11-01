@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Unread } from '../gen/Unread';
-import { SHORTCUTS, isTyping, keysFor, nextUnread, shortcut, stepRoom, type Def } from './keys';
+import { SHORTCUTS, isSendKey, isTyping, keysFor, nextUnread, shortcut, stepRoom, type Def } from './keys';
 
 const un = (room_id: number, unread: number): Unread => ({ room_id, last_read_id: 0, unread, mentions: 0 });
 
@@ -174,5 +174,19 @@ describe('room steps', () => {
     expect(nextUnread(order, 5, { 5: un(5, 1) })).toBe(null);
     expect(nextUnread(order, null, { 9: un(9, 2) })).toBe(9);
     expect(nextUnread(order, 2, { 9: un(9, 0) })).toBe(null);
+  });
+});
+
+describe('isSendKey', () => {
+  const k = (over: Partial<{ key: string; shiftKey: boolean; isComposing: boolean; keyCode: number }> = {}) =>
+    isSendKey({ key: 'Enter', shiftKey: false, isComposing: false, keyCode: 13, ...over });
+  it('sends on Enter, not on Shift+Enter or other keys', () => {
+    expect(k()).toBe(true);
+    expect(k({ shiftKey: true })).toBe(false);
+    expect(k({ key: 'a', keyCode: 65 })).toBe(false);
+  });
+  it('does not send while an IME is composing, including the Safari keyCode 229 Enter', () => {
+    expect(k({ isComposing: true })).toBe(false);
+    expect(k({ keyCode: 229 })).toBe(false);
   });
 });

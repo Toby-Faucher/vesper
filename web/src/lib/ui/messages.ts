@@ -18,6 +18,12 @@ export const UI_MESSAGES = {
   chatFailed: 'The chat did not load. Reload the page to try again.',
   switcherLoading: 'Loading...',
   switcherFailed: 'Could not load the switcher. Check your connection and try again.',
+  composerOffline: 'You are offline. Your text is kept here, and Send works again once the connection is back.',
+  tooLong: (over: number) => `Too long by ${over} ${over === 1 ? 'character' : 'characters'}.`,
+  attachFailed: 'That file could not be attached. Upload it again.',
+  fileTooLarge: 'Files can be up to 25 MB.',
+  pinsFull: 'This room has 50 pins, the most it can hold. Unpin one first.',
+  pinsFailed: 'The pins did not load.',
   adminLater: 'The admin pages are not built yet.',
   sectionLater: 'Nothing to set here yet.',
 } as const;

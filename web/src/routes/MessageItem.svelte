@@ -6,10 +6,12 @@
   import { tick } from 'svelte';
   import Markdown from './Markdown.svelte';
   import { parse } from '../lib/markdown';
-  import { edit, pin, react, remove } from '../lib/chat.svelte';
+  import { chat, edit, pin, react, remove } from '../lib/chat.svelte';
   import type { Message } from '../lib/gen/Message';
   import * as I from '../lib/ui/icons';
   import { isLong } from '../lib/ui/timeline';
+  import { isSendKey } from '../lib/ui/keys';
+  import { UI_MESSAGES } from '../lib/ui/messages';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
   import Dialog from '../lib/ui/c/Dialog.svelte';
@@ -35,7 +37,7 @@
     myName: string;
     isMod: boolean;
     user: (id: string) => { user_id: string; display_name: string; accent: string };
-    act: (f: () => Promise<unknown>) => Promise<boolean>;
+    act: (f: () => Promise<unknown>, conflict?: string) => Promise<boolean>;
     onreply: (m: Message) => void;
     onjump: (id: number) => void;
   } = $props();
@@ -69,10 +71,23 @@
   const toggle = (e: string, on: boolean) => act(() => react(m.id, e, on));
   const has = (e: string) => m.reactions.find((r) => r.emoji === e)?.user_ids.includes(myId) ?? false;
 
+  let fromComposer = false; // opened by Up in the composer: focus goes back there
+  function startEditing(composer = false) {
+    editText = m.body;
+    editing = true;
+    fromComposer = composer;
+  }
+  $effect(() => {
+    if (chat.edit !== m.id) return;
+    chat.edit = null;
+    if (!m.deleted) startEditing(true);
+  });
+
   async function stopEditing() {
     editing = false;
     await tick();
-    moreEl?.focus(); // Edit lives in the More menu: focus goes back to the button that opened it
+    if (fromComposer) chat.refocus++;
+    else moreEl?.focus(); // Edit lives in the More menu: focus goes back to the button that opened it
   }
   async function save() {
     if (!editText.trim() || saving) return;
@@ -86,7 +101,7 @@
       e.preventDefault();
       e.stopPropagation(); // the Esc that cancels an edit does not also jump the timeline
       void stopEditing();
-    } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+    } else if (isSendKey(e)) {
       e.preventDefault();
       void save();
     }
@@ -132,7 +147,7 @@
       <p class="quiet italic">Message deleted</p>
     {:else if editing}
       <textarea class="control mt-1 block w-full resize-y px-2.5 py-1.5" rows="2" aria-label="Edit message" bind:value={editText}
-        onkeydown={onEditKey} {@attach (el) => el.focus()}></textarea>
+        onkeydown={onEditKey} {@attach (el) => { el.focus({ preventScroll: true }); el.closest('article')?.scrollIntoView({ block: 'nearest' }); }}></textarea>
       <p class="mt-1 flex items-center gap-2 text-xs text-fg-2">
         <Button size="sm" variant="primary" loading={saving} onclick={save}>Save</Button>
         <Button size="sm" variant="ghost" onclick={stopEditing}>Cancel</Button>
@@ -173,7 +188,7 @@
     <div class="tools" role="toolbar" aria-label="Message actions">
       <button type="button" class="tb" aria-label="Add reaction" bind:this={reactEl} onclick={() => (picker = { mounted: true, open: !picker.open })}><Icon d={I.smile} /></button>
       <button type="button" class="tb" aria-label="Reply" onclick={() => onreply(m)}><Icon d={I.reply} /></button>
-      <button type="button" class="tb" aria-label={m.pinned ? 'Unpin' : 'Pin'} onclick={() => act(() => pin(m.id, !m.pinned))}><Icon d={I.pin} /></button>
+      <button type="button" class="tb" aria-label={m.pinned ? 'Unpin' : 'Pin'} onclick={() => act(() => pin(m.id, !m.pinned), UI_MESSAGES.pinsFull)}><Icon d={I.pin} /></button>
       <button type="button" class="tb" aria-label="More" aria-haspopup="menu" bind:this={moreEl} onclick={() => (menu = { mounted: true, open: !menu.open })}><Icon d={I.more} /></button>
     </div>
   {/if}
@@ -181,7 +196,7 @@
 
 {#if menu.mounted}
   <Menu anchor={moreEl} open={menu.open} onclose={() => (menu.open = false)} label="Message actions">
-    {#if mine}<MenuItem icon={I.edit} onselect={() => { editText = m.body; editing = true; }}>Edit</MenuItem>{/if}
+    {#if mine}<MenuItem icon={I.edit} onselect={() => startEditing()}>Edit</MenuItem>{/if}
     <MenuItem icon={I.copy} onselect={() => copy(m.body)}>Copy text</MenuItem>
     <MenuItem icon={I.link} onselect={() => copy(`${location.origin}/r/${m.room_id}#m${m.id}`)}>Copy link</MenuItem>
     {#if mine || isMod}<MenuItem icon={I.trash} danger onselect={() => (confirm = { mounted: true, open: true })}>Delete</MenuItem>{/if}
@@ -231,6 +246,7 @@
   /* A mention of me: a 2 px amber bar and a faint amber wash. */
   .msg.mentioned { background: color-mix(in oklab, var(--accent-subtle) 55%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
   .msg:hover, .msg:focus-within, .msg.editing { background: var(--bg-hover); }
+  .msg.editing { scroll-margin-bottom: 16px; } /* the list's bottom padding: an edit of the last row ends at the bottom */
   .msg.mentioned:hover, .msg.mentioned:focus-within { background: var(--accent-subtle); }
   .quote, .content { grid-column: 2; }
   .gutter { grid-column: 1; }

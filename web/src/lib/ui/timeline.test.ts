@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../gen/Message';
 import { parse } from '../markdown';
-import { dayLabel, firstUnreadInPage, isLong, plain, rows } from './timeline';
+import { canSee, dayLabel, firstUnreadInPage, isLong, mentionQuery, mentionable, plain, rows, typingLine } from './timeline';
 
 const TZ = 'Europe/London';
 // 2026-10-27 is a Tuesday. 23:58 London time (GMT, after the October change) is 23:58 UTC.
@@ -90,5 +90,60 @@ describe('isLong', () => {
     expect(isLong('a\n'.repeat(20))).toBe(false);
     expect(isLong('a\n'.repeat(21))).toBe(true);
     expect(isLong('x'.repeat(2001))).toBe(true);
+  });
+});
+
+describe('mentionQuery', () => {
+  const at = (t: string) => mentionQuery(t.replace('|', ''), t.indexOf('|'));
+  it('finds an @ at a word start before the caret', () => {
+    expect(at('@|')).toEqual({ start: 0, q: '' });
+    expect(at('hi @al|')).toEqual({ start: 3, q: 'al' });
+    expect(at('hi @al| there')).toEqual({ start: 3, q: 'al' });
+    expect(at('line\n(@bo|')).toEqual({ start: 6, q: 'bo' });
+    expect(at('@Zoë|')).toEqual({ start: 0, q: 'Zoë' });
+    expect(at('@🙂x|')).toEqual({ start: 0, q: '🙂x' });
+  });
+  it('is null after a space, inside a word, or with the caret before the @', () => {
+    expect(at('@al ex|')).toBeNull();
+    expect(at('mail@host|')).toBeNull();
+    expect(at('|@al')).toBeNull();
+    expect(at('no mention|')).toBeNull();
+  });
+  it('is null inside inline code and code blocks', () => {
+    expect(at('`@al|')).toBeNull();
+    expect(at('`x` @al|')).toEqual({ start: 4, q: 'al' });
+    expect(at('```\n@al|')).toBeNull();
+    expect(at('```\ncode\n```\n@al|')).toEqual({ start: 13, q: 'al' });
+  });
+});
+
+describe('mentionable', () => {
+  const u = (user_id: string, username: string, display_name = username, role = 'member', banned = false) => ({ user_id, username, display_name, role, banned });
+  const people = [u('1', 'alice'), u('2', 'alan', 'Alan Wake'), u('3', 'zoe', 'Zoë'), u('4', 'mod', 'Mod', 'moderator'), u('5', 'albert', 'Al', 'member', true), u('9', 'me')];
+  const open = { restricted: false, members: [] as string[] };
+  const names = (q: string, room = open) => mentionable(q, people, room, '9').map((x) => x.username);
+  it('offers only people who can see the room, never me or the banned', () => {
+    expect(names('')).toEqual(['alan', 'alice', 'mod', 'zoe']);
+    expect(names('', { restricted: true, members: ['3'] })).toEqual(['mod', 'zoe']);
+    expect(names('al', { restricted: true, members: ['1'] })).toEqual(['alice']);
+    expect(canSee(people[0], { restricted: true, members: [] })).toBe(false);
+    expect(canSee(people[3], { restricted: true, members: [] })).toBe(true);
+  });
+  it('filters by username or display name, best first, any script', () => {
+    expect(names('al')).toEqual(['alan', 'alice']);
+    expect(names('wake')).toEqual(['alan']);
+    expect(names('zoë')).toEqual(['zoe']);
+    expect(names('ZO')).toEqual(['zoe']);
+    expect(names('xq')).toEqual([]);
+    expect(mentionable('', people, open, '9', 2)).toHaveLength(2);
+  });
+});
+
+describe('typingLine', () => {
+  it('names one or two, then says several', () => {
+    expect(typingLine([])).toBe('');
+    expect(typingLine(['Sam'])).toBe('Sam is typing');
+    expect(typingLine(['Sam', 'Alex'])).toBe('Sam and Alex are typing');
+    expect(typingLine(['Sam', 'Alex', 'Kim'])).toBe('Several people are typing');
   });
 });

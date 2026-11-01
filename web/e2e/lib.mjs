@@ -147,6 +147,9 @@ export async function messageMenu(article, item) {
   await article.page().getByRole('menuitem', { name: item, exact: true }).click();
 }
 
+// The message box of the open room ("Message <room>" is its placeholder; the edit box is "Edit message").
+export const composer = (page) => page.getByRole('textbox', { name: 'Message', exact: true });
+
 // Opens the Account menu at the bottom of the sidebar and signs out.
 export async function logout(page) {
   await page.getByRole('button', { name: 'Account' }).click();

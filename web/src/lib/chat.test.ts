@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CAP, anchorTop, applyChatMsg, cap, chat, loadLatest, marks, mergeLatest, openRoom, trimRooms, typers, type ChatState } from './chat.svelte';
+import { CAP, anchorTop, applyChatMsg, cap, chat, lastOwn, loadLatest, marks, mergeLatest, openRoom, trimRooms, typers, type ChatState } from './chat.svelte';
 import type { Message } from './gen/Message';
 
 const msg = (id: number, over: Partial<Message> = {}): Message => ({
@@ -159,5 +159,14 @@ describe('cap and trimRooms', () => {
     expect(chat.state.rooms[2].messages.length).toBe(CAP);
     trimRooms(1, true);
     expect(chat.state.rooms[1].messages.length).toBe(CAP);
+  });
+});
+
+describe('lastOwn', () => {
+  it('is my newest message, skipping deleted ones and other authors', () => {
+    chat.state = { rooms: { 1: { messages: [msg(1, { author_id: 'me' }), msg(2, { author_id: 'me' }), msg(3, { author_id: 'me', deleted: true }), msg(4)], moreBefore: false, moreAfter: false } }, typing: {} };
+    expect(lastOwn(1, 'me')?.id).toBe(2);
+    expect(lastOwn(1, 'nobody')).toBeNull();
+    expect(lastOwn(2, 'me')).toBeNull();
   });
 });

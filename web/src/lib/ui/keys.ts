@@ -86,3 +86,7 @@ export function nextUnread(ids: number[], current: number | null, unread: Record
   }
   return null;
 }
+
+/** Enter without Shift sends (or saves an edit). Not while an IME is composing: Safari reports keyCode 229 for the Enter that ends it. */
+export const isSendKey = (e: { key: string; shiftKey: boolean; isComposing: boolean; keyCode: number }) =>
+  e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229;

@@ -6,7 +6,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { ORIGIN, browser, cli, cspViolations, inVoice, logout, openRoom, roomId, roomLink, signedIn, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, composer, cspViolations, inVoice, logout, openRoom, roomId, roomLink, signedIn, sleep, startServer } from './lib.mjs';
 
 // fetch from the page, so it sends the session cookie and the Origin header as the app does.
 const call = (page, method, path, body) =>
@@ -129,12 +129,12 @@ try {
   // The switcher: Ctrl+K works from the composer, a typed room name and Enter open that room, Esc closes and gives focus
   // back. Alt+Down and Alt+Up step through the rooms; Ctrl+\ hides the sidebar and focus moves to the Show button.
   await openRoom(a, 'general');
-  const composer = a.getByRole('textbox', { name: 'Message' });
+  const msgBox = composer(a);
   // The switcher's chunk fails to load the first time: the dialog says so, and the next Ctrl+K tries again. While the
   // second load is held back, keys typed go into the dialog's field (not the composer) and are kept when it loads.
   const chunk = '**/assets/switcher-chunk-*.js';
   await a.route(chunk, (r) => r.abort());
-  await composer.focus();
+  await msgBox.focus();
   await a.keyboard.press('Control+k');
   await a.getByRole('alert').filter({ hasText: 'Could not load the switcher.' }).waitFor();
   await a.unroute(chunk);
@@ -149,20 +149,20 @@ try {
   await box.waitFor();
   await a.unroute(chunk);
   assert.equal(await box.inputValue(), 'mus', 'the text typed while the switcher loaded was lost');
-  assert.equal(await composer.inputValue(), '', 'keys typed while the switcher loaded went into the composer');
+  assert.equal(await msgBox.inputValue(), '', 'keys typed while the switcher loaded went into the composer');
   assert.ok(await box.evaluate((e) => e === document.activeElement), 'the switcher field has no focus');
   assert.equal(await a.getByRole('option', { selected: true }).innerText().then((t) => t.split('\n')[0]), 'music');
   await a.keyboard.press('Enter');
   await a.waitForURL(`${ORIGIN}/r/${music.id}`);
   await a.getByRole('heading', { level: 1, name: 'music', exact: true }).waitFor();
   await box.waitFor({ state: 'hidden' });
-  await composer.focus();
+  await msgBox.focus();
   await a.keyboard.press('Control+k');
   await box.waitFor();
   assert.equal(await box.inputValue(), '', 'the switcher kept the last query');
   await a.keyboard.press('Escape');
   await box.waitFor({ state: 'hidden' });
-  assert.ok(await composer.evaluate((e) => e === document.activeElement), 'focus did not go back to the composer');
+  assert.ok(await msgBox.evaluate((e) => e === document.activeElement), 'focus did not go back to the composer');
   // `p ` scopes to people; a person opens their card as a dialog.
   await a.keyboard.press('Control+k');
   await box.fill('p bob');
@@ -171,7 +171,7 @@ try {
   await a.getByRole('dialog', { name: 'bob' }).waitFor();
   await a.keyboard.press('Escape');
   await a.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
-  assert.ok(await composer.evaluate((e) => e === document.activeElement), 'focus did not go back after the person card');
+  assert.ok(await msgBox.evaluate((e) => e === document.activeElement), 'focus did not go back after the person card');
   // The room above music in the sidebar, whichever it is, then back. In the composer Alt+Up is the field's (a Mac moves
   // the caret with it); Ctrl+Alt+Up works there.
   const above = await a.getByRole('navigation', { name: 'Rooms' }).getByRole('link').evaluateAll((l) => l.map((x) => x.getAttribute('href')));
