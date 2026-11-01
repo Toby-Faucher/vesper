@@ -132,13 +132,13 @@
             <div class="flex justify-end gap-2">
               {#if canModerate(me, u) && inVoice(u) && !u.banned}
                 <Button size="sm" variant="ghost" aria-label="Voice actions for {u.display_name}" aria-haspopup="dialog"
-                  onclick={(e) => togglePerson(u.user_id, e.currentTarget)}>Voice</Button>
+                  onclick={(e) => togglePerson(u.user_id, e.currentTarget)}>Voice actions</Button>
               {/if}
               {#if editable(u)}
                 {#if u.banned}
                   <Button size="sm" loading={busy === u.user_id} aria-label="Unban {u.display_name}" onclick={() => send(u, 'POST', 'unban')}>Unban</Button>
                 {:else}
-                  <Button size="sm" variant="danger-ghost" aria-label="Ban {u.display_name}" onclick={() => ([confirm, error] = [{ u }, ''])}>Ban</Button>
+                  <Button size="sm" variant="ghost" aria-label="Ban {u.display_name}" onclick={() => ([confirm, error] = [{ u }, ''])}>Ban</Button>
                 {/if}
               {/if}
             </div>
