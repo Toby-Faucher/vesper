@@ -13,7 +13,8 @@ export class Playback {
   constructor(volumes: Map<string, number>, ctx: AudioContext = new AudioContext()) {
     this.volumes = volumes;
     this.ctx = ctx;
-    void ctx.resume();
+    // Firefox rejects a pending resume when the context closes first (a join that fails at once): nothing to do then.
+    void ctx.resume().catch(() => {});
   }
 
   private tap(stream: MediaStream) {
@@ -27,7 +28,7 @@ export class Playback {
   /** Local mic: analysed only, never played back. */
   addLocal(id: string, stream: MediaStream) {
     this.nodes.set(id, this.tap(stream));
-    void this.ctx.resume();
+    void this.ctx.resume().catch(() => {});
   }
 
   addRemote(id: string, stream: MediaStream) {
@@ -43,7 +44,7 @@ export class Playback {
     n.el = el;
     this.nodes.set(id, n);
     this.apply(id);
-    void this.ctx.resume();
+    void this.ctx.resume().catch(() => {});
   }
 
   remove(id: string) {
@@ -88,6 +89,6 @@ export class Playback {
   }
   close() {
     [...this.nodes.keys()].forEach((id) => this.remove(id));
-    void this.ctx.close();
+    void this.ctx.close().catch(() => {});
   }
 }

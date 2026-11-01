@@ -65,7 +65,7 @@ const stopAll = (m: MediaStream) => m.getTracks().forEach((t) => t.stop());
 export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps> = {}) {
   const d = { ...browserDeps, ...deps };
   const ctx = d.createContext();
-  void ctx.resume();
+  void ctx.resume().catch(() => {}); // Firefox rejects it if close() comes first
   const stream = new MediaStream();
   const cbs: ((m: DenoiseMode, reason: string) => void)[] = [];
   const statCbs = new Set<(s: CaptureStats) => void>();
