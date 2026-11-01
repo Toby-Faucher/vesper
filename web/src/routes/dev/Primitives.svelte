@@ -55,6 +55,10 @@
   let last = $state('Nothing yet');
 
   let dialogOpen = $state(false);
+  let dialogCloses = $state(0); // read by the gallery scene: onclose runs once per close
+  // The gallery scene removes the open dialog (as a re-key or a sign out does) to check that focus still goes back.
+  let dialogMounted = $state(true);
+  (window as unknown as { __unmountDialog: () => void }).__unmountDialog = () => (dialogMounted = false);
   let confirmOpen = $state(false);
   let menuOpen = $state(false);
   let innerMenuOpen = $state(false);
@@ -213,7 +217,7 @@
       <Button aria-haspopup="dialog" aria-controls="invite-dialog" onclick={() => (dialogOpen = true)}>Create invite</Button>
       <IconButton bind:el={menuBtn} icon={I.more} label="Message actions" onclick={() => (menuOpen = !menuOpen)} />
       <Button bind:el={cardBtn} variant="ghost" onclick={() => (cardOpen = !cardOpen)}>Show person card</Button>
-      <p role="status" class="text-xs text-fg-3">Last action: {last}</p>
+      <p role="status" class="text-xs text-fg-3" data-closes={dialogCloses}>Last action: {last}</p>
     </div>
   </section>
 </div>
@@ -240,7 +244,8 @@
   </div>
 </Popover>
 
-<Dialog id="invite-dialog" open={dialogOpen} title="Create an invite" onclose={() => (dialogOpen = false)}>
+{#if dialogMounted}
+<Dialog id="invite-dialog" open={dialogOpen} title="Create an invite" onclose={() => { dialogOpen = false; dialogCloses++; }}>
   <div class="space-y-4">
     <p>The link works once and expires after the time you pick.</p>
     <Field label="Role">
@@ -266,6 +271,7 @@
     <Button variant="primary" onclick={() => { last = 'Create link'; dialogOpen = false; }}>Create link</Button>
   {/snippet}
 </Dialog>
+{/if}
 
 <!-- A dialog on top of a dialog: Esc closes only this one and focus goes back to "Revoke all links". -->
 <Dialog id="revoke-dialog" open={confirmOpen} title="Revoke all invite links?" onclose={() => (confirmOpen = false)}>

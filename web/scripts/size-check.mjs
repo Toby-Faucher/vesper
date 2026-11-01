@@ -1,37 +1,65 @@
-// Fails when the built JS or CSS in dist/assets grows past its gzip budget.
+// Fails when the built app passes its gzip budgets. Four numbers count (Ruling of 2026-11-01):
+// - first load: the entry chunk in dist/index.html, its modulepreloads and every chunk they import statically;
+// - the largest lazy chunk: any other JS file (dynamic import() chunks and the workers);
+// - the sum of all JS in dist/assets, and the sum of all CSS.
 // The wasm and the model live in dist/dsp, not dist/assets, so they are not counted.
 // Raise a budget on purpose, in the same commit as the change that needs it.
 import { readdirSync, readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
+import { posix } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-// Measured on 2026-10-30: js 29.5 kB, css 2.8 kB gzip. Budgets were those plus about 25 percent.
-// Raised on 2026-11-01 for the chat panel (js 41.4 kB, css 3.4 kB): about 10 percent headroom.
-// Raised on 2026-11-01 for the design tokens and base styles (css 4.4 kB): about 10 percent headroom.
-// Raised on 2026-11-01 for the primitives (css 5.3 kB, of which about 0.4 kB are classes only the dev gallery uses, since
-// Tailwind scans routes/dev too): about 10 percent headroom. The components are not imported yet, so js is unchanged.
-// Raised on 2026-11-01 for the app shell, sidebar, routes and the first primitives in use (js 59.9 kB, of which about 5 kB
-// are animejs waapi and 6 kB the lazy Settings chunk; css 6.4 kB): about 10 percent headroom.
-// Raised on 2026-11-01 for the call bar and the person card (css 7.5 kB, of which 0.7 kB is the lazy person card chunk with
-// the dialog and range styles): about 10 percent headroom. js measured 65.2 kB fits the old 66 and stays.
-// Raised on 2026-11-01 for the Task 4 fix round (js 66.8 kB, was 65.2): icons became one export each (unused ones drop,
-// -0.5 kB) and Chat with the markdown renderer loads on the first room open. That cut the first load from 55.2 to 51.0 kB,
-// but Rolldown then moves the Svelte runtime into a shared chunk, which costs about 2 kB in this sum: about 10 percent headroom.
-// Raised on 2026-11-01 for the Ctrl/Cmd+K switcher and the shortcuts (js 73.6 kB, was 67.0; first load 52.9 kB, was 51.1):
-// the switcher, its matcher and the shortcuts list are one lazy chunk (4.6 kB) loaded on the first Ctrl+K, and the dialog
-// code became a shared chunk. Ten percent would pass the 80 kB ceiling, so the budget is the ceiling: later tasks have 6.4 kB.
-const BUDGET_GZIP_KB = { js: 80, css: 8.2 };
+// History: the budget was one summed JS number (29.5 kB on 2026-10-30, 73.7 kB at Task 6) against an estimated 80 kB
+// ceiling. On 2026-11-01 (Task 6 fix round) it became first load / lazy chunk / sum / CSS, because with lazy chunks
+// the sum is not what a user waits for. Measured then: first load 52.9, largest lazy 6.0, sum 73.7, css 8.1 kB.
+export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 150, css: 14 };
 
-const dir = new URL('../dist/assets/', import.meta.url);
-const sums = { js: 0, css: 0 };
-for (const f of readdirSync(dir)) {
-  const ext = f.endsWith('.js') ? 'js' : f.endsWith('.css') ? 'css' : null;
-  if (ext) sums[ext] += gzipSync(readFileSync(new URL(f, dir))).length;
+// Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
+// import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.
+const STATIC = /\b(?:import|export)\s*(?:[\w$*{}\s,]*?\bfrom\s*)?["']([^"']+\.js)["']/g;
+
+/** Paths (relative to dist, like "assets/index.js") of the JS a first visit loads before anything is clicked. */
+export function firstLoad(dist) {
+  const html = readFileSync(posix.join(dist, 'index.html'), 'utf8');
+  const roots = [...html.matchAll(/<(?:script[^>]*\bsrc|link[^>]*rel="modulepreload"[^>]*\bhref)="\/?([^"]+\.js)"/g)];
+  const seen = new Set();
+  const todo = roots.map((m) => m[1]);
+  while (todo.length) {
+    const f = todo.pop();
+    if (seen.has(f)) continue;
+    seen.add(f);
+    for (const m of readFileSync(posix.join(dist, f), 'utf8').matchAll(STATIC)) {
+      if (m[1].startsWith('.')) todo.push(posix.join(posix.dirname(f), m[1]));
+    }
+  }
+  return seen;
 }
-let bad = false;
-for (const [k, max] of Object.entries(BUDGET_GZIP_KB)) {
-  const kb = sums[k] / 1024;
-  console.log(`${k}: ${kb.toFixed(1)} kB gzip (budget ${max})`);
-  if (kb > max) bad = true;
+
+/** Gzip sizes in bytes: { first, lazy (largest), lazyName, sum, css }. */
+export function measure(dist) {
+  const first = firstLoad(dist);
+  const r = { first: 0, lazy: 0, lazyName: '', sum: 0, css: 0 };
+  for (const name of readdirSync(posix.join(dist, 'assets'))) {
+    const f = `assets/${name}`;
+    const n = gzipSync(readFileSync(posix.join(dist, f))).length;
+    if (name.endsWith('.css')) r.css += n;
+    if (!name.endsWith('.js')) continue;
+    r.sum += n;
+    if (first.has(f)) r.first += n;
+    else if (n > r.lazy) Object.assign(r, { lazy: n, lazyName: name });
+  }
+  return r;
 }
-if (bad) console.error('size-check: over budget');
-process.exit(bad ? 1 : 0);
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const r = measure(new URL('../dist/', import.meta.url).pathname);
+  let bad = false;
+  for (const [k, max] of Object.entries(BUDGET_GZIP_KB)) {
+    const kb = r[k] / 1024;
+    const label = { first: 'first load js', lazy: `largest lazy js (${r.lazyName})`, sum: 'all js', css: 'all css' }[k];
+    console.log(`${label}: ${kb.toFixed(1)} kB gzip (budget ${max})`);
+    if (kb > max) bad = true;
+  }
+  if (bad) console.error('size-check: over budget');
+  process.exit(bad ? 1 : 0);
+}

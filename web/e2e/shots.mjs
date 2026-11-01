@@ -118,6 +118,25 @@ scene('gallery', async ({ open, shot }) => {
   await page.mouse.click(8, 8);
   await dialog.waitFor({ state: 'hidden' });
   await expectFocus('Create invite', 'after a backdrop click');
+  // Esc, then open again at once: the close event of the first close arrives late and must not close the new one, and
+  // onclose ran once per close (Esc and the backdrop click: 2).
+  const closes = () => page.getByRole('status').filter({ hasText: 'Last action' }).getAttribute('data-closes').then(Number);
+  const before = await closes();
+  await opener.click();
+  await dialog.waitFor();
+  await page.keyboard.press('Escape');
+  await opener.click();
+  await dialog.evaluate((d) => d.dispatchEvent(new Event('close'))); // a late close event from the Esc
+  await sleep(100);
+  must(await dialog.isVisible(), 'a late close event closed the reopened dialog');
+  must((await closes()) === before + 1, `onclose ran ${(await closes()) - before} times for one Esc`);
+  must(before === 2, `onclose ran ${before} times for Esc and a backdrop click`);
+  // Removed while open (a re-key, a sign out): focus still goes back to the opener.
+  await page.evaluate(() => window.__unmountDialog());
+  await dialog.waitFor({ state: 'detached' });
+  await expectFocus('Create invite', 'after the open dialog was removed');
+  await page.reload(); // the dialog is gone from this page now
+  await page.getByRole('button', { name: 'Create invite' }).waitFor();
 
   // Menu: roving focus, typeahead, Esc, Enter, Tab, and the trigger toggles it.
   const trigger = page.getByRole('button', { name: 'Message actions' });
@@ -452,6 +471,26 @@ for (const [name, query] of [['switcher-empty', ''], ['switcher-query', 'gen'], 
   scene(name, async (ctx) => {
     const page = await switcher(ctx, query);
     await ctx.shot(page, name);
+    await closeSwitcher(page);
+  });
+// The switcher's dialog before its chunk has loaded (held back, then let through), and after a failed load.
+for (const [name, fail] of [['switcher-loading', false], ['switcher-failed', true]])
+  scene(name, async (ctx) => {
+    await fullHouse(ctx);
+    const page = ctx.alice.page;
+    const chunk = '**/assets/switcher-chunk-*.js';
+    let release;
+    const held = new Promise((r) => (release = r));
+    await page.route(chunk, async (r) => (fail ? r.abort() : (await held, r.continue())));
+    await page.reload();
+    await rest(page);
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('mus');
+    await page.getByText(fail ? 'Could not load the switcher.' : 'Loading...').waitFor();
+    await sleep(200);
+    await ctx.shot(page, name);
+    release();
+    await page.unroute(chunk);
     await closeSwitcher(page);
   });
 scene('shortcuts', async (ctx) => {

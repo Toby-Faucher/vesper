@@ -6,7 +6,7 @@ export type RankContext = { unread: Record<number, Unread>; recent: number[] };
 
 export const MAX_RESULTS = 30;
 const KINDS: Item['kind'][] = ['room', 'person', 'action'];
-const SCOPES: Record<string, Item['kind']> = { 'r ': 'room', 'p ': 'person', '> ': 'action' };
+export const SCOPES: Record<string, Item['kind']> = { 'r ': 'room', 'p ': 'person', '> ': 'action' };
 
 // Code points, so a letter outside the BMP counts once and is never split.
 const chars = (s: string) => Array.from(s.toLowerCase());

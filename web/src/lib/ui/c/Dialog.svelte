@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as I from '../icons';
-  import type { Snippet } from 'svelte';
+  import { onMount, type Snippet } from 'svelte';
   import { enter } from '../motion';
   import IconButton from './IconButton.svelte';
   // A modal on native <dialog>: showModal() traps focus and makes the page inert, Esc closes. A click on the backdrop closes
@@ -41,6 +41,17 @@
     el.close();
     closed();
   }
+  // Removed while open (the person card re-keyed, a sign out): no close runs, so give focus back here. Not onclose: the
+  // owner is going away.
+  onMount(() => {
+    const d = el; // bind:this is null by the time this runs
+    return () => {
+      if (!shown) return;
+      shown = false;
+      d.close(); // leave the top layer first, else the page is still inert and the opener cannot take focus
+      opener?.focus();
+    };
+  });
   function closed() {
     if (!shown) return;
     shown = false;

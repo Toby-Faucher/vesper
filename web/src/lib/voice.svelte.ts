@@ -9,6 +9,7 @@ import { createCapture, type Capture } from './audio/capture';
 import { loadSettings, saveSettings, type AudioSettings } from './audio/settings';
 import { DEVICE_MESSAGES, applyBitrate, classifyMediaError, missingDevice, newInputs, trackLive, watchDevices } from './devices';
 import { pttKeyEvent } from './audio/ptt';
+import { isTyping } from './ui/keys';
 import { MIC_QUIET, micSilence, type MicWarning } from './audio/mic-silence';
 import type { DenoiseMode } from './audio/mode';
 import { summarize, type Diag } from './diag';
@@ -93,7 +94,7 @@ function onKey(type: 'keydown' | 'keyup') {
   return (e: KeyboardEvent) => {
     const r = pttKeyEvent(voice.pttHeld, {
       type, code: e.code, pttKey: voice.settings.pushToTalk.key, enabled: voice.settings.pushToTalk.enabled,
-      typing: !!(e.target as HTMLElement | null)?.matches?.('input,textarea,select'), capturing: false, // Settings stops keys itself while capturing
+      typing: isTyping(e.target as Element | null), capturing: false, // Settings stops keys itself while capturing
     });
     if (r.prevent) e.preventDefault();
     if (r.held !== voice.pttHeld) {

@@ -13,7 +13,7 @@ Who it is for: a voice room for a few friends on desktop Chrome or Firefox. Dark
 5. **The call screen is cheap.** No animation or effect that costs CPU while audio runs. Motion only on state changes, and none under `prefers-reduced-motion`.
 6. **Keyboard works.** Every control is reachable with Tab and shows a visible focus ring (`:focus-visible` in `web/src/app.css`). Inputs without a visible label get an `aria-label`.
 7. **Copy is plain.** `scripts/check-wording.sh` checks the strings in `web/src`.
-8. **Size is watched.** `web/scripts/size-check.mjs` fails the build when JS or CSS in `dist/assets` passes its gzip budget. The wasm and the model are not counted.
+8. **Size is watched.** `web/scripts/size-check.mjs` fails the build when, in gzip, the first load JS passes 70 kB, any lazy chunk 35 kB, all JS 150 kB or all CSS 14 kB. What loads before the first click is the number that counts. The wasm and the model are not counted.
 
 ## Not goals
 

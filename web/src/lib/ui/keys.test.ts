@@ -9,7 +9,7 @@ const ev = (key: string, mods: Partial<Ev> = {}): Ev => ({
   key, code: key === '\\' ? 'Backslash' : key.length === 1 ? `Key${key.toUpperCase()}` : key,
   ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods,
 });
-const linux = { typing: false, mac: false, capturingPtt: false };
+const linux = { typing: false, mac: false, capturingPtt: false, ptt: { code: null, held: false } };
 const mac = { ...linux, mac: true };
 const typing = { ...linux, typing: true };
 // The event that presses `d` on this platform.
@@ -48,11 +48,14 @@ describe('shortcut', () => {
     expect(shortcut(ev('Escape', { shiftKey: true }), linux)).toBe(null);
   });
 
-  it('a key without a modifier is never a shortcut, apart from Escape (push to talk is a single key)', () => {
+  it('a key without a modifier is never a shortcut, apart from Escape and ? (Shift+/)', () => {
     for (const k of [' ', 'f', 'k', 'm', 'd', 'ArrowUp', 'ArrowDown', '\\', 'Enter', 'Tab', 'F1', 'Control', 'Alt'])
       for (const ctx of [linux, mac]) expect(shortcut(ev(k), ctx)).toBe(null);
     for (const k of ['F', 'K', 'M']) expect(shortcut(ev(k, { shiftKey: true }), linux)).toBe(null);
-    for (const d of SHORTCUTS) if (d.s !== 'escape') expect(d.mod || d.ctrl || d.alt).toBeTruthy();
+    for (const d of SHORTCUTS) if (d.s !== 'escape' && d.s !== 'help') expect(d.mod || d.ctrl || d.alt).toBeTruthy();
+    expect(shortcut(ev('?', { shiftKey: true }), linux)).toBe('help');
+    expect(shortcut(ev('?', { shiftKey: true }), typing)).toBe(null);
+    expect(shortcut(ev('/'), linux)).toBe(null);
   });
 
   it('nothing while Settings captures the push-to-talk key', () => {
@@ -60,12 +63,19 @@ describe('shortcut', () => {
     for (const d of SHORTCUTS) expect(shortcut(press(d, false), cap)).toBe(null);
   });
 
-  it('while typing: modifier shortcuts and Alt+Up/Down work; Escape and Alt+Shift+Down do not', () => {
+  it('while typing: modifier shortcuts and Ctrl+Alt+Up/Down work; Alt+Up/Down, Escape and Alt+Shift+Down do not', () => {
     expect(shortcut(ev('k', { ctrlKey: true }), typing)).toBe('switcher');
     expect(shortcut(ev('M', { ctrlKey: true, shiftKey: true }), typing)).toBe('mute');
     expect(shortcut(ev('\\', { ctrlKey: true }), typing)).toBe('sidebar');
-    expect(shortcut(ev('ArrowUp', { altKey: true }), typing)).toBe('prev-room');
-    expect(shortcut(ev('ArrowDown', { altKey: true }), typing)).toBe('next-room');
+    // Option+Up/Down moves the caret by paragraph in a Mac text field.
+    for (const ctx of [typing, { ...mac, typing: true }]) {
+      expect(shortcut(ev('ArrowUp', { altKey: true }), ctx)).toBe(null);
+      expect(shortcut(ev('ArrowDown', { altKey: true }), ctx)).toBe(null);
+      expect(shortcut(ev('ArrowUp', { ctrlKey: true, altKey: true }), ctx)).toBe('prev-room');
+      expect(shortcut(ev('ArrowDown', { ctrlKey: true, altKey: true }), ctx)).toBe('next-room');
+    }
+    expect(shortcut(ev('ArrowUp', { altKey: true }), linux)).toBe('prev-room');
+    expect(shortcut(ev('ArrowUp', { ctrlKey: true, altKey: true }), linux)).toBe('prev-room');
     expect(shortcut(ev('ArrowDown', { altKey: true, shiftKey: true }), typing)).toBe(null);
     expect(shortcut(ev('Escape'), typing)).toBe(null);
   });
@@ -78,8 +88,29 @@ describe('shortcut', () => {
     }
   });
 
-  it('finds Backslash by position when the layout types something else', () => {
-    expect(shortcut({ ...ev('|', { ctrlKey: true }), code: 'Backslash' }, linux)).toBe('sidebar');
+  it('finds Backslash by the character it types, not by its position; AltGr is never a shortcut', () => {
+    expect(shortcut({ ...ev('#', { ctrlKey: true }), code: 'Backslash' }, linux)).toBe(null); // German layout
+    expect(shortcut({ ...ev('\\', { ctrlKey: true }), code: 'IntlBackslash' }, linux)).toBe('sidebar');
+    // German Windows: AltGr+ß types \ and reports Ctrl+Alt; typing a backslash must not hide the sidebar.
+    const altGr = { getModifierState: (m: string) => m === 'AltGraph' };
+    expect(shortcut({ ...ev('\\', { ctrlKey: true, altKey: true }), code: 'Minus', ...altGr }, typing)).toBe(null);
+    expect(shortcut({ ...ev('\\', { ctrlKey: true }), code: 'Minus', ...altGr }, linux)).toBe(null);
+  });
+
+  it('steps aside for push to talk: nothing while it is held, nor on its own key, whatever key it is', () => {
+    const presses = SHORTCUTS.map((d) => press(d, false));
+    for (const code of ['ControlLeft', 'AltLeft', 'KeyK', 'ArrowUp', 'Backslash']) {
+      // While the key is held, no shortcut fires.
+      for (const e of presses) expect(shortcut(e, { ...linux, ptt: { code, held: true } })).toBe(null);
+      // A press of the key itself is push to talk's, held or not.
+      for (const e of presses.filter((e) => e.code === code)) expect(shortcut(e, { ...linux, ptt: { code, held: false } })).toBe(null);
+    }
+    // KeyK as push to talk: Ctrl+K is the push-to-talk key with Ctrl, so it does not open the switcher.
+    expect(shortcut(ev('k', { ctrlKey: true }), { ...linux, ptt: { code: 'KeyK', held: false } })).toBe(null);
+    // Not held and another key: the shortcut works. Push to talk off (code null): everything works.
+    expect(shortcut(ev('k', { ctrlKey: true }), { ...linux, ptt: { code: 'ControlLeft', held: false } })).toBe('switcher');
+    expect(shortcut(ev('ArrowUp', { altKey: true }), { ...linux, ptt: { code: 'KeyK', held: false } })).toBe('prev-room');
+    for (const e of presses) expect(shortcut(e, linux)).not.toBe(null);
   });
 });
 
@@ -91,6 +122,8 @@ describe('keysFor', () => {
     expect(keysFor(find('next-unread'), false)).toEqual(['Alt', 'Shift', '↓']);
     expect(keysFor(find('sidebar'), true)).toEqual(['Ctrl', '\\']);
     expect(keysFor(find('escape'), false)).toEqual(['Esc']);
+    expect(keysFor(find('help'), true)).toEqual(['?']);
+    expect(keysFor(find('prev-room'), false)).toEqual(['Alt', '↑']);
   });
 });
 

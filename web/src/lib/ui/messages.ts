@@ -16,6 +16,8 @@ export const UI_MESSAGES = {
   openFirstRoom: (name: string) => `Open ${name}`,
   chatLoading: 'Loading messages...',
   chatFailed: 'The chat did not load. Reload the page to try again.',
+  switcherLoading: 'Loading...',
+  switcherFailed: 'Could not load the switcher. Check your connection and try again.',
   adminLater: 'The admin pages are not built yet.',
   sectionLater: 'Nothing to set here yet.',
 } as const;

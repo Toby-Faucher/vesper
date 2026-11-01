@@ -8,6 +8,6 @@ export default defineConfig(({ mode }) => ({
   server: { proxy: { '/ws': { target: 'ws://localhost:8080', ws: true }, '/api': 'http://localhost:8080' } },
   // css: tokens.test.ts reads tokens.css and app.css as ?raw text; vitest returns CSS as empty otherwise.
   // client-env, the browser condition and inlining svelte: tests get Svelte's client build, so $effect runs (voice.test.ts).
-  test: { include: ['src/**/*.test.ts'], css: true, environment: './src/client-env.ts', server: { deps: { inline: ['svelte'] } } },
+  test: { include: ['src/**/*.test.ts', 'scripts/*.test.mjs'], css: true, environment: './src/client-env.ts', server: { deps: { inline: ['svelte'] } } },
   resolve: mode === 'test' ? { conditions: ['browser'] } : undefined,
 }));

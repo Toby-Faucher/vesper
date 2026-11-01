@@ -1,10 +1,12 @@
 // The keyboard shortcuts: one table, read by the shell's keydown handler, the shortcuts dialog and the switcher's hints.
-// Every shortcut but Escape needs a modifier, so none can fight push to talk (a single key) or typing.
+// Every shortcut but Escape and ? needs a modifier, and those two never fire while typing. Push to talk can be any key, also
+// a modifier (ControlLeft) or a letter (KeyK): so nothing fires while it is held, or when the key pressed is that key.
 
-export type Shortcut = 'switcher' | 'mute' | 'deafen' | 'prev-room' | 'next-room' | 'next-unread' | 'search' | 'sidebar' | 'escape';
+export type Shortcut = 'switcher' | 'help' | 'mute' | 'deafen' | 'prev-room' | 'next-room' | 'next-unread' | 'search' | 'sidebar' | 'escape';
 import type { Unread } from '../gen/Unread';
 
-type KeyEvent = Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>;
+type KeyEvent = Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'> &
+  Partial<Pick<KeyboardEvent, 'getModifierState'>>;
 
 /** `mod` is Cmd on a Mac and Ctrl elsewhere; `ctrl` is Ctrl everywhere. `typing`: it also works in a text field. */
 export type Def = { s: Shortcut; key: string; label: string; mod?: true; ctrl?: true; shift?: true; alt?: true; typing?: true };
@@ -13,18 +15,28 @@ export const SHORTCUTS: Def[] = [
   { s: 'mute', mod: true, shift: true, key: 'm', typing: true, label: 'Mute or unmute' },
   { s: 'deafen', mod: true, shift: true, key: 'd', typing: true, label: 'Deafen or undeafen' },
   { s: 'search', mod: true, shift: true, key: 'f', typing: true, label: 'Search messages' },
-  { s: 'prev-room', alt: true, key: 'ArrowUp', typing: true, label: 'Previous room' },
-  { s: 'next-room', alt: true, key: 'ArrowDown', typing: true, label: 'Next room' },
+  // Alt+Up/Down move the caret by paragraph in a Mac text field, so in a field they stay the field's; Ctrl+Alt works there.
+  { s: 'prev-room', alt: true, key: 'ArrowUp', label: 'Previous room' },
+  { s: 'next-room', alt: true, key: 'ArrowDown', label: 'Next room' },
+  { s: 'prev-room', ctrl: true, alt: true, key: 'ArrowUp', typing: true, label: 'Previous room, also while typing' },
+  { s: 'next-room', ctrl: true, alt: true, key: 'ArrowDown', typing: true, label: 'Next room, also while typing' },
   { s: 'next-unread', alt: true, shift: true, key: 'ArrowDown', label: 'Next unread room' },
   { s: 'sidebar', ctrl: true, key: '\\', typing: true, label: 'Hide or show the sidebar' },
+  { s: 'help', shift: true, key: '?', label: 'Show the keyboard shortcuts' },
   { s: 'escape', key: 'Escape', label: 'Close a dialog or a menu' },
 ];
 
-/** The shortcut `e` presses, or null. Nothing while Settings waits for a new push-to-talk key. */
-export function shortcut(e: KeyEvent, ctx: { typing: boolean; mac: boolean; capturingPtt: boolean }): Shortcut | null {
-  if (ctx.capturingPtt) return null;
-  // Backslash by its position: Shift or the layout can change the character. Letters by the character they type.
-  const key = e.code === 'Backslash' ? '\\' : e.key.length === 1 ? e.key.toLowerCase() : e.key;
+/** The push-to-talk state the shortcuts step aside for: the key's code (null when push to talk is off) and if it is held. */
+export type Ptt = { code: string | null; held: boolean };
+
+/** The shortcut `e` presses, or null. Nothing while Settings waits for a new push-to-talk key, or for push to talk. */
+export function shortcut(e: KeyEvent, ctx: { typing: boolean; mac: boolean; capturingPtt: boolean; ptt: Ptt }): Shortcut | null {
+  if (ctx.capturingPtt || ctx.ptt.held || (ctx.ptt.code && e.code === ctx.ptt.code)) return null;
+  // AltGr types characters (Windows reports it as Ctrl+Alt), so it is never a shortcut. Keys by the character they type:
+  // Ctrl+\ is the key that types \, not the key in the US \ position (Ctrl+# on a German layout). Where \ needs AltGr,
+  // the sidebar has its button only.
+  if (e.getModifierState?.('AltGraph')) return null;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   for (const d of SHORTCUTS) {
     const ctrl = !!d.ctrl || (!!d.mod && !ctx.mac);
     const meta = !!d.mod && ctx.mac;
@@ -42,7 +54,7 @@ export function keysFor(d: Def, mac: boolean): string[] {
     ...(d.ctrl ? ['Ctrl'] : []),
     ...(d.mod ? [mac ? '⌘' : 'Ctrl'] : []),
     ...(d.alt ? [mac ? '⌥' : 'Alt'] : []),
-    ...(d.shift ? [mac ? '⇧' : 'Shift'] : []),
+    ...(d.shift && d.key !== '?' ? [mac ? '⇧' : 'Shift'] : []), // ? is Shift+/ on most layouts: the cap says it
     k,
   ];
 }
@@ -50,7 +62,7 @@ export const keysOf = (s: Shortcut, mac: boolean) => keysFor(SHORTCUTS.find((d) 
 
 export const isMac = () => typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent);
 
-/** True when `el` takes text: a text input, a textarea, a select or an editable element. */
+/** True when `el` takes text: a text input, a textarea, a select or an editable element. Push to talk and the shortcuts both use it. */
 export function isTyping(el: Element | null): boolean {
   return !!el?.closest?.(
     'input:not([type=checkbox],[type=radio],[type=range],[type=button],[type=submit],[type=reset],[type=color],[type=file]),textarea,select,[contenteditable]:not([contenteditable=false])',

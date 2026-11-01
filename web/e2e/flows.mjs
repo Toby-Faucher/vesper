@@ -130,12 +130,27 @@ try {
   // back. Alt+Down and Alt+Up step through the rooms; Ctrl+\ hides the sidebar and focus moves to the Show button.
   await openRoom(a, 'general');
   const composer = a.getByRole('textbox', { name: 'Message' });
+  // The switcher's chunk fails to load the first time: the dialog says so, and the next Ctrl+K tries again. While the
+  // second load is held back, keys typed go into the dialog's field (not the composer) and are kept when it loads.
+  const chunk = '**/assets/switcher-chunk-*.js';
+  await a.route(chunk, (r) => r.abort());
   await composer.focus();
   await a.keyboard.press('Control+k');
+  await a.getByRole('alert').filter({ hasText: 'Could not load the switcher.' }).waitFor();
+  await a.unroute(chunk);
+  let release;
+  const held = new Promise((r) => (release = r));
+  await a.route(chunk, async (r) => { await held; await r.continue(); });
+  await a.keyboard.press('Control+k');
+  await a.getByText('Loading...').waitFor();
+  await a.keyboard.type('mus');
+  release();
   const box = a.getByRole('combobox', { name: 'Switch to' });
   await box.waitFor();
+  await a.unroute(chunk);
+  assert.equal(await box.inputValue(), 'mus', 'the text typed while the switcher loaded was lost');
+  assert.equal(await composer.inputValue(), '', 'keys typed while the switcher loaded went into the composer');
   assert.ok(await box.evaluate((e) => e === document.activeElement), 'the switcher field has no focus');
-  await box.fill('mus');
   assert.equal(await a.getByRole('option', { selected: true }).innerText().then((t) => t.split('\n')[0]), 'music');
   await a.keyboard.press('Enter');
   await a.waitForURL(`${ORIGIN}/r/${music.id}`);
@@ -157,10 +172,15 @@ try {
   await a.keyboard.press('Escape');
   await a.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
   assert.ok(await composer.evaluate((e) => e === document.activeElement), 'focus did not go back after the person card');
-  // The room above music in the sidebar, whichever it is, then back.
+  // The room above music in the sidebar, whichever it is, then back. In the composer Alt+Up is the field's (a Mac moves
+  // the caret with it); Ctrl+Alt+Up works there.
   const above = await a.getByRole('navigation', { name: 'Rooms' }).getByRole('link').evaluateAll((l) => l.map((x) => x.getAttribute('href')));
   await a.keyboard.press('Alt+ArrowUp');
+  await sleep(200);
+  assert.equal(a.url(), `${ORIGIN}/r/${music.id}`, 'Alt+Up in the composer changed the room');
+  await a.keyboard.press('Control+Alt+ArrowUp');
   await a.waitForURL(`${ORIGIN}${above[above.indexOf(`/r/${music.id}`) - 1]}`);
+  await a.locator('main').focus();
   await a.keyboard.press('Alt+ArrowDown');
   await a.getByRole('heading', { level: 1, name: 'music', exact: true }).waitFor();
   await a.getByRole('button', { name: 'Hide sidebar' }).focus();
@@ -170,6 +190,21 @@ try {
   await a.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Show sidebar');
   await show.click();
   await signedIn(a);
+  // Ctrl+Shift+M and D are the browser's (bookmark all tabs, and others) unless alice is in a call: only then the page
+  // takes them. A listener added after the app's sees whether it called preventDefault.
+  const prevented = (key) => a.evaluate((key) => new Promise((done) => {
+    addEventListener('keydown', (e) => done(e.defaultPrevented), { once: true });
+    dispatchEvent(new KeyboardEvent('keydown', { key, code: `Key${key.toUpperCase()}`, ctrlKey: true, shiftKey: true, cancelable: true }));
+  }), key);
+  assert.equal(await prevented('M'), false, 'Ctrl+Shift+M taken from the browser outside a call');
+  assert.equal(await prevented('D'), false, 'Ctrl+Shift+D taken from the browser outside a call');
+  await join(a, 'general');
+  assert.equal(await prevented('M'), true, 'Ctrl+Shift+M not handled in a call');
+  await a.getByRole('button', { name: 'Unmute' }).waitFor();
+  assert.equal(await prevented('M'), true, 'Ctrl+Shift+M not handled in a call');
+  await a.getByRole('button', { name: 'Mute' }).waitFor();
+  await a.getByRole('button', { name: 'Leave' }).click();
+  await a.getByRole('button', { name: 'Join' }).waitFor();
   console.log('switcher and shortcuts: ok');
 
   // A room link opened signed out: sign in returns to that room (music), not to the first one; Back does not loop to

@@ -13,6 +13,9 @@
   import Button from '../lib/ui/c/Button.svelte';
   import EmptyState from '../lib/ui/c/EmptyState.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
+  import Dialog from '../lib/ui/c/Dialog.svelte';
+  import { lazy } from '../lib/ui/lazy';
+  import SwitcherField from './SwitcherField.svelte';
   import CallBar from './CallBar.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
   import RoomView from './RoomView.svelte';
@@ -57,17 +60,30 @@
     e.preventDefault();
     navigate(a.pathname + a.search + a.hash);
   }
-  // The switcher (with the shortcuts list) loads on first use. Once loaded it stays mounted, so closing gives focus back.
-  let switcher = $state<Promise<typeof import('./Switcher.svelte')>>();
+  // The switcher and the shortcuts list are one chunk, loaded on first use. The switcher's dialog is here, in the first
+  // load, so it opens at once with a field that takes the typing (not the composer) and a Loading line. A failed load
+  // says so and is not kept: Ctrl+K, or closing and opening again, tries again.
+  const loadLayers = lazy(() => import('./switcher-chunk'));
+  let layersMod = $state<Awaited<ReturnType<typeof loadLayers>>>();
+  let layersFailed = $state(false);
+  let typed = $state(''); // the switcher's text, also while its chunk loads
+  function load() {
+    layersFailed = false;
+    loadLayers().then((m) => (layersMod = m), () => { layersFailed = true; layers.shortcuts = false; });
+  }
   $effect(() => {
-    if (layers.switcher || layers.shortcuts) switcher ??= import('./Switcher.svelte');
+    if ((layers.switcher || layers.shortcuts) && !layersMod) untrack(load);
+  });
+  $effect(() => {
+    if (!layers.switcher && !layersMod) typed = '';
   });
 
   const mac = isMac();
   function onkeydown(e: KeyboardEvent) {
     if (e.defaultPrevented || e.isComposing) return;
     // Settings stops the keys itself while it waits for a new push-to-talk key, so they never reach this handler.
-    const s = shortcut(e, { typing: isTyping(e.target as Element | null), mac, capturingPtt: false });
+    const ptt = { code: voice.settings.pushToTalk.enabled ? voice.settings.pushToTalk.key : null, held: voice.pttHeld };
+    const s = shortcut(e, { typing: isTyping(e.target as Element | null), mac, capturingPtt: false, ptt });
     if (!s || s === 'escape') return; // Esc: dialogs, menus and popovers close themselves; the timeline jump is Task 7's
     if (e.repeat && s !== 'prev-room' && s !== 'next-room') return e.preventDefault(); // a held key toggles once
     const ids = rooms.map((x) => x.id);
@@ -76,9 +92,15 @@
       const field = document.querySelector<HTMLInputElement>('input[aria-label="Search messages"]');
       if (!field) return; // no room open: leave the key to the browser
       field.focus();
-    } else if (s === 'switcher') layers.switcher = !layers.switcher;
-    else if (s === 'mute') { if (voice.joined) toggleMute(); }
-    else if (s === 'deafen') { if (voice.joined) toggleDeafen(); }
+    } else if (s === 'switcher') {
+      if (layers.switcher && layersFailed) load();
+      else layers.switcher = !layers.switcher;
+    } else if (s === 'help') layers.shortcuts = true;
+    else if (s === 'mute' || s === 'deafen') {
+      if (!voice.joined) return; // not in a call: Ctrl+Shift+M and D stay the browser's
+      if (s === 'mute') toggleMute();
+      else toggleDeafen();
+    }
     else if (s === 'sidebar') setCollapsed(!sidebar.collapsed);
     else if (s === 'prev-room' || s === 'next-room') to(stepRoom(ids, room?.id ?? null, s === 'next-room' ? 1 : -1));
     else if (s === 'next-unread') to(nextUnread(ids, room?.id ?? null, session.state.unread));
@@ -140,11 +162,19 @@
     {/key}
   {/await}
 {/if}
-{#if switcher}
-  {#await switcher then m}
-    <m.default open={layers.switcher} current={room?.id ?? null} {recent} onclose={() => (layers.switcher = false)} />
-  {/await}
-{/if}
+<Dialog open={layers.switcher} title="Switch to" bare onclose={() => (layers.switcher = false)}>
+  {#if layersMod}
+    <layersMod.Switcher open={layers.switcher} current={room?.id ?? null} {recent} bind:q={typed} onclose={() => (layers.switcher = false)} />
+  {:else}
+    <SwitcherField bind:value={typed} />
+    {#if layersFailed}
+      <p role="alert" class="px-4 py-6 text-center text-fg-2">{UI_MESSAGES.switcherFailed}</p>
+    {:else}
+      <p class="px-4 py-6 text-center text-fg-3">{UI_MESSAGES.switcherLoading}</p>
+    {/if}
+  {/if}
+</Dialog>
+{#if layersMod}<layersMod.Shortcuts open={layers.shortcuts} onclose={() => (layers.shortcuts = false)} />{/if}
 
 <style>
   /* Off screen until focused, then a raised chip at the top left, over the sidebar. */
