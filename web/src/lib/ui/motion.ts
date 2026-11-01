@@ -106,7 +106,7 @@ export function glide(from: HTMLElement, to: HTMLElement): void {
   void Promise.all(a.animations.map((x) => x.finished)).then(done, done);
 }
 
-// The jump flash: the message background goes to --accent-subtle and fades back.
+// The jump flash: the message background fades in to --accent-subtle, holds and fades back (a fifth of the time each way).
 export function flash(el: Element): void {
   const h = el as HTMLElement;
   if (reduced()) {
@@ -115,5 +115,20 @@ export function flash(el: Element): void {
     setTimeout(() => (h.style.backgroundColor = ''), 600);
     return;
   }
-  waapi.animate(h, { backgroundColor: ['var(--accent-subtle)', 'transparent'], duration: 600 + ms('--dur-3'), ease: token('--ease-out') });
+  const a = 'var(--accent-subtle)';
+  waapi.animate(h, { backgroundColor: ['transparent', a, a, a, a, 'transparent'], duration: 5 * ms('--dur-2'), ease: 'linear' });
+}
+
+// The sidebar slides in or out and the main pane follows its edge. The grid already has its final columns (one layout),
+// so only transforms move: `side` by its own width (the shell holds it fixed while it leaves) and `main` from where it
+// was back to 0. A closing side keeps its end frame until the shell hides it. Reduced motion: no slide at all.
+export function slide(side: HTMLElement, main: HTMLElement, open: boolean): Promise<void> {
+  for (const e of [side, main]) e.getAnimations().forEach((x) => x.cancel()); // a toggle during the slide starts over
+  if (reduced()) return Promise.resolve();
+  const w = side.offsetWidth;
+  const o = { duration: ms('--dur-3'), ease: token('--ease-out') };
+  const away = `translateX(${-w}px)`;
+  const s = waapi.animate(side, { transform: open ? [away, 'translateX(0)'] : ['translateX(0)', away], ...o, persist: !open });
+  const m = waapi.animate(main, { transform: [`translateX(${open ? -w : w}px)`, 'translateX(0)'], ...o });
+  return Promise.all([...s.animations, ...m.animations].map((x) => x.finished)).then(() => undefined, () => undefined);
 }

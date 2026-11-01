@@ -298,6 +298,49 @@ scene('motion', async (ctx) => {
   });
   await page.keyboard.press('Escape');
   await sleep(400);
+  // The sidebar sliding out (the main pane follows its edge) and back in, and the switcher popping open.
+  await pose('motion-sidebar-hide', () => page.getByRole('button', { name: 'Hide sidebar' }).click());
+  await pose('motion-sidebar-show', () => page.getByRole('button', { name: 'Show sidebar' }).click());
+  await pose('motion-switcher', async () => {
+    await page.keyboard.press('Control+k');
+    await page.getByRole('combobox', { name: 'Switch to' }).waitFor();
+  });
+  await page.keyboard.press('Escape');
+  await sleep(400);
+  // The hover highlight crossing from one message to the next: a CSS transition, so frozen through getAnimations().
+  await openRoom(page, 'general');
+  await sleep(400);
+  const rows = page.locator('article');
+  await rows.nth(-3).hover();
+  await sleep(400);
+  await rows.nth(-2).hover();
+  await page.evaluate(() => { for (const a of document.getAnimations()) { a.pause(); a.currentTime = 80; } });
+  await ctx.shot(page, 'motion-hover');
+  await page.evaluate(() => { for (const a of document.getAnimations()) a.play(); });
+  await page.mouse.move(1, 1);
+  await sleep(400);
+  // The sidebar slide: rAF gaps and the layouts (CDP LayoutCount) over a hide and a show. Only transforms move, so the
+  // layout count stays a handful per toggle, not one per frame.
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Performance.enable');
+  const layouts = async () => (await cdp.send('Performance.getMetrics')).metrics.find((m) => m.name === 'LayoutCount').value;
+  await page.evaluate(() => {
+    window.__frames = [];
+    let last = performance.now();
+    const tick = (t) => { window.__frames.push(t - last); last = t; if (window.__frames.length < 120) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+  const i0 = await layouts();
+  await sleep(1000);
+  const idle = (await layouts()) - i0;
+  const l0 = await layouts();
+  await page.getByRole('button', { name: 'Hide sidebar' }).click();
+  await sleep(400);
+  await page.getByRole('button', { name: 'Show sidebar' }).click();
+  await sleep(400);
+  const l1 = await layouts();
+  const sf = (await page.evaluate(() => window.__frames)).slice(1).sort((a, b) => a - b);
+  console.log(`sidebar slide frames: ${sf.length}, p50 ${sf[sf.length >> 1].toFixed(1)} ms, max ${sf.at(-1).toFixed(1)} ms, layouts over a hide and a show: ${l1 - l0} (idle for the same time: ${idle})`);
   await pose('motion-leave', async () => {
     await extra[2].page.getByRole('button', { name: 'Leave' }).click();
     await sleep(300);

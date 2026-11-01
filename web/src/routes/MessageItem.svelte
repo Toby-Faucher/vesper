@@ -281,13 +281,15 @@
     /* Rows off screen skip layout and paint; the last size seen is kept (chat research item 13). */
     content-visibility: auto;
     contain-intrinsic-size: auto 56px;
-    transition: background-color var(--dur-1) var(--ease-out);
+    /* The highlight (hover, keyboard focus, editing, a mention) fades: in over --dur-2 (the rules below), out over
+       --dur-3, so moving between rows crossfades. Paint only; the focus ring itself has no transition. */
+    transition: background-color var(--dur-3) var(--ease-out);
   }
   .msg.head { margin-top: 8px; padding-top: 8px; }
   .msg:focus-visible { outline-offset: -2px; } /* inside the list, which clips the sides */
   /* A mention of me: a 2 px amber bar and a faint amber wash. */
   .msg.mentioned { background: color-mix(in oklab, var(--accent-subtle) 55%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
-  .msg:hover, .msg:focus-within, .msg.editing { background: var(--bg-hover); }
+  .msg:hover, .msg:focus-within, .msg.editing { background: var(--bg-hover); transition-duration: var(--dur-2); }
   .msg.editing { scroll-margin-bottom: 16px; } /* the list's bottom padding: an edit of the last row ends at the bottom */
   .msg.mentioned:hover, .msg.mentioned:focus-within { background: var(--accent-subtle); }
   .quote, .content { grid-column: 2; }
@@ -295,7 +297,7 @@
   .face { display: flex; cursor: pointer; }
   .quote + .gutter { grid-row: 2; }
   /* Tertiary text: --fg-3 on the app background, --fg-2 once the row has a hover, selected or amber background. */
-  .quiet { color: var(--fg-3); }
+  .quiet { color: var(--fg-3); transition: color var(--dur-3) var(--ease-out); }
   .msg:hover .quiet, .msg:focus-within .quiet, .msg.mentioned .quiet, .msg.editing .quiet { color: var(--fg-2); }
   .quote {
     display: flex;
@@ -320,7 +322,9 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     opacity: 0;
+    transition: opacity var(--dur-3) var(--ease-out);
   }
+  .msg:hover :is(.gtime, .tools, .quiet), .msg:focus-within :is(.gtime, .tools, .quiet) { transition-duration: var(--dur-2); }
   .msg:hover .gtime, .msg:focus-within .gtime { opacity: 1; }
   .clamp {
     max-height: 400px; /* 20 lines */
@@ -358,7 +362,7 @@
     border-radius: var(--radius);
     background: var(--bg-raised);
     opacity: 0;
-    transition: opacity var(--dur-1) var(--ease-out);
+    transition: opacity var(--dur-3) var(--ease-out);
   }
   .msg.head .tools { top: 4px; }
   .msg:hover .tools, .msg:focus-within .tools, .tools:has(:global([aria-expanded='true'])) { opacity: 1; }
@@ -377,6 +381,6 @@
   .pick { width: 32px; height: 32px; border-radius: var(--radius); font-size: 16px; }
   .pick:hover, .pick[aria-pressed='true'] { background: var(--bg-hover); }
   @media (prefers-reduced-motion: reduce) {
-    .msg, .tools { transition: none; }
+    .msg, .tools, .gtime, .quiet { transition: none; }
   }
 </style>

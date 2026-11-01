@@ -143,7 +143,7 @@ try {
   await cog.hover();
   assert.ok((await b.evaluate(() => document.getAnimations().map((x) => JSON.stringify(x.effect?.getKeyframes?.() ?? [])))).some((f) => f.includes('"transform"')),
     'the Settings gear does not turn on hover');
-  await sleep(500);
+  await sleep(700); // the tooltip waits 400 ms, then fades and scales in over 160 ms
   const inside = (r) => r.left >= 0 && r.top >= 0 && r.right <= 1024 && r.bottom <= 640;
   const tip = await cog.evaluate((el) => {
     const r = el.getBoundingClientRect(), s = getComputedStyle(el, '::after'), m = new DOMMatrix(s.transform);
@@ -360,6 +360,10 @@ try {
   await r.locator('article').filter({ hasText: 'calm hello' }).waitFor();
   await openRoom(r, 'hangout');
   await openRoom(r, 'general');
+  await r.keyboard.press('Control+Backslash');
+  await r.locator('#sidebar').waitFor({ state: 'hidden' });
+  await r.keyboard.press('Control+Backslash');
+  await r.locator('#sidebar').waitFor();
   await r.getByRole('button', { name: 'Settings', exact: true }).click();
   await r.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Appearance' }).click();
   await sleep(300);
@@ -493,6 +497,38 @@ try {
   await k.getByRole('heading', { level: 1, name: 'general', exact: true }).waitFor();
   await k.getByRole('button', { name: 'Leave' }).waitFor(); // still in the call
   console.log('keyboard only: ok');
+
+  // The message highlight fades (paint only: background, text colour, opacity) and never moves the row.
+  const lastRow = k.locator('article').last();
+  const box = () => lastRow.evaluate((e) => [e.offsetTop, e.offsetLeft, e.offsetWidth, e.offsetHeight].join()); // layout, not scroll
+  const still = await box();
+  await lastRow.hover();
+  const fades = await lastRow.evaluate((e) => e.getAnimations({ subtree: true }).map((a) => a.transitionProperty ?? 'script'));
+  assert.ok(fades.includes('background-color'), `the hover highlight does not fade: ${fades}`);
+  assert.deepEqual(fades.filter((x) => !['background-color', 'color', 'opacity'].includes(x)), [], 'the hover highlight animates more than paint');
+  assert.equal(await box(), still, 'the hover highlight moved the row');
+  // The sidebar slides out (inert at once, the main pane following by transform) and back; focus stays where it was.
+  await composer(k).focus();
+  await k.keyboard.press('Control+Backslash');
+  const mid = await k.evaluate(() => {
+    const side = document.getElementById('sidebar');
+    const slides = (id) => document.getElementById(id).getAnimations().some((a) => JSON.stringify(a.effect.getKeyframes()).includes('translateX'));
+    return { inert: side.inert, drawn: side.checkVisibility(), slides: [slides('sidebar'), slides('main')] };
+  });
+  assert.deepEqual(mid, { inert: true, drawn: true, slides: [true, true] }, 'the sidebar did not slide out');
+  await k.locator('#sidebar').waitFor({ state: 'hidden' });
+  assert.equal(await focusedName(), 'Message', 'hiding the sidebar moved focus out of the composer');
+  // The saved hidden state at boot: no slide, nothing animates the shell.
+  await k.reload();
+  await k.getByRole('button', { name: 'Show sidebar' }).waitFor();
+  await sleep(500);
+  assert.deepEqual((await animatedSince(k)).filter((t) => t === 'main'), [], 'the saved sidebar state slid at boot');
+  assert.equal(await k.locator('#sidebar').evaluate((e) => e.hidden && e.getAnimations().length), 0, 'the hidden sidebar animated at boot');
+  await k.getByRole('button', { name: 'Show sidebar' }).click();
+  await sleep(50);
+  assert.ok((await animatedSince(k)).includes('main'), 'the sidebar did not slide back in');
+  assert.equal(await focusedName(), 'Hide sidebar', 'focus did not move to the sidebar toggle');
+  console.log('message highlight and sidebar slide: ok');
 
   for (const p of [a, b, s, r, k]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
   assert.deepEqual([gallery, alice, bob, carol, stranger, calm, keys].flatMap((x) => x.errors), [], 'page errors');
