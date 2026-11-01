@@ -180,7 +180,8 @@ async fn health(State(st): State<ws::WsState>) -> (StatusCode, &'static str) {
 /// - dotfiles are hidden (a served dir may hold `.env`);
 /// - a 404 on an extensionless path gets `index.html` (SPA routes); a 404 on a path with an
 ///   extension (`/assets/old.js`) or under `/api/` stays a 404 so it fails loudly, not as HTML;
-/// - `/assets/*` (content-hashed by Vite) is immutable, everything else is `no-cache`;
+/// - `/assets/*` (content-hashed by Vite) is immutable, `/api/*` is `no-store` (per-user data),
+///   everything else is `no-cache`;
 /// - `nosniff` on every response.
 async fn guard(State(dir): State<Arc<PathBuf>>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_ascii_lowercase();
@@ -204,6 +205,8 @@ async fn guard(State(dir): State<Arc<PathBuf>>, req: Request, next: Next) -> Res
         header::CACHE_CONTROL,
         HeaderValue::from_static(if immutable {
             "public, max-age=31536000, immutable"
+        } else if path.starts_with("/api/") {
+            "no-store"
         } else {
             "no-cache"
         }),

@@ -74,7 +74,8 @@ pub enum ApiErrorCode {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+// `Debug` is written by hand so the password and invite code never reach a log.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SignupReq {
     pub invite: String,
@@ -83,11 +84,32 @@ pub struct SignupReq {
     pub display_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+// `Debug` is written by hand so the password and invite code never reach a log.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LoginReq {
     pub username: String,
     pub password: String,
+}
+
+impl std::fmt::Debug for SignupReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignupReq")
+            .field("invite", &"***")
+            .field("username", &self.username)
+            .field("password", &"***")
+            .field("display_name", &self.display_name)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for LoginReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginReq")
+            .field("username", &self.username)
+            .field("password", &"***")
+            .finish()
+    }
 }
 
 /// A missing field is left as it is.
@@ -102,11 +124,21 @@ pub struct ProfilePatch {
     pub accent: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+// `Debug` is written by hand so the password and invite code never reach a log.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PasswordChange {
     pub old: String,
     pub new: String,
+}
+
+impl std::fmt::Debug for PasswordChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasswordChange")
+            .field("old", &"***")
+            .field("new", &"***")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -121,4 +153,42 @@ pub struct Me {
 #[ts(export)]
 pub struct InvitePreview {
     pub role: Role,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_hides_passwords_and_invite() {
+        let secret = "s3cret-value";
+        let out = [
+            format!(
+                "{:?}",
+                SignupReq {
+                    invite: secret.into(),
+                    username: "alice".into(),
+                    password: secret.into(),
+                    display_name: "A".into(),
+                }
+            ),
+            format!(
+                "{:?}",
+                LoginReq {
+                    username: "alice".into(),
+                    password: secret.into(),
+                }
+            ),
+            format!(
+                "{:?}",
+                PasswordChange {
+                    old: secret.into(),
+                    new: secret.into(),
+                }
+            ),
+        ];
+        for o in out {
+            assert!(!o.contains(secret) && o.contains("***"), "{o}");
+        }
+    }
 }

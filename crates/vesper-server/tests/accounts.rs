@@ -112,6 +112,10 @@ async fn second_owner_link_cannot_make_a_second_owner() {
     let (status, _, _) = t.call(request(Method::GET, &preview, None, None)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(users(&t).await, 1);
+    // The refused owner invite was not spent.
+    let invites = t.state.store.invites().await.unwrap();
+    assert_eq!(invites.len(), 2);
+    assert_eq!(invites.iter().map(|i| i.uses).sum::<u32>(), 1);
 }
 
 #[tokio::test]
@@ -327,4 +331,135 @@ async fn signed_out_calls_are_401() {
     }
     let junk = request(Method::GET, "/api/me", None, Some("vesper_session=nothex"));
     assert_eq!(t.call(junk).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn login_ip_limit_comes_before_the_username_limit() {
+    let t = TestServer::new().await;
+    t.member("alice").await;
+    // Bad-format names fail before argon2 but still spend the address's bucket (20).
+    let junk = login_body("x", "test-password-2");
+    for _ in 0..20 {
+        let (s, _, _) = t
+            .call(request(Method::POST, "/api/login", Some(&junk), None))
+            .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+    // The right password for a fresh username bucket is still refused: the address is spent.
+    let good = login_body("alice", PASSWORD);
+    let (s, h, v) = t
+        .call(request(Method::POST, "/api/login", Some(&good), None))
+        .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "{v}");
+    assert!(h.get(header::RETRY_AFTER).is_some());
+    let mut other = request(Method::POST, "/api/login", Some(&good), None);
+    other
+        .headers_mut()
+        .insert("cf-connecting-ip", "203.0.113.9".parse().unwrap());
+    assert_eq!(t.call(other).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn banned_user_cannot_log_in() {
+    let t = TestServer::new().await;
+    let a = t.member("alice").await;
+    t.state
+        .store
+        .set_banned(&a.user.user_id, true, vesper_store::now_ms())
+        .await
+        .unwrap();
+    let (s, h, v) = t
+        .call(request(
+            Method::POST,
+            "/api/login",
+            Some(&login_body("alice", PASSWORD)),
+            None,
+        ))
+        .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    assert_eq!(v["message"], "wrong username or password");
+    assert!(h.get(header::SET_COOKIE).is_none());
+}
+
+#[tokio::test]
+async fn https_cookie_is_secure_host_prefixed() {
+    let mut t = TestServer::new().await;
+    let mut cfg = (*t.state.cfg).clone();
+    cfg.secure_cookies = true;
+    t.state.cfg = std::sync::Arc::new(cfg);
+    let a = t.member("alice").await;
+    assert!(
+        a.cookie.starts_with("__Host-vesper_session="),
+        "{}",
+        a.cookie
+    );
+    let (_, h, _) = t
+        .call(request(
+            Method::POST,
+            "/api/login",
+            Some(&login_body("alice", PASSWORD)),
+            None,
+        ))
+        .await;
+    let c = h[header::SET_COOKIE].to_str().unwrap();
+    for part in ["Secure", "HttpOnly", "SameSite=Strict", "Path=/"] {
+        assert!(c.contains(part), "{c}");
+    }
+    assert!(!c.to_ascii_lowercase().contains("domain="), "{c}");
+    assert_eq!(t.call(get("/api/me", &a)).await.0, StatusCode::OK);
+    // The http cookie name does not count on https.
+    let plain = a.cookie.replacen("__Host-", "", 1);
+    let req = request(Method::GET, "/api/me", None, Some(&plain));
+    assert_eq!(t.call(req).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn patch_without_origin_is_403() {
+    let t = TestServer::new().await;
+    let a = t.member("alice").await;
+    let req = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/me")
+        .header(header::COOKIE, &a.cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "display_name": "Mallory" }).to_string()))
+        .unwrap();
+    let (s, _, v) = t.call(req).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    let (_, _, me) = t.call(get("/api/me", &a)).await;
+    assert_eq!(me["user"]["display_name"], "alice");
+}
+
+#[tokio::test]
+async fn signup_drops_a_presented_session() {
+    let t = TestServer::new().await;
+    let old = t.member("alice").await;
+    let code = t.invite(&["invite"]).await;
+    let (s, _, _) = t
+        .call(post("/api/signup", signup_body(&code, "bob"), &old))
+        .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(
+        t.call(get("/api/me", &old)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn revoking_the_current_session_clears_the_cookie() {
+    let t = TestServer::new().await;
+    let a = t.member("alice").await;
+    let (_, _, me) = t.call(get("/api/me", &a)).await;
+    let path = format!("/api/sessions/{}", me["session_id"]);
+    let (s, h, _) = t
+        .call(request(Method::DELETE, &path, None, Some(&a.cookie)))
+        .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert!(
+        h[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    assert_eq!(t.call(get("/api/me", &a)).await.0, StatusCode::UNAUTHORIZED);
 }

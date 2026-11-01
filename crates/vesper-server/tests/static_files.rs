@@ -161,4 +161,7 @@ async fn cache_control_and_extension_paths_do_not_fall_back() {
         );
     }
     assert!(cc(&get(addr, "/dsp/g.js").await));
+    // API answers are per user: never stored by any cache.
+    let r = get(addr, "/api/me").await;
+    assert!(header_has(&r, "cache-control: no-store"), "{r}");
 }

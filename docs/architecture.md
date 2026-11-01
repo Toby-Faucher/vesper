@@ -128,7 +128,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`). Bodies are the `vesper-protocol
 | `PATCH /api/me` (`ProfilePatch`) | a session | the new `UserInfo` |
 | `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
-| `DELETE /api/sessions/{id}` | a session | 204, or 404 if the id is not one of yours |
+| `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
 
 Rules every route keeps:
 
@@ -138,18 +138,27 @@ Rules every route keeps:
 - **Sessions.** The cookie holds a random token; the database holds its SHA-256. `Authed` turns the cookie into the user and
   session id, or 401 when it is missing, malformed, unknown, expired or the user is banned.
 - **Login.** Every failure is the same 401 "wrong username or password". An unknown user still costs one argon2 check, so the
-  time taken does not tell whether the name exists. A cookie sent with a login is deleted, and a new token is always minted.
-  Rate-limit keys use the client address, and IPv6 clients are keyed on their /64.
+  time taken should not tell whether the name exists; this is reasoned from the code, not measured. A username that fails the
+  format check is refused before any argon2 check. A cookie sent with a login or signup is deleted, and a new token is always minted.
+- **Client address.** Rate-limit keys use the client address (`client_ip`, `auth.rs`), and IPv6 clients are keyed on their /64.
+  When the TCP peer is loopback or private (10/8, 172.16/12, 192.168/16, IPv6 unique-local), the server takes a valid
+  `CF-Connecting-IP`, else the last `X-Forwarded-For` entry, else the peer. From any other peer it ignores both headers.
+  Behind Cloudflare, `cloudflared` and Caddy the peer is private and Cloudflare overwrites `CF-Connecting-IP`, so the key is the real
+  client. Reached on a private network without Cloudflare, a LAN client could set that header itself
+  ([known-issues.md](known-issues.md#security-and-abuse-all-need-the-join-key-except-where-noted)). The per-username login limit does
+  not use the address.
 - **Invites.** Unknown, used up, expired, revoked and changed codes all give the same 404 body. An owner invite stops working
   once an owner exists; the store checks this in the signup transaction.
-- Handlers never log request bodies. The WebSocket does not use the session yet; it still takes the join key.
+- **Caching.** Every `/api` response has `Cache-Control: no-store`.
+- Handlers never log request bodies, and the request types with a password or invite code print `***` in `Debug`. A body that does
+  not parse gets a fixed "invalid request body" message. The WebSocket does not use the session yet; it still takes the join key.
 
 Tests: `crates/vesper-server/tests/accounts.rs`, through `tests/common/mod.rs`.
 
 ## Static serving
 
 `guard` in `vesper-server/src/lib.rs`: dotfiles and `%2e` are 404; an extensionless 404 gets `index.html` (SPA routes); a missing file with
-an extension or under `/api/` stays 404; `/assets/*` is `immutable`, everything else `no-cache`; `nosniff` on all. Tests: `crates/vesper-server/tests/static_files.rs`.
+an extension or under `/api/` stays 404; `/assets/*` is `immutable`, `/api/*` `no-store`, everything else `no-cache`; `nosniff` on all. Tests: `crates/vesper-server/tests/static_files.rs`.
 
 ## Not verified
 
@@ -157,4 +166,6 @@ Read from the code on 2026-10-30, not run:
 
 - Behaviour in real Chrome and Firefox, including the `ontrack` stream id and `replaceTrack` during a mode swap.
 - Everything in the SFU loop beyond its doc comments (`room.rs` forwarding, `client.rs` negotiation).
-- Text chat, accounts and rooms beyond a name: not built (spec "Build order").
+- Text chat and rooms beyond a name: not built (spec "Build order").
+- The accounts REST API is built and tested in process only (`tests/accounts.rs`). No real browser run, and no https run of the
+  `Secure` `__Host-` cookie beyond the in-process test.

@@ -111,7 +111,8 @@ pub fn body<T>(r: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
             ApiErrorCode::TooLarge,
             "request body too large",
         )),
-        Err(e) => Err(bad(&e.body_text())),
+        // Fixed text: the rejection's own text holds serde internals.
+        Err(_) => Err(bad("invalid request body")),
     }
 }
 
@@ -138,6 +139,18 @@ async fn session_of(h: &HeaderMap, st: &AppState) -> Result<Option<(i64, UserInf
         return Ok(None);
     };
     Ok(st.store.session_user(&hash, now_ms()).await?)
+}
+
+/// Session fixation: a cookie sent with a login or signup never survives it. Already gone
+/// (another tab logged out meanwhile) is fine.
+async fn drop_presented_session(h: &HeaderMap, st: &AppState) -> Result<(), ApiError> {
+    if let Some((sid, old)) = session_of(h, st).await? {
+        match st.store.delete_session(&old.user_id, sid).await {
+            Ok(()) | Err(StoreError::NotFound) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
 }
 
 /// Rate-limit key for an address: IPv6 clients are keyed on their /64, as one host usually
@@ -202,7 +215,7 @@ async fn preview(
     q: Result<Query<PreviewQuery>, QueryRejection>,
 ) -> Result<Json<InvitePreview>, ApiError> {
     limit(&st, Kind::Invite, &ip_key(client_ip(peer, &h)))?;
-    let q = q.map_err(|e| bad(&e.body_text()))?;
+    let q = q.map_err(|_| bad("invalid query"))?;
     let invalid = || ApiError::new(ApiErrorCode::InviteInvalid, BAD_INVITE);
     let hash = hash_token(&q.code).ok_or_else(invalid)?;
     let role = st
@@ -257,6 +270,7 @@ async fn signup(
         now: now_ms(),
     };
     let (user, session_id) = st.store.signup(&invite_hash, account, s).await?;
+    drop_presented_session(&h, &st).await?;
     let cookie = session_cookie(&token, st.cfg.secure_cookies);
     Ok((
         StatusCode::CREATED,
@@ -266,8 +280,9 @@ async fn signup(
         .into_response())
 }
 
-/// Every failure is the same 401. An unknown user still costs one argon2 verify, so timing does
-/// not tell whether the name exists.
+/// Every failure is the same 401. An unknown user still costs one argon2 verify, so timing should
+/// not tell whether the name exists (reasoned, not measured). A name that fails the format check
+/// is refused before argon2.
 async fn login(
     State(st): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -287,10 +302,7 @@ async fn login(
     let Some(row) = row.filter(|r| ok && !r.banned) else {
         return Err(wrong());
     };
-    // Session fixation: a cookie sent with the login never survives it.
-    if let Some((sid, old)) = session_of(&h, &st).await? {
-        st.store.delete_session(&old.user_id, sid).await?;
-    }
+    drop_presented_session(&h, &st).await?;
     let (session_id, cookie) = new_session(&st, &row.user_id, &h).await?;
     let user = st.store.user(&row.user_id).await?;
     Ok((
@@ -375,14 +387,19 @@ async fn sessions(State(st): State<AppState>, a: Authed) -> Result<Json<Vec<Devi
     ))
 }
 
+/// Revoking the current session also clears its cookie, like logout.
 async fn revoke(
     State(st): State<AppState>,
     a: Authed,
     id: Result<Path<i64>, axum::extract::rejection::PathRejection>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Response, ApiError> {
     let Path(id) = id.map_err(|_| ApiError::new(ApiErrorCode::NotFound, "not found"))?;
     st.store.delete_session(&a.user.user_id, id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    if id == a.session_id {
+        let cookie = clear_cookie(st.cfg.secure_cookies);
+        return Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response());
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 #[cfg(test)]

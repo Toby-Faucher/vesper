@@ -155,21 +155,30 @@ fn is_private(ip: IpAddr) -> bool {
     }
 }
 
-/// The peer, or the rightmost `X-Forwarded-For` entry when the peer is loopback or private
-/// (Caddy in front). Spoofable if the HTTP port is reachable on the LAN without Caddy.
+/// The client address. Only when the TCP peer is loopback or private (the proxy chain:
+/// Cloudflare, cloudflared, Caddy) are forwarding headers read: a valid `CF-Connecting-IP` first
+/// (Cloudflare overwrites it), then the rightmost `X-Forwarded-For` entry, then the peer.
+/// A LAN client that reaches the port without Cloudflare can set either header.
 pub fn client_ip(peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
     let peer = peer.ip().to_canonical();
     if !is_private(peer) {
         return peer;
     }
-    headers
-        .get_all("x-forwarded-for")
-        .iter()
-        .next_back()
+    let parse = |v: &str| v.trim().parse::<IpAddr>().ok();
+    let cf = headers
+        .get("cf-connecting-ip")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.rsplit(',').next())
-        .and_then(|ip| ip.trim().parse::<IpAddr>().ok())
-        .map_or(peer, |ip| ip.to_canonical())
+        .and_then(parse);
+    let xff = || {
+        headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .next_back()
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit(',').next())
+            .and_then(parse)
+    };
+    cf.or_else(xff).map_or(peer, |ip| ip.to_canonical())
 }
 
 /// A short device name such as "Firefox on Linux". Built from fixed words, never from the
@@ -351,10 +360,31 @@ mod tests {
         assert_eq!(ip("127.0.0.1:5000", &h), "5.6.7.8");
         assert_eq!(ip("172.18.0.2:5000", &h), "5.6.7.8");
         assert_eq!(ip("[::ffff:127.0.0.1]:5000", &h), "5.6.7.8");
+        assert_eq!(ip("[fd00::1]:5000", &h), "5.6.7.8");
         assert_eq!(ip("8.8.8.8:5000", &h), "8.8.8.8");
         h.insert("x-forwarded-for", "junk".parse().unwrap());
         assert_eq!(ip("127.0.0.1:5000", &h), "127.0.0.1");
         assert_eq!(ip("127.0.0.1:5000", &HeaderMap::new()), "127.0.0.1");
+    }
+
+    #[test]
+    fn client_ip_prefers_cf_connecting_ip_from_private_peer() {
+        let ip = |peer: &str, h: &HeaderMap| client_ip(peer.parse().unwrap(), h).to_string();
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "1.2.3.4, 10.0.0.5".parse().unwrap());
+        h.insert("cf-connecting-ip", "203.0.113.7".parse().unwrap());
+        assert_eq!(ip("127.0.0.1:5000", &h), "203.0.113.7");
+        h.insert("cf-connecting-ip", " 2001:db8::7 ".parse().unwrap());
+        assert_eq!(ip("10.0.0.2:5000", &h), "2001:db8::7");
+        // Untrusted peer: every forwarding header is ignored.
+        assert_eq!(ip("8.8.8.8:5000", &h), "8.8.8.8");
+        // Malformed CF-Connecting-IP falls back to X-Forwarded-For, then the peer.
+        for junk in ["junk", "1.2.3.4, 5.6.7.8", "", "1.2.3.4:80"] {
+            h.insert("cf-connecting-ip", junk.parse().unwrap());
+            assert_eq!(ip("127.0.0.1:5000", &h), "10.0.0.5", "{junk:?}");
+        }
+        h.remove("x-forwarded-for");
+        assert_eq!(ip("127.0.0.1:5000", &h), "127.0.0.1");
     }
 
     #[test]
