@@ -143,7 +143,9 @@ Verified on the dev machine with Chromium 156 (Playwright 1.64.1). Firefox is no
 `Performance.getMetrics` `TaskDuration` on bob's page at the start and end of 10 s and prints the difference. Run it three times and take
 the median. Baseline, measured 2026-11-01 on the dev machine (headless Chromium, fake mics, browser noise suppression, with the 2 s
 connection quality poll): runs of 312, 261 and 238 ms, median **261 ms per 10 s**. The UI plan's Task 17 must stay within 25 percent of it
-(at most 326 ms). The runs vary by about 30 percent, so compare medians, not single runs.
+(at most 326 ms). The runs vary by about 30 percent, so compare medians, not single runs. The baseline ran in
+browser noise suppression mode, because the shots run has no wasm denoiser. Task 17 must compare in the same mode. When `dist/dsp` is
+present, measure both modes and compare the browser mode run against this baseline.
 
 Debug-build note: `Cargo.toml` turns off debug assertions for `tract-core` only, because tract 0.21.4 trips one on the DeepFilterNet3 model
 ("duplicate name /convt3/Conv.bias"). Release builds are fine. Remove the override when tract moves past the bug.

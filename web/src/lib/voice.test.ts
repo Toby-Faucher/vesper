@@ -36,22 +36,26 @@ vi.mock('./signaling', () => ({ joinRoom: (...a: unknown[]) => joinRoom(...a) })
 // Counts listeners on window, document and mediaDevices.
 class Target {
   n = 0;
-  addEventListener() { this.n++; }
+  last: (() => void) | undefined; // the newest listener, to fire a devicechange
+  addEventListener(_t: string, fn: () => void) { this.n++; this.last = fn; }
   removeEventListener() { this.n--; }
 }
 const win = new Target();
 const doc = Object.assign(new Target(), { visibilityState: 'visible' });
-const md = Object.assign(new Target(), { enumerateDevices: async () => [] });
+let devices: MediaDeviceInfo[] = [];
+const md = Object.assign(new Target(), { enumerateDevices: async () => devices });
 vi.stubGlobal('window', win);
 vi.stubGlobal('document', doc);
 vi.stubGlobal('navigator', { mediaDevices: md, locks: { request: vi.fn() } });
-vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+const stored = new Map<string, string>();
+vi.stubGlobal('localStorage', { getItem: (k: string) => stored.get(k) ?? null, setItem: () => {}, removeItem: () => {} });
 vi.stubGlobal('location', { pathname: '/', search: '', hash: '', protocol: 'http:', host: 'x' });
 
 const { session } = await import('./session.svelte');
 const v = await import('./voice.svelte');
 const { voice } = v;
 const { CALL_ENDED, ROOM_GONE } = await import('./call');
+const { SETTINGS_KEY } = await import('./audio/settings');
 
 class FakeSig {
   msg = new Set<(m: ServerMsg) => void>();
@@ -75,6 +79,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   calls.length = 0;
   h.playbacks.length = 0;
+  devices = [];
+  stored.clear();
   sig = new FakeSig();
   session.sig = sig as never;
   session.online = true;
@@ -191,6 +197,79 @@ describe('in a call', () => {
     expect(sig.close.size).toBe(1);
     await joined();
     expect(joinRoom.mock.calls.at(-1)![0]).toBe(sig);
+  });
+});
+
+// Logout and a 4001 close end the voice session (stop) and a new sign-in starts it again: nothing may carry over.
+describe('a new session starts fresh', () => {
+  const restart = () => {
+    stop();
+    stop = v.startVoice();
+    flushSync();
+  };
+
+  it('a failed join leaves no error alert for the next sign-in', async () => {
+    const p = v.join(1);
+    h.capture!.reject(new DOMException('no', 'NotAllowedError'));
+    await p;
+    expect(voice.error).not.toBe('');
+    restart();
+    expect(voice.error).toBe('');
+  });
+
+  it('a 4001 close in a call leaves no "Disconnected from the server." whichever close handler runs first', async () => {
+    // The session's handler (logout, stop) ran after the call's handler: the call already wrote its text.
+    await joined();
+    sig.drop();
+    expect(voice.error).toBe('Disconnected from the server.');
+    restart();
+    expect(voice.error).toBe('');
+    // The session's handler ran first: the call's handler still runs in the same loop, after stop.
+    stop();
+    sig = new FakeSig();
+    session.sig = sig as never;
+    sig.close.add(() => stop());
+    stop = v.startVoice();
+    flushSync();
+    await joined();
+    sig.drop();
+    expect(voice.error).toBe('');
+    stop = v.startVoice();
+    flushSync();
+    expect(voice.error).toBe('');
+  });
+
+  it('Diagnostics shows deepfilter again after a call that fell back', async () => {
+    const { cap } = await joined();
+    const onMode = cap.onModeChange.mock.calls[0][0] as (m: string, r: string) => void;
+    onMode('browser', 'denoiser failed');
+    expect(voice.mode).toBe('browser');
+    restart();
+    expect(voice.mode).toBe('deepfilter');
+    expect(voice).toMatchObject({ volumes: {}, userId: '', joinedBitrate: 64 });
+  });
+
+  it('a mic plugged in while signed out is not offered later', async () => {
+    const mic = (id: string) => ({ kind: 'audioinput', deviceId: id, label: id, groupId: '' }) as MediaDeviceInfo;
+    devices = [mic('a')];
+    restart();
+    await vi.advanceTimersByTimeAsync(0); // the first enumerateDevices
+    stop(); // signed out
+    devices = [mic('a'), mic('b')];
+    stop = v.startVoice();
+    flushSync();
+    await vi.advanceTimersByTimeAsync(0);
+    await joined();
+    md.last!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(voice.offered).toBeNull();
+  });
+
+  it('reads the audio settings from storage again', async () => {
+    stop();
+    stored.set(SETTINGS_KEY, JSON.stringify({ bitrateKbps: 32 }));
+    stop = v.startVoice();
+    expect(voice.settings.bitrateKbps).toBe(32);
   });
 });
 

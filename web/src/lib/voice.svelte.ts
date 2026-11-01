@@ -105,6 +105,7 @@ function onKey(type: 'keydown' | 'keyup') {
 
 /** Starts the key, blur, visibility and device listeners and the socket subscription. Returns the cleanup, which also ends the call. */
 export function startVoice(): () => void {
+  voice.settings = loadSettings(storage); // a fresh start, as a new Room mount had
   const [kd, ku] = [onKey('keydown'), onKey('keyup')];
   window.addEventListener('keydown', kd);
   window.addEventListener('keyup', ku);
@@ -157,6 +158,13 @@ export function startVoice(): () => void {
   });
   return () => {
     teardown();
+    // Nothing from this call may reach the next sign-in (the 4001 close handler can run just before this).
+    voice.error = '';
+    voice.mode = 'deepfilter';
+    voice.volumes = {};
+    voice.userId = '';
+    voice.joinedBitrate = 64;
+    known = [];
     stop();
     offSocket();
     window.removeEventListener('keydown', kd);
