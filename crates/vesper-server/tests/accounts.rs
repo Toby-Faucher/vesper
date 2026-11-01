@@ -473,6 +473,7 @@ fn mutating_routes() -> Vec<(String, String)> {
         include_str!("../src/api_rooms.rs"),
         include_str!("../src/api_messages.rs"),
         include_str!("../src/uploads.rs"),
+        include_str!("../src/avatars.rs"),
     ];
     let mut out = Vec::new();
     for line in sources.iter().flat_map(|s| s.lines()) {

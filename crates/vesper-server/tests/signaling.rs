@@ -1713,3 +1713,58 @@ async fn watch_sfu_fires_after_crash_and_not_while_healthy() {
     // FnOnce: exactly once, then the sender is dropped.
     assert!(rx.recv().await.is_none());
 }
+
+/// A signup reaches every open socket as `user_created` (so nobody shows as "Someone"), and a new
+/// picture or bio reaches them as `user_updated`.
+#[tokio::test]
+async fn signup_and_profile_changes_reach_every_socket() {
+    let server = TestServer::new().await;
+    let alice = server.member("alice").await;
+    let owner = server.account("owner", Role::Owner).await;
+    let mut a = Conn::open(&server, &alice).await;
+    let mut o = Conn::open(&server, &owner).await;
+    let bob = server.member("bob").await;
+    for c in [&mut a, &mut o] {
+        let m = c
+            .until("UserCreated", |m| {
+                matches!(m, ServerMsg::UserCreated { .. })
+            })
+            .await;
+        let ServerMsg::UserCreated { user } = m else {
+            unreachable!()
+        };
+        assert_eq!(user, bob.user);
+    }
+    let mut b = Conn::open(&server, &bob).await;
+    let (status, _, _) = server
+        .call(request(
+            Method::PATCH,
+            "/api/me",
+            Some(&json!({ "bio": "hello" })),
+            Some(&bob.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    for c in [&mut a, &mut o, &mut b] {
+        c.until(
+            "UserUpdated",
+            |m| matches!(m, ServerMsg::UserUpdated { user } if user.bio == "hello"),
+        )
+        .await;
+    }
+    let png = b"\x89PNG\r\n\x1a\n\0\0\0\0IEND\0\0\0\0".to_vec();
+    let req = axum::http::Request::builder()
+        .method(Method::PUT)
+        .uri("/api/me/avatar")
+        .header("origin", ORIGIN)
+        .header("cookie", &bob.cookie)
+        .body(axum::body::Body::from(png))
+        .unwrap();
+    let (status, _, v) = server.call(req).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    a.until(
+        "UserUpdated",
+        |m| matches!(m, ServerMsg::UserUpdated { user } if user.avatar.is_some()),
+    )
+    .await;
+}
