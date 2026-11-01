@@ -3,7 +3,8 @@
   import type { HTMLButtonAttributes } from 'svelte/elements';
   // Primary is the amber fill: at most one per view. The rest of the attributes (aria-*, data-*) pass through.
   // `loading`: a spinner over the hidden label (same width), aria-busy, and clicks do nothing. It stays focusable (not
-  // disabled), so keyboard focus is not lost while a send or a save runs.
+  // disabled), so keyboard focus is not lost while a send or a save runs. aria-disabled="true" looks disabled and ignores
+  // clicks the same way, for a button that must stay focusable (Join voice while offline).
   let {
     variant = 'secondary',
     size = 'md',
@@ -29,7 +30,7 @@
   class="btn {variant} {size}"
   aria-busy={loading || undefined}
   aria-disabled={loading || rest['aria-disabled']}
-  onclick={(e) => (loading ? e.preventDefault() : onclick?.(e))}
+  onclick={(e) => (loading || String(rest['aria-disabled']) === 'true' ? e.preventDefault() : onclick?.(e))}
 >
   <span class="label">{@render children()}</span>
   {#if loading}
@@ -71,6 +72,6 @@
   [aria-busy] .label { visibility: hidden; }
   .spin { position: absolute; inset: 0; margin: auto; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(1turn); } }
-  .btn:disabled { cursor: not-allowed; background: var(--bg-element); border-color: var(--line-subtle); color: var(--fg-disabled); }
+  .btn:disabled, .btn[aria-disabled='true']:not([aria-busy]) { cursor: not-allowed; background: var(--bg-element); border-color: var(--line-subtle); color: var(--fg-disabled); }
   .ghost:disabled { background: none; border-color: transparent; }
 </style>

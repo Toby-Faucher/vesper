@@ -15,6 +15,7 @@
   let pins = $state<Promise<typeof import('./PinsPopover.svelte')> | null>(null);
   let pinsOpen = $state(false);
   let pinsFailed = false;
+  const offlineId = $props.id();
   function togglePins() {
     if (pinsFailed) [pins, pinsFailed] = [null, false]; // the chunk did not load: try again
     pins ??= import('./PinsPopover.svelte').catch((e) => {
@@ -44,8 +45,10 @@
     {/if}
     <IconButton icon={I.search} label="Search" tip aria-haspopup="dialog" aria-controls="search" aria-expanded={layers.search} onclick={() => (layers.search = true)} />
     {#if !inCall}
-      <Button variant="primary" loading={joining} onclick={onjoin} disabled={!session.online}
-        data-tip={session.online ? undefined : UI_MESSAGES.offlineAction} data-tip-end>Join voice</Button>
+      <!-- aria-disabled, not disabled: a dropped connection must not take focus away, and the reason stays reachable by Tab. -->
+      <Button variant="primary" loading={joining} onclick={onjoin} aria-disabled={!session.online || undefined}
+        aria-describedby={session.online ? undefined : offlineId} data-tip={session.online ? undefined : UI_MESSAGES.offlineAction} data-tip-end>Join voice</Button>
+      {#if !session.online}<span id={offlineId} class="sr-only">{UI_MESSAGES.offlineAction}</span>{/if}
     {/if}
   </div>
 </header>
