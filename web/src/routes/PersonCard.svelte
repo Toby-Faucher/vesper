@@ -18,9 +18,10 @@
     userId,
     anchor,
     side = 'right',
+    above = null,
     asDialog = false,
     onclose,
-  }: { userId: string; anchor: HTMLElement | null; side?: 'right' | 'top'; asDialog?: boolean; onclose: () => void } = $props();
+  }: { userId: string; anchor: HTMLElement | null; side?: 'right' | 'top'; above?: Element | null; asDialog?: boolean; onclose: () => void } = $props();
 
   const ROLE = { member: 'Member', moderator: 'Moderator', owner: 'Owner' } as const;
   const me = $derived(session.state.me?.user);
@@ -115,7 +116,7 @@
 {#if asDialog}
   <Dialog open title={name} {onclose}>{@render body()}</Dialog>
 {:else}
-  <Popover {anchor} open label={name} {onclose} {side}>{@render body()}</Popover>
+  <Popover {anchor} open label={name} {onclose} {side} {above}>{@render body()}</Popover>
 {/if}
 
 <style>

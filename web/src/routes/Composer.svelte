@@ -228,7 +228,7 @@
   </div>
 
   <span class="sr-only" role="status">{trayLine}</span>
-  <form class="box" onsubmit={submit}>
+  <form class="box" data-composer onsubmit={submit}>
     {#if replyTo}
       <div class="bar">
         <Icon d={I.reply} size={16} />

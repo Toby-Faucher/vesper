@@ -263,6 +263,20 @@ try {
   assert.equal(await b.getByText('Your call ended.').count(), 0);
   await inVoice(a, 'bob').waitFor(); // alice still sees bob in voice
   assert.equal(roomId(b), general);
+  // A person card opened from the call bar sits above the composer, not over it (the composer is right above the bar).
+  for (const size of [{ width: 1440, height: 900 }, { width: 1024, height: 640 }]) {
+    await b.setViewportSize(size);
+    await b.getByRole('region', { name: 'Call' }).getByRole('button', { name: /^bob/ }).click();
+    const card = b.getByRole('dialog', { name: 'bob' });
+    await card.waitFor();
+    await sleep(300); // past the open motion, which scales the card
+    const [c, m] = [await card.boundingBox(), await b.locator('[data-composer]').boundingBox()];
+    assert.ok(c.y + c.height <= m.y, `the person card covers the composer at ${size.width}x${size.height}`);
+    await b.keyboard.press('Escape');
+    await card.waitFor({ state: 'hidden' });
+  }
+  await b.setViewportSize({ width: 1280, height: 720 }); // Playwright's default, as before
+  console.log('person card from the call bar clears the composer: ok');
   await b.getByRole('button', { name: 'Leave' }).click();
   await inVoice(a, 'bob').waitFor({ state: 'detached' });
   console.log('call survives navigation: ok');
