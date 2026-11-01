@@ -49,7 +49,7 @@ describe('applyServerMsg', () => {
   });
   it('unread counts new messages from others and mentions, and read clears it', () => {
     const msg = (id: number, author_id: string, mentions: string[] = []): Message => ({
-      id, room_id: 1, author_id, body: 'x', created_at: 0, edited_at: null, deleted: false, reply_to: null,
+      id, room_id: 1, author_id, body: 'x', created_at: 0, edited_at: null, updated_at: 0, deleted: false, reply_to: null,
       reactions: [], attachments: [], mentions, pinned: false,
     });
     let s: AppState = { ...emptyState(), me, unread: { 1: unread1 } };

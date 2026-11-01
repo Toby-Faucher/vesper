@@ -561,3 +561,46 @@ async fn upload_rows_sum_sweep_and_skip_attached() {
     assert_eq!(s.upload_bytes().await.unwrap(), 50);
     assert!(s.upload(&attached).await.unwrap().message_id.is_some());
 }
+
+/// Every change raises `updated_at`, also when the clock stands still or goes back, and the
+/// stored copy (history) carries the same stamp as the one the change returned.
+#[tokio::test]
+async fn updated_at_rises_on_every_change() {
+    let (_tmp, s) = open().await;
+    let a = user(&s, "alice").await;
+    let room = general(&s).await;
+    let m = post(&s, room, &a, "first").await;
+    assert_eq!(m.updated_at, m.created_at);
+    let last = std::cell::Cell::new(m.updated_at);
+    let rose = |got: Message, what: &str| {
+        let was = last.replace(got.updated_at);
+        assert!(
+            got.updated_at > was,
+            "{what}: {} after {was}",
+            got.updated_at
+        );
+    };
+    // The same ms as the post, then a clock that went back.
+    rose(
+        s.edit_message(m.id, &a, "second", &[], 1000).await.unwrap(),
+        "edit",
+    );
+    rose(
+        s.set_reaction(m.id, &a, "👍", true, 500).await.unwrap(),
+        "react",
+    );
+    rose(
+        s.set_reaction(m.id, &a, "👍", false, 500).await.unwrap(),
+        "unreact",
+    );
+    rose(s.set_pinned(m.id, &a, true, 500).await.unwrap(), "pin");
+    let held = s.history(room, Cursor::Latest, 10).await.unwrap().messages[0].clone();
+    assert_eq!(
+        held.updated_at,
+        last.get(),
+        "stored stamp matches the returned copy"
+    );
+    rose(s.set_pinned(m.id, &a, false, 9000).await.unwrap(), "unpin");
+    assert_eq!(last.get(), 9000, "a later clock is taken as is");
+    rose(s.delete_message(m.id, 9000, &a).await.unwrap().0, "delete");
+}

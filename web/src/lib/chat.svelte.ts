@@ -22,12 +22,9 @@ const PAGE = 50;
 
 /**
  * True when `incoming` is older than `held` and must not replace it. Events for one message can arrive out of
- * order, so a delete or a later edit is never undone by an older copy.
- * shortcut: the wire has no updated_at, so two reaction or pin changes that race keep the last one received;
- * the refetch on reconnect fixes it. Add updated_at to Message if that shows up.
+ * order; the server raises `updated_at` on every change, so the larger one is the newer copy.
  */
-export const stale = (held: Message, incoming: Message) =>
-  (held.deleted && !incoming.deleted) || (held.edited_at ?? 0) > (incoming.edited_at ?? 0);
+export const stale = (held: Message, incoming: Message) => held.updated_at > incoming.updated_at;
 
 /** Inserts or replaces `m` by id, keeping the list sorted. Returns the same list when nothing changed. */
 export function upsert(list: Message[], m: Message, insert = true): Message[] {

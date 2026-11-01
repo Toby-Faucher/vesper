@@ -33,7 +33,7 @@ pub const MAX_PINS: i64 = 50;
 
 macro_rules! msg_select {
     () => {
-        "SELECT m.id, m.room_id, m.author_id, m.body, m.created_at, m.edited_at,
+        "SELECT m.id, m.room_id, m.author_id, m.body, m.created_at, m.edited_at, m.updated_at,
                 m.deleted_at IS NOT NULL AS deleted, m.pinned_at IS NOT NULL AS pinned,
                 p.id AS reply_id, p.author_id AS reply_author, substr(p.body, 1, 100) AS reply_excerpt
          FROM messages m LEFT JOIN messages p ON p.id = m.reply_to "
@@ -62,6 +62,7 @@ pub(crate) struct MsgRow {
     body: String,
     created_at: i64,
     edited_at: Option<i64>,
+    updated_at: i64,
     deleted: bool,
     pinned: bool,
     reply_id: Option<i64>,
@@ -159,10 +160,22 @@ pub(crate) async fn load(c: &mut SqliteConnection, rows: Vec<MsgRow>) -> Result<
             body: r.body,
             created_at: r.created_at,
             edited_at: r.edited_at,
+            updated_at: r.updated_at,
             deleted: r.deleted,
             pinned: r.pinned,
         })
         .collect())
+}
+
+/// Raises `updated_at` past its old value and to at least `now`, inside the change's transaction,
+/// so the copy read back right after carries the stamp of this change.
+async fn bump(c: &mut SqliteConnection, id: i64, now: i64) -> Result<()> {
+    sqlx::query("UPDATE messages SET updated_at = max(updated_at + 1, ?2) WHERE id = ?1")
+        .bind(id)
+        .bind(now)
+        .execute(&mut *c)
+        .await?;
+    Ok(())
 }
 
 async fn by_id(c: &mut SqliteConnection, id: i64) -> Result<Message> {
@@ -250,8 +263,8 @@ impl Store {
             }
         }
         let id: i64 = sqlx::query_scalar(
-            "INSERT INTO messages (room_id, author_id, body, reply_to, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
+            "INSERT INTO messages (room_id, author_id, body, reply_to, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5) RETURNING id",
         )
         .bind(m.room_id)
         .bind(m.author_id)
@@ -308,6 +321,7 @@ impl Store {
             return Err(StoreError::NotFound);
         }
         set_mentions(&mut tx, id, mentions).await?;
+        bump(&mut tx, id, now).await?;
         let msg = by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok(msg)
@@ -349,6 +363,7 @@ impl Store {
                 .bind(id)
                 .fetch_all(&mut *tx)
                 .await?;
+        bump(&mut tx, id, now).await?;
         let msg = by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok((msg, uploads))
@@ -407,6 +422,7 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         }
+        bump(&mut tx, id, now).await?;
         let msg = by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok(msg)
@@ -446,6 +462,7 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
         }
+        bump(&mut tx, id, now).await?;
         let msg = by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok(msg)

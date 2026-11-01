@@ -7,7 +7,12 @@ import type { ReplyPreview } from "./ReplyPreview";
  * A chat message. A deleted one keeps its id and times with an empty body and no reactions,
  * attachments, mentions or pin.
  */
-export type Message = { id: number, room_id: number, author_id: string, body: string, created_at: number, edited_at: number | null, deleted: boolean, reply_to: ReplyPreview | null, reactions: Array<Reaction>, attachments: Array<Attachment>, 
+export type Message = { id: number, room_id: number, author_id: string, body: string, created_at: number, edited_at: number | null, 
+/**
+ * Unix ms, raised by every edit, delete, reaction and pin change and never equal to an
+ * earlier copy's: of two copies of one message, the larger `updated_at` is the newer.
+ */
+updated_at: number, deleted: boolean, reply_to: ReplyPreview | null, reactions: Array<Reaction>, attachments: Array<Attachment>, 
 /**
  * User ids mentioned in the body.
  */

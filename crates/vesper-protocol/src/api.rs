@@ -235,6 +235,10 @@ pub struct Message {
     pub created_at: i64,
     #[ts(type = "number | null")]
     pub edited_at: Option<i64>,
+    /// Unix ms, raised by every edit, delete, reaction and pin change and never equal to an
+    /// earlier copy's: of two copies of one message, the larger `updated_at` is the newer.
+    #[ts(type = "number")]
+    pub updated_at: i64,
     pub deleted: bool,
     pub reply_to: Option<ReplyPreview>,
     pub reactions: Vec<Reaction>,

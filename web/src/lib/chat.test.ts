@@ -3,7 +3,7 @@ import { anchorTop, applyChatMsg, marks, mergeLatest, typers, type ChatState } f
 import type { Message } from './gen/Message';
 
 const msg = (id: number, over: Partial<Message> = {}): Message => ({
-  id, room_id: 1, author_id: 'a', body: `m${id}`, created_at: id, edited_at: null, deleted: false, reply_to: null,
+  id, room_id: 1, author_id: 'a', body: `m${id}`, created_at: id, edited_at: null, updated_at: id, deleted: false, reply_to: null,
   reactions: [], attachments: [], mentions: [], pinned: false, ...over,
 });
 const loaded = (ids: number[], moreAfter = false): ChatState => ({
@@ -27,7 +27,7 @@ describe('applyChatMsg', () => {
   });
 
   it('message_updated_replaces_in_place', () => {
-    const s = applyChatMsg(loaded([1, 2, 3]), { type: 'message_updated', message: msg(2, { body: 'new', edited_at: 10 }) });
+    const s = applyChatMsg(loaded([1, 2, 3]), { type: 'message_updated', message: msg(2, { body: 'new', edited_at: 10, updated_at: 10 }) });
     expect(ids(s)).toEqual([1, 2, 3]);
     expect(s.rooms[1].messages[1].body).toBe('new');
     // An update for a message outside the loaded slice is not inserted.
@@ -35,11 +35,16 @@ describe('applyChatMsg', () => {
   });
 
   it('a stale message_updated never replaces a newer copy', () => {
-    let s = applyChatMsg(loaded([1]), { type: 'message_updated', message: msg(1, { body: 'second', edited_at: 20 }) });
-    s = applyChatMsg(s, { type: 'message_updated', message: msg(1, { body: 'first', edited_at: 10 }) });
+    const upd = (over: Partial<Message>) => ({ type: 'message_updated' as const, message: msg(1, over) });
+    let s = applyChatMsg(loaded([1]), upd({ body: 'second', edited_at: 20, updated_at: 20 }));
+    s = applyChatMsg(s, upd({ body: 'first', edited_at: 10, updated_at: 10 }));
     expect(s.rooms[1].messages[0].body).toBe('second');
-    s = applyChatMsg(s, { type: 'message_updated', message: msg(1, { body: '', deleted: true, edited_at: 20 }) });
-    s = applyChatMsg(s, { type: 'message_updated', message: msg(1, { body: 'second', edited_at: 20, pinned: true }) });
+    // Two reaction or pin changes that race: the older copy arriving last is dropped.
+    s = applyChatMsg(s, upd({ body: 'second', edited_at: 20, updated_at: 22, pinned: true }));
+    s = applyChatMsg(s, upd({ body: 'second', edited_at: 20, updated_at: 21, pinned: false }));
+    expect(s.rooms[1].messages[0].pinned).toBe(true);
+    s = applyChatMsg(s, upd({ body: '', deleted: true, edited_at: 20, updated_at: 30 }));
+    s = applyChatMsg(s, upd({ body: 'second', edited_at: 20, updated_at: 22, pinned: true }));
     expect(s.rooms[1].messages[0].deleted).toBe(true);
   });
 
@@ -63,14 +68,14 @@ describe('mergeLatest (refetch after a reconnect)', () => {
 
   it('keeps older held messages and takes the fetched copies', () => {
     const held = loaded([1, 2, 3]).rooms[1];
-    const r = mergeLatest(held, page([msg(2, { body: 'edited', edited_at: 5 }), msg(3), msg(4)]));
+    const r = mergeLatest(held, page([msg(2, { body: 'edited', edited_at: 5, updated_at: 5 }), msg(3), msg(4)]));
     expect(r.messages.map((m) => m.id)).toEqual([1, 2, 3, 4]);
     expect(r.messages[1].body).toBe('edited');
     expect(r.moreBefore).toBe(true);
   });
 
   it('a held copy newer than the fetched one wins', () => {
-    const held = { messages: [msg(2, { deleted: true, body: '' })], moreBefore: false, moreAfter: false };
+    const held = { messages: [msg(2, { deleted: true, body: '', updated_at: 9 })], moreBefore: false, moreAfter: false };
     expect(mergeLatest(held, page([msg(2)])).messages[0].deleted).toBe(true);
   });
 
