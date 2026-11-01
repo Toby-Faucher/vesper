@@ -137,6 +137,8 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`). Bodies are the 
 | `POST /api/users/{id}/ban` | owner | the new `UserInfo`; every session of that user is deleted |
 | `POST /api/users/{id}/unban` | owner | the new `UserInfo` |
 
+A ban ends the user's sessions but does not revoke invites they already created; the owner revokes those by hand. `InviteCreate` needs all three fields (`role`, `max_uses`, `expires_hours`), so the web client must send them.
+
 Roles (`require`, `api_admin.rs`; owner > moderator > member):
 
 | Action | Member | Moderator | Owner |

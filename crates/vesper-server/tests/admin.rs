@@ -157,6 +157,36 @@ async fn role_change_and_ban_are_owner_only() {
 }
 
 #[tokio::test]
+async fn ban_ends_every_session_of_the_user() {
+    let t = TestServer::new().await;
+    let o = t.owner().await;
+    let first = t.member("alice").await;
+    let second = t.login("alice").await;
+    for s in [&first, &second] {
+        assert_eq!(t.call(get("/api/me", s)).await.0, StatusCode::OK);
+    }
+    let ban = format!("/api/users/{}/ban", first.user.user_id);
+    assert_eq!(
+        status(&t, Method::POST, &ban, None, Some(&o)).await,
+        StatusCode::OK
+    );
+    for s in [&first, &second] {
+        assert_eq!(t.call(get("/api/me", s)).await.0, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(login_status(&t, "alice").await, StatusCode::UNAUTHORIZED);
+    let unban = format!("/api/users/{}/unban", first.user.user_id);
+    assert_eq!(
+        status(&t, Method::POST, &unban, None, Some(&o)).await,
+        StatusCode::OK
+    );
+    let third = t.login("alice").await;
+    assert_eq!(t.call(get("/api/me", &third)).await.0, StatusCode::OK);
+    for s in [&first, &second] {
+        assert_eq!(t.call(get("/api/me", s)).await.0, StatusCode::UNAUTHORIZED);
+    }
+}
+
+#[tokio::test]
 async fn owner_cannot_ban_self() {
     let t = TestServer::new().await;
     let o = t.owner().await;
@@ -240,9 +270,10 @@ async fn every_route_for_every_role() {
     let t = TestServer::new().await;
     let owner = t.owner().await;
     let md = moderator(&t, "mod").await;
-    let md2 = moderator(&t, "mod2").await;
+    let mut md2 = moderator(&t, "mod2").await;
     let mem = t.member("mem").await;
-    let mem2 = t.member("mem2").await;
+    let mut mem2 = t.member("mem2").await;
+    let n_invites = || async { t.state.store.invites().await.unwrap().len() };
     let callers = [
         (Who::Out, None),
         (Who::Member, Some(&mem)),
@@ -270,29 +301,35 @@ async fn every_route_for_every_role() {
             ("moderator", S::FORBIDDEN, S::CREATED),
             ("owner", S::BAD_REQUEST, S::BAD_REQUEST),
         ] {
+            let before = n_invites().await;
             let got = status(&t, Method::POST, "/api/invites", Some(invite_body(role)), s).await;
             let want = pick(who, want_mod, want_owner, S::FORBIDDEN);
             assert_eq!(got, want, "create {role} invite {who:?}");
+            let grew = if want == S::CREATED { 1 } else { 0 };
+            assert_eq!(n_invites().await, before + grew, "create {role} {who:?}");
         }
         // A fresh invite, made by the owner, for each revoke.
         let (_, _, v) = t
             .call(post("/api/invites", invite_body("moderator"), &owner))
             .await;
-        let path = format!("/api/invites/{}", v["info"]["id"]);
+        let inv_id = v["info"]["id"].as_i64().unwrap();
+        let path = format!("/api/invites/{inv_id}");
         let got = status(&t, Method::DELETE, &path, None, s).await;
-        assert_eq!(
-            got,
-            pick(who, S::NO_CONTENT, S::NO_CONTENT, S::FORBIDDEN),
-            "revoke {who:?}"
-        );
+        let want = pick(who, S::NO_CONTENT, S::NO_CONTENT, S::FORBIDDEN);
+        assert_eq!(got, want, "revoke {who:?}");
+        let invites = t.state.store.invites().await.unwrap();
+        let revoked = invites.iter().find(|i| i.id == inv_id).unwrap().revoked;
+        assert_eq!(revoked, want == S::NO_CONTENT, "revoked flag {who:?}");
 
         for target in [Target::Member, Target::Mod, Target::Owner, Target::Me] {
-            let tu = match target {
-                Target::Member => &mem2.user,
-                Target::Mod => &md2.user,
-                Target::Owner => &owner.user,
-                Target::Me => s.map_or(&mem2.user, |s| &s.user),
+            let target_session = match target {
+                Target::Member => &mem2,
+                Target::Mod => &md2,
+                Target::Owner => &owner,
+                Target::Me => s.unwrap_or(&mem2),
             };
+            let tu = target_session.user.clone();
+            let cookie = target_session.cookie.clone();
             let id = &tu.user_id;
             // Owner on a member or moderator: allowed. On an owner or themselves: 400.
             let owner_want = match target {
@@ -331,9 +368,38 @@ async fn every_route_for_every_role() {
                     got, want,
                     "{method} {path} {body:?} by {who:?} on {target:?}"
                 );
-                // Undo any change so the next case starts from the same state.
-                t.state.store.set_role(id, tu.role).await.unwrap();
-                t.state.store.set_banned(id, false, 0).await.unwrap();
+                let after = t.state.store.user(id).await.unwrap();
+                if got.is_success() {
+                    // Undo the change so the next case starts from the same state.
+                    t.state.store.set_role(id, tu.role).await.unwrap();
+                    t.state.store.set_banned(id, false, 0).await.unwrap();
+                    // A ban ended the target's sessions: log it in again.
+                    if path.ends_with("/ban") && got == S::OK {
+                        let name = &tu.username;
+                        match target {
+                            Target::Member => mem2 = t.login(name).await,
+                            Target::Mod => md2 = t.login(name).await,
+                            _ => unreachable!("only members and mods can be banned"),
+                        }
+                    }
+                } else {
+                    // A refusal changes nothing: same role, same ban flag, session still live.
+                    assert_eq!(
+                        after.role, tu.role,
+                        "role changed: {method} {path} by {who:?} on {target:?}"
+                    );
+                    assert!(
+                        !after.banned,
+                        "banned: {method} {path} by {who:?} on {target:?}"
+                    );
+                    let req = request(Method::GET, "/api/me", None, Some(cookie.as_str()));
+                    let c = t.call(req).await.0;
+                    assert_eq!(
+                        c,
+                        S::OK,
+                        "session lost: {method} {path} by {who:?} on {target:?}"
+                    );
+                }
             }
         }
     }
