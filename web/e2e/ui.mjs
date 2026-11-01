@@ -247,6 +247,7 @@ try {
   await a.getByRole('button', { name: 'Archive music room' }).click();
   await a.getByRole('dialog', { name: 'Archive music room?' }).getByRole('button', { name: 'Archive', exact: true }).click();
   await order(b, ['general']);
+  await a.getByRole('button', { name: 'Unarchive music room' }).waitFor(); // bob's event can land before alice's PATCH answers
   assert.ok(await a.getByRole('button', { name: 'Archive general' }).isDisabled(), 'the last room can be archived');
   const lastId = await a.locator('tr[data-room]:not([data-archived])').getAttribute('data-room');
   const status = await a.evaluate((id) => fetch(`/api/rooms/${id}`, {
@@ -258,7 +259,8 @@ try {
   await a.getByRole('button', { name: 'Unarchive music room' }).click();
   await order(b, ['music room', 'general', 'hangout']);
   await order(c, ['general', 'hangout']);
-  assert.equal(await a.locator('tr[data-archived]').count(), 0);
+  // A late rooms_changed from the first unarchive can show music room archived for a moment: wait for the last one.
+  await a.waitForFunction(() => document.querySelectorAll('tr[data-room]').length === 3 && !document.querySelector('tr[data-archived]'));
   console.log('rooms: archive asks, hides live, keeps the last room, unarchive restores: ok');
 
   // Disk use: two meters (the database shows its size only); uploads are counted against the default 10 GB quota.
