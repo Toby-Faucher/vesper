@@ -128,13 +128,15 @@ device. It passes when bob's ICE is connected, his inbound audio packets and byt
 packets rise too (only that count: audio content is proven alice to bob through the speaking ring, not bob to alice), each page lists the other in the people list, and neither page throws.
 Then chat on the same pages: alice sends `hello **bob** <b>x</b>` and a link, bob sees a bold `bob`, the `<b>x</b>` as text and a link with
 `rel="noopener noreferrer nofollow"`; bob replies, alice edits (the edit box has focus, Escape cancels, Enter saves), and bob sees both live. Alice attaches a 1x1 PNG built in the test (nothing committed)
-and bob's page shows it with `naturalWidth` 1. Alice makes a restricted room `secret` with a `hello` message: her search for `hello` finds 2 hits,
-bob's finds exactly his 1. After 30 newer messages push the hit out of view, the hit scrolls it back into view on an older slice. Bob
+and bob's page shows it with `naturalWidth` 1. Alice makes a restricted room `secret` with a `hello` message: her search for `hello` (the
+header's Search button) finds 2 hits, Esc gives focus back to the button; bob's (Ctrl+Shift+F) says `No one called nobody.` for an unknown
+`from:`, asks for 2 letters on `h`, and finds exactly his 1. Down then Enter jumps. After 30 newer messages push the hit out of view, the hit scrolls it back into view on an older slice. Bob
 switches to another room and back, and sees the newest page with a live message again. The test sets the denoise mode to `browser`, so it needs no wasm build. Its two variables are in [env.md](env.md#dev-machine-only).
 
 `web/e2e/flows.mjs` then starts a fresh server the same way and checks the UI in Chromium: a bad invite link, the invite code leaving the
 address bar, autocomplete attributes, an empty password field and focus on the error after a failed sign in or signup, force-mute (also
-after a rejoin, and lifted), a kick ending the call, and a room made private ending the call. If `web/dist/dsp/` exists
+after a rejoin, and lifted), a kick ending the call, and a room made private ending the call and dropping out of bob's search
+(alice still finds its message). It also opens search by Ctrl+Shift+F after a failed chunk load and from the switcher. If `web/dist/dsp/` exists
 (`scripts/build-dsp.sh`, then `npm run build`), it also signs alice in with DeepFilterNet on and checks the denoiser starts.
 
 Both tests fail on any CSP block in a page: each page records `securitypolicyviolation` events and console lines about the Content

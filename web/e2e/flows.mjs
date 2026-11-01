@@ -2,11 +2,11 @@
 // the address bar, a bad link, autocomplete attributes, passwords cleared and focus on the error after a failed
 // submit, routes, a room link surviving sign in, the call staying up while moving between rooms and settings,
 // force-mute (also on rejoin and from the person card), a kick ending the call, and a room that becomes private ending
-// the call.
+// the call and leaving bob's search.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { ORIGIN, browser, cli, composer, cspViolations, inVoice, logout, openRoom, roomId, roomLink, signedIn, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, composer, cspViolations, inVoice, logout, openRoom, roomId, roomLink, searchFor, searchHits, signedIn, sleep, startServer } from './lib.mjs';
 
 // fetch from the page, so it sends the session cookie and the Origin header as the app does.
 const call = (page, method, path, body) =>
@@ -207,6 +207,39 @@ try {
   await a.getByRole('button', { name: 'Join' }).waitFor();
   console.log('switcher and shortcuts: ok');
 
+  // Search opens from the keys: its chunk fails to load the first time (the dialog says so) and Ctrl+Shift+F tries
+  // again; text typed while the second load is held back is kept, and Esc gives focus back to the composer.
+  const searchChunk = '**/assets/SearchDialog-*.js';
+  await a.route(searchChunk, (r) => r.abort());
+  await composer(a).focus();
+  await a.keyboard.press('Control+Shift+F');
+  await a.getByRole('alert').filter({ hasText: 'Could not load search.' }).waitFor();
+  await a.unroute(searchChunk);
+  let letGo;
+  const hold = new Promise((r) => (letGo = r));
+  await a.route(searchChunk, async (r) => { await hold; await r.continue(); });
+  await a.keyboard.press('Control+Shift+F');
+  await a.getByRole('dialog', { name: 'Search' }).getByText('Loading...').waitFor();
+  await a.keyboard.type('hel');
+  letGo();
+  const searchBox = a.getByRole('combobox', { name: 'Search messages' });
+  await searchBox.waitFor();
+  await a.unroute(searchChunk);
+  assert.equal(await searchBox.inputValue(), 'hel', 'the text typed while search loaded was lost');
+  assert.equal(await composer(a).inputValue(), '', 'keys typed while search loaded went into the composer');
+  await a.keyboard.press('Escape');
+  await searchBox.waitFor({ state: 'hidden' });
+  assert.ok(await composer(a).evaluate((e) => e === document.activeElement), 'focus did not go back to the composer');
+  // The switcher's action opens it too, empty.
+  await a.keyboard.press('Control+k');
+  await a.getByRole('combobox', { name: 'Switch to' }).fill('> search messages');
+  await a.keyboard.press('Enter');
+  await searchBox.waitFor();
+  assert.equal(await searchBox.inputValue(), '', 'search kept the last query');
+  await a.keyboard.press('Escape');
+  await searchBox.waitFor({ state: 'hidden' });
+  console.log('search opens from the keys and the switcher: ok');
+
   // A room link opened signed out: sign in returns to that room (music), not to the first one; Back does not loop to
   // sign in. A room id nobody can see gives the plain missing state after sign in.
   const signInAs = async (page, path) => {
@@ -291,6 +324,16 @@ try {
   assert.equal(await roomLink(b, 'secret').count(), 0, 'secret still listed');
   assert.notEqual(roomId(b), room.id, 'still on the hidden room');
   console.log(`vanished room ends the call: ok (${why})`);
+
+  // Search follows the change: a message in the room bob just lost never shows for him, while alice finds it.
+  await call(a, 'POST', `/api/rooms/${room.id}/messages`, { body: 'zebra plans for the staff', reply_to: null, attachments: [] });
+  await searchFor(a, 'zebra', { keys: true }); // alice is not in a room here: the keys work anywhere
+  await searchHits(a).first().waitFor({ timeout: 5000 });
+  await searchFor(b, 'zebra');
+  await b.getByText('No messages found.').waitFor({ timeout: 5000 });
+  assert.equal(await searchHits(b).count(), 0, 'bob found a message from a room he cannot see');
+  for (const p of [a, b]) await p.keyboard.press('Escape');
+  console.log('search skips a room that became private: ok');
 
   // The denoiser (worklet, worker, WASM) under the server's CSP. A CSP block in the worker is not a page console
   // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (not in CI).

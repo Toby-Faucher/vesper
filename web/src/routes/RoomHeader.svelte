@@ -6,7 +6,8 @@
   import Icon from '../lib/ui/c/Icon.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
   import { UI_MESSAGES } from '../lib/ui/messages';
-  // The open room's name, Pins and its one primary action. Search joins it in Task 10. The pins list (with the Markdown
+  import { layers } from '../lib/ui/layers.svelte';
+  // The open room's name, Pins, Search and its one primary action. The pins list (with the Markdown
   // renderer) loads on the first click, so it stays out of the first load.
   let { room, inCall, joining, onjoin }: { room: RoomInfo; inCall: boolean; joining: boolean; onjoin: () => void } = $props();
   let pinsEl = $state<HTMLButtonElement | null>(null);
@@ -40,6 +41,7 @@
         <span class="sr-only" role="alert">{UI_MESSAGES.pinsFailed}</span>
       {/await}
     {/if}
+    <IconButton icon={I.search} label="Search" tip aria-haspopup="dialog" aria-controls="search" aria-expanded={layers.search} onclick={() => (layers.search = true)} />
     {#if !inCall}<Button variant="primary" loading={joining} onclick={onjoin}>Join voice</Button>{/if}
   </div>
 </header>

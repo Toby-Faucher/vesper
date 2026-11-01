@@ -929,6 +929,60 @@ scene('upload-tray', async (ctx) => {
   await signedIn(page);
 });
 
+// The search dialog over plans (search hits get the same day shift as the timeline, so they group by day).
+// `answer` fakes the server's reply: 'hold' keeps it pending (the loading line), 429 is the rate limit.
+async function openSearch(ctx, text, { answer } = {}) {
+  const page = await openPlans(ctx);
+  const { shift } = await plans(ctx);
+  let release;
+  const held = new Promise((r) => (release = r));
+  await page.route('**/api/search?*', async (route) => {
+    if (answer === 429) return route.fulfill({ status: 429, json: { code: 'rate_limited' } });
+    if (answer === 'hold') await held;
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const h of body.hits) h.message.created_at -= (shift.get(h.message.id) ?? 0) * 86_400_000;
+    body.hits.sort((x, y) => y.message.created_at - x.message.created_at); // newest first, as the server's ids would be
+    await route.fulfill({ response: res, json: body });
+  });
+  await rest(page);
+  await page.keyboard.press('Control+Shift+F');
+  const box = page.getByRole('combobox', { name: 'Search messages' });
+  await box.waitFor();
+  if (text) await box.fill(text);
+  await sleep(900); // past the debounce and the answer
+  return { page, release };
+}
+const day2 = new Date(Date.now() - 2 * 86_400_000);
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+for (const [name, text, answer] of [
+  ['search-empty', ''],
+  ['search-results', 'patch'],
+  ['search-filters', `from:bob in:plans after:${iso(day2)} the`],
+  ['search-suggest', 'from:b'],
+  ['search-none', 'zebra'],
+  ['search-unknown', 'from:carl hello'],
+  ['search-hint', 'p'],
+  ['search-slow', 'patch', 429],
+  ['search-loading', 'patch', 'hold'],
+])
+  scene(name, async (ctx) => {
+    const { page, release } = await openSearch(ctx, text, { answer });
+    await ctx.shot(page, name);
+    release();
+    await page.keyboard.press('Escape');
+    await page.unrouteAll({ behavior: 'wait' });
+  });
+// A hit focused from the keyboard (Down from the box): its row and the Jump hint show.
+scene('search-focus', async (ctx) => {
+  const { page } = await openSearch(ctx, 'game');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await sleep(200);
+  await ctx.shot(page, 'search-focus');
+  await page.keyboard.press('Escape');
+  await page.unrouteAll({ behavior: 'wait' });
+});
 scene('room', async ({ alice, bob, seed }) => {
   await seed();
   for (const p of [alice.page, bob.page]) {

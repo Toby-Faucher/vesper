@@ -78,6 +78,22 @@
   $effect(() => {
     if (!layers.switcher && !layersMod) typed = '';
   });
+  // Message search: the same pattern, its own chunk.
+  const loadSearch = lazy(() => import('./SearchDialog.svelte'));
+  let searchMod = $state<Awaited<ReturnType<typeof loadSearch>>>();
+  let searchFailed = $state(false);
+  let searchTyped = $state('');
+  function openSearch() {
+    searchFailed = false;
+    layers.search = true;
+    if (!searchMod) loadSearch().then((m) => (searchMod = m), () => (searchFailed = true));
+  }
+  $effect(() => {
+    if (layers.search && !searchMod && !searchFailed) untrack(openSearch);
+  });
+  $effect(() => {
+    if (!layers.search && !searchMod) [searchTyped, searchFailed] = ['', false]; // the next open tries the chunk again
+  });
 
   const mac = isMac();
   function onkeydown(e: KeyboardEvent) {
@@ -94,11 +110,8 @@
     if (e.repeat && s !== 'prev-room' && s !== 'next-room') return e.preventDefault(); // a held key toggles once
     const ids = rooms.map((x) => x.id);
     const to = (id: number | null) => id !== null && navigate(href({ name: 'room', id }));
-    if (s === 'search') {
-      const field = document.querySelector<HTMLInputElement>('input[aria-label="Search messages"]');
-      if (!field) return; // no room open: leave the key to the browser
-      field.focus();
-    } else if (s === 'switcher') {
+    if (s === 'search') openSearch();
+    else if (s === 'switcher') {
       if (layers.switcher && layersFailed) load();
       else layers.switcher = !layers.switcher;
     } else if (s === 'help') layers.shortcuts = true;
@@ -180,6 +193,18 @@
     {/if}
   {/if}
 </Dialog>
+<Dialog id="search" open={layers.search} title="Search" bare onclose={() => (layers.search = false)}>
+  {#if searchMod}
+    <searchMod.default open={layers.search} current={room?.id ?? null} bind:q={searchTyped} onclose={() => (layers.search = false)} />
+  {:else if layers.search}
+    <SwitcherField bind:value={searchTyped} aria-label="Search messages" placeholder="Search messages. Try from:alice in:general" />
+    {#if searchFailed}
+      <p role="alert" class="px-4 py-6 text-center text-fg-2">{UI_MESSAGES.searchFailed}</p>
+    {:else}
+      <p class="px-4 py-6 text-center text-fg-3">{UI_MESSAGES.switcherLoading}</p>
+    {/if}
+  {/if}
+</Dialog>
 {#if layersMod}<layersMod.Shortcuts open={layers.shortcuts} onclose={() => (layers.shortcuts = false)} />{/if}
 
 <style>
@@ -200,6 +225,8 @@
   .skip:focus { transform: none; }
   /* Empty states sit in the middle of the pane; the bottom padding offsets the 48 px header, so they centre on the screen. */
   .center { display: flex; flex: 1; flex-direction: column; justify-content: center; padding-bottom: 48px; }
+  /* Search: wider and taller than the switcher, for snippets and the filter row. */
+  :global(dialog#search) { width: min(720px, calc(100vw - 32px)); max-height: min(640px, calc(100vh - 128px)); }
   main:focus-visible { outline: none; } /* the skip link's target: the whole pane, a ring there helps nobody */
 </style>
 

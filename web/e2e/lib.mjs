@@ -158,3 +158,13 @@ export async function logout(page) {
 
 // The securitypolicyviolation events the page saw since it loaded; must be [].
 export const cspViolations = (page) => page.evaluate(() => window.__csp);
+
+// Opens the search dialog (the header's Search button, or Ctrl+Shift+F with `keys`) and types `text` into it.
+export async function searchFor(page, text, { keys = false } = {}) {
+  if (keys) await page.keyboard.press('Control+Shift+F');
+  else await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByLabel('Search messages').fill(text);
+}
+
+// The search dialog's result buttons that show a highlighted match.
+export const searchHits = (page) => page.getByLabel('Search results').locator('button', { has: page.locator('mark') });

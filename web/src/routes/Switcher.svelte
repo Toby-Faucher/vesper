@@ -53,7 +53,7 @@
             act('leave', 'Leave voice', leave),
           ]
         : []),
-      ...(room ? [act('search', 'Search messages', focusSearch, 'search')] : []),
+      act('search', 'Search messages', () => (layers.search = true), 'search'),
       ...(next !== null ? [act('next-unread', `Next unread room: ${roomName(next)}`, go(href({ name: 'room', id: next })), 'next-unread')] : []),
       ...SETTINGS_SECTIONS.map((s) => act(`settings-${s}`, `Settings: ${SETTINGS_NAMES[s]}`, go(href({ name: 'settings', section: s })))),
       ...(staff ? ADMIN_SECTIONS : [])
@@ -132,9 +132,6 @@
     onclose();
     // After the dialog gave focus back, so a new dialog (a person card) or the search field takes it from there.
     void tick().then(() => it.run());
-  }
-  function focusSearch() {
-    document.querySelector<HTMLInputElement>('input[aria-label="Search messages"]')?.focus();
   }
   const GROUP = { room: 'Rooms', person: 'People', action: 'Actions' } as const;
   // Action rows: an icon by the first part of their id.

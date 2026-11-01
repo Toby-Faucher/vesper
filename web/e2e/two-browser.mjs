@@ -2,13 +2,12 @@
 // alice up, has her invite bob through the API, and joins both into `general` with fake microphones. Checks that audio
 // flows both ways (bob to alice only as rising packets), that bob hears alice, and that each sees the other in the people list.
 // Then chat: Markdown and raw HTML shown safely, a reply, an edit, a PNG upload shown inline, the upload tray, drop, image
-// boxes and the viewer, and search that never
-// returns a message from a room bob cannot see. Stops the server.
+// boxes and the viewer, and the search dialog, which never returns a message from a room bob cannot see. Stops the server.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
-import { browser, cli, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, signup, sleep, startServer } from './lib.mjs';
+import { browser, cli, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, searchFor, searchHits, signup, sleep, startServer } from './lib.mjs';
 
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
@@ -360,9 +359,18 @@ try {
   const secret = await call(alice.page, 'POST', '/api/rooms', { name: 'secret' });
   await call(alice.page, 'PATCH', `/api/rooms/${secret.id}`, { restricted: true });
   await call(alice.page, 'POST', `/api/rooms/${secret.id}/messages`, { body: 'hello from the secret room', reply_to: null, attachments: [] });
-  const results = (page) => page.getByLabel('Search results').locator('button', { has: page.locator('mark') });
-  await alice.page.getByLabel('Search messages').fill('hello');
+  const results = searchHits;
+  await searchFor(alice.page, 'hello');
   await results(alice.page).nth(1).waitFor({ timeout: 5000 });
+  assert.ok((await results(alice.page).allInnerTexts()).some((t) => t.includes('in secret')), 'alice (owner) should find the secret room');
+  await alice.page.keyboard.press('Escape');
+  await alice.page.getByRole('dialog', { name: 'Search' }).waitFor({ state: 'hidden', timeout: 2000 });
+  assert.equal(await alice.page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Search', 'Esc did not give focus back to Search');
+  // Bob opens it with the keys; the filter syntax narrows it, and an unknown name says so instead of searching.
+  await searchFor(bob.page, 'from:nobody hello', { keys: true });
+  await bob.page.getByText('No one called nobody.').waitFor({ timeout: 5000 });
+  await bob.page.getByLabel('Search messages').fill('h');
+  await bob.page.getByText('Type at least 2 letters to search as you type.').waitFor({ timeout: 5000 });
   await bob.page.getByLabel('Search messages').fill('hello');
   await results(bob.page).first().waitFor({ timeout: 5000 });
   await sleep(500); // a late second hit would show by now
@@ -379,7 +387,12 @@ try {
     return r.bottom > l.top && r.top < l.bottom;
   });
   assert.equal(await shown(boldBob(bob.page)), false, 'the hit was already in view before the jump');
-  await results(bob.page).first().click();
+  // The dialog was left open while the fillers came in; Down then Enter jumps from the keyboard.
+  await bob.page.getByLabel('Search messages').focus();
+  await bob.page.keyboard.press('ArrowDown');
+  assert.match(await bob.page.evaluate(() => document.activeElement?.textContent ?? ''), /hello/, 'Down did not reach the first hit');
+  await bob.page.keyboard.press('Enter');
+  await bob.page.getByRole('dialog', { name: 'Search' }).waitFor({ state: 'hidden', timeout: 2000 });
   await bob.page.waitForFunction(() => {
     const el = [...document.querySelectorAll('article')].find((a) => a.querySelector('strong')?.textContent === 'bob');
     const [r, l] = [el.getBoundingClientRect(), el.parentElement.getBoundingClientRect()];
