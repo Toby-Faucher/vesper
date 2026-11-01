@@ -37,32 +37,13 @@
         <span class="pl-1 text-xs text-fg-2 tabular-nums" aria-live="polite">{at + 1} of {images.length}</span>
       </div>
     {/if}
-    <a class="link" href={url} target="_blank" rel="noopener noreferrer"><Icon d={I.externalLink} size={16} />Open original</a>
-    <a class="link" href={url} download={a.name}><Icon d={I.download} size={16} />Download</a>
+    <a class="mini-act lined" href={url} target="_blank" rel="noopener noreferrer"><Icon d={I.externalLink} size={16} />Open original</a>
+    <a class="mini-act lined" href={url} download={a.name}><Icon d={I.download} size={16} />Download</a>
   {/snippet}
 </Dialog>
 
 <style>
-  .stage {
-    display: flex;
-    height: min(640px, calc(100vh - 220px));
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius);
-    background: var(--bg-element);
-  }
-  .stage img { max-width: 100%; max-height: 100%; object-fit: contain; }
-  .link {
-    display: inline-flex;
-    height: 32px;
-    align-items: center;
-    gap: 6px;
-    padding: 0 12px;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    color: var(--fg);
-    font-size: 13px;
-    font-weight: 500;
-  }
-  .link:hover { border-color: var(--line-strong); background: var(--bg-hover); }
+  /* The stage takes the image's size (up to the dialog and the window), so a small image does not float in a band. */
+  .stage { display: flex; min-height: 96px; align-items: center; justify-content: center; border-radius: var(--radius); background: var(--bg-element); }
+  .stage img { max-width: 100%; max-height: min(640px, calc(100vh - 220px)); }
 </style>

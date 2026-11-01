@@ -1,15 +1,15 @@
 <script lang="ts">
   // The chat panel for the picked room: the timeline and the composer (search is a dialog, SearchDialog.svelte).
-  // Files dragged over the panel show the drop overlay and go to the composer's upload tray. Text and links dragged
-  // around are left alone; a file dropped anywhere else in the app is ignored instead of opening in the tab.
-  import { onMount, untrack } from 'svelte';
+  // Files dragged over the panel show the drop overlay and go to the composer's upload tray (the page's one tray: a room
+  // change keeps them). Text and links dragged around are left alone; a file dropped anywhere else in the app is
+  // ignored instead of opening in the tab.
   import Composer from './Composer.svelte';
   import Timeline from './Timeline.svelte';
   import { ApiFailure, errorText } from '../lib/api';
   import type { Message } from '../lib/gen/Message';
   import * as I from '../lib/ui/icons';
   import { UI_MESSAGES } from '../lib/ui/messages';
-  import { Tray } from '../lib/ui/tray.svelte';
+  import { tray } from '../lib/ui/tray.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
 
   let { roomId }: { roomId: number } = $props();
@@ -17,16 +17,13 @@
   let error = $state('');
   let replyTo = $state<Message | null>(null);
   let composer = $state<Composer>();
-  const tray = new Tray();
   let drag = $state(0); // dragenter minus dragleave over the panel, for file drags only
 
-  // A new room: an action error and the files waiting to be sent belong to the old one.
+  // A new room: an action error belongs to the old one. Its files stay in the tray, by room.
   $effect(() => {
     void roomId;
     error = '';
-    untrack(() => tray.clear()); // reads the tray: only the room change may re-run this
   });
-  onMount(() => () => tray.clear());
 
   const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
   function onDragOver(e: DragEvent) {
@@ -77,7 +74,7 @@
   <Timeline {roomId} {act} onreply={reply} onempty={sayHello} />
 
   {#if error}<p class="shrink-0 px-5 pt-1 text-xs text-danger" role="alert">{error}</p>{/if}
-  <Composer {roomId} {tray} bind:this={composer} bind:replyTo />
+  <Composer {roomId} bind:this={composer} bind:replyTo />
 
   {#if drag}
     <div class="drop" aria-hidden="true"><Icon d={I.paperclip} />Drop to attach</div>

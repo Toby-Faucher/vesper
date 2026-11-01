@@ -9,7 +9,7 @@
   // back to its own opener. The page behind does not scroll while any modal is open (the :has rule below counts them all).
   // `id` lets the opener point aria-controls at the dialog. `bare` (the switcher): the title is for screen readers only,
   // there is no Close button (Esc closes), the body has no padding, it opens without motion, wider and near the top.
-  // `wide` (the image viewer): up to 1040 px wide.
+  // `wide` (the image viewer): as wide as the content, up to 1040 px.
   let {
     open,
     title,
@@ -94,7 +94,8 @@
     color: var(--fg);
     box-shadow: var(--shadow-float);
   }
-  dialog.wide { width: min(1040px, calc(100vw - 64px)); }
+  /* As wide as its content (the viewer's image), from the normal width up to 1040 px. */
+  dialog.wide { width: fit-content; min-width: min(440px, calc(100vw - 32px)); max-width: min(1040px, calc(100vw - 64px)); }
   dialog.bare { width: min(600px, calc(100vw - 32px)); max-height: min(520px, calc(100vh - 128px)); margin-top: 96px; }
   /* A modal makes the page inert but wheel and touch still scroll it. Gone with the last open modal, also on destroy. */
   :global(html:has(dialog:modal)) { overflow: hidden; }

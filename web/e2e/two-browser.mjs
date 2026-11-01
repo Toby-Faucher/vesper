@@ -272,6 +272,22 @@ try {
   await alice.page.getByRole('button', { name: 'Cancel slow.png' }).click();
   await alice.page.getByRole('list', { name: 'Files to send' }).waitFor({ state: 'detached', timeout: 5000 });
   await alice.page.unrouteAll({ behavior: 'ignoreErrors' });
+  // A room change keeps an upload going: the other room says so, and the file is attached on the way back.
+  let letGo;
+  await alice.page.route('**/api/rooms/*/uploads?*', async (r) => { await new Promise((ok) => (letGo = ok)); await r.continue(); });
+  await attach.setInputFiles({ name: 'away.png', mimeType: 'image/png', buffer: png1x1() });
+  await alice.page.getByRole('progressbar', { name: 'Upload progress' }).waitFor({ timeout: 5000 });
+  await openRoom(alice.page, 'general');
+  await alice.page.getByText('Uploading in files').waitFor({ timeout: 5000 });
+  assert.equal(await alice.page.getByRole('list', { name: 'Files to send' }).count(), 0, 'the files upload showed in general');
+  while (!letGo) await sleep(20);
+  letGo();
+  await alice.page.getByText('Uploading in files').waitFor({ state: 'detached', timeout: 5000 });
+  await openRoom(alice.page, 'files');
+  await alice.page.getByText('Attached: away.png').waitFor({ timeout: 5000 });
+  await alice.page.getByRole('button', { name: 'Remove away.png' }).click();
+  await alice.page.unrouteAll({ behavior: 'ignoreErrors' });
+  console.log('upload_survives_room_change: ok');
   const chatPane = alice.page.getByRole('region', { name: 'Chat' });
   const drag = (kind) => alice.page.evaluateHandle((kind) => {
     const d = new DataTransfer();
@@ -295,10 +311,13 @@ try {
     const r = await fetch(`/api/rooms/${roomId}/uploads?name=${encodeURIComponent(name)}`, { method: 'POST', body: new Uint8Array(bytes) });
     return (await r.json()).attachment.id;
   }, [roomId, name, [...png1x1()]]);
-  let release;
-  await bob.page.route('**/api/uploads/*', async (r) => { await new Promise((ok) => (release = ok)); await r.continue(); });
+  const held = new Map(); // bob's image requests, by upload id, until the test lets each one go
+  await bob.page.route('**/api/uploads/*', async (r) => { await new Promise((ok) => held.set(r.request().url().split('/').pop(), ok)); await r.continue(); });
+  const release = async (id) => { while (!held.has(id)) await sleep(20); held.get(id)(); };
   const lateId = await uploadAs(alice.page, filesRoom.id, 'late.png');
   await call(alice.page, 'POST', `/api/rooms/${filesRoom.id}/messages`, { body: 'a late image', reply_to: null, attachments: [lateId] });
+  const midId = await uploadAs(alice.page, filesRoom.id, 'mid.png');
+  await call(alice.page, 'POST', `/api/rooms/${filesRoom.id}/messages`, { body: 'text above an image\n' + 'line\n'.repeat(10), reply_to: null, attachments: [midId] });
   for (let i = 0; i < 8; i++) await post([alice, bob][i % 2].page, filesRoom.id, `tall ${i}\n` + 'line\n'.repeat(5));
   await openRoom(bob.page, 'files');
   await bob.page.locator('article', { hasText: 'tall 7' }).waitFor({ timeout: 10000 });
@@ -317,10 +336,22 @@ try {
     return [...el.querySelectorAll(':scope > article')].map((a) => a.getBoundingClientRect().top).find((t) => t >= top);
   });
   const before = await refTop();
-  release();
+  await release(lateId);
   await bob.page.waitForFunction(() => document.querySelector('img[alt="late.png"]')?.closest('button').offsetHeight === 48, null, { timeout: 5000 });
   await sleep(100);
   assert.ok(Math.abs((await refTop()) - before) < 1, `the view moved by ${(await refTop()) - before} px when the image loaded`);
+  // The image is in the view but its row's text starts above it: nothing above the image moves, so neither does it.
+  const midBox = bob.page.getByRole('button', { name: 'Open image mid.png' });
+  await midBox.evaluate((el) => { const l = el.closest('[data-timeline]'); l.scrollTop += el.getBoundingClientRect().top - l.getBoundingClientRect().top - 40; });
+  await sleep(200);
+  const midTop = () => midBox.evaluate((el) => [el.getBoundingClientRect().top - el.closest('[data-timeline]').getBoundingClientRect().top, el.closest('article').getBoundingClientRect().top - el.closest('[data-timeline]').getBoundingClientRect().top]);
+  const [imgAt, rowAt] = await midTop();
+  assert.ok(Math.abs(imgAt - 40) < 2 && rowAt < 0, `the setup is wrong: image at ${imgAt}, row at ${rowAt}`);
+  await release(midId);
+  await bob.page.waitForFunction(() => document.querySelector('img[alt="mid.png"]')?.closest('button').offsetHeight === 48, null, { timeout: 5000 });
+  await sleep(100);
+  const [imgAfter] = await midTop();
+  assert.ok(Math.abs(imgAfter - imgAt) < 1, `an image in view moved by ${imgAfter - imgAt} px when it loaded`);
   console.log('image_no_shift: ok');
   const atEnd = () => tl.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 8);
   await tl.evaluate((el) => (el.scrollTop = el.scrollHeight));
@@ -330,7 +361,7 @@ try {
   await bob.page.getByRole('button', { name: 'Open image last.png' }).waitFor({ timeout: 5000 });
   await sleep(200);
   assert.ok(await atEnd(), 'not at the bottom after a new image message');
-  release();
+  await release(lastId);
   await bob.page.waitForFunction(() => document.querySelector('img[alt="last.png"]')?.naturalWidth === 1, null, { timeout: 5000 });
   await sleep(200);
   assert.ok(await atEnd(), 'a late image in the last row left the bottom');
@@ -342,9 +373,11 @@ try {
   console.log('stick_to_bottom_last_row: ok');
   await lateBox.click();
   const viewerBox = bob.page.getByRole('dialog', { name: 'late.png' });
-  await viewerBox.getByText('1 of 2').waitFor({ timeout: 5000 });
+  await viewerBox.getByText('1 of 3').waitFor({ timeout: 5000 });
   await bob.page.keyboard.press('ArrowRight');
-  await bob.page.getByRole('dialog', { name: 'last.png' }).getByText('2 of 2').waitFor({ timeout: 2000 });
+  await bob.page.getByRole('dialog', { name: 'mid.png' }).getByText('2 of 3').waitFor({ timeout: 2000 });
+  await bob.page.keyboard.press('ArrowRight');
+  await bob.page.getByRole('dialog', { name: 'last.png' }).getByText('3 of 3').waitFor({ timeout: 2000 });
   const dl = bob.page.getByRole('dialog').getByRole('link', { name: 'Download' });
   assert.equal(await dl.getAttribute('download'), 'last.png');
   assert.equal(await dl.getAttribute('href'), `/api/uploads/${lastId}`);

@@ -912,6 +912,17 @@ scene('upload-tray', async (ctx) => {
   await sleep(300);
   await rest(page);
   await ctx.shot(page, 'upload-tray');
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await sleep(300);
+  await ctx.shot(page, 'upload-tray-narrow');
+  await page.setViewportSize(VIEWPORT);
+  // Another room while they upload: its composer says where the uploads are, and the files are there on the way back.
+  await openRoom(page, 'general');
+  await page.getByText('Uploading in photos').waitFor();
+  await rest(page);
+  await ctx.shot(page, 'upload-elsewhere');
+  await openRoom(page, 'photos');
+  await page.getByText('Waiting', { exact: true }).waitFor();
   for (const name of ['backup.zip', 'clip.mp4', 'photo.png', 'scan.png', 'song-with-a-rather-long-file-name-for-the-tray.flac']) {
     await page.getByRole('button', { name: new RegExp(`^(Cancel|Remove) ${name.replace('.', '\\.')}$`) }).click();
   }
@@ -1063,7 +1074,8 @@ const LINES = [
   'the co-op one again?', 'sure', 'I fixed my mic, tell me if it still crackles', 'sounds fine to me', 'link to the patch notes: https://example.com/notes',
 ];
 
-const names = process.argv.slice(2);
+const GROUPS = { uploads: ['message-image', 'drop-overlay', 'upload-tray'] }; // npm run shots -- uploads
+const names = process.argv.slice(2).flatMap((n) => GROUPS[n] ?? [n]);
 for (const n of names) if (!scenes.has(n)) throw new Error(`unknown scene ${n}; known: ${[...scenes.keys()].join(' ')}`);
 const run = names.length ? names : [...scenes.keys()];
 

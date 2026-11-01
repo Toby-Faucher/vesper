@@ -2,6 +2,7 @@ import { ApiFailure, api } from './api';
 import { applyChatMsg, chat, resync } from './chat.svelte';
 import { loginHref } from './route';
 import { recentKey } from './ui/recent';
+import { tray } from './ui/tray.svelte';
 import { Signaling } from './signaling';
 import { applyServerMsg, emptyState, type AppState } from './state';
 
@@ -136,6 +137,7 @@ function toLogin(notice: string): void {
   stop();
   session.state = emptyState();
   Object.assign(chat, { state: { rooms: {}, typing: {} }, active: null, drafts: {} }); // the next account sees none of it
+  tray.clear(); // and the uploads stop
   session.notice = notice;
   navigate(notice ? loginHref(location.pathname) : '/login', true); // a sign in after a lost session returns to this page
 }

@@ -50,6 +50,22 @@
   .control:hover:enabled { border-color: var(--line-strong); }
   .control[aria-invalid='true'] { border-color: var(--danger-fg); }
   .control:disabled { cursor: not-allowed; border-color: var(--line-subtle); color: var(--fg-disabled); }
+
+  /* Small actions inside a row: a 24 px icon button (.mini-x) and an icon with a word (.mini-act, .lined in a footer). */
+  .mini-x, .mini-act {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--fg-2);
+    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+  }
+  .mini-x { width: 24px; height: 24px; }
+  .mini-act { height: 28px; gap: 6px; padding: 0 8px; color: var(--fg); font-size: 12px; line-height: 16px; font-weight: 500; }
+  .mini-act.lined { height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; }
+  .mini-x:hover, .mini-act:hover { background: var(--bg-hover); color: var(--fg); }
+  .mini-act.lined:hover { border-color: var(--line-strong); }
 }
 
 :focus-visible {

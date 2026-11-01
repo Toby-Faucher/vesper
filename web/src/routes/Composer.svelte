@@ -18,10 +18,10 @@
   import Icon from '../lib/ui/c/Icon.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
   import Popover from '../lib/ui/c/Popover.svelte';
-  import type { Tray } from '../lib/ui/tray.svelte';
+  import { tray } from '../lib/ui/tray.svelte';
   import UploadTray from './UploadTray.svelte';
 
-  let { roomId, tray, replyTo = $bindable(null) }: { roomId: number; tray: Tray; replyTo?: Message | null } = $props();
+  let { roomId, replyTo = $bindable(null) }: { roomId: number; replyTo?: Message | null } = $props();
 
   const TYPING_EVERY_MS = 3000; // the server takes one typing event per 3 s
   const MAX = 4000; // the server's limit, in characters
@@ -48,7 +48,14 @@
   const count = $derived([...draft.trim().normalize('NFC')].length);
   const over = $derived(count - MAX);
   const online = $derived(session.online);
-  const canSend = $derived(online && over <= 0 && !tray.busy && !sending && (!!draft.trim() || tray.done.length > 0));
+  const files = $derived(tray.of(roomId));
+  const busy = $derived(tray.busy(roomId));
+  const done = $derived(tray.done(roomId));
+  // Uploads still running in rooms you left, so a room change never hides them.
+  const away = $derived(tray.elsewhere(roomId).map((id) => session.state.rooms.find((r) => r.id === id)?.name ?? 'another room'));
+  // Polite, and only when the count changes: not per progress step. A failure has its own alert in the row.
+  const trayLine = $derived(busy ? UI_MESSAGES.uploading(files.filter((i) => i.state === 'queued' || i.state === 'uploading').length) : done.length ? UI_MESSAGES.filesReady(done.length) : '');
+  const canSend = $derived(online && over <= 0 && !busy && !sending && (!!draft.trim() || done.length > 0));
   const people = $derived(mention && room ? mentionable(mention.q, Object.values(session.state.users), room, myId) : []);
   const listOpen = $derived(people.length > 0);
   const typingIds = $derived(typers(chat.state, roomId, now).filter((id) => id !== myId));
@@ -60,7 +67,7 @@
     return () => clearInterval(t);
   });
 
-  // A new room: the reply and the mention list belong to the old one (Chat clears the uploads). The draft is kept by room.
+  // A new room: the reply and the mention list belong to the old one. The draft and the files are kept by room.
   $effect(() => {
     void roomId;
     untrack(() => {
@@ -105,15 +112,16 @@
     if (!canSend) return;
     const room = roomId;
     const text = draft;
-    const files = tray.done.map((i) => i.attachment!);
-    const body = text.trim() || files.map((a) => a.name).join(', '); // a body is required
+    const taken = done; // a file that finishes during the send stays for the next one
+    const atts = taken.map((i) => i.attachment!);
+    const body = text.trim() || atts.map((a) => a.name).join(', '); // a body is required
     sending = true;
     error = '';
     try {
-      await send(room, body, replyTo?.id ?? null, files.map((a) => a.id));
+      await send(room, body, replyTo?.id ?? null, atts.map((a) => a.id));
       if (chat.drafts[room] === text) chat.drafts[room] = ''; // text typed while it was sending stays
       replyTo = null;
-      tray.sent();
+      tray.sent(taken.map((i) => i.key));
       mention = null;
       chat.latest++; // follow your own message, also from an older slice after a jump
     } catch (err) {
@@ -173,7 +181,7 @@
       e.preventDefault();
       e.stopPropagation();
       replyTo = null;
-    } else if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && draft === '' && !tray.items.length) {
+    } else if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && draft === '' && !files.length) {
       const m = lastOwn(roomId, myId);
       if (!m) return;
       e.preventDefault();
@@ -219,6 +227,7 @@
     <p class="truncate text-fg-3" class:hidden={!!notice} role="status">{notice ? '' : typing}</p>
   </div>
 
+  <span class="sr-only" role="status">{trayLine}</span>
   <form class="box" onsubmit={submit}>
     {#if replyTo}
       <div class="bar">
@@ -227,10 +236,13 @@
           Replying to <span class="font-medium text-fg">{name(replyTo.author_id)}</span>
           <span class="ml-2 text-fg-2">{plain(parse(replyTo.body)) || 'a message with a file'}</span>
         </p>
-        <button type="button" class="x" aria-label="Cancel reply" onclick={cancelReply}><Icon d={I.x} size={16} /></button>
+        <button type="button" class="mini-x" aria-label="Cancel reply" onclick={cancelReply}><Icon d={I.x} size={16} /></button>
       </div>
     {/if}
-    {#if tray.items.length}<UploadTray {tray} />{/if}
+    {#if away.length}
+      <p class="away"><Icon d={I.upload} size={16} /><span class="truncate">Uploading in {away.join(', ')}</span></p>
+    {/if}
+    {#if files.length}<UploadTray {tray} items={files} />{/if}
 
     <div class="row">
       <!-- The native picker stays in the page for the keyboard (Tab reaches it, Space opens it), drawn as the icon. -->
@@ -250,7 +262,7 @@
         <span class="count" class:over={over > 0}>{count}/{MAX}</span>
       {/if}
       <IconButton icon={I.help} label="Formatting help" bind:el={helpEl} onclick={() => (help = { mounted: true, open: !help.open })} />
-      <button type="submit" class="send" aria-label="Send" aria-disabled={!canSend} aria-busy={sending || undefined} data-tip="Send" data-tip-up>
+      <button type="submit" class="send" aria-label="Send" aria-disabled={!canSend} aria-busy={sending || undefined} data-tip={busy ? UI_MESSAGES.waitUploads : 'Send'} data-tip-up>
         <Icon d={I.send} />
       </button>
     </div>
@@ -314,6 +326,7 @@
     font-size: 12px;
     line-height: 16px;
   }
+  .away { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-bottom: 1px solid var(--line-subtle); color: var(--fg-2); font-size: 12px; line-height: 16px; }
   .row { display: flex; align-items: flex-end; gap: 4px; padding: 4px; }
   textarea {
     flex: 1;
@@ -328,7 +341,7 @@
   }
   textarea::placeholder { color: var(--fg-3); }
   textarea:focus-visible { outline: none; } /* drawn on .box above */
-  .attach, .send, .x {
+  .attach, .send {
     display: inline-flex;
     flex-shrink: 0;
     align-items: center;
@@ -338,8 +351,7 @@
     transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
   }
   .attach, .send { width: 32px; height: 32px; cursor: pointer; }
-  .x { width: 24px; height: 24px; border-radius: var(--radius-sm); }
-  .attach:hover, .x:hover { background: var(--bg-hover); color: var(--fg); }
+  .attach:hover { background: var(--bg-hover); color: var(--fg); }
   .attach:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
   .send { color: var(--accent-fg); }
   .send:hover { background: var(--bg-hover); }
@@ -376,6 +388,6 @@
   .help dd { color: var(--fg-2); }
   .help code { padding: 0 4px; border-radius: var(--radius-sm); background: var(--bg-element); font-family: var(--font-mono); font-size: 12px; }
   @media (prefers-reduced-motion: reduce) {
-    .box, .attach, .send, .x { transition: none; }
+    .box, .attach, .send { transition: none; }
   }
 </style>

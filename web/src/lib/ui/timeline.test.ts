@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../gen/Message';
 import { parse } from '../markdown';
-import { canSee, dayLabel, firstUnreadInPage, isLong, mentionQuery, mentionable, plain, rows, typingLine } from './timeline';
+import { canSee, dayLabel, firstUnreadInPage, follows, isLong, mentionQuery, mentionable, plain, rows, typingLine } from './timeline';
 
 const TZ = 'Europe/London';
 // 2026-10-27 is a Tuesday. 23:58 London time (GMT, after the October change) is 23:58 UTC.
@@ -145,5 +145,20 @@ describe('typingLine', () => {
     expect(typingLine(['Sam'])).toBe('Sam is typing');
     expect(typingLine(['Sam', 'Alex'])).toBe('Sam and Alex are typing');
     expect(typingLine(['Sam', 'Alex', 'Kim'])).toBe('Several people are typing');
+  });
+});
+
+describe('follows', () => {
+  it('follows within 8 px of the bottom, from any position before', () => {
+    expect(follows(false, 0, false)).toBe(true);
+    expect(follows(false, 7, false)).toBe(true);
+  });
+  it('stops following anywhere else, also without a move up (a change above pushed the reader off)', () => {
+    expect(follows(true, 8, false)).toBe(false);
+    expect(follows(true, 300, false)).toBe(false);
+  });
+  it('keeps following while the list changed height and its ResizeObserver has not run yet', () => {
+    expect(follows(true, 64, true)).toBe(true);
+    expect(follows(false, 64, true)).toBe(false);
   });
 });

@@ -144,3 +144,11 @@ export function typingLine(names: string[]): string {
   if (names.length === 2) return `${names[0]} and ${names[1]} are typing`;
   return 'Several people are typing';
 }
+
+/**
+ * Whether the timeline follows the bottom after a scroll event. The position decides: within 8 px of the bottom it
+ * follows, anywhere else it does not (a reader moved off the bottom by anything, a scroll or a change above, is left
+ * there). One exception: `resized`, the list changed height since its ResizeObserver last ran (the upload tray grew),
+ * and the observer is about to put it back at the bottom, so it keeps what it was.
+ */
+export const follows = (was: boolean, gap: number, resized: boolean) => gap < 8 || (resized && was);

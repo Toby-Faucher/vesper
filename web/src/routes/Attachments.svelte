@@ -39,23 +39,21 @@
       <span class="ic"><Icon d={I.file} /></span>
       <div class="min-w-0 flex-1">
         <p class="truncate text-fg" title={a.name}>{a.name}</p>
-        <p class="meta">{typeLabel(a.mime)}, {fileSize(a.size)}</p>
+        <p class="meta">{[typeLabel(a.mime, a.name), fileSize(a.size)].filter(Boolean).join(', ')}</p>
       </div>
-      <a class="dl" href="/api/uploads/{a.id}" download={a.name} aria-label="Download {a.name}"><Icon d={I.download} size={16} />Download</a>
+      <a class="mini-act" href="/api/uploads/{a.id}" download={a.name} aria-label="Download {a.name}"><Icon d={I.download} size={16} />Download</a>
     </div>
   {/if}
 {/each}
 
 <style>
+  .img, .card { width: min(360px, 100%); margin-top: 4px; border-radius: var(--radius); }
   .img {
     position: relative;
     display: block;
-    width: min(360px, 100%);
     max-width: 100%;
     aspect-ratio: 360 / 280;
-    margin-top: 4px;
     overflow: hidden;
-    border-radius: var(--radius);
     background: var(--bg-element);
     cursor: zoom-in;
   }
@@ -66,30 +64,14 @@
   .err { position: absolute; inset: 0; display: flex; align-items: center; padding: 0 12px; color: var(--fg-2); font-size: 12px; line-height: 16px; }
   .card {
     display: flex;
-    width: min(360px, 100%);
     align-items: center;
     gap: 12px;
-    margin-top: 4px;
     padding: 8px 8px 8px 12px;
     border: 1px solid var(--line-subtle);
-    border-radius: var(--radius);
     background: var(--bg-raised);
     font-size: 13px;
     line-height: 20px;
   }
   .ic { display: inline-flex; flex-shrink: 0; color: var(--fg-2); }
   .meta { color: var(--fg-2); font-size: 12px; line-height: 16px; }
-  .dl {
-    display: inline-flex;
-    flex-shrink: 0;
-    height: 28px;
-    align-items: center;
-    gap: 6px;
-    padding: 0 8px;
-    border-radius: var(--radius-sm);
-    color: var(--fg);
-    font-size: 12px;
-    font-weight: 500;
-  }
-  .dl:hover { background: var(--bg-hover); }
 </style>

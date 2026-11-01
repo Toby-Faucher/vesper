@@ -31,7 +31,7 @@ describe('Tray', () => {
     await flush();
     expect(f.calls.map((c) => c.name)).toEqual(['a', 'b', 'c', 'd', 'e']);
     expect(states(t)).toEqual(['failed', 'done', 'uploading', 'uploading', 'uploading']);
-    expect(t.busy).toBe(true);
+    expect(t.busy(1)).toBe(true);
   });
 
   it('refuses a file over the limit before any upload', () => {
@@ -66,14 +66,45 @@ describe('Tray', () => {
     f.calls[1].fail(new ApiFailure(507, 'quota_full'));
     await flush();
     expect(t.items[1]).toMatchObject({ state: 'failed', error: UI_MESSAGES.uploadQuota, retry: true });
-    expect(t.done.map((i) => i.attachment?.id)).toEqual(['a']);
-    t.sent();
+    expect(t.done(1).map((i) => i.attachment?.id)).toEqual(['a']);
+    t.sent(t.done(1).map((i) => i.key));
     expect(t.items.map((i) => i.file.name)).toEqual(['b']);
     t.retry(t.items[0].key);
     expect(f.calls.map((c) => c.name)).toEqual(['a', 'b', 'b']);
     t.clear();
     expect(f.calls[2].signal.aborted).toBe(true);
     expect(t.items).toEqual([]);
+  });
+
+  it('a send removes only the files it took: one that finished during the send stays', async () => {
+    const f = fake();
+    const t = new Tray(f.up);
+    t.add(1, [file('a')]);
+    f.calls[0].ok(att('a'));
+    await flush();
+    const taken = t.done(1).map((i) => i.key); // Composer's snapshot before `await send()`
+    t.add(1, [file('late')]); // picked, dropped or pasted while the send runs
+    f.calls[1].ok(att('late'));
+    await flush();
+    t.sent(taken);
+    expect(t.items.map((i) => [i.file.name, i.state])).toEqual([['late', 'done']]);
+  });
+
+  it('keeps the files of each room apart: uploads of another room go on and wait there', async () => {
+    const f = fake();
+    const t = new Tray(f.up);
+    t.add(1, [file('one')]);
+    t.add(2, [file('two')]);
+    expect(t.of(2).map((i) => i.file.name)).toEqual(['two']);
+    expect(t.elsewhere(2)).toEqual([1]); // the note in room 2: still uploading in room 1
+    f.calls[0].progress(0.5);
+    f.calls[0].ok(att('one'));
+    await flush();
+    expect(t.elsewhere(2)).toEqual([]);
+    expect(t.busy(1)).toBe(false);
+    expect(t.busy(2)).toBe(true); // room 2's Send waits for its own file only
+    expect(t.done(1).map((i) => i.attachment?.id)).toEqual(['one']); // back in room 1: still attached
+    expect(f.calls.every((c) => !c.signal.aborted)).toBe(true);
   });
 
   it('words each failure plainly', () => {

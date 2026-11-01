@@ -1,6 +1,8 @@
 // The files waiting above the composer. Each file is uploaded on its own request, at most LIMIT at a time, the rest wait
 // in order. Cancel aborts the request (the server deletes the partial file), Retry starts a failed one again, and the
 // next Send takes the finished ones. File names and types come from the user: shown as text only, never used in a URL.
+// One tray for the page (`tray`), each file with its room: a room change keeps the uploads going and the finished files
+// wait in their room. Sign out and a lost session clear it (session.svelte.ts). A reload loses it: memory only.
 import { ApiFailure, errorText } from '../api';
 import { MAX_UPLOAD, upload } from '../chat.svelte';
 import type { Attachment } from '../gen/Attachment';
@@ -31,12 +33,17 @@ export function uploadError(e: unknown): { error: string; retry: boolean } {
 }
 
 let keys = 0;
+const pending = (i: TrayItem) => i.state === 'queued' || i.state === 'uploading';
 
 export class Tray {
   items = $state<TrayItem[]>([]);
-  /** An upload is queued or running: Send waits. */
-  busy = $derived(this.items.some((i) => i.state === 'queued' || i.state === 'uploading'));
-  done = $derived(this.items.filter((i) => i.state === 'done'));
+
+  of = (room: number) => this.items.filter((i) => i.room === room);
+  /** An upload of this room is queued or running: Send waits. */
+  busy = (room: number) => this.of(room).some(pending);
+  done = (room: number) => this.of(room).filter((i) => i.state === 'done');
+  /** The other rooms with an upload queued or running, in the order their files were added. */
+  elsewhere = (room: number) => [...new Set(this.items.filter((i) => i.room !== room && pending(i)).map((i) => i.room))];
 
   private up: typeof upload;
   constructor(up: typeof upload = upload) {
@@ -68,12 +75,12 @@ export class Tray {
     this.pump();
   }
 
-  /** After a send: the attached files leave, failed ones stay to retry or remove. */
-  sent() {
-    this.items = this.items.filter((i) => i.state !== 'done');
+  /** After a send: the files it attached (by key) leave. Failed ones stay, and so does a file that finished meanwhile. */
+  sent(keys: number[]) {
+    this.items = this.items.filter((i) => !keys.includes(i.key));
   }
 
-  /** Another room: everything stops and goes. */
+  /** Sign out: every upload of every room stops and goes. */
   clear() {
     for (const i of this.items) i.ctrl?.abort();
     this.items = [];
@@ -104,3 +111,5 @@ export class Tray {
     });
   }
 }
+
+export const tray = new Tray();

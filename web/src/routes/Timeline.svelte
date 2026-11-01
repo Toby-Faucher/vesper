@@ -13,7 +13,7 @@
   import * as I from '../lib/ui/icons';
   import { flash } from '../lib/ui/motion';
   import { UI_MESSAGES } from '../lib/ui/messages';
-  import { firstUnreadInPage, plain, rows } from '../lib/ui/timeline';
+  import { firstUnreadInPage, follows, plain, rows } from '../lib/ui/timeline';
   import { lazy } from '../lib/ui/lazy';
   import type { Attachment } from '../lib/gen/Attachment';
   import Button from '../lib/ui/c/Button.svelte';
@@ -180,10 +180,14 @@
   // The list fills the pane, so it shrinks when the call bar or the connection banner appear: keep the bottom in view.
   // The last row too: a reaction, an edit or a late image makes it taller.
   let ro: ResizeObserver | undefined;
+  let seenHeight = -1; // the list's height when its ResizeObserver last ran (onScroll's `resized`)
   let lastRow: Element | null = null;
   $effect(() => {
     if (!list) return;
-    ro = new ResizeObserver(() => stuck && toBottom());
+    ro = new ResizeObserver(() => {
+      seenHeight = list!.clientHeight;
+      if (stuck) toBottom();
+    });
     ro.observe(list);
     return () => {
       ro?.disconnect();
@@ -268,13 +272,9 @@
     loadingOlder = false;
   }
 
-  let lastTop = 0;
   function onScroll() {
     if (!list) return;
-    // Only a move up leaves the bottom. A scroll event can come after the list got shorter again (the upload tray
-    // growing row by row) and before the ResizeObserver put it back at the bottom: that must not unstick it.
-    stuck = list.scrollTop < lastTop ? atBottom(list) : stuck || atBottom(list);
-    lastTop = list.scrollTop;
+    stuck = follows(stuck, list.scrollHeight - list.scrollTop - list.clientHeight, list.clientHeight !== seenHeight);
     if (list.scrollTop < 40 && log?.moreBefore && ready) void older();
     maybeRead();
   }

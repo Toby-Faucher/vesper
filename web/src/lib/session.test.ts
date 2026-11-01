@@ -174,6 +174,24 @@ describe('session', () => {
     await session.logout();
     expect(session.retryAt).toBeNull();
   });
+  it('logout and a lost session (4001) stop and clear the uploads of every room', async () => {
+    for (const end of ['logout', '4001']) {
+      const { session } = await load();
+      const { tray } = await import('./ui/tray.svelte');
+      const ctrls = [1, 2].map((room) => {
+        const ctrl = new AbortController();
+        tray.items.push({ key: room, room, file: {} as File, state: 'uploading', progress: 0, error: '', retry: true, attachment: null, ctrl });
+        return ctrl;
+      });
+      session.connect();
+      if (end === 'logout') {
+        meStatus = 204;
+        await session.logout();
+      } else FakeWS.all[0].drop(4001);
+      expect(ctrls.map((c) => c.signal.aborted)).toEqual([true, true]);
+      expect(tray.items).toEqual([]);
+    }
+  });
   it('logout posts, closes the socket and stops reconnecting', async () => {
     const { session, route } = await load();
     session.connect();
