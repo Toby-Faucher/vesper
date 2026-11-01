@@ -12,6 +12,7 @@ use vesper_protocol::Role;
 
 mod accounts;
 mod invites;
+mod rooms;
 mod sessions;
 
 pub use accounts::{LoginRow, NewAccount};

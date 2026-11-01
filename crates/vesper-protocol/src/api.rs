@@ -188,6 +188,53 @@ pub struct RolePatch {
     pub role: Role,
 }
 
+/// A room has text and voice. `members` is filled only when `restricted`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RoomInfo {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub name: String,
+    #[ts(type = "number")]
+    pub position: i64,
+    pub restricted: bool,
+    pub members: Vec<String>,
+}
+
+/// `POST /api/rooms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RoomCreate {
+    pub name: String,
+}
+
+/// `PATCH /api/rooms/{id}`. A missing field is left as it is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RoomPatch {
+    #[serde(default)]
+    #[ts(optional)]
+    pub name: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub restricted: Option<bool>,
+}
+
+/// `PUT /api/rooms/order`: every room id once, in the new order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RoomOrder {
+    #[ts(type = "number[]")]
+    pub ids: Vec<i64>,
+}
+
+/// `PUT /api/rooms/{id}/members`: the whole member list, replacing the old one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RoomMembers {
+    pub user_ids: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

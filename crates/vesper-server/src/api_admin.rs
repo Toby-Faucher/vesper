@@ -36,11 +36,11 @@ pub fn require(user: &UserInfo, min: Role) -> Result<(), ApiError> {
     }
 }
 
-fn bad(message: &str) -> ApiError {
+pub(crate) fn bad(message: &str) -> ApiError {
     ApiError::new(ApiErrorCode::BadRequest, message)
 }
 
-fn path<T>(p: Result<Path<T>, PathRejection>) -> Result<T, ApiError> {
+pub(crate) fn path<T>(p: Result<Path<T>, PathRejection>) -> Result<T, ApiError> {
     p.map(|Path(t)| t)
         .map_err(|_| ApiError::new(ApiErrorCode::NotFound, "not found"))
 }

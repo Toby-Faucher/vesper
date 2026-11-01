@@ -3,6 +3,7 @@
 
 pub mod api_accounts;
 pub mod api_admin;
+pub mod api_rooms;
 pub mod auth;
 pub mod cli;
 pub mod config;
@@ -54,6 +55,7 @@ pub struct AppState {
 pub fn router(state: AppState) -> Router {
     let api = api_accounts::routes()
         .merge(api_admin::routes())
+        .merge(api_rooms::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_origin,

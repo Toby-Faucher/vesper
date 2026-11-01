@@ -29,10 +29,10 @@ The "Not verified" list at the end says what was only read.
 
 | Crate | Job |
 |---|---|
-| `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, and the limits `MAX_NAME_CHARS` (32) and `MAX_MSG_BYTES` (64 KiB). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
-| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions and invites (`accounts.rs`, `sessions.rs`, `invites.rs`). It stores only hashes of session tokens and invite codes. |
+| `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, and the limits `MAX_NAME_CHARS` (32) and `MAX_MSG_BYTES` (64 KiB). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
+| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites and rooms (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`). It stores only hashes of session tokens and invite codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `rooms.rs` (presence and session numbers), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `rooms.rs` (presence and session numbers), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -113,7 +113,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 ## HTTP API
 
-JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
+JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
 `ApiError { code, message }`, and the status follows the code: `bad_request` 400, `unauthorized` 401, `forbidden` 403,
 `not_found` and `invite_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
 `internal` 500, `quota_full` 507.
@@ -136,6 +136,17 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`). Bodies are the 
 | `PATCH /api/users/{id}/role` (`RolePatch`) | owner | the new `UserInfo` |
 | `POST /api/users/{id}/ban` | owner | the new `UserInfo`; every session of that user is deleted |
 | `POST /api/users/{id}/unban` | owner | the new `UserInfo` |
+| `GET /api/rooms` | a session | `RoomInfo[]` by position, only the rooms you can see |
+| `POST /api/rooms` (`RoomCreate`) | owner | 201 `RoomInfo`, open, placed last |
+| `PATCH /api/rooms/{id}` (`RoomPatch`) | owner | the new `RoomInfo` |
+| `PUT /api/rooms/order` (`RoomOrder`) | owner | 204; `ids` must hold every room id once, else 409 |
+| `PUT /api/rooms/{id}/members` (`RoomMembers`) | owner | the new `RoomInfo`; the list replaces the old one, an unknown account is 404 |
+
+Rooms (`api_rooms.rs`, store `rooms.rs`): every room has text and voice. A fresh database has `general` and `hangout`
+(migration `0002_rooms.sql`). Room names follow the display name rule (NFC, 1 to 32 characters, no control or hidden format
+characters, else 400) and are unique ignoring case (409). A restricted room is seen only by the owner, the moderators and the
+accounts on its member list (`can_see`); `members` is filled only while the room is restricted, and the list is kept when the
+room is opened again. The room routes do not push changes to open sockets yet.
 
 A ban ends the user's sessions but does not revoke invites they already created; the owner revokes those by hand. `InviteCreate` needs all three fields (`role`, `max_uses`, `expires_hours`), so the web client must send them.
 
@@ -149,6 +160,8 @@ Roles (`require`, `api_admin.rs`; owner > moderator > member):
 | Mint a moderator invite | no | no | yes |
 | Change a role, ban, unban | no | no | yes, not on themselves or an owner |
 | Mint or grant the owner role | no | no | no, only `vesper-server create-owner` |
+| See a restricted room | only when listed | yes | yes |
+| Create, rename, reorder, restrict a room or set its members | no | no | yes |
 
 A refused role is 403. An `owner` role in `InviteCreate` or `RolePatch`, the owner acting on their own account, `max_uses` outside
 1 to 50 and `expires_hours` outside 1 to 720 are 400. A role change counts from the user's next request. A banned user's cookie
@@ -177,7 +190,7 @@ Rules every route keeps:
 - Handlers never log request bodies, and the request types with a password or invite code print `***` in `Debug`. A body that does
   not parse gets a fixed "invalid request body" message. The WebSocket does not use the session yet; it still takes the join key.
 
-Tests: `crates/vesper-server/tests/accounts.rs` and `tests/admin.rs` (every route for every caller and target role), through
+Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs` and `tests/rooms.rs` (every route for every caller and target role), through
 `tests/common/mod.rs`.
 
 ## Static serving
