@@ -115,6 +115,37 @@ describe('joinRoom', () => {
     expect(FakePC.last.maxActive).toBe(1);
     expect(t.sent.filter((m) => m.type === 'answer')).toHaveLength(2);
   });
+  it('rejoin_plays_the_new_track (#45): a new track for a known id is played, alone, and the old one ending does not drop it', async () => {
+    vi.stubGlobal('MediaStream', class { id = crypto.randomUUID(); constructor(public tracks: unknown[]) {} });
+    const track = () => {
+      const t = { readyState: 'live', ends: [] as (() => void)[], addEventListener: (_: string, f: () => void) => t.ends.push(f) };
+      return t;
+    };
+    const end = (t: ReturnType<typeof track>) => ((t.readyState = 'ended'), t.ends.forEach((f) => f()));
+    const t = setup();
+    const added: [string, unknown[]][] = [];
+    const ended: string[] = [];
+    const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64,
+      onRemoteStream: (id, s) => added.push([id, (s as unknown as { tracks: unknown[] }).tracks]), onRemoteStreamEnd: (id) => ended.push(id) });
+    await tick();
+    t.emit(joined);
+    await p;
+    const ontrack = FakePC.last.ontrack as (e: unknown) => void;
+    // Firefox: one MediaStream per MSID id, and a stopped m-line's ended track stays in it with no removetrack.
+    const bob = { id: 'b'.repeat(32), tracks: [] as unknown[], getTracks: () => bob.tracks };
+    const old = track();
+    bob.tracks.push(old);
+    ontrack({ track: old, streams: [bob] });
+    end(old); // bob left: the SFU stopped his m-line
+    const fresh = track();
+    bob.tracks.push(fresh);
+    ontrack({ track: fresh, streams: [bob] }); // bob is back
+    end(old); // a second, late end of the old track
+    expect(added).toEqual([[bob.id, [old]], [bob.id, [fresh]]]);
+    expect(ended).toEqual([bob.id]);
+    end(fresh);
+    expect(ended).toEqual([bob.id, bob.id]);
+  });
   it('reports post-join errors and cleans up on close', async () => {
     const t = setup();
     const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64, onError: t.onError });
