@@ -9,7 +9,7 @@ function fakeAudio(state: AudioContextState, closeFails = false) {
     currentTime = 0;
     destination = {};
     rec = { resumed: 0, closed: 0, tones: 0 };
-    constructor() { made.push(this.rec); }
+    constructor() { made.push(this.rec); (globalThis as unknown as { lastCtx: unknown }).lastCtx = this; }
     resume() { this.rec.resumed++; return Promise.resolve(); }
     close() { this.rec.closed++; return closeFails ? Promise.reject(new Error('closed already')) : Promise.resolve(); }
     createOscillator() { const r = this.rec; return { frequency: {}, connect: (n: unknown) => n, start: () => r.tones++, stop: () => {} }; }
@@ -54,4 +54,21 @@ it('closes_after_10_s_idle_and_a_failed_close_is_caught', async () => {
   vi.useFakeTimers();
   chime('join', null); // a new context after the close
   expect(made).toHaveLength(2);
+});
+
+it('volume_0_opens_no_context', () => {
+  vi.useFakeTimers();
+  const made = fakeAudio('running');
+  chime('mute', null, 0);
+  expect(made).toHaveLength(0);
+});
+
+it('a_context_closed_elsewhere_is_replaced', () => {
+  vi.useFakeTimers();
+  const made = fakeAudio('running');
+  chime('mute', null);
+  (globalThis as unknown as { lastCtx: { state: string } }).lastCtx.state = 'closed';
+  chime('unmute', null);
+  expect(made).toHaveLength(2);
+  expect(made[1].tones).toBe(2);
 });

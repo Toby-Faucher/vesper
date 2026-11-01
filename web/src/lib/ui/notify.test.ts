@@ -9,13 +9,13 @@ vi.stubGlobal('location', { pathname: '/', search: '', hash: '', protocol: 'http
 vi.stubGlobal('localStorage', {
   getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), clear: () => store.clear(),
 });
-const { NOTIFY_KEY, loadPrefs, mentionCount, savePrefs, shouldChime, shouldNotify, titleFor } = await import('./notify');
+const { DEFAULTS, NOTIFY_KEY, loadPrefs, mentionCount, savePrefs, shouldChime, shouldNotify, titleFor } = await import('./notify');
 
 const msg = (o: Partial<Message> = {}): Message => ({
   id: 5, room_id: 2, author_id: 'b', body: 'hi @alice', created_at: 0, edited_at: null, updated_at: 0, deleted: false,
   reply_to: null, reactions: [], attachments: [], mentions: ['a'], pinned: false, ...o,
 });
-const on = { mentions: true, sounds: true };
+const on = { mentions: true, sounds: true, call: true, muteCues: true, connectCues: true, volume: 50 };
 const nctx = { myId: 'a', activeRoom: 1, hidden: false, prefs: on, permission: 'granted' as NotificationPermission };
 
 describe('shouldNotify', () => {
@@ -26,7 +26,7 @@ describe('shouldNotify', () => {
     expect(shouldNotify(msg({ mentions: ['c'] }), nctx)).toBe(false);
     expect(shouldNotify(msg({ author_id: 'a' }), nctx)).toBe(false);
     expect(shouldNotify(msg({ deleted: true }), nctx)).toBe(false);
-    expect(shouldNotify(msg(), { ...nctx, prefs: { mentions: false, sounds: true } })).toBe(false);
+    expect(shouldNotify(msg(), { ...nctx, prefs: { ...on, mentions: false } })).toBe(false);
     expect(shouldNotify(msg(), { ...nctx, permission: 'default' })).toBe(false);
     expect(shouldNotify(msg(), { ...nctx, permission: 'denied' })).toBe(false);
     expect(shouldNotify(msg(), { ...nctx, activeRoom: 2 })).toBe(false); // looking at that room
@@ -53,7 +53,9 @@ describe('shouldChime', () => {
     expect(shouldChime({ type: 'peer_left', user_id: 'a' }, c)).toBe(null);
     expect(shouldChime(joined('b', 3), { ...c, online: false })).toBe(null);
     expect(shouldChime(joined('b', 3), { ...c, joinedRoom: null })).toBe(null);
-    expect(shouldChime(joined('b', 3), { ...c, prefs: { mentions: true, sounds: false } })).toBe(null);
+    expect(shouldChime(joined('b', 3), { ...c, prefs: { ...on, sounds: false } })).toBe(null);
+    expect(shouldChime(joined('b', 3), { ...c, prefs: { ...on, call: false } })).toBe(null); // the master switch
+    expect(shouldChime(joined('b', 3), { ...c, deafened: true })).toBe(null);
     expect(shouldChime({ type: 'typing', room_id: 3, user_id: 'b' }, c)).toBe(null);
   });
 });
@@ -79,11 +81,21 @@ describe('title count', () => {
 
 describe('prefs', () => {
   beforeEach(() => localStorage.clear());
-  it('default off, and saved', () => {
-    expect(loadPrefs()).toEqual({ mentions: false, sounds: false });
-    savePrefs({ mentions: true, sounds: false });
-    expect(loadPrefs()).toEqual({ mentions: true, sounds: false });
+  it('defaults: mentions and join/leave off, my call cues on at volume 50; saved', () => {
+    expect(loadPrefs()).toEqual({ mentions: false, sounds: false, call: true, muteCues: true, connectCues: true, volume: 50 });
+    savePrefs({ ...DEFAULTS, mentions: true, connectCues: false, volume: 20 });
+    expect(loadPrefs()).toEqual({ ...DEFAULTS, mentions: true, connectCues: false, volume: 20 });
     localStorage.setItem(NOTIFY_KEY, 'not json');
-    expect(loadPrefs()).toEqual({ mentions: false, sounds: false });
+    expect(loadPrefs()).toEqual(DEFAULTS);
+  });
+  it('an old saved value keeps its join and leave choice', () => {
+    localStorage.setItem(NOTIFY_KEY, JSON.stringify({ mentions: true, sounds: true }));
+    expect(loadPrefs()).toEqual({ ...DEFAULTS, mentions: true, sounds: true });
+  });
+  it('a bad volume falls back or is clamped', () => {
+    for (const [v, want] of [['70', 50], [null, 50], [-5, 0], [140, 100], [33.4, 33]] as const) {
+      localStorage.setItem(NOTIFY_KEY, JSON.stringify({ volume: v }));
+      expect(loadPrefs().volume).toBe(want);
+    }
   });
 });

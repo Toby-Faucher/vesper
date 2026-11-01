@@ -1,5 +1,5 @@
 // The voice call, moved from Room.svelte so it outlives the screen that shows it.
-import { tick } from 'svelte';
+import { tick, untrack } from 'svelte';
 import { joinRoom } from './signaling';
 import { callEvent, idleCall } from './call';
 import { session } from './session.svelte';
@@ -14,6 +14,9 @@ import { MIC_QUIET, micSilence, type MicWarning } from './audio/mic-silence';
 import type { DenoiseMode } from './audio/mode';
 import { summarize, type Diag } from './diag';
 import { quality, type Quality } from './ui/quality';
+import { callCue, type CallSnap } from './ui/cues';
+import { chime } from './ui/chime';
+import { loadPrefs } from './ui/notify';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();
@@ -124,6 +127,15 @@ export function startVoice(): () => void {
   });
   void navigator.mediaDevices.enumerateDevices().then((l) => { if (!known.length) known = l; }, () => {});
   const offSocket = $effect.root(() => {
+    // My own call sounds: one per change of the call's state, none for the state found at start.
+    let was: CallSnap | null = null;
+    $effect(() => {
+      const now = { joined: voice.joined, muted: voice.muted, deafened: voice.deafened, online: session.online };
+      const prefs = loadPrefs();
+      const cue = callCue(was, now, prefs);
+      was = now;
+      if (cue) untrack(() => chime(cue, voice.settings.speakerId, prefs.volume));
+    });
     // Call events on the shared socket. It is replaced after a reconnect, so this re-subscribes.
     $effect(() => {
       const s = session.sig;
