@@ -14,6 +14,7 @@ import { MIC_QUIET, micSilence, type MicWarning } from './audio/mic-silence';
 import type { DenoiseMode } from './audio/mode';
 import { summarize, type Diag } from './diag';
 import { quality, type Quality } from './ui/quality';
+import { linkSamples, stepLink, type Link } from './ui/link';
 import { callCue, type CallSnap } from './ui/cues';
 import { chime } from './ui/chime';
 import { loadPrefs } from './ui/prefs';
@@ -46,6 +47,8 @@ class Voice {
   quality = $state<Quality>('unknown');
   /** The last stats summary behind `quality`, for qualityText. */
   diag = $state.raw<Diag | null>(null);
+  /** Connection quality per person in the call (you too), keyed on user_id. Empty when not in a call. */
+  links = $state.raw<Record<string, Link>>({});
 }
 export const voice = new Voice();
 
@@ -57,6 +60,7 @@ let poll: ReturnType<typeof setInterval> | undefined;
 let statsPoll: ReturnType<typeof setInterval> | undefined;
 let releaseLock: (() => void) | undefined;
 let silence = MIC_QUIET;
+const tracks = new Map<string, string>(); // remote track id to user_id, for the per-person stats
 
 // Push to talk is mute-gated: the track is live only when not muted and (PTT off or key held).
 function applyTrack() {
@@ -233,6 +237,8 @@ function teardown() {
   voice.micWarning = null;
   voice.quality = 'unknown';
   voice.diag = null;
+  voice.links = {};
+  tracks.clear();
   ({ muted: voice.muted, deafened: voice.deafened, forceMuted: voice.forceMuted } = idleCall());
   voice.speaking = new Set();
   voice.joined = false;
@@ -248,6 +254,12 @@ function pollStats(conn: RTCPeerConnection) {
       const now = performance.now();
       voice.diag = summarize(prev, cur, (now - at) / 1000, conn.iceConnectionState);
       voice.quality = quality(voice.diag);
+      const d = voice.diag;
+      const samples = linkSamples(prev, cur, tracks);
+      samples.set(voice.userId, { lossPct: d.lossDownPct === null && d.lossUpPct === null ? null : Math.max(d.lossDownPct ?? 0, d.lossUpPct ?? 0),
+        rttMs: d.rttMs, jitterMs: null, concealedPct: null });
+      const live = new Set([...tracks.values(), voice.userId]);
+      voice.links = Object.fromEntries([...live].map((id) => [id, stepLink(voice.links[id], samples.get(id))]));
       prev = cur;
       at = now;
     }, () => {});
@@ -289,8 +301,15 @@ export async function join(roomId: number): Promise<boolean> {
     const r = await joinRoom(sig, {
       roomId: room, stream, bitrateKbps: voice.settings.bitrateKbps, dtx: voice.settings.dtx,
       onError: (err) => (voice.error = err.message),
-      onRemoteStream: (id, s) => playback?.addRemote(id, s),
-      onRemoteStreamEnd: (id) => playback?.remove(id),
+      onRemoteStream: (id, s) => {
+        tracks.forEach((u, t) => u === id && tracks.delete(t));
+        s.getAudioTracks().forEach((t) => tracks.set(t.id, id));
+        playback?.addRemote(id, s);
+      },
+      onRemoteStreamEnd: (id) => {
+        tracks.forEach((u, t) => u === id && tracks.delete(t));
+        playback?.remove(id);
+      },
     });
     callOff = r.off;
     voice.userId = r.userId;

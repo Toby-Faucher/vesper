@@ -407,6 +407,19 @@ scene('person-card', async (ctx) => {
   await card.getByRole('button', { name: 'Reset' }).click();
   await page.keyboard.press('Escape');
 });
+// Connection quality per person (#56): the graded icons on the voice rows in the sidebar, then alice's card with the figures.
+scene('voice-quality', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  for (const n of ['bob', 'carol', 'dave']) await inVoice(page, n).getByRole('img', { name: /^Connection to .*: (good|fair|poor)$/ }).waitFor({ timeout: 15000 });
+  await rest(page);
+  await ctx.shot(page, 'voice-quality');
+  await inVoice(page, 'bob').getByRole('button').click();
+  await page.getByRole('dialog', { name: 'bob' }).getByText(/^Connection (good|fair|poor)\./).waitFor();
+  await rest(page);
+  await ctx.shot(page, 'voice-quality-card');
+  await page.keyboard.press('Escape');
+});
 scene('person-card-mod', async (ctx) => {
   await fullHouse(ctx);
   const users = await api(ctx.alice.page, 'GET', '/api/users');

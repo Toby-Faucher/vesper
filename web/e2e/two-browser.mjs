@@ -167,6 +167,15 @@ try {
   await inVoice(bob.page, 'alice').waitFor({ timeout: 5000 });
   console.log('presence_seen_by_both: ok');
 
+  // connection_quality_per_person (#56): after a few stats polls each row shows a graded icon with an accessible name.
+  for (const [page, other] of [[alice.page, 'bob'], [bob.page, 'alice']]) {
+    const icon = inVoice(page, other).getByRole('img', { name: new RegExp(`^Connection to ${other}: (good|fair|poor)$`) });
+    await icon.waitFor({ timeout: 10000 });
+    console.log(`  ${other} on ${page === alice.page ? 'alice' : 'bob'}'s page: ${await icon.getAttribute('aria-label')}; ${await icon.getAttribute('title')}`);
+  }
+  await alice.page.getByRole('img', { name: /^Your connection: (good|fair|poor)$/ }).waitFor({ timeout: 5000 });
+  console.log('connection_quality_per_person: ok');
+
   // rejoin_audio (#45): bob leaves and joins again (after a pause, within a second, and after a reload) while alice stays.
   // Each time both directions must flow again: packets and bytes rise, and each page rings the other's row (it is heard).
   // "Heard" is the loudest sample of a remote stream in the app's own playback graph (the `meter` init script): the
