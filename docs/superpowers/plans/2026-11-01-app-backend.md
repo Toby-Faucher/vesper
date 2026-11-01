@@ -117,7 +117,7 @@ crates/vesper-store/                    new: the only crate that imports sqlx
   migrations/0001_accounts.sql          accounts, sessions, invites
   migrations/0002_rooms.sql             rooms, room_members, the general room
   migrations/0003_messages.sql          messages, reactions, mentions, reads, messages_fts + triggers
-  migrations/0004_uploads.sql           uploads
+  migrations/0003 (Task 12)             uploads table lives here already; a 0004 only if Task 14 needs a change
   src/lib.rs                            Store, StoreError, open, random_hex, now_ms
   src/accounts.rs  src/sessions.rs  src/invites.rs
   src/rooms.rs  src/messages.rs  src/uploads.rs  src/search.rs
@@ -575,7 +575,7 @@ CREATE TRIGGER messages_au AFTER UPDATE OF body, deleted_at ON messages BEGIN
 ### Task 14: Uploads, quota and disk use
 
 **Files:**
-- Create: `crates/vesper-store/migrations/0004_uploads.sql`, `crates/vesper-store/src/uploads.rs`, `crates/vesper-server/src/uploads.rs`, `crates/vesper-server/tests/uploads.rs`
+- Create: `crates/vesper-store/src/uploads.rs` (the `uploads` TABLE already exists in migration 0003 from Task 12: do NOT create it again; add `migrations/0004_*.sql` only if you need a schema change, and store the sniffed mime type), `crates/vesper-server/src/uploads.rs`, `crates/vesper-server/tests/uploads.rs`
 - Modify: `crates/vesper-server/Cargo.toml` (`rustix` with `fs`), `lib.rs` (routes, hourly sweep task, clean `uploads/tmp` at start), `api_messages.rs` (delete removes files), `crates/vesper-protocol/src/api.rs`, `docs/architecture.md`, `docs/env.md` (quota row already there, add the layout note)
 
 **Interfaces:**
