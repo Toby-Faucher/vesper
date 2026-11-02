@@ -542,7 +542,9 @@ try {
   // The message highlight fades (paint only: background, text colour, opacity) and never moves the row.
   const lastRow = k.locator('article').last();
   const box = () => lastRow.evaluate((e) => [e.offsetTop, e.offsetLeft, e.offsetWidth, e.offsetHeight].join()); // layout, not scroll
-  const still = await box();
+  // The room has just come back from Settings: measure once the row has settled (it can still sit 16 px lower).
+  let still = await box();
+  for (let i = 0, prev = ''; prev !== still && i < 10; i++) [prev, still] = [still, await sleep(200).then(box)];
   await lastRow.hover();
   const fades = await lastRow.evaluate((e) => e.getAnimations({ subtree: true }).map((a) => a.transitionProperty ?? 'script'));
   assert.ok(fades.includes('background-color'), `the hover highlight does not fade: ${fades}`);
