@@ -102,7 +102,9 @@
   pointer-events: none;
   opacity: 0;
   transform: translateX(calc(var(--tip-dx, 0px) - 50%));
-  transition: opacity var(--dur-1) var(--ease-out);
+  /* The pop preset in CSS: out in --dur-out easing in, in (below) in --dur-2 easing out. */
+  scale: 0.97;
+  transition: opacity var(--dur-out) var(--ease-in), scale var(--dur-out) var(--ease-in);
 }
 [data-tip-up]::after,
 [data-tip-side='top']::after {
@@ -121,7 +123,8 @@
 [data-tip]:hover::after,
 [data-tip]:focus-visible::after {
   opacity: 1;
-  transition-delay: 400ms;
+  scale: 1;
+  transition: opacity var(--dur-2) var(--ease-out) 400ms, scale var(--dur-2) var(--ease-out) 400ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -133,4 +136,5 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  [data-tip]::after { scale: none !important; }
 }

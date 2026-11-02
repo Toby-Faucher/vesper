@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as I from '../lib/ui/icons';
   import { onMount } from 'svelte';
+  import { motion } from '../lib/ui/motion';
   import { session } from '../lib/session.svelte';
   import { UI_MESSAGES } from '../lib/ui/messages';
   import Button from '../lib/ui/c/Button.svelte';
@@ -38,7 +39,7 @@
 
 <p role="status" class="sr-only">{said}</p>
 {#if kind}
-  <div class="bar shrink-0 {kind === 'connecting' ? 'calm' : 'warn'}">
+  <div class="bar shrink-0 {kind === 'connecting' ? 'calm' : 'warn'}" in:motion={'swap'} out:motion={'swap'}>
     <span class="mark"><Icon d={kind === 'connecting' ? I.info : I.warn} /></span>
     <span class="tabular-nums" aria-hidden={kind !== 'connecting'}>
       {kind === 'connecting' ? UI_MESSAGES.connecting : kind === 'retry' ? UI_MESSAGES.reconnecting(secs) : UI_MESSAGES.reconnectingNow}

@@ -36,7 +36,8 @@
   const shown = () => el.matches(':popover-open');
   function refocus() {
     const a = document.activeElement;
-    if (anchor && (!a || a === document.body || el.contains(a))) anchor.focus();
+    // el is null when the popover was removed while open: its toggle event comes after the unmount.
+    if (anchor && (!a || a === document.body || el?.contains(a))) anchor.focus();
   }
 
   $effect(() => {
@@ -73,10 +74,11 @@
   $effect(() => {
     const a = anchor;
     if (!a) return;
-    const up = () => setTimeout(() => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const up = () => (t = setTimeout(() => {
       downOnAnchor = false;
       if (open && !shown()) onclose();
-    });
+    }));
     const down = () => {
       if (!open) return;
       downOnAnchor = true;
@@ -86,11 +88,14 @@
     return () => {
       a.removeEventListener('pointerdown', down);
       removeEventListener('pointerup', up);
+      clearTimeout(t); // the anchor's click can unmount us (a second click on a name closes its card) before this runs
     };
   });
 
   function toggle(e: ToggleEvent) {
-    if (e.newState !== 'closed' || !open) return;
+    // Removed while open (the owner closed it, or another name's card replaced it): the browser still sends this event,
+    // a task after the unmount. Nothing to report then: an onclose now would close what the owner shows next.
+    if (e.newState !== 'closed' || !open || !el) return;
     refocus();
     if (!downOnAnchor) onclose();
   }

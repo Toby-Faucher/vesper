@@ -38,6 +38,8 @@ table heads use 500, which Segoe UI and Liberation Sans draw as regular. The res
 tabular figures.
 
 **The colour rules.**
+- The accent is amber (the logo colour) unless the person picks another in Settings > Appearance. Below, "amber" means
+  the accent.
 - Amber means one of five things: the primary action, focus, a selection marker, a mention, or the unread line. A view has
   one amber fill at most. Text on an amber fill is near-black.
 - Warnings use their own orange plus an icon and words. They never use amber.
@@ -45,6 +47,19 @@ tabular figures.
   There are no role colours.
 - Room names have no `#` in front.
 - Colour is never the only cue. Speaking also shows a static bar icon, and muted shows an icon.
+
+**The accent choice.** Per account: `accounts.ui_accent`, sent in `UserInfo`, so it follows the person to every device and
+paints from `/api/me` before the shell renders (the last value is kept in `vesper.accent` for the sign in page). It is one
+of 8 presets (amber, rose, orchid, violet, indigo, sky, teal, lime) or a custom `#rrggbb`. The server checks only the form; a
+custom colour must pass the contrast rules in `web/src/lib/ui/accent.ts` (near-black text on the fill and on its hover 4.5:1,
+the fill 3:1 on the page, sidebar and panels, link text 4.5:1 on the page and on the soft fill). Settings refuses one that does not,
+shows the ratio and offers the nearest allowed colour, and a stored one that fails paints amber. `roles()` in `accent.ts` derives every
+accent role (`--accent`, `--accent-hover`, `--accent-fg`, `--accent-subtle`, `--accent-line`, `--focus`) from the one fill and
+sets them on `<html>`; `accent.test.ts` checks each preset. The logo and the tab icon follow the accent: `tint()` gives a colour
+matrix that moves amber to the fill and keeps every grey, applied to the logo by the `#logo-tint` SVG filter in `index.html`
+(set before the first paint, so the logo never shows amber first) and to the 32 px favicon on a canvas (`favicon.ts`, lazy,
+a `blob:` URL). Amber leaves both files untouched. The avatar colours, the notification icon and the speaking ring do not
+change. There is no coral: it sat between the danger red and the warning orange.
 
 **The switch point.** The look is chosen in one place: `data-style` on `<html>`, set by `web/src/lib/ui/style.ts` before the app
 mounts. A new style is a new block in `tokens.css` with the same role names, plus one entry in `STYLES`. Components never read
@@ -67,16 +82,22 @@ build (`waapi.animate` only). Only `opacity` and `transform` move, except the ju
 
 | Preset | Pose | Used by |
 | --- | --- | --- |
-| `pop` | scale 0.97, 160 ms | popovers, menus, dialogs (open, and an empty box with their fill fading out on close) |
+| `pop` | scale 0.97, 160 ms | popovers, menus, dialogs including the switcher and search (open, and an empty box with their fill fading out on close), the mention list, the drop overlay; the CSS tooltip does the same pose in CSS |
 | `rise` | 6 px up, 220 ms (under the timeline's 8 px bottom margin, so it keeps following) | the call bar, a new message, the timeline pills |
-| `swap` | 4 px up, 160 ms | the timeline when another room opens, a settings or admin section |
+| `swap` | 4 px up, 160 ms | the timeline when another room opens, a settings or admin section, the connection bar |
 | `row` | 8 px from the left, 160 ms | a person joining or leaving voice |
 | `bump` | scale 0.6 with a small overshoot, 160 ms | a reaction coming, going or changing its count; a sidebar unread count |
 
 Enter eases out (`--ease-out`, `--ease-pop` for `bump`); exit runs the pose backwards in 120 ms, easing in. The selected room's fill
 glides to the next room (`glide`). Buttons sink a little while pressed and hover changes colour: both plain CSS on the same tokens.
+A message row's highlight (hover, keyboard focus, editing, a mention) is a CSS fade of its background: in over 160 ms, out over
+220 ms, so moving between rows crossfades; the focus ring itself shows at once. The jump flash fades in, holds and fades out
+(`flash`). Hiding the sidebar slides it out to the left and the main pane follows its edge; showing it slides both back
+(`slide`). The grid takes its final columns once at the start and only transforms move after that; the leaving sidebar is
+inert at once and hidden when the slide ends. The saved hidden state at load does not slide.
 
-Rules: under `prefers-reduced-motion` every preset is an 80 ms opacity fade, and the glide and the jump flash are instant. Nothing
+Rules: under `prefers-reduced-motion` every preset is an 80 ms opacity fade, and the glide, the jump flash, the row highlight and
+the sidebar are instant. Nothing
 animates on a speaking change; the ring toggles instantly (a fade once cost about 60 percent more CPU in a call). History, a room open and
 "Load older" do not animate; only live arrivals do, three at most. The rooms, counts and people that come with the first hello appear
 at once (`settle()`), and at most three transitions start in one task. A dialog or popover closes at once, so focus moves on; the fading

@@ -47,7 +47,7 @@
       : voice.micWarning === 'pipeline' ? 'The audio pipeline stopped. Leave and join again.' : '',
   );
   const noise = $derived(`Noise suppression: ${voice.mode}${voice.modeReason ? ` (${voice.modeReason})` : ''}`);
-  const notice = $derived(voice.deviceError || (voice.forceMuted ? 'A moderator muted you.' : '') || warning);
+  const notice = $derived(voice.deviceError || (voice.forceMuted ? 'A moderator muted you.' : '') || warning || voice.notice);
 </script>
 
 <div class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-4" bind:clientHeight={height} {@attach motion}>

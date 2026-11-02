@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  applyBitrate, classifyMediaError, hintLevelDb, isBluetoothLabel, levelHint, missingDevice, newInputs, trackLive, watchDevices,
+  applyBitrate, classifyMediaError, hintLevelDb, micStartError, isBluetoothLabel, levelHint, missingDevice, newInputs, trackLive, watchDevices,
 } from './devices';
 import { loadSettings, saveSettings, SETTINGS_KEY } from './audio/settings';
 import { DEFAULT_AUDIO_SETTINGS } from './audio/settings';
@@ -23,6 +23,27 @@ describe('classifyMediaError', () => {
     expect(classifyMediaError('microphone lost: NotAllowedError: Permission denied')).toBe('denied');
     expect(classifyMediaError('microphone lost: ended')).toBe('ended');
     expect(classifyMediaError('microphone lost: muted by the system')).toBe('muted');
+  });
+});
+
+describe('micStartError', () => {
+  // [error, start of the sentence, details]
+  const cases: [unknown, string, string][] = [
+    [{ name: 'OverconstrainedError', message: 'Constraints could not be satisfied.' }, 'Vesper could not find a microphone.', 'OverconstrainedError: Constraints could not be satisfied.'],
+    [new DOMException('Requested device not found', 'NotFoundError'), 'Vesper could not find a microphone.', 'NotFoundError: Requested device not found'],
+    [new DOMException('Permission denied', 'NotAllowedError'), 'Microphone access was denied.', 'NotAllowedError: Permission denied'],
+    [new DOMException('', 'NotReadableError'), 'The microphone is in use by another app.', 'NotReadableError'],
+    [new DOMException('Starting audioinput failed', 'AbortError'), 'Vesper could not start the microphone.', 'AbortError: Starting audioinput failed'],
+    ['boom', 'Vesper could not start the microphone.', 'boom'],
+  ];
+  it.each(cases)('%o', (e, sentence, details) => {
+    const m = micStartError(e);
+    expect(m.startsWith(sentence)).toBe(true);
+    expect(m.endsWith(` Details: ${details}`)).toBe(true);
+    expect(m).not.toMatch(/call stays connected/);
+  });
+  it('names the way out', () => {
+    for (const n of ['NotFoundError', 'NotReadableError', 'AbortError']) expect(micStartError({ name: n })).toContain('Settings > Voice > Microphone');
   });
 });
 
