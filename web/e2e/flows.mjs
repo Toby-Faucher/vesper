@@ -966,11 +966,14 @@ try {
       status = await line.innerText();
     }
     assert.equal(status, 'Noise suppression: deepfilter', 'denoiser did not start under the CSP');
-    const ns = await d.evaluate(() => window.__mics.map((x) => [x.asked, x.track.getConstraints().noiseSuppression, x.track.getSettings().noiseSuppression]));
-    assert.deepEqual(ns.map((x) => x[0]), [true], 'the mic was not asked for with the browser filter on while loading');
-    assert.equal(ns[0][1], false, 'the browser filter was not turned off when DeepFilterNet took over');
-    assert.notEqual(ns[0][2], true, 'the track still reports the browser filter on');
-    console.log(`browser filter while the denoiser loads: asked ${ns[0][0]}, after ready constraint ${ns[0][1]}, setting ${ns[0][2]}: ok`);
+    // Chromium cannot turn a track's filter off (applyConstraints leaves getSettings() at true, tried 2026-11-02), so at ready
+    // the app moves the graph to a second track of the same mic asked for without it, and ends the first.
+    await d.waitForFunction(() => window.__mics.length === 2 && window.__mics[0].track.readyState === 'ended', null, { timeout: 5000 })
+      .catch(() => assert.fail('the browser-filtered mic was not replaced at ready'));
+    const ns = await d.evaluate(() => window.__mics.map((x) => [x.asked, x.track.readyState]));
+    assert.deepEqual(ns, [[true, 'ended'], [false, 'live']], 'browser filter while loading, then off under DeepFilterNet');
+    assert.equal(await d.evaluate(() => window.__mics[1].track.getSettings().noiseSuppression), false, 'the track under DeepFilterNet reports the browser filter on');
+    console.log('browser filter while the denoiser loads, off once it runs: ok');
     await d.getByRole('link', { name: 'Call details' }).click();
     const diag = d.getByRole('group', { name: 'Call numbers' }).getByText('Noise suppression:');
     assert.equal(await diag.innerText(), 'Noise suppression: deepfilter', 'Diagnostics shows another mode');

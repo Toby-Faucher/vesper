@@ -82,12 +82,12 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   let closed = false;
   let live = d.startLive; // applied to every new track, so mute/PTT survive swaps and rebuilds
 
-  // deepfilter asks with the browser filter on (`loading`) and turns it off when the model is ready, unless the user wants it on top.
-  const ask = (mode: DenoiseMode, id: string | null) =>
+  // deepfilter asks with the browser filter on (while the model loads); `deep` asks again without it once the model is ready.
+  const ask = (mode: DenoiseMode, id: string | null, ns = mode !== 'off') =>
     d.getUserMedia({
       audio: {
         echoCancellation: true,
-        noiseSuppression: mode !== 'off',
+        noiseSuppression: ns,
         autoGainControl: s.autoGain,
         channelCount: 1,
         sampleRate: 48000,
@@ -156,9 +156,9 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
 
   async function deep(): Promise<Pipe> {
     if (ctx.sampleRate !== 48000) throw new Error(`AudioContext runs at ${ctx.sampleRate} Hz, DeepFilterNet needs 48000`);
-    const m = await mic('deepfilter');
+    let m = await mic('deepfilter');
     let me: Pipe | undefined;
-    const unwatch = watch(m.getAudioTracks()[0], () => me);
+    let unwatch = watch(m.getAudioTracks()[0], () => me);
     let dead = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let node: AudioWorkletNode | undefined;
@@ -183,7 +183,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     };
     try {
       node = await d.createWorkletNode(ctx);
-      const src = ctx.createMediaStreamSource(m);
+      let src = ctx.createMediaStreamSource(m);
       const gain = ctx.createGain();
       gain.gain.value = 10 ** (s.inputBoostDb / 20);
       out = ctx.createMediaStreamDestination();
@@ -206,13 +206,28 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         n.port.postMessage({ type: 'port' }, [ch.port2]);
         set(); // settings may have changed while the model loaded
         me!.status = '';
-        const raw = m.getAudioTracks()[0];
         // DeepFilterNet takes over now: the browser filter goes off, so the two never stack. A failure is named, not hidden.
         if (!s.noiseSuppression)
-          void raw.applyConstraints({ ...raw.getConstraints(), noiseSuppression: false }).catch(() => {
+          void unfiltered().catch(() => {
             if (pipe === me && !dead) notify('deepfilter', (me!.status = 'the browser filter could not be turned off'));
           });
         if (pipe === me) notify('deepfilter', '');
+      };
+      // Chromium keeps a track's noise suppression as it was asked for (applyConstraints leaves getSettings() at true), so the
+      // graph moves to a second track of the same mic asked for without it; the sent track stays the same.
+      const unfiltered = async () => {
+        const next = await ask('deepfilter', m.getAudioTracks()[0].getSettings().deviceId ?? null, false);
+        if (dead) return stopAll(next);
+        const old = m;
+        const s2 = ctx.createMediaStreamSource(next);
+        s2.connect(gain);
+        src.disconnect();
+        nodes[0] = src = s2;
+        unwatch();
+        m = next;
+        unwatch = watch(next.getAudioTracks()[0], () => me);
+        me!.raw = next.getAudioTracks()[0];
+        stopAll(old);
       };
       w.onerror = (e) => fail(`denoiser worker failed: ${e.message ?? ''}`);
       n.port.onmessage = ({ data }: MessageEvent<{ type: 'error'; message: string } | ({ type: 'stats' } & PipelineStats)>) => {
