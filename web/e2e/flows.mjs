@@ -6,7 +6,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { ORIGIN, browser, cli, composer, cspViolations, inVoice, logout, openRoom, roomId, roomLink, searchFor, searchHits, signedIn, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, composer, cspViolations, hasFirefox, inVoice, logout, openRoom, roomId, roomLink, searchFor, searchHits, signedIn, signup, sleep, startServer } from './lib.mjs';
 
 // fetch from the page, so it sends the session cookie and the Origin header as the app does.
 const call = (page, method, path, body) =>
@@ -380,6 +380,42 @@ try {
     await b.goto(`${ORIGIN}/r/${general}`);
     await b.waitForFunction(() => document.title === 'Vesper'); // general read at the bottom: the count clears
     console.log('mention notifications and title count: ok');
+
+    // A name in a message opens the card with the bio; Esc gives focus back to the name. Enter on a mention opens theirs.
+    await call(a, 'PATCH', '/api/me', { bio: 'Plays bass on Sundays' });
+    const row = b.locator('article').filter({ hasText: 'hey @bob can you look at this' });
+    // Her messages above group under one head row: its name is the button.
+    const name = b.getByRole('main').getByRole('button', { name: 'Open profile of alice' }).last();
+    await name.click();
+    const card = b.getByRole('dialog', { name: 'alice' });
+    await card.getByText('Plays bass on Sundays').waitFor();
+    const [c, vw] = [await card.boundingBox(), b.viewportSize()];
+    assert.ok(c.x >= 0 && c.y >= 0 && c.x + c.width <= vw.width && c.y + c.height <= vw.height, 'the card is outside the viewport');
+    await b.keyboard.press('Escape');
+    await card.waitFor({ state: 'hidden' });
+    assert.ok(await name.evaluate((e) => e === document.activeElement), 'focus did not go back to the name after Esc');
+    await row.getByRole('button', { name: 'Open profile of @bob' }).press('Enter');
+    await b.getByRole('dialog', { name: 'bob' }).waitFor();
+    await b.keyboard.press('Escape');
+    await b.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
+    // Another name while a card is open (#65): the open card unmounts and its toggle event comes after; that must not
+    // throw or close the new card. Then a second click on a name closes its card, also while the open motion still runs.
+    await name.click();
+    await card.waitFor();
+    await row.getByRole('button', { name: 'Open profile of @bob' }).click();
+    await b.getByRole('dialog', { name: 'bob' }).waitFor();
+    await card.waitFor({ state: 'hidden' });
+    await sleep(300); // past a late toggle event of alice's card
+    assert.ok(await b.getByRole('dialog', { name: 'bob' }).isVisible(), "alice's card closing closed bob's card");
+    await row.getByRole('button', { name: 'Open profile of @bob' }).click();
+    await b.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
+    await name.click();
+    assert.ok(await card.evaluate((e) => e.getAnimations().length > 0), 'the open motion was over before the second click');
+    await name.click();
+    await card.waitFor({ state: 'hidden' });
+    await sleep(300);
+    assert.deepEqual(bob.errors, [], 'page errors after a person card unmounted while open');
+    console.log('a name or a mention in a message opens the person card: ok');
   }
 
   // Settings > Account, devices: alice signs in on a second browser, the first lists both and signs the other out, and
@@ -391,6 +427,72 @@ try {
   await a2.getByLabel('Password', { exact: true }).fill('test-password-1');
   await a2.getByRole('button', { name: 'Sign in' }).click();
   await signedIn(a2);
+
+  // Settings > Appearance, the accent: a preset paints at once, follows the account to the second browser (live and after
+  // a reload), and survives a reload here. A custom colour that fails the contrast rules is refused with its ratio; the
+  // nearest allowed one is taken. Reset goes back to amber. The server refuses a value that is not a preset or #rrggbb.
+  const accentOf = (p) => p.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+  const accentIs = (p, hex) => p.waitForFunction((h) => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() === h, hex);
+  assert.equal(await accentOf(a2), '#f0b010', 'amber is the default');
+  await a.goto(`${ORIGIN}/settings/appearance`);
+  const [saved] = await Promise.all([
+    a.waitForResponse((r) => r.url().endsWith('/api/me') && r.request().method() === 'PATCH'),
+    a.getByRole('radio', { name: 'Teal' }).check(),
+  ]);
+  assert.equal(await accentOf(a), '#2fc4b2', 'the preview did not apply at once');
+  // The logo and the tab icon follow (#69): the logo's filter maps amber to the accent, the favicon is a blob: drawn in it.
+  const logo = await a.evaluate(() => {
+    const img = document.querySelector('img[alt="Vesper"]');
+    const m = document.getElementById('logo-matrix').getAttribute('values').split(' ').map(Number);
+    const [r, g, b] = [0xf0, 0xb0, 0x10].map((_, i, x) => Math.round(m[i * 5] * x[0] + m[i * 5 + 1] * x[1] + m[i * 5 + 2] * x[2]));
+    return { filter: getComputedStyle(img).filter, amberTo: '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('') };
+  });
+  assert.match(logo.filter, /url\("?#logo-tint"?\)/, 'the logo is not filtered');
+  assert.equal(logo.amberTo, '#2fc4b2', 'the logo filter does not paint amber in the accent');
+  const icon = async (p) => {
+    await p.waitForFunction(() => document.querySelector('link[rel="icon"]').href.startsWith('blob:'));
+    return p.evaluate(async () => {
+      const bmp = new Image(); // an <img>, not fetch: the CSP allows blob: images, not blob: connections
+      bmp.src = document.querySelector('link[rel="icon"]').href;
+      await bmp.decode();
+      const ctx = new OffscreenCanvas(32, 32).getContext('2d');
+      ctx.drawImage(bmp, 0, 0);
+      const d = ctx.getImageData(0, 0, 32, 32).data, n = {};
+      for (let i = 0; i < d.length; i += 4) if (d[i + 3] === 255 && Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) {
+        const k = [d[i], d[i + 1], d[i + 2]].join();
+        n[k] = (n[k] ?? 0) + 1;
+      }
+      return Object.entries(n).sort((x, y) => y[1] - x[1])[0][0].split(',').map(Number); // the most common colourful pixel
+    });
+  };
+  const disc = await icon(a);
+  assert.ok([0x2f, 0xc4, 0xb2].every((v, i) => Math.abs(v - disc[i]) <= 24), `the favicon disc is ${disc}, not near teal`);
+  assert.equal(saved.status(), 200);
+  await accentIs(a2, '#2fc4b2');
+  await a2.reload();
+  await signedIn(a2);
+  assert.equal(await accentOf(a2), '#2fc4b2', 'the other device lost the accent on reload');
+  await a.reload();
+  await a.getByRole('radio', { name: 'Teal' }).waitFor();
+  assert.ok(await a.getByRole('radio', { name: 'Teal' }).isChecked(), 'Teal is not checked after a reload');
+  assert.equal(await accentOf(a), '#2fc4b2');
+  await a.getByLabel('Custom colour', { exact: true }).fill('#3050a0');
+  await a.getByText(/^Not allowed\. Dark text on this colour is \d\.\d:1 and needs 4\.5:1\.$/).waitFor();
+  assert.ok(await a.getByRole('button', { name: 'Use colour' }).isDisabled(), 'a refused colour can be used');
+  await a.getByRole('button', { name: /^Use nearest allowed/ }).click();
+  await a.getByText(/^Allowed\./).waitFor();
+  const near = await a.getByLabel('Custom colour', { exact: true }).inputValue();
+  await a.getByRole('button', { name: 'Use colour' }).click();
+  await accentIs(a, near);
+  await accentIs(a2, near);
+  await a.getByRole('button', { name: 'Reset to amber' }).click();
+  await accentIs(a2, '#f0b010');
+  assert.equal((await call(a, 'GET', '/api/me')).user.ui_accent, 'amber');
+  await a.waitForFunction(() => document.querySelector('link[rel="icon"]').getAttribute('href') === '/favicon.ico');
+  assert.equal(await a.evaluate(() => getComputedStyle(document.querySelector('img[alt="Vesper"]')).filter), 'none', 'amber filters the logo');
+  await assert.rejects(call(a, 'PATCH', '/api/me', { ui_accent: 'red' }), /400/);
+  console.log('accent follows the account, custom checked: ok');
+
   await a.goto(`${ORIGIN}/settings/account`);
   const deviceRows = a.getByRole('list', { name: 'Signed-in devices' }).getByRole('listitem');
   await deviceRows.nth(1).waitFor();
@@ -695,6 +797,31 @@ try {
   assert.equal(await searchHits(b).count(), 0, 'a hit from a room bob lost stayed in his open search');
   await b.keyboard.press('Escape');
   console.log('open search drops a room that became private: ok');
+
+  // A saved microphone that is gone (another machine, Firefox new ids): the join uses the default mic, says so once in the
+  // call bar, and forgets the id. In Chromium, and in Firefox where the bug was reported, when Playwright's Firefox is there.
+  for (const ff of hasFirefox() ? [false, true] : [false]) {
+    const who = ff ? 'fern' : 'erin';
+    const gone = await browser(who, [], { firefox: ff });
+    const g = gone.page;
+    await g.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'browser', micId: 'unplugged-mic-id' })));
+    await signup(g, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, who);
+    await join(g, 'general');
+    await g.getByRole('region', { name: 'Call' }).getByText('Your saved microphone was not found, so Vesper is using the default one.').waitFor();
+    assert.equal(await g.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).micId), null, 'the stale mic id was kept');
+    await g.getByRole('button', { name: 'Leave' }).click();
+    // The mic test in Settings falls back the same way (the init script seeds the gone id again on the reload).
+    await g.reload();
+    await signedIn(g);
+    await g.getByRole('button', { name: 'Settings' }).click();
+    await g.getByRole('button', { name: 'Mic test (hear yourself)' }).click();
+    await g.getByRole('status').filter({ hasText: 'Your saved microphone was not found' }).waitFor();
+    assert.equal(await g.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).micId), null, 'the mic test kept the stale id');
+    await g.getByRole('button', { name: 'Stop mic test' }).click();
+    alice.errors.push(...gone.errors);
+    console.log(`saved mic gone, ${ff ? 'Firefox' : 'Chromium'}: ok`);
+  }
+  if (!hasFirefox()) console.log('saved mic gone, Firefox: skipped (npx playwright-core install firefox)');
 
   // The denoiser (worklet, worker, WASM, model) under the server's CSP. A CSP block in the worker is not a page console
   // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (CI downloads it from

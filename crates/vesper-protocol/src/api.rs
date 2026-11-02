@@ -26,6 +26,24 @@ pub struct UserInfo {
     /// The picture's version, or null for the letter avatar. Fetch
     /// `/api/users/{user_id}/avatar?v={avatar}`; a new picture gets a new version.
     pub avatar: Option<String>,
+    /// The person's chosen UI accent: an `AccentPreset` key or `#rrggbb`. Null means amber, the default.
+    /// Not the avatar colour (`accent`).
+    pub ui_accent: Option<String>,
+}
+
+/// The accent presets of Settings > Appearance. `web/src/lib/ui/accent.ts` holds their colours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AccentPreset {
+    Amber,
+    Rose,
+    Orchid,
+    Violet,
+    Indigo,
+    Sky,
+    Teal,
+    Lime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -131,6 +149,10 @@ pub struct ProfilePatch {
     #[serde(default)]
     #[ts(optional)]
     pub bio: Option<String>,
+    /// An `AccentPreset` key or `#rrggbb`. The client also checks a custom colour's contrast.
+    #[serde(default)]
+    #[ts(optional)]
+    pub ui_accent: Option<String>,
 }
 
 // `Debug` is written by hand so the password and invite code never reach a log.

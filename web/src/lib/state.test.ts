@@ -6,7 +6,7 @@ import type { UserInfo } from './gen/UserInfo';
 import type { Message } from './gen/Message';
 
 const user = (user_id: string, display_name = user_id): UserInfo => ({
-  user_id, username: user_id, display_name, accent: '#888888', role: 'member', banned: false, bio: '', avatar: null,
+  user_id, username: user_id, display_name, accent: '#888888', role: 'member', banned: false, bio: '', avatar: null, ui_accent: null,
 });
 const room = (id: number): RoomInfo => ({ id, name: `room${id}`, position: id, restricted: false, members: [], archived: false });
 const peer = (user_id: string, room_id: number): Peer => ({

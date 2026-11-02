@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import tokens from '../../styles/tokens.css?raw';
 import app from '../../app.css?raw';
+import { contrast as ratio } from './accent';
 
 // The vesper style block: every `--name: value;` in it.
 const block = tokens.slice(tokens.indexOf("[data-style='vesper']"));
@@ -15,14 +16,8 @@ function hex(name: string, seen = 0): string {
   return v;
 }
 
-const lum = (h: string) => {
-  const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
-  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-};
-const contrast = (a: string, b: string) => {
-  const [x, y] = [lum(hex(a)), lum(hex(b))].sort((p, q) => q - p);
-  return (x + 0.05) / (y + 0.05);
-};
+// The same helpers the accent check uses (accent.ts), on resolved role names.
+const contrast = (a: string, b: string) => ratio(hex(a), hex(b));
 
 const slots = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `--avatar-${n}`);
 // The pairs in the plan's "Measured contrast": text needs 4.5, UI parts (rings, swatches) 3.

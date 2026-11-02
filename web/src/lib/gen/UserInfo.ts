@@ -10,4 +10,9 @@ bio: string,
  * The picture's version, or null for the letter avatar. Fetch
  * `/api/users/{user_id}/avatar?v={avatar}`; a new picture gets a new version.
  */
-avatar: string | null, };
+avatar: string | null, 
+/**
+ * The person's chosen UI accent: an `AccentPreset` key or `#rrggbb`. Null means amber, the default.
+ * Not the avatar colour (`accent`).
+ */
+ui_accent: string | null, };

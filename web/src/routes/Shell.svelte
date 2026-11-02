@@ -146,8 +146,9 @@
 <div class="grid h-screen overflow-hidden {sidebar.collapsed ? 'grid-cols-[1fr]' : 'grid-cols-[248px_1fr]'}" {onclick}>
   <!-- First Tab stop. It focuses main itself, so the address does not gain a #main. -->
   <a href="#main" class="skip" onclick={(e) => { e.preventDefault(); mainEl?.focus(); }}>Skip to main content</a>
-  <!-- Hidden, not removed, while collapsed, so the toggles' aria-controls always points at it. -->
-  <div id="sidebar" class="min-w-0" hidden={sidebar.collapsed}><Sidebar current={room?.id ?? null} /></div>
+  <!-- Hidden, not removed, while collapsed, so the toggles' aria-controls always points at it. Inert from the moment it
+       is hidden: while it slides out it is still drawn, fixed over the left edge, out of the grid. -->
+  <div id="sidebar" class="min-w-0" class:leaving={sidebar.collapsed && sidebar.sliding} hidden={sidebar.collapsed && !sidebar.sliding} inert={sidebar.collapsed}><Sidebar current={room?.id ?? null} /></div>
   <main id="main" tabindex="-1" bind:this={mainEl} class="relative flex h-screen min-w-0 flex-col" style:padding-bottom={voice.joined ? `${barH + 24}px` : null}>
     <ConnectionBanner />
     {#if room}
@@ -237,6 +238,9 @@
     transform: translateY(-200%);
   }
   .skip:focus { transform: none; }
+  /* Over the main pane, which slides under its edge (slide() in motion.ts). */
+  #sidebar { position: relative; z-index: 1; }
+  #sidebar.leaving { position: fixed; inset: 0 auto 0 0; width: 248px; }
   /* Empty states sit in the middle of the pane; the bottom padding offsets the 48 px header, so they centre on the screen. */
   .center { display: flex; flex: 1; flex-direction: column; justify-content: center; padding-bottom: 48px; }
   /* Search: wider and taller than the switcher, for snippets and the filter row. */

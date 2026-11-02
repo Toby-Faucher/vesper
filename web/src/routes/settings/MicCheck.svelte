@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { createCapture, type Capture } from '../../lib/audio/capture';
   import { clampSettings, type AudioSettings } from '../../lib/audio/settings';
-  import { DEVICE_MESSAGES, classifyMediaError, hintLevelDb, isBluetoothLabel, levelHint, watchDevices } from '../../lib/devices';
+  import { MIC_FALLBACK, hintLevelDb, isBluetoothLabel, levelHint, micStartError, watchDevices } from '../../lib/devices';
   import Button from '../../lib/ui/c/Button.svelte';
   import Field from '../../lib/ui/c/Field.svelte';
   import Meter from '../../lib/ui/c/Meter.svelte';
@@ -29,6 +29,7 @@
   let test: Capture | undefined;
   let testing = $state(false);
   let testError = $state('');
+  let testNotice = $state('');
   let loop: HTMLAudioElement | undefined;
   let levelDb = $state(-100);
   let peaks: number[] = [];
@@ -73,17 +74,17 @@
   });
 
   async function startTest() {
-    testError = '';
+    testError = testNotice = '';
     try {
       // Same pipeline as the call, so this is what others will hear. In a call, the call's own stream: no second mic.
-      if (!liveStream) test = await createCapture(settings);
+      if (!liveStream) test = await createCapture(settings, { onMicFallback: () => (set({ micId: null }), (testNotice = MIC_FALLBACK)) });
       loop = new Audio();
       loop.srcObject = test?.stream ?? liveStream!;
       void loop.play().catch(() => {});
       testing = true;
       void refresh(); // labels appear once permission is granted
     } catch (e) {
-      testError = DEVICE_MESSAGES[classifyMediaError(e)];
+      testError = micStartError(e);
     }
   }
   function stopTest() {
@@ -140,4 +141,5 @@
   </Button>
   <span class="text-xs text-fg-3">Use headphones, or you will get feedback.</span>
   {#if testError}<p class="w-full text-danger" role="alert">{testError}</p>{/if}
+  {#if testNotice}<p class="w-full text-warn" role="status">{testNotice}</p>{/if}
 </div>
