@@ -358,12 +358,18 @@ describe('in a call', () => {
     const p = v.retryMic();
     void v.retryMic(); // a second press while it runs does nothing
     expect(retry).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledWith(false); // a lost mic: the swap is not blamed
     expect(voice.retrying).toBe(true);
     onMode('browser', '');
     done(true);
     await p;
     expect(voice).toMatchObject({ retrying: false, deviceError: '', mode: 'browser', joined: true });
     expect(sig.leaves).toBe(0);
+    voice.micWarning = 'mic'; // "no sound": the retry also keeps the browser filter (no reopened mic)
+    const q = v.retryMic();
+    expect(retry).toHaveBeenLastCalledWith(true);
+    done(true);
+    await q;
   });
 
   it('polls stats every 2 s into quality', async () => {

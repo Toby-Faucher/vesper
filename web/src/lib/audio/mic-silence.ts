@@ -1,6 +1,6 @@
 import type { CaptureStats } from './capture';
 
-const SILENT_RMS = 1e-5; // about -100 dBFS: digital silence (no input, or a hardware mute). A real mic's own noise is far above it.
+export const SILENT_RMS = 1e-5; // about -100 dBFS: digital silence (no input, or a hardware mute). A real mic's own noise is far above it.
 const STALE_MS = 2000; // the worklet reports every 500 ms
 const SILENT_MS = 5000;
 

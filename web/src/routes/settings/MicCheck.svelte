@@ -80,7 +80,9 @@
       if (!liveStream) test = await createCapture(settings, { onMicFallback: () => (set({ micId: null }), (testNotice = MIC_FALLBACK)) });
       loop = new Audio();
       loop.srcObject = test?.stream ?? liveStream!;
-      void loop.play().catch(() => {});
+      // The chosen speaker, as in a call (Chromium only). A refused play() is said, not hidden: the meter alone looks fine.
+      if (settings.speakerId) void (loop as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }).setSinkId?.(settings.speakerId).catch(() => {});
+      void loop.play().catch((e) => (testNotice = `Could not play the mic test: ${e instanceof Error ? e.message : String(e)}`));
       testing = true;
       void refresh(); // labels appear once permission is granted
     } catch (e) {
