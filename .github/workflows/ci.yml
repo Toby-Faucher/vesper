@@ -20,26 +20,29 @@ env:
 
 # Only e2e and dsp-wasm wait, for the few seconds of `changes`. e2e takes dsp-wasm's denoiser build as an artifact,
 # polled once its own build is done; dsp-wasm uploads it before its tests, so e2e does not usually wait.
-# Pull request runs restore main's Rust caches but do not save their own: the repo's caches sit near the 10 GB limit.
+# Pull request runs restore main's caches but do not save their own: the repo's caches sit near the 10 GB limit.
 jobs:
   # A pull request that only bumps the release version (scripts/version-only.py) skips e2e and dsp-wasm.
-  # Anything else, any push to main and any error in the check runs everything. A job skipped by `if:` reports
-  # "skipped", which a required status check treats as passing.
+  # Anything else, any push to main, an error in the check, or this job failing runs everything. A job skipped
+  # by `if:` reports "skipped", which a required status check treats as passing.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      full: ${{ steps.gate.outputs.full }}
+      version_only: ${{ steps.gate.outputs.version_only }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           # The pull request merge commit and its first parent, the base branch tip.
           fetch-depth: 2
+      # The base branch's copy of the script decides, so a PR cannot loosen the gate for itself. No copy on the base
+      # (git show fails) means the full pipeline.
       - id: gate
         run: |
-          full=true
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] && python3 -I scripts/version-only.py HEAD^1 HEAD; then full=false; fi
-          echo "full=$full" | tee -a "$GITHUB_OUTPUT"
+          v=false
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git show HEAD^1:scripts/version-only.py >"$RUNNER_TEMP/version-only.py" &&
+            python3 -I "$RUNNER_TEMP/version-only.py" HEAD^1 HEAD; then v=true; fi
+          echo "version_only=$v" | tee -a "$GITHUB_OUTPUT"
 
   lint-rust:
     runs-on: ubuntu-24.04
@@ -103,7 +106,8 @@ jobs:
   # No wasm build here: flows.mjs runs its denoiser-under-CSP step with dsp-wasm's build; the other steps use browser suppression.
   e2e:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    # Runs unless `changes` succeeded and said version only: a failed `changes` runs everything.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.version_only != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -150,15 +154,16 @@ jobs:
 
   dsp-wasm:
     needs: changes
-    if: needs.changes.outputs.full == 'true'
+    # Runs unless `changes` succeeded and said version only: a failed `changes` runs everything.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.version_only != 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7.0.1
       # The built web/public/dsp, keyed on everything the wasm build reads: the wasm-bindgen version is in Cargo.lock, the
-      # model's sha256 in fetch-model.sh. Saved at the end of a green job only. Before fetch-model.sh, so the model is not hashed.
+      # model's sha256 in fetch-model.sh. Saved by green main runs only (last step). Before fetch-model.sh, so the model is not hashed.
       - id: dsp-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: web/public/dsp
           key: dsp-wasm-v1-${{ runner.os }}-${{ hashFiles('crates/vesper-dsp/**', 'Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'rust-toolchain.toml', 'scripts/build-dsp.sh', 'scripts/fetch-model.sh') }}
@@ -199,3 +204,8 @@ jobs:
           retention-days: 1
       # With the wasm build above this is `scripts/check.sh dsp`; the tests run whether or not the cache hit.
       - run: scripts/check.sh denoiser audiolab
+      - if: github.ref == 'refs/heads/main' && steps.dsp-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: web/public/dsp
+          key: ${{ steps.dsp-cache.outputs.cache-primary-key }}

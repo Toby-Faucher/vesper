@@ -229,14 +229,18 @@ speech 6 and 12 dB over full scale and compares it with a hard clip.
 
 - `dsp-wasm` caches the built `web/public/dsp`, keyed on a hash of `crates/vesper-dsp/**`, `Cargo.toml`, `Cargo.lock` (which holds the
   wasm-bindgen version), `.cargo/config.toml`, `rust-toolchain.toml`, `scripts/build-dsp.sh` and `scripts/fetch-model.sh` (which holds the
-  model's sha256). On a hit it uploads the artifact without building. The denoiser and audio lab tests run either way.
+  model's sha256). On a hit it uploads the artifact without building. The denoiser and audio lab tests run either way. Only green `main`
+  runs save the cache.
 - `e2e` polls for the `dsp` artifact instead of `needs: dsp-wasm`. `dsp-wasm` uploads it before its tests, so `e2e` rarely waits.
 - A pull request that only bumps the release version gets the light pipeline: `e2e` and `dsp-wasm` are skipped, the other jobs run.
   `scripts/version-only.py` decides it: the only changed files are `Cargo.toml`, `Cargo.lock`, `web/package.json`, `web/package-lock.json`
   and `docs/versions.md`, and the first four differ only in the release version (the workspace members in `Cargo.lock`, the root package
-  in the npm files). Any other change, a push to `main`, or an error in the script means the full pipeline. `scripts/test-version-only.sh`
-  tests it. A job skipped by `if:` reports "skipped", which a required status check counts as passing. The repo has no branch protection
-  today (the API answers 403 on this plan).
+  in the npm files). Any other change, a push to `main`, an error in the script, or a failed `changes` job means the full pipeline.
+  `scripts/test-version-only.sh` tests it. The `changes` job runs the base branch's copy of the script, so a PR that edits the script is
+  judged by the old one (and gets the full pipeline, since the script is not on the list). `ci.yml` itself comes from the PR, so the
+  gate guards against mistakes, not against a PR that rewrites the workflow.
+  A job skipped by `if:` reports "skipped", which a required status check counts as passing. Whether `main` has branch protection could
+  not be checked: the protection API answers 403 for this repo.
 - Rust caches (Swatinem/rust-cache) are saved by `main` runs only; pull requests restore them. The repo's caches are close to the 10 GB limit.
 - A newer push to the same pull request cancels the running one.
 
