@@ -28,6 +28,15 @@ async function join(page, room) {
   await page.getByRole('button', { name: 'Join' }).click();
   await page.getByRole('button', { name: 'Leave' }).waitFor();
 }
+// Signs `name` in again (password test-password-1). Steps late in the run reuse an account made earlier: every signup
+// spends one of the 10 per-address signup tries (6 min refill), and the run would pass 10.
+async function signInAgain(page, name) {
+  await page.goto(`${ORIGIN}/login`);
+  await page.getByLabel('Username').fill(name);
+  await page.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await signedIn(page);
+}
 const focusedText = (page) => page.evaluate(() => document.activeElement?.textContent?.trim());
 const MUTED_NOTICE = 'A moderator muted you.';
 // The notice in the live call bar; the inert copy that fades out after Leave is aria-hidden, so the region query skips it.
@@ -889,7 +898,7 @@ try {
         return m;
       };
     });
-    await signup(l, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, 'ines');
+    await signInAgain(l, 'rhea'); // rhea, the room-change reader, has never been in a call
     await join(l, 'general');
     const bar = l.getByRole('region', { name: 'Call' });
     await bar.getByText('Noise suppression: browser').waitFor();
@@ -914,12 +923,12 @@ try {
     await bar.getByRole('button', { name: 'Leave' }).click();
     alice.errors.push(...lost.errors);
     console.log('Retry microphone after the mic ended, same call: ok');
-    // Your recent calls: the call just left is listed, for ines only (server tests cover the other accounts).
+    // Your recent calls: the call just left is listed, for rhea only (server tests cover the other accounts).
     await l.waitForFunction(async () => (await (await fetch('/api/me/calls')).json()).length === 1, null, { timeout: 5000 });
     await l.goto(`${ORIGIN}/settings/account`);
     const list = l.getByRole('list', { name: 'Your recent calls' });
     await list.waitFor();
-    assert.equal(await list.getByRole('listitem').count(), 1, 'ines does not see her one call');
+    assert.equal(await list.getByRole('listitem').count(), 1, 'rhea does not see her one call');
     // It ended on the browser filter, with the last problem of the call (the refused retry) as its reason.
     assert.match(await list.innerText(), /browser filter \(microphone lost: NotAllowedError/);
     await l.getByText(/Only you can see this list/).waitFor();
@@ -933,9 +942,9 @@ try {
   // run every AudioContext, with or without a gesture, whatever the flags and prefs say (tried 2026-11-01); voice.test.ts
   // checks that join() makes both contexts before its first await.
   for (const ff of hasFirefox() ? [false, true] : [false]) {
-    const who = ff ? 'gwen' : 'hana';
+    const who = ff ? 'flora' : 'rhea'; // from the room-change step
     const cold = await browser(who, [], { firefox: ff });
-    await signup(cold.page, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, who);
+    await signInAgain(cold.page, who);
     await openRoom(cold.page, 'general');
     const state = await cold.page.context().storageState();
     for (const how of ['click', 'Enter']) {
