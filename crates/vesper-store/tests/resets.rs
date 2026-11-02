@@ -67,7 +67,7 @@ async fn reset_sets_password_and_ends_every_session_once() {
     );
     assert_eq!(phc(&s, "bob").await.as_deref(), Some("new"));
     // The row stays as the audit: who made it, when it was used and from where.
-    let r = s.resets().await.unwrap();
+    let r = s.resets(now_ms()).await.unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].user_id, bob);
     assert_eq!(r[0].created_by.as_deref(), Some(alice.as_str()));
@@ -120,7 +120,7 @@ async fn a_new_code_cancels_the_old_one() {
     );
     assert!(s.reset_valid(&[3; 32], now).await.unwrap());
     // The latest per account: bob's used one, alice's open one.
-    let r = s.resets().await.unwrap();
+    let r = s.resets(now_ms()).await.unwrap();
     assert_eq!(r.len(), 2);
     let bobs = r.iter().find(|x| x.user_id == bob).unwrap();
     assert_eq!(bobs.created_by.as_deref(), Some(alice.as_str()));
@@ -151,12 +151,12 @@ async fn role_ban_and_password_change_cancel_a_live_code() {
             None,
             "{what}"
         );
-        assert!(s.resets().await.unwrap()[0].cancelled, "{what}");
+        assert!(s.resets(now_ms()).await.unwrap()[0].cancelled, "{what}");
     }
     // An expired link is left as expired, not cancelled.
     s.create_reset(&bob, &[5; 32], now - 1, None).await.unwrap();
     s.set_role(&bob, Role::Member).await.unwrap();
-    assert!(!s.resets().await.unwrap()[0].cancelled);
+    assert!(!s.resets(now_ms()).await.unwrap()[0].cancelled);
 }
 
 #[tokio::test]
@@ -192,6 +192,98 @@ async fn reset_notices_are_shown_once() {
         ]
     );
     assert!(s.take_reset_notices(&bob, now).await.unwrap().is_empty());
+}
+
+/// A demoted or banned maker's live links stop working; links made by others stay.
+#[tokio::test]
+async fn demoting_or_banning_the_maker_cancels_their_links() {
+    let (_tmp, s) = open().await;
+    let m = user(&s, "mod").await;
+    let owner = user(&s, "owner").await;
+    let (a, b, c) = (
+        user(&s, "a").await,
+        user(&s, "b").await,
+        user(&s, "c").await,
+    );
+    let now = now_ms();
+    let later = now + RESET_TTL_MS;
+    s.create_reset(&a, &[1; 32], later, Some(&m)).await.unwrap();
+    s.create_reset(&c, &[3; 32], later, Some(&owner))
+        .await
+        .unwrap();
+    s.set_role(&m, Role::Member).await.unwrap();
+    assert!(!s.reset_valid(&[1; 32], now).await.unwrap());
+    assert!(s.reset_valid(&[3; 32], now).await.unwrap());
+    s.create_reset(&b, &[2; 32], later, Some(&m)).await.unwrap();
+    s.set_banned(&m, true, now).await.unwrap();
+    assert!(!s.reset_valid(&[2; 32], now).await.unwrap());
+    assert_eq!(
+        s.use_reset(&[2; 32], "new", now, "lan").await.unwrap(),
+        None
+    );
+    assert!(s.reset_valid(&[3; 32], now).await.unwrap());
+}
+
+/// A newer link does not hide a used one from the owner.
+#[tokio::test]
+async fn used_resets_stay_listed_after_newer_links() {
+    let (_tmp, s) = open().await;
+    let bob = user(&s, "bob").await;
+    let m = user(&s, "mod").await;
+    let now = now_ms();
+    let later = now + RESET_TTL_MS;
+    s.create_reset(&bob, &[1; 32], later, Some(&m))
+        .await
+        .unwrap();
+    s.use_reset(&[1; 32], "new", now, "internet").await.unwrap();
+    s.create_reset(&bob, &[2; 32], later, Some(&m))
+        .await
+        .unwrap();
+    let r = s.resets(now_ms()).await.unwrap();
+    assert_eq!(r.len(), 2);
+    assert!(r[0].used_at.is_none(), "newest first");
+    assert_eq!(r[1].used_at, Some(now));
+    assert_eq!(r[1].created_by.as_deref(), Some(m.as_str()));
+    // Once the newer one is used too, both stay listed for 30 days, then only the latest.
+    s.use_reset(&[2; 32], "new2", now + 1, "lan").await.unwrap();
+    let r = s.resets(now + 1).await.unwrap();
+    assert_eq!(r.len(), 2);
+    assert_eq!(r[0].used_at, Some(now + 1));
+    let month = 31 * 24 * 3600 * 1000;
+    assert_eq!(s.resets(now + month).await.unwrap().len(), 1);
+}
+
+/// The taker sees the notice first; a later reset shows every recent one to the real person.
+#[tokio::test]
+async fn a_later_reset_shows_earlier_notices_again() {
+    let (_tmp, s) = open().await;
+    let bob = user(&s, "bob").await;
+    let m = user(&s, "mod").await;
+    let now = now_ms();
+    let later = now + RESET_TTL_MS;
+    s.create_reset(&bob, &[1; 32], later, Some(&m))
+        .await
+        .unwrap();
+    s.use_reset(&[1; 32], "taker", now, "lan").await.unwrap();
+    assert_eq!(s.take_reset_notices(&bob, now).await.unwrap().len(), 1);
+    s.create_reset(&bob, &[2; 32], later, None).await.unwrap();
+    s.use_reset(&[2; 32], "mine", now + 1, "lan").await.unwrap();
+    let n = s.take_reset_notices(&bob, now + 1).await.unwrap();
+    assert_eq!(n.len(), 2);
+    assert_eq!(n[0].by.as_deref(), Some("mod"));
+    assert_eq!(n[1].by, None);
+    // A reset used more than 30 days before is not shown again.
+    s.create_reset(&bob, &[3; 32], i64::MAX, None)
+        .await
+        .unwrap();
+    let month = 31 * 24 * 3600 * 1000;
+    s.use_reset(&[3; 32], "again", now + month, "lan")
+        .await
+        .unwrap();
+    assert_eq!(
+        s.take_reset_notices(&bob, now + month).await.unwrap().len(),
+        1
+    );
 }
 
 #[tokio::test]

@@ -161,6 +161,15 @@ async fn create_reset(
     if !verify_password(req.password, phc).await {
         return Err(ApiError::new(ApiErrorCode::Forbidden, "wrong password"));
     }
+    // Again after the hash: a role change or ban during it must not leave a link it forbids.
+    let maker = st.store.user(&a.user.user_id).await?;
+    let target = st.store.user(&id).await?.role;
+    if maker.banned
+        || rank(maker.role) < rank(Role::Moderator)
+        || (maker.role != Role::Owner && target != Role::Member)
+    {
+        return Err(ApiError::new(ApiErrorCode::Forbidden, "not allowed"));
+    }
     let (code, hash) = new_token();
     let expires_at = now_ms() + RESET_TTL_MS;
     st.store
@@ -174,7 +183,7 @@ async fn create_reset(
 /// The latest reset link of each account, so the owner sees who reset whom. Owner only.
 async fn resets(State(st): State<AppState>, a: Authed) -> Result<Json<Vec<ResetInfo>>, ApiError> {
     require(&a.user, Role::Owner)?;
-    Ok(Json(st.store.resets().await?))
+    Ok(Json(st.store.resets(now_ms()).await?))
 }
 
 /// Owner only, and never on themselves or another owner, so the owner can not lock everyone out.

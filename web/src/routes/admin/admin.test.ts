@@ -97,6 +97,10 @@ describe('resetStatus and resetLine', () => {
   });
   it('names who made it, or the command line', () => {
     expect(resetLine(r({ used_at: NOW }), 'alice', NOW)).toMatch(/^Password reset by alice on .+ \(used\)$/);
+    // A used one shows the day it was used, not the day it was made.
+    const day = 86_400_000;
+    expect(resetLine(r({ created_at: NOW - 3 * day, used_at: NOW }), 'a', NOW)).toBe(resetLine(r({ created_at: NOW, used_at: NOW }), 'a', NOW));
+    expect(resetLine(r({ created_at: NOW - 3 * day, used_at: NOW }), 'a', NOW)).not.toBe(resetLine(r({ created_at: NOW - 3 * day, used_at: NOW - 3 * day }), 'a', NOW));
     expect(resetLine(r(), null, NOW)).toMatch(/^Password reset from the command line on .+ \(unused\)$/);
   });
 });

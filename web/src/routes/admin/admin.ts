@@ -39,9 +39,10 @@ export function resetStatus(r: ResetInfo, now: number): ResetStatus {
   return 'unused';
 }
 const dayOf = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-/** "Password reset by alice on 2 Nov (used)"; `by` is the maker's name, null for the command line. */
+/** "Password reset by alice on 2 Nov (used)"; `by` is the maker's name, null for the command line. The date is when it was
+ * used, else when it was made. */
 export const resetLine = (r: ResetInfo, by: string | null, now: number) =>
-  `Password reset ${by === null ? 'from the command line' : `by ${by}`} on ${dayOf(r.created_at)} (${resetStatus(r, now)})`;
+  `Password reset ${by === null ? 'from the command line' : `by ${by}`} on ${dayOf(r.used_at ?? r.created_at)} (${resetStatus(r, now)})`;
 
 /** When `ms` is: "in 7 days", "in 3 h", "in 20 min", "in less than a minute"; past times as relTime ("2 days ago"). */
 export function untilText(ms: number, now: number): string {

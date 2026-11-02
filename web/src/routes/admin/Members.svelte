@@ -94,11 +94,14 @@
 
   // Reset links: confirm naming the person and asking for your own password, then the link once, like a new invite
   // (only in this state, never stored). The owner also sees each person's latest reset: who made it and if it was used.
-  let resets = $state<Record<string, ResetInfo>>({});
+  // Per person, newest first: the latest link, then every reset used in the last 30 days (a newer link can not hide one).
+  let resets = $state<Record<string, ResetInfo[]>>({});
   async function loadResets() {
     if (!owner) return;
     try {
-      resets = Object.fromEntries((await api<ResetInfo[]>('GET', '/api/resets')).map((r) => [r.user_id, r]));
+      const by: Record<string, ResetInfo[]> = {};
+      for (const r of await api<ResetInfo[]>('GET', '/api/resets')) (by[r.user_id] ??= []).push(r);
+      resets = by;
     } catch {
       // only the audit line; the table works without it
     }
@@ -162,8 +165,9 @@
                 <span class="block truncate text-xs text-fg-2">@{u.username}{u.user_id === me.user_id ? ' (you)' : ''}</span>
               </span>
             </PersonButton>
-            {#if resets[u.user_id]}{@const line = resetLine(resets[u.user_id], resetBy(resets[u.user_id]), Date.now())}
-              <p class="mt-0.5 pl-8 text-xs text-fg-2">{line}</p>{/if}
+            {#each resets[u.user_id] ?? [] as r}
+              <p class="mt-0.5 pl-8 text-xs text-fg-2">{resetLine(r, resetBy(r), Date.now())}</p>
+            {/each}
           </td>
           <td>
             {#if editable(u)}
@@ -235,7 +239,7 @@
   {/snippet}
 </Dialog>
 
-<Dialog open={!!resetFor} title={resetFor ? `Create a reset link for ${resetFor.display_name}?` : ''} onclose={() => (resetFor = null)}>
+<Dialog open={!!resetFor} title={resetFor ? `Create a reset link for ${resetFor.display_name}?` : ''} onclose={() => ([resetFor, resetPassword] = [null, ''])}>
   {M.resetBody}
   {#if resetFor}
     <form id="reset-form" class="mt-4" onsubmit={(e) => (e.preventDefault(), void makeReset())}>
@@ -246,7 +250,7 @@
   {/if}
   {#if resetError}<p role="alert" tabindex="-1" class="mt-3 text-danger">{resetError}</p>{/if}
   {#snippet footer()}
-    <Button variant="ghost" onclick={() => (resetFor = null)}>Cancel</Button>
+    <Button variant="ghost" onclick={() => ([resetFor, resetPassword] = [null, ''])}>Cancel</Button>
     <Button variant="primary" type="submit" form="reset-form" loading={resetBusy}>Create link</Button>
   {/snippet}
 </Dialog>

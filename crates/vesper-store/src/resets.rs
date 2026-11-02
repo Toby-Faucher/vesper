@@ -35,6 +35,24 @@ struct ResetRow {
     cancelled: bool,
 }
 
+/// Cancels the live links `maker` made for others: a banned or demoted moderator must not keep
+/// working links. Called on every role change and ban or unban of `maker`.
+pub(crate) async fn cancel_made_by(c: &mut SqliteConnection, maker: &str, now: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE password_resets SET cancelled_at = ?2
+         WHERE created_by = ?1 AND used_at IS NULL AND cancelled_at IS NULL AND expires_at > ?2",
+    )
+    .bind(maker)
+    .bind(now)
+    .execute(c)
+    .await?;
+    Ok(())
+}
+
+/// Resets used this recently are shown again to the person after each new reset, and listed to
+/// the owner.
+const NOTICE_REARM_MS: i64 = 30 * 24 * 3600 * 1000;
+
 impl Store {
     /// A new reset code for the account; any older unused one is cancelled. Rows are kept as the
     /// audit. NotFound for an unknown account.
@@ -105,6 +123,15 @@ impl Store {
         .fetch_optional(&mut *tx)
         .await?;
         let Some((id, by)) = row else { return Ok(None) };
+        // The taker of an account sees and uses up the notice first; when the real person gets
+        // back in through a later link, they are told about every recent reset again.
+        sqlx::query(
+            "UPDATE password_resets SET seen_at = NULL WHERE account_id = ?1 AND used_at > ?2",
+        )
+        .bind(&id)
+        .bind(now - NOTICE_REARM_MS)
+        .execute(&mut *tx)
+        .await?;
         sqlx::query("UPDATE accounts SET password_phc = ?2 WHERE id = ?1")
             .bind(&id)
             .bind(phc)
@@ -118,14 +145,17 @@ impl Store {
         Ok(Some((id, by)))
     }
 
-    /// The latest reset of each account that has one.
-    pub async fn resets(&self) -> Result<Vec<ResetInfo>> {
+    /// For each account with a reset: its latest row, plus every reset used in the 30 days before
+    /// `now`, so a newer link (even the owner's recovery link) can not hide a used one. Newest first.
+    pub async fn resets(&self, now: i64) -> Result<Vec<ResetInfo>> {
         let rows: Vec<ResetRow> = sqlx::query_as(
             "SELECT account_id, created_by, created_at, expires_at, used_at, used_from,
              cancelled_at IS NOT NULL AS cancelled FROM password_resets
              WHERE id IN (SELECT max(id) FROM password_resets GROUP BY account_id)
+             OR used_at > ?1
              ORDER BY id DESC",
         )
+        .bind(now - NOTICE_REARM_MS)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows

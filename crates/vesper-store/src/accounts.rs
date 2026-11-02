@@ -1,7 +1,7 @@
 use sqlx::{FromRow, SqliteConnection};
 use vesper_protocol::{Role, UserInfo};
 
-use crate::resets::cancel_reset;
+use crate::resets::{cancel_made_by, cancel_reset};
 use crate::sessions::{NewSession, insert_session};
 use crate::{Result, Store, StoreError, constraint, now_ms, parse_role, random_hex, role_str};
 
@@ -210,7 +210,8 @@ impl Store {
         Ok(())
     }
 
-    /// Also cancels a live reset link: who may make one depends on the role.
+    /// Also cancels the user's live reset link and the live links they made: who may make one, and
+    /// for whom, depends on the role.
     pub async fn set_role(&self, id: &str, role: Role) -> Result<UserInfo> {
         let mut tx = self.pool.begin().await?;
         let n = sqlx::query("UPDATE accounts SET role = ?2 WHERE id = ?1")
@@ -223,13 +224,14 @@ impl Store {
             return Err(StoreError::NotFound);
         }
         cancel_reset(&mut tx, id, now_ms()).await?;
+        cancel_made_by(&mut tx, id, now_ms()).await?;
         let user = user_by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok(user)
     }
 
     /// A ban deletes all of the user's sessions. Banning twice keeps the first time. A ban or an
-    /// unban cancels a live reset link.
+    /// unban cancels the user's live reset link and the live links they made.
     pub async fn set_banned(&self, id: &str, banned: bool, now: i64) -> Result<UserInfo> {
         let mut tx = self.pool.begin().await?;
         let n = sqlx::query(
@@ -252,6 +254,7 @@ impl Store {
                 .await?;
         }
         cancel_reset(&mut tx, id, now).await?;
+        cancel_made_by(&mut tx, id, now).await?;
         let user = user_by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok(user)

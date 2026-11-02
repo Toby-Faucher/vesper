@@ -229,7 +229,8 @@ impl std::fmt::Debug for ResetCreate {
     }
 }
 
-/// `GET /api/resets` (owner): the latest reset link of each account that has one. No code.
+/// `GET /api/resets` (owner): for each account its latest reset link, plus every reset used in the
+/// last 30 days. Newest first. No code.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ResetInfo {

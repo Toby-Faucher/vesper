@@ -41,13 +41,17 @@ There is no email, so a reset is a link someone hands over, like an invite.
 - **A forgotten password:** the owner, or a moderator for a member, opens Admin > Members, presses Reset link on that
   person's row and types their own password to confirm. The link (`<origin>/reset#<code>`) is shown once. It works once,
   for 24 hours. Send it to that person only. On the page they set a new password; every session of that account then
-  ends, and they sign in with the new password. Their next sign in tells them once who made the link and when.
+  ends, and they sign in with the new password. The next sign in after a reset shows who made the link and when, and
+  lists every reset of that account used in the last 30 days again. So if someone else used a link first (and saw the
+  notice), the person still hears about it once they are back in through a new link.
   A new link for the same person replaces the old one; a role change, a ban or unban, or the person changing their
-  own password also ends a live link. Moderators can not make one for the owner or a moderator, and nobody can make one
-  for themself in the app. Each person can make 10 links, then 1 every 6 minutes.
-- **Who reset whom:** the owner sees each person's latest reset in Admin > Members ("Password reset by alice on 2 Nov
-  (used)"). The database keeps every reset (who made it, when, when it was used and whether from the LAN or the
-  internet), never the code.
+  own password also ends a live link, and banning or demoting a moderator ends every live link they made. Moderators
+  can not make one for the owner or a moderator, and nobody can make one for themself in the app. Each person can make
+  10 links, then 1 every 6 minutes; a mistyped own password counts as one of them.
+- **Who reset whom:** the owner sees, under each person in Admin > Members, their latest reset link and every reset used
+  in the last 30 days ("Password reset by alice on 2 Nov (used)"; the date is the day it was used). Older used resets
+  stay in the database (who made it, when, when it was used and whether from the LAN or the internet, never the code)
+  and in the server log, but not in the app.
 - **The owner's own password:** on the host, `docker compose exec vesper vesper-server reset-password <username>` prints
   the same kind of link, valid 24 h. It works for any account, the owner's too. Open it on your own device.
   For the binary install use the `systemd-run` form above with `reset-password <username>` (not verified).

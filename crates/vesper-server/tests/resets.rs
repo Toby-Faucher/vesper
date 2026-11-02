@@ -355,7 +355,7 @@ async fn making_a_link_needs_your_own_password() {
         .call(post(&format!("/api/users/{id}/reset"), json!({}), &owner))
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    assert!(t.state.store.resets().await.unwrap().is_empty());
+    assert!(t.state.store.resets(now_ms()).await.unwrap().is_empty());
     // The right password from another address works.
     assert_eq!(make_link(&t, &owner, id).await.0, StatusCode::CREATED);
 }
@@ -491,5 +491,115 @@ async fn role_change_ban_and_password_change_end_a_live_link() {
     assert_eq!(
         login_status(&t, "bob", "test-password-3").await,
         StatusCode::OK
+    );
+}
+
+/// Banning or demoting a moderator ends the live links they made, even ones nobody used yet.
+#[tokio::test]
+async fn banning_or_demoting_the_maker_ends_their_links() {
+    let t = TestServer::new().await;
+    let owner = t.owner().await;
+    let m = moderator(&t, "mod").await;
+    let bob = t.member("bob").await;
+    let carol = t.member("carol").await;
+    let mid = m.user.user_id.clone();
+    let for_bob = make_link(&t, &m, &bob.user.user_id).await.1.unwrap();
+    let by_owner = make_link(&t, &owner, &carol.user.user_id).await.1.unwrap();
+    let (s, _, _) = t
+        .call(post(&format!("/api/users/{mid}/ban"), json!({}), &owner))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        reset(&t, &for_bob, NEW_PASSWORD).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(login_status(&t, "bob", PASSWORD).await, StatusCode::OK);
+    // Another maker's link is untouched.
+    assert_eq!(
+        reset(&t, &by_owner, NEW_PASSWORD).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    let (s, _, _) = t
+        .call(post(&format!("/api/users/{mid}/unban"), json!({}), &owner))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let m = t.login("mod").await;
+    let for_bob = make_link(&t, &m, &bob.user.user_id).await.1.unwrap();
+    let role = json!({ "role": "member" });
+    let (s, _, _) = t
+        .call(request(
+            Method::PATCH,
+            &format!("/api/users/{mid}/role"),
+            Some(&role),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        reset(&t, &for_bob, NEW_PASSWORD).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// After a takeover the taker sees the notice first; when the member gets back in with the
+/// owner's link, they see both resets.
+#[tokio::test]
+async fn the_member_hears_about_a_takeover_after_recovery() {
+    let t = TestServer::new().await;
+    let owner = t.owner().await;
+    let m = moderator(&t, "mod").await;
+    let bob = t.member("bob").await;
+    let notices = async |password: &str| {
+        let body = json!({ "username": "bob", "password": password });
+        let (s, h, _) = t
+            .call(request(Method::POST, "/api/login", Some(&body), None))
+            .await;
+        assert_eq!(s, StatusCode::OK);
+        let cookie = common::set_cookie(&h);
+        t.call(request(
+            Method::POST,
+            "/api/me/reset-notices",
+            None,
+            Some(&cookie),
+        ))
+        .await
+        .2
+    };
+    let code = make_link(&t, &m, &bob.user.user_id).await.1.unwrap();
+    assert_eq!(
+        reset(&t, &code, "test-password-7").await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        notices("test-password-7").await.as_array().unwrap().len(),
+        1
+    );
+    // The member can not sign in; the owner gives them a link.
+    let code = make_link(&t, &owner, &bob.user.user_id).await.1.unwrap();
+    assert_eq!(
+        reset(&t, &code, NEW_PASSWORD).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let v = notices(NEW_PASSWORD).await;
+    let by: Vec<_> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["by"].clone())
+        .collect();
+    assert_eq!(by, [json!("mod"), json!("owner")], "{v}");
+    // The owner's own recovery link does not hide the moderator's reset from the owner.
+    let (_, _, v) = t.call(get("/api/resets", &owner)).await;
+    let makers: Vec<_> = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["created_by"].clone())
+        .collect();
+    assert_eq!(
+        makers,
+        [json!(owner.user.user_id), json!(m.user.user_id)],
+        "{v}"
     );
 }

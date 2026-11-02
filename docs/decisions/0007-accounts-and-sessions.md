@@ -39,5 +39,6 @@ client reconnects instead of growing memory.
 
 Update, v1.3: one-use reset links (Admin > Members) and `vesper-server reset-password <username>` replace the manual database
 edit for a lost password ([deploy.md](../deploy.md#password-recovery)). The code is 32 random bytes kept as SHA-256, like an
-invite, and using it ends every session of the account. Making one needs the maker's own password, never works on yourself
-in the app, and every reset is kept for the owner to see.
+invite, and using it ends every session of the account. Making one needs the maker's own password and never works on yourself
+in the app. Every reset row is kept in the database; the owner's Members page lists the latest link and the resets used in
+the last 30 days.

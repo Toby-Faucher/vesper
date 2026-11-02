@@ -33,9 +33,11 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
   ([deploy.md](deploy.md#password-recovery)). Whoever holds the link can set the password, so it must reach the right
   person. The reset page does not say whose account it is for.
 - **A moderator can take over a member's account through a reset link.** They make a link for the member (typing their
-  own password), use it themself and sign in as that member. It is not silent: the member is signed out everywhere,
-  their password stops working, the owner's Members table shows who made the last reset and if it was used, and the
-  server log has both account ids. The owner can give the member a new link. The owner can do the same to anyone.
+  own password), use it themself and sign in as that member. It is not silent: the member is signed out everywhere and
+  their password stops working; the owner's Members table lists every reset used in the last 30 days with who made it;
+  the server log has both account ids. The taker sees the "your password was reset" notice first, so the member is told
+  only after they get back in through a new link (that reset shows the earlier ones again). The owner can give the member
+  a new link and ban the moderator, which ends every live link the moderator made. The owner can do the same to anyone.
 - **No backup command.** Back up the data dir by hand ([deploy.md](deploy.md)); nothing does it on a schedule.
 - **Uploads are not scanned for viruses.** Images are served inline only after their magic bytes match, everything else is a
   download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
