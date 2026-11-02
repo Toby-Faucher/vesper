@@ -256,6 +256,8 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
 | `POST /api/reset` (`ResetReq`) | a reset code, Reset limit by address (10, then 1 every 6 minutes) | 204, the password is set, the code is marked used and every session of that account is deleted; 404 `reset_invalid` for an unknown, used, cancelled or expired code (all the same) |
 | `POST /api/me/reset-notices` | a session | `ResetNotice[]`: resets of your password not shown yet, now marked shown (the sign-in page shows them once) |
+| `POST /api/me/calls` (`CallSummary`) | a session, Calls limit by user (10, then 1 a minute) | 204; stored for your account only (an account field in the body is ignored, like any unknown field). 400 when `duration_s` is over 24 h, `fallback_reason` is over 120 characters or has a control character, a percentage is outside 0 to 100, `jitter_ms` outside 0 to 10000 or `rtt_ms` outside 0 to 60000. The newest 20 per account are kept |
+| `GET /api/me/calls` | a session | `CallRecord[]`: your own last 20 calls, newest first. Nobody else's, the owner included |
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
 | `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
 | `GET /api/push` | a session | `PushInfo`: the VAPID public key (null when push is off) and `PushDevice[]`, `current` marks this session's |
@@ -292,6 +294,12 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past 25 MiB, 507 `quota_full` |
 | `GET /api/uploads/{id}` | sees the room; an upload not attached yet needs the uploader | the file (Range works), else 404 |
 | `GET /api/admin/disk` | owner | `DiskUse` |
+
+Your recent calls (`api_calls.rs`, store `calls.rs`, table `call_stats` from migration `0010_call_stats.sql`): when you leave a call your
+client posts one summary: how long it lasted, the noise suppression mode it ended in and its fallback reason, incoming loss, jitter,
+concealed share and round trip (averages over the call's 2 s stats polls), and whether the browser filter ran while DeepFilterNet
+loaded. No room and no other people are stored. Each person reads only their own (Settings > Account, "Your recent calls"); there is
+no owner view (a ruling for v1.4). Rows older than 30 days are deleted at start and every 24 h, and each account keeps its newest 20.
 
 Rooms (`api_rooms.rs`, store `rooms.rs`): every room has text and voice. A fresh database has `general` and `hangout`
 (migration `0002_rooms.sql`). Room names follow the display name rule (NFC, 1 to 32 characters, no control or hidden format

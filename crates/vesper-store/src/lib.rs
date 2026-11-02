@@ -11,6 +11,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use vesper_protocol::Role;
 
 mod accounts;
+mod calls;
 mod invites;
 mod messages;
 mod push;
@@ -21,6 +22,7 @@ mod sessions;
 mod uploads;
 
 pub use accounts::{LoginRow, NewAccount};
+pub use calls::{CALLS_KEPT, CALLS_TTL_MS};
 pub use messages::{Cursor, MAX_PINS, MAX_REACTIONS, NewMessage};
 pub use push::{
     ENDPOINT_TAKEN, MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget, TOO_MANY_DEVICES,
