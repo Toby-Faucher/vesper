@@ -23,6 +23,7 @@ use vesper_protocol::{
     CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Peer, Role,
     RoomInfo, ServerMsg,
 };
+use vesper_server::hub::QUEUE;
 use vesper_sfu::testing::FakeClient;
 
 /// Generous: CI machines can be slow and ICE/DTLS takes a few round trips.
@@ -997,14 +998,33 @@ async fn force_mute_stops_forwarding_in_the_sfu() {
         a.client.is_connected() && b.client.is_connected() && b.client.remote_tracks() >= 1
     })
     .await;
-    let from_a = || {
+    // Alice's packets from index `start` on that bob received.
+    let from_a_since = |start: usize| {
         let sent = a.client.sent();
+        let sent = &sent[start.min(sent.len())..];
         b.client
             .received()
             .iter()
             .filter(|p| sent.contains(p))
             .count()
     };
+    // Bob's fake client counts the track once it has answered the SFU's offer, but the SFU
+    // forwards to him only after that answer came back over the websocket; packets before that
+    // are dropped (#113). Prime one packet at a time until one gets through, then count from there.
+    let deadline = Instant::now() + WAIT;
+    let mut start = 0;
+    while from_a_since(0) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the forward path"
+        );
+        if a.client.sent().len() == start {
+            a.client.send_audio(1);
+            start += 1;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let from_a = || from_a_since(start);
     a.client.send_audio(10);
     wait_until("bob hears alice", || from_a() == 10).await;
 
@@ -1015,7 +1035,7 @@ async fn force_mute_stops_forwarding_in_the_sfu() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     // Alice's client ignores the mute and keeps sending.
     a.client.send_audio(20);
-    wait_until("alice sent 30", || a.client.sent().len() == 30).await;
+    wait_until("alice sent 30", || a.client.sent().len() == start + 30).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(from_a(), 10, "bob heard force-muted alice");
 
@@ -1587,14 +1607,24 @@ async fn full_queue_closes_only_that_socket() {
             .await;
         assert_eq!(status, StatusCode::CREATED);
     }
+    // Its own account, so `hub.online` tells when the server dropped this socket.
+    let reader = server.account("reader", Role::Member).await;
     let general = general(&server).await;
     let mut fast = Conn::open(&server, &owner).await;
-    let mut slow = Conn::open_with(&server, &owner, true).await;
+    let mut slow = Conn::open_with(&server, &reader, true).await;
     slow.freeze();
-    const N: usize = 1000;
     let path = format!("/api/rooms/{general}");
-    for i in 0..N {
-        let body = json!({ "name": format!("general{}", i % 2) });
+    // Send until the server drops the stalled socket, not a fixed count: how much the kernel's
+    // TCP buffers absorb first varies (send buffer autotuning goes up to 4 MB, #95). The fast
+    // socket reads each event before the next one, so its queue never fills.
+    let deadline = Instant::now() + 6 * WAIT;
+    let mut sent = 0;
+    while server.state.hub.online(&reader.user.user_id) {
+        assert!(
+            Instant::now() < deadline,
+            "stalled socket still open after {sent} events"
+        );
+        let body = json!({ "name": format!("general{}", sent % 2) });
         let (status, _, _) = server
             .call(request(
                 Method::PATCH,
@@ -1604,10 +1634,13 @@ async fn full_queue_closes_only_that_socket() {
             ))
             .await;
         assert_eq!(status, StatusCode::OK);
-    }
-    for _ in 0..N {
         assert!(matches!(fast.next().await, ServerMsg::RoomsChanged { .. }));
+        sent += 1;
     }
+    assert!(
+        sent > QUEUE,
+        "closed after {sent} events, before its queue could fill"
+    );
     slow.thaw();
     let mut got = 0;
     while tokio::time::timeout(WAIT, slow.msgs.recv())
@@ -1617,7 +1650,7 @@ async fn full_queue_closes_only_that_socket() {
     {
         got += 1;
     }
-    assert!(got < N, "the stalled socket was not closed: got all {got}");
+    assert!(got < sent, "the stalled socket got all {got} events");
     // The close code itself is asserted in the hub unit test. On the wire it is not reliable: a
     // full TCP buffer can keep the close frame from arriving, and the kernel may reset the
     // connection instead (the CI kernel did).
