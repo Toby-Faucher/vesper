@@ -1,6 +1,6 @@
 # Build from the repo root:  docker build -f deploy/Dockerfile -t vesper .
 # No secrets are baked in: accounts and sessions live in the data dir, outside the image.
-# Base images are pinned by digest (the multi-arch index of each tag, read from Docker Hub on 2026-11-02), so a
+# Base images are pinned by digest (the multi-arch index of each tag, read from Docker Hub on 2026-11-01), so a
 # rebuild of one commit uses the same bases. Bump them on purpose: docker buildx imagetools inspect <tag>.
 
 # --- 1. denoiser wasm (scripts/build-dsp.sh) ---------------------------------------------------

@@ -1,7 +1,7 @@
 import { ApiFailure, api } from './api';
 import { applyChatMsg, chat, resync } from './chat.svelte';
 import { loginHref } from './route';
-import { badge } from './ui/badge';
+import { badge, resetBadge } from './ui/badge';
 import { onServerMsg } from './ui/notify';
 import { recentKey } from './ui/recent';
 import { tray } from './ui/tray.svelte';
@@ -175,7 +175,7 @@ function stop(): void {
 function toLogin(notice: string): void {
   stop();
   session.state = emptyState();
-  badge({}); // the next account starts with none
+  resetBadge(); // the next account starts with none
   Object.assign(chat, { state: { rooms: {}, typing: {} }, active: null, drafts: {} }); // the next account sees none of it
   tray.clear(); // and the uploads stop
   session.notice = notice;

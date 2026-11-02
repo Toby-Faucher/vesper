@@ -666,8 +666,11 @@ async fn server_status_is_for_the_owner() {
     let server = TestServer::new().await;
     let owner = server.account("olive", Role::Owner).await;
     let moder = server.account("mo", Role::Moderator).await;
-    let (status, _, _) = server.call(get("/api/admin/server", &moder)).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    let member = server.account("mel", Role::Member).await;
+    for who in [&moder, &member] {
+        let (status, _, _) = server.call(get("/api/admin/server", who)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
     let (status, _, v) = server.call(get("/api/admin/server", &owner)).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     let s: vesper_protocol::ServerStatus = serde_json::from_value(v.clone()).unwrap();

@@ -374,3 +374,57 @@ async fn precompressed_variants_by_accept_encoding() {
         "{r}"
     );
 }
+
+/// Range and HEAD on a precompressed file, as tower-http 0.7 does them: the range is cut from the
+/// encoded bytes (the `.br`), HEAD has the headers and no body, and the ETag (mtime and size of the
+/// file read) differs between the `.br` and the plain file, so a cache never mixes the two.
+#[tokio::test]
+async fn precompressed_range_and_head() {
+    let web = site();
+    std::fs::write(web.join("assets/w.js.br"), "BROTLI").unwrap();
+    let addr = start(web).await;
+    let r = get_with(
+        addr,
+        "/assets/w.js",
+        "Accept-Encoding: br\r\nRange: bytes=1-3\r\n",
+    )
+    .await;
+    let r = String::from_utf8_lossy(&r);
+    assert!(r.starts_with("HTTP/1.1 206"), "{r}");
+    assert_eq!(
+        header_value(&r, "content-encoding").as_deref(),
+        Some("br"),
+        "{r}"
+    );
+    assert_eq!(
+        header_value(&r, "content-range").as_deref(),
+        Some("bytes 1-3/6"),
+        "{r}"
+    );
+    assert!(r.ends_with("\r\n\r\nROT"), "{r}");
+    let br_tag = header_value(&r, "etag").expect("an ETag");
+    let plain = get_enc(addr, "/assets/w.js", "identity").await;
+    assert_ne!(header_value(&plain, "etag"), Some(br_tag), "{plain}");
+
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(b"HEAD /assets/w.js HTTP/1.1\r\nHost: x\r\nAccept-Encoding: br\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut b = Vec::new();
+    s.read_to_end(&mut b).await.unwrap();
+    let r = String::from_utf8_lossy(&b);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert_eq!(
+        header_value(&r, "content-encoding").as_deref(),
+        Some("br"),
+        "{r}"
+    );
+    assert_eq!(
+        header_value(&r, "content-length").as_deref(),
+        Some("6"),
+        "{r}"
+    );
+    assert!(header_value(&r, "last-modified").is_some(), "{r}");
+    assert!(header_value(&r, "etag").is_some(), "{r}");
+    assert!(r.ends_with("\r\n\r\n"), "HEAD has no body: {r}");
+}
