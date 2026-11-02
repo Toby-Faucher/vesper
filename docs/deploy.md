@@ -61,6 +61,22 @@ If the voice engine thread dies (a bug on hostile input), `/health` returns 503 
 
 Back up the data dir (`data/` next to `compose.yaml`, or `/var/lib/private/vesper`). With the Proxmox snapshot of the VM, check that the snapshot includes that directory. For a copy while the server runs, use SQLite's own backup so the WAL is included: `sqlite3 data/vesper.db ".backup vesper-backup.db"` (needs the `sqlite3` tool; the data dir is owned by uid 10001 with mode 0700, so on the host run it with `sudo`, or run it inside the container), or stop the stack and copy the whole directory. The copy holds password and session hashes: keep it private. Not verified.
 
+The Web Push signing key (VAPID) is in `vesper.db` (table `server_secrets`), so a copy of the database covers it: after a restore,
+devices that turned on notifications keep getting them. A database restored without that row makes a new key, and every device has to
+turn notifications off and on again. Treat the copy as secret for this reason too.
+
+## Web Push
+
+Notifications while Vesper is closed ([architecture.md](architecture.md#web-push)). Nothing to set up when `VESPER_ORIGIN` is https:
+the origin is the VAPID contact; set `VESPER_PUSH_SUBJECT=mailto:<you>` to give push services an address instead ([env.md](env.md)).
+
+- **Outbound only.** The server opens HTTPS connections to `fcm.googleapis.com`, `updates.push.services.mozilla.com`,
+  `*.push.apple.com` and `*.notify.windows.com` on port 443. A firewall that blocks outbound traffic from the VM must allow those. The
+  Cloudflare tunnel is not involved: it carries only inbound requests, and the browser's subscription call is a normal `/api` request.
+- **What the push services see:** that a notification went to a browser, when, and its size. Not who sent it, which room, or any text:
+  the payload is encrypted for the browser.
+- **iPhone and iPad:** only from Vesper added to the Home Screen (Share, Add to Home Screen), iOS 16.4 or later. Not verified.
+
 ## Upgrade from the shared key
 
 For the instance that still runs the voice-only build with `VESPER_DEV_KEY`. Not verified (no Docker on the dev machine). In the stack directory (from a clone, add `-f deploy/compose.yaml`):

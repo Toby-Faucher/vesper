@@ -19,6 +19,7 @@ Fixed, not configurable: the room size cap (12, `max_room_size`) and the WebSock
 | `VESPER_DATA_DIR` | Directory for the database (`vesper.db`, with its WAL files) and uploads (`uploads/<first 2 of id>/<id>`, plus `uploads/tmp/` for uploads in progress, emptied at start). Created if missing (new dirs 0700, `vesper.db` and upload files 0600). Empty counts as unset. | `data` | `config.rs`, `cli.rs`, `lib.rs`, `uploads.rs` |
 | `VESPER_ORIGIN` | The address people open in the browser: `http://` or `https://`, a host and an optional port, no path. Stored lowercase with no trailing slash and no default port, so it matches the browser's `Origin` header byte for byte. It is the base of every printed invite link. `https` turns on `Secure` cookies with the `__Host-` name. With Vite dev set it to `http://localhost:5173`. | `http://localhost:8080` | `config.rs`, `cli.rs`, `lib.rs`, `ws.rs` |
 | `VESPER_UPLOAD_QUOTA_MB` | Total size of all uploads, in MiB. An upload that would pass it gets 507 `quota_full`. Empty counts as unset. | `10240` | `config.rs`, `uploads.rs` |
+| `VESPER_PUSH_SUBJECT` | The contact sent to push services in every VAPID token (RFC 8292): `mailto:<address>` or `https://<host>`. Unset: `VESPER_ORIGIN` when it is https, else Web Push is off (Settings says so). Empty counts as unset. A value of another form stops the server. | `VESPER_ORIGIN` if https | `config.rs`, `push.rs` |
 | `RUST_LOG` | Logs go to stderr. Log filter in `tracing_subscriber` `EnvFilter` syntax, for example `info,vesper_sfu=debug`. | `info` | `main.rs` |
 
 The Origin check applies to `/api` requests that change something (not GET or HEAD) and to the `/ws` upgrade; a missing or
@@ -49,8 +50,8 @@ requests, so other GETs are not checked. Clients that are not browsers, such as 
 |---|---|---|---|
 | `VESPER_NO_CAP` | `1` runs builds and checks without the memory cap. CI sets it. | unset | `scripts/capped.sh` |
 | `VESPER_CAP_MIB` | Memory cap for capped commands, in MiB. | `8192` | `scripts/capped.sh` |
-| `VESPER_SERVER_BIN` | Server binary the two-browser test starts. Relative paths start from `web/`. | `../target/release/vesper-server` | `web/e2e/lib.mjs` |
-| `E2E_CHROMIUM` | Path to a Chromium the two-browser test launches instead of the one Playwright downloaded. Local use only. | unset | `web/e2e/lib.mjs` |
+| `VESPER_SERVER_BIN` | Server binary the e2e tests start. Relative paths start from `web/`. `push.mjs` needs a debug build with the `test-push` feature and defaults to `../target/debug/vesper-server`. | `../target/release/vesper-server` | `web/e2e/lib.mjs`, `web/e2e/push.mjs` |
+| `E2E_CHROMIUM` | Path to a Chromium the e2e tests launch instead of the one Playwright downloaded. Local use only. | unset | `web/e2e/lib.mjs` |
 
 ## Not environment variables
 

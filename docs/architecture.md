@@ -227,7 +227,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 ## HTTP API
 
-JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`, `uploads.rs`, `avatars.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
+JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`, `api_push.rs`, `uploads.rs`, `avatars.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
 `ApiError { code, message }`, and the status follows the code: `bad_request` 400, `unauthorized` 401, `forbidden` 403,
 `not_found` and `invite_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
 `internal` 500, `quota_full` 507.
@@ -246,6 +246,11 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
 | `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
+| `GET /api/push` | a session | `PushInfo`: the VAPID public key (null when push is off) and `PushDevice[]`, `current` marks this session's |
+| `PUT /api/push/subscription` (`PushSubscribe`) | a session, Push limit by user (10, then 1 per 30 s, shared with the test) | 204; replaces this session's subscription. 400 for an endpoint off the push service list or bad keys, 404 when push is off, 409 past 5 devices |
+| `DELETE /api/push/subscription` | a session | 204, this session's subscription is gone |
+| `DELETE /api/push/devices/{id}` | a session | 204, or 404 if the id is not one of yours |
+| `POST /api/push/test` | a session, Push limit | 204 once the push service took it; 404 with no subscription or when the service says it is gone (then deleted), 500 for any other answer |
 | `GET /api/users` | a session | `UserInfo[]`, every account (role and banned included) to any signed-in member by design: the WebSocket hello sends the same list |
 | `GET /api/invites` | moderator or owner | `InviteInfo[]`, newest first |
 | `POST /api/invites` (`InviteCreate`) | moderator or owner; a moderator invite needs the owner | 201 `InviteCreated` with the link `<origin>/invite#<code>` |
@@ -435,6 +440,45 @@ speed is not in these numbers. The box was not idle, so the numbers move a few m
 
 The test fails if any of these is 50 ms or more. Not measured: the 1 GB VM (expect it slower), a database with years of real chat.
 A one-letter prefix (`a*`) was the slow case; the server now matches a last term ending in a one-letter or one-digit token (`a`, `a.`, `x-a`) as a whole word, and the web client waits for 2 characters.
+
+## Web Push
+
+Notifications while Vesper is closed (issue #58): "alice mentioned you in Games" and "alice started voice in Games". Server
+`push.rs` and `api_push.rs`, store `push.rs` (migration `0009_push.sql`), client `web/src/lib/push.ts`,
+`routes/settings/PushSettings.svelte` and `web/public/sw.js`.
+
+- **Opt-in per device.** Settings > Notifications > While Vesper is closed. The switch asks for permission (from the click), registers
+  `/sw.js` and subscribes with the server's VAPID public key. Each device has a mentions switch and a voice switch, both on once
+  push is on. Turning it off, or logging out, unregisters the worker; the server deletes the subscription with the session.
+- **Who gets one.** A new message pushes to the accounts it mentions (already limited to people who can see the room and are not
+  banned). The first join of an empty voice room pushes to everyone who can see the room. Never to the sender, never to an account with a
+  WebSocket open at that moment (its tab shows the event), never to a device with that switch off or a session unused for 90 days,
+  and "started voice" at most once per room and person per 10 minutes (in memory, so a restart forgets it). Edits do not push.
+- **What the push service sees.** The payload `PushPayload { kind, room_id, title, body }` is encrypted for the browser (RFC 8291,
+  `aes128gcm`, tested against the RFC's Appendix A vector), so Google, Mozilla, Apple or Microsoft see only that a push went to that
+  browser, its size and time. The body names the sender and the room, never the message text. TTL 24 h for mentions, 10 minutes for
+  voice; `Topic` per room, so a waiting push is replaced by a newer one.
+- **VAPID.** An ES256 key made on first start and kept in the database (`server_secrets`), so a copy of `vesper.db` keeps it and
+  existing subscriptions keep working after a restore. JWTs last 12 hours. The contact (`sub`) is `VESPER_PUSH_SUBJECT`, else an https
+  `VESPER_ORIGIN`; with neither, push is off ([env.md](env.md)).
+- **SSRF.** The server POSTs to a URL the browser gave it, so `parse_endpoint` allows only https on port 443 to `fcm.googleapis.com`,
+  `updates.push.services.mozilla.com`, `*.push.apple.com` and `*.notify.windows.com`, with no user part and at most 2048 bytes. The
+  name is resolved once; if any address is not public (loopback, private, link-local such as 169.254.169.254, CGNAT, documentation,
+  multicast, IPv6 unique-local, or IPv4 wrapped in IPv6) the push is refused, and the connection goes to the checked address. TLS with
+  the Mozilla root list (`webpki-roots`), HTTP/1.1, no redirects followed, no cookies, 10 s for the whole exchange, only the status line
+  of the answer read. 404 or 410 deletes the subscription. The `test-push` cargo feature (tests and the push e2e) also allows
+  `http://127.0.0.1:<port>`; it is a compile error in a release build.
+- **The worker** shows the notification (tag `room-<id>`), focuses an open Vesper tab and asks it to open the room (the app navigates
+  in place, so a call goes on) or opens `/r/<id>`, and resubscribes on `pushsubscriptionchange` with the device's switches. It has
+  no fetch handler and caches nothing.
+- **Install.** `web/public/manifest.webmanifest` (standalone, `#100e0c`, 192 and 512 px icons) is linked from `index.html`. Under the
+  CSP the manifest falls under `default-src 'self'` and the worker under `worker-src 'self'`; nothing changed in the policy.
+
+Verified: unit tests in `push.rs` (RFC 8291 vector, VAPID JWT signature, `aud`, `exp` at most 24 h, `sub`, the SSRF matrix, the
+recipients rule, the 10 minute rule), `crates/vesper-server/tests/push.rs` (a fake push service on 127.0.0.1: signature, decrypted
+payload, no text in the clear, 410 deletes, switches, open socket, hidden room, rate limit, cap), `crates/vesper-store/tests/push.rs`,
+`web/src/lib/push.test.ts` and `web/e2e/push.mjs` (headless Chromium, with a stand-in `PushManager`). Not verified: a real push
+service, a notification on screen, iOS, Firefox and Safari.
 
 ## Static serving
 
