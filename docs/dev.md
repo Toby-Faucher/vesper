@@ -121,10 +121,10 @@ npx --prefix web playwright-core install chromium   # once; CI adds --with-deps 
 npm --prefix web run e2e
 ```
 
-`web/e2e/two-browser.mjs` starts `target/release/vesper-server` itself on 127.0.0.1:18090 (UDP 18091) on a new temp data dir with `VESPER_ORIGIN=http://127.0.0.1:18090`, and stops it and deletes the dir at the end
+`web/e2e/two-browser.mjs` starts `target/release/vesper-server` itself on 127.0.0.1 on a free HTTP and a free UDP port picked at start (`VESPER_ORIGIN` follows), on a new temp data dir, and stops it and deletes the dir at the end
 (helpers in `web/e2e/lib.mjs`). It runs `vesper-server create-owner`, signs alice up through that link, has alice's page make bob's
 invite with `POST /api/invites`, signs bob up, and joins both to `general`.
-Those ports must be free. It opens two Chromium browsers with fake microphones: alice plays `web/e2e/fixtures/speech.wav`, bob uses the default fake
+A crash (an uncaught exception or rejection, SIGINT, SIGTERM, SIGHUP) also stops the server, the Vite dev server and the browsers before the script exits: `lib.mjs` runs each spawned server in its own process group and kills the group. `node web/e2e/cleanup.mjs` (about 15 s, the first step of `npm run e2e`) checks this: it ends a child script by an uncaught exception, an unhandled rejection, SIGTERM and SIGINT, and fails if any of its processes or its port is left. It opens two Chromium browsers with fake microphones: alice plays `web/e2e/fixtures/speech.wav`, bob uses the default fake
 device. It passes when bob's ICE is connected, his inbound audio packets and bytes rise, alice's speaking ring lights on bob's page, alice's inbound
 packets rise too (only that count: audio content is proven alice to bob through the speaking ring, not bob to alice), each page lists the other in the people list, and neither page throws.
 Then bob leaves and joins again three times (after 2 s, within a second, and after a page reload) while alice stays: each time both pages'
