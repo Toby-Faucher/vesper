@@ -171,7 +171,13 @@ through libopus (the `opus` 0.4.0 crate, which builds its own libopus 1.5 with c
 library does not matter), 20 ms packets at 48 kHz mono, and scores the DECODED audio with every metric.
 Missing keys keep these defaults. More keys: `burst=3` (Gilbert-Elliott loss with a mean burst of 3
 packets at the same long-run rate; without it, losses are independent) and `app=audio` (the default is
-`voip`, which is what WebRTC uses for mono).
+`voip`, which is what WebRTC uses for mono). `frame=10` encodes 10 ms packets instead of 20 ms (the loss rate is per
+packet). `red=1` models RFC 2198 redundancy with distance 1: a lost packet whose next packet arrived
+decodes from its full copy, before FEC is tried; the redundant bytes are not counted in `bitrate`.
+
+`audiolab eval --processed DIR` scores output made by another tool instead of running the pipeline:
+`DIR/<item id>.wav`, 48 kHz mono, already aligned with the mixture and at least as long. It takes
+`--opus` like a config run. Used to score a rebuilt copy of another product's chain on the same items.
 
 - Loss is seeded per item (`seed` and the item index), so two runs match bit for bit.
 - A lost packet is decoded from the next packet's in-band FEC when FEC is on and that packet arrived (one
