@@ -94,6 +94,8 @@ pub enum ApiErrorCode {
     TooLarge,
     QuotaFull,
     InviteInvalid,
+    /// A reset code that is unknown, used, replaced or expired: all look the same.
+    ResetInvalid,
     Internal,
 }
 
@@ -208,6 +210,89 @@ impl std::fmt::Debug for InviteCreated {
         f.debug_struct("InviteCreated")
             .field("info", &self.info)
             .field("url", &"***")
+            .finish()
+    }
+}
+
+/// `POST /api/users/{id}/reset`: the caller's own password, checked again before a link is made.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetCreate {
+    pub password: String,
+}
+
+impl std::fmt::Debug for ResetCreate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetCreate")
+            .field("password", &"***")
+            .finish()
+    }
+}
+
+/// `GET /api/resets` (owner): for each account its latest reset link, plus every reset used in the
+/// last 30 days. Newest first. No code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetInfo {
+    pub user_id: String,
+    /// Null: made on the server command line.
+    pub created_by: Option<String>,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number")]
+    pub expires_at: i64,
+    #[ts(type = "number | null")]
+    pub used_at: Option<i64>,
+    /// `lan` or `internet` when used.
+    pub used_from: Option<String>,
+    /// Replaced, or ended by a role change, a ban or a password change.
+    pub cancelled: bool,
+}
+
+/// `POST /api/me/reset-notices`: resets of your password not shown to you yet; asking marks them shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetNotice {
+    /// Display name of who made the link; null for the server command line. Not unique: show
+    /// `by_username` with it.
+    pub by: Option<String>,
+    /// Username (unique) of who made the link; null for the server command line.
+    pub by_username: Option<String>,
+    #[ts(type = "number")]
+    pub at: i64,
+}
+
+/// `POST /api/users/{id}/reset`: a one-use link to set a new password, shown once.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetCreated {
+    pub url: String,
+    #[ts(type = "number")]
+    pub expires_at: i64,
+}
+
+impl std::fmt::Debug for ResetCreated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetCreated")
+            .field("url", &"***")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+/// `POST /api/reset`: the code from the link and the new password (8 to 128 characters).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetReq {
+    pub code: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for ResetReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetReq")
+            .field("code", &"***")
+            .field("password", &"***")
             .finish()
     }
 }
@@ -506,6 +591,26 @@ mod tests {
                         revoked: false,
                     },
                     url: format!("http://x/invite#{secret}"),
+                }
+            ),
+            format!(
+                "{:?}",
+                ResetCreated {
+                    url: format!("http://x/reset#{secret}"),
+                    expires_at: 0,
+                }
+            ),
+            format!(
+                "{:?}",
+                ResetCreate {
+                    password: secret.into()
+                }
+            ),
+            format!(
+                "{:?}",
+                ResetReq {
+                    code: secret.into(),
+                    password: secret.into(),
                 }
             ),
         ];

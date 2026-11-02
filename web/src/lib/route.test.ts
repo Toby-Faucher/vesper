@@ -4,7 +4,7 @@ import { ADMIN_SECTIONS, SETTINGS_SECTIONS, href, loginHref, parse, safeNext, ty
 describe('route', () => {
   it('round trips every route', () => {
     const all: Route[] = [
-      { name: 'room', id: 1 }, { name: 'room', id: 42 }, { name: 'welcome' }, { name: 'login' }, { name: 'invite' }, { name: 'home' },
+      { name: 'room', id: 1 }, { name: 'room', id: 42 }, { name: 'welcome' }, { name: 'login' }, { name: 'invite' }, { name: 'reset' }, { name: 'home' },
       { name: 'gallery' },
       ...SETTINGS_SECTIONS.map((section) => ({ name: 'settings', section }) as const),
       ...ADMIN_SECTIONS.map((section) => ({ name: 'admin', section }) as const),
@@ -40,7 +40,7 @@ describe('route', () => {
   it('next rejects other sites, schemes, backslashes and pages outside the app', () => {
     for (const p of [
       null, '', '//evil.example', '//evil.example/r/1', '/\\evil.example', '/r/1\\x', '\\evil.example', 'javascript:alert(1)',
-      '/javascript:alert(1)', 'https://evil.example/r/1', '/\t/evil.example', '/\n/evil.example', 'r/1', '/nope', '/login', '/invite',
+      '/javascript:alert(1)', 'https://evil.example/r/1', '/\t/evil.example', '/\n/evil.example', 'r/1', '/nope', '/login', '/invite', '/reset',
       '/_gallery',
       // The route parser alone would turn these into a settings page, so each guard above has a case of its own.
       '/settings/\\evil.example', '/settings/\tx', '/settings/javascript:alert(1)', 'evil.example/settings/voice',

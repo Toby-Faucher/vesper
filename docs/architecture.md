@@ -25,7 +25,7 @@ The "Not verified" list at the end says what was only read.
   `SfuHandle`. If the thread dies, `/health` returns 503 and the process exits with code 1 so Docker or systemd restarts it
   (`watch_sfu` in `lib.rs`).
 - **The browser** captures the mic, cleans it with DeepFilterNet in WASM, and sends Opus over WebRTC (`web/src/lib/audio/`, `signaling.ts`).
-- **The web app** (`web/src/App.svelte`, paths in `web/src/lib/route.ts`) has `/login`, `/invite` (signup; the code is read from the part after `#`, then removed from the URL; a second link opened in the
+- **The web app** (`web/src/App.svelte`, paths in `web/src/lib/route.ts`) has `/login`, `/reset` (a new password from a reset link; the code is read and removed like an invite's), `/invite` (signup; the code is read from the part after `#`, then removed from the URL; a second link opened in the
   same tab is read too), `/welcome` (after signup, and from Settings > Account: name and colour, a mic check, mention notifications; every step can be skipped; it renders inside the Shell, so a call keeps running)
   and the app shell (`web/src/routes/Shell.svelte`) for every other path, which needs a session (`GET /api/me`, else `/login`): `/r/<id>` (a room),
   `/settings/<section>`, `/admin/<section>`, and `/`, which opens the last room (`localStorage['vesper.lastRoom']`) or the first. Any other path
@@ -82,9 +82,9 @@ The "Not verified" list at the end says what was only read.
 | Crate | Job |
 |---|---|
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, the limit `MAX_MSG_BYTES` (64 KiB) and the close codes `CLOSE_SESSION_ENDED` (4001) and `CLOSE_DISCONNECTED` (4003). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`, `Unread`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
-| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. The UI accent from Settings > Appearance (`0006_ui_accent.sql`): `accounts.ui_accent`, a preset key or `#rrggbb`, NULL for amber. It stores only hashes of session tokens and invite codes. |
+| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. The UI accent from Settings > Appearance (`0006_ui_accent.sql`): `accounts.ui_accent`, a preset key or `#rrggbb`, NULL for amber. Password resets (`0007_password_resets.sql`, `resets.rs`): every reset row is kept as an audit (who made it, used when and from the LAN or the internet, shown to the person); at most one live code per account (a partial unique index), cancelled by a new one, a role change, a ban or unban and a password change; a role change or ban of the maker cancels the live links they made. It stores only hashes of session tokens, invite codes and reset codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, reset links, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -229,7 +229,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`, `uploads.rs`, `avatars.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
 `ApiError { code, message }`, and the status follows the code: `bad_request` 400, `unauthorized` 401, `forbidden` 403,
-`not_found` and `invite_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
+`not_found`, `invite_invalid` and `reset_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
 `internal` 500, `quota_full` 507.
 
 | Route | Needs | Returns |
@@ -244,12 +244,16 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `DELETE /api/me/avatar` | a session, Change limit by user | the new `UserInfo` with `avatar: null` |
 | `GET /api/users/{id}/avatar?v=` | a session | the picture, or 404 when there is none; `ETag` is the version, and `v` equal to it makes the answer `immutable` |
 | `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
+| `POST /api/reset` (`ResetReq`) | a reset code, Reset limit by address (10, then 1 every 6 minutes) | 204, the password is set, the code is marked used and every session of that account is deleted; 404 `reset_invalid` for an unknown, used, cancelled or expired code (all the same) |
+| `POST /api/me/reset-notices` | a session | `ResetNotice[]`: resets of your password not shown yet, now marked shown (the sign-in page shows them once) |
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
 | `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
 | `GET /api/users` | a session | `UserInfo[]`, every account (role and banned included) to any signed-in member by design: the WebSocket hello sends the same list |
 | `GET /api/invites` | moderator or owner | `InviteInfo[]`, newest first |
 | `POST /api/invites` (`InviteCreate`) | moderator or owner; a moderator invite needs the owner | 201 `InviteCreated` with the link `<origin>/invite#<code>` |
 | `DELETE /api/invites/{id}` | moderator or owner | 204, or 404 for an unknown id |
+| `POST /api/users/{id}/reset` (`ResetCreate`: your own password) | owner for anyone else; a moderator for a member only; 400 on yourself; ResetCreate limit by user (10, then 1 every 6 minutes), then the Login limit | 201 `ResetCreated` with the link `<origin>/reset#<code>`, one use, 24 h; it cancels the account's older code. 403 `wrong password` |
+| `GET /api/resets` | owner | `ResetInfo[]`, each account's latest reset plus every reset used in the last 30 days, newest first (no code) |
 | `PATCH /api/users/{id}/role` (`RolePatch`) | owner | the new `UserInfo` |
 | `POST /api/users/{id}/ban` | owner | the new `UserInfo`; every session of that user is deleted |
 | `POST /api/users/{id}/unban` | owner | the new `UserInfo` |
@@ -411,7 +415,7 @@ Rules every route keeps:
 - Handlers never log request bodies, and the request types with a password or invite code print `***` in `Debug`. A body that does
   not parse gets a fixed "invalid request body" message. The WebSocket upgrade takes the same session cookie and Origin check.
 
-Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs`, `tests/rooms.rs` (every route for every caller and target role) `tests/chat.rs` (chat routes, pushes, typing, unread, search) and `tests/uploads.rs` (limits, quota race, served headers, the access matrix, sweep), through
+Tests: `crates/vesper-server/tests/accounts.rs`, `tests/admin.rs`, `tests/resets.rs`, `tests/rooms.rs` (every route for every caller and target role) `tests/chat.rs` (chat routes, pushes, typing, unread, search) and `tests/uploads.rs` (limits, quota race, served headers, the access matrix, sweep), through
 `tests/common/mod.rs`; the voice actions in `tests/signaling.rs` (`voice_actions_check_roles`).
 
 ## Performance

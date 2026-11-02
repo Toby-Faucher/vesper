@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { relTime } from './messages';
+import { UI_MESSAGES, relTime } from './messages';
 
 const NOW = Date.UTC(2026, 10, 1, 12, 0, 0);
 const MIN = 60_000;
@@ -21,5 +21,12 @@ describe('relTime', () => {
     const t = NOW - 7 * 24 * 60 * MIN;
     expect(relTime(t, NOW)).toBe(new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }));
     expect(relTime(t, NOW)).not.toMatch(/ago/);
+  });
+});
+
+describe('resetNotice', () => {
+  it('names the maker with the unique @username, so a copied display name does not pass', () => {
+    expect(UI_MESSAGES.resetNotice('Toby', 'mallory', '2 Nov')).toBe('Your password was reset by Toby (@mallory) on 2 Nov.');
+    expect(UI_MESSAGES.resetNotice(null, null, '2 Nov')).toBe('Your password was reset from the server command line on 2 Nov.');
   });
 });

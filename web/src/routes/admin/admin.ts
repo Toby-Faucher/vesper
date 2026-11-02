@@ -1,4 +1,5 @@
 import type { InviteInfo } from '../../lib/gen/InviteInfo';
+import type { ResetInfo } from '../../lib/gen/ResetInfo';
 import type { Role } from '../../lib/gen/Role';
 import { relTime } from '../../lib/ui/messages';
 
@@ -24,6 +25,24 @@ export function inviteStatus(i: InviteInfo, now: number): InviteStatus {
 /** Revoke shows on active invites; a moderator only gets it on member invites, as the server allows. */
 export const canRevoke = (i: InviteInfo, viewer: Role, now: number) =>
   inviteStatus(i, now) === 'active' && (viewer === 'owner' || i.role === 'member');
+
+/** Reset links: the owner for anyone else, a moderator for members only, never yourself: the server refuses the same (the owner's own way back is the CLI). */
+export const canReset = (me: { user_id: string; role: Role }, them: { user_id: string; role: Role }) =>
+  me.user_id !== them.user_id && (me.role === 'owner' || (me.role === 'moderator' && them.role === 'member'));
+
+export type ResetStatus = 'used' | 'cancelled' | 'expired' | 'unused';
+/** Used wins over cancelled, which wins over expired: the order the server checks a code in. */
+export function resetStatus(r: ResetInfo, now: number): ResetStatus {
+  if (r.used_at !== null) return 'used';
+  if (r.cancelled) return 'cancelled';
+  if (r.expires_at <= now) return 'expired';
+  return 'unused';
+}
+const dayOf = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+/** "Password reset by alice on 2 Nov (used)"; `by` is the maker's name, null for the command line. The date is when it was
+ * used, else when it was made. */
+export const resetLine = (r: ResetInfo, by: string | null, now: number) =>
+  `Password reset ${by === null ? 'from the command line' : `by ${by}`} on ${dayOf(r.used_at ?? r.created_at)} (${resetStatus(r, now)})`;
 
 /** When `ms` is: "in 7 days", "in 3 h", "in 20 min", "in less than a minute"; past times as relTime ("2 days ago"). */
 export function untilText(ms: number, now: number): string {
