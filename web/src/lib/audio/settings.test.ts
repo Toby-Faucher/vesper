@@ -31,16 +31,14 @@ describe('clampSettings', () => {
       vad: { thresholdDb: 'x' }, pushToTalk: { enabled: 'true', key: 5 }, junk: 1,
     } as unknown as Partial<AudioSettings>);
     expect(s).toEqual({ ...DEFAULT_AUDIO_SETTINGS, speakerId: 'spk' });
-    expect(clampSettings({ vad: { thresholdDb: -500, gate: false, auto: false } }).vad.thresholdDb).toBe(-100);
-    expect(clampSettings({ vad: { thresholdDb: -30, gate: 'on' } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -30, gate: false, auto: false });
+    expect(clampSettings({ vad: { thresholdDb: -500, gate: false } }).vad.thresholdDb).toBe(-100);
+    expect(clampSettings({ vad: { thresholdDb: -30, gate: 'on' } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -30, gate: false });
   });
   it('the noise gate is off for saved settings from before it existed, and keeps their marker', () => {
-    expect(clampSettings({ vad: { thresholdDb: -35 } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -35, gate: false, auto: false });
+    expect(clampSettings({ vad: { thresholdDb: -35 } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -35, gate: false });
     expect(clampSettings({ vad: null } as unknown as Partial<AudioSettings>).vad).toEqual(DEFAULT_AUDIO_SETTINGS.vad);
     expect(clampSettings({ vad: { thresholdDb: -35, gate: true } } as unknown as Partial<AudioSettings>).vad.gate).toBe(true);
-    // The automatic threshold: off by default, a real boolean only.
-    expect(DEFAULT_AUDIO_SETTINGS.vad.auto).toBe(false);
-    expect(clampSettings({ vad: { thresholdDb: -35, gate: true, auto: 'yes' } } as unknown as Partial<AudioSettings>).vad.auto).toBe(false);
-    expect(clampSettings({ vad: { thresholdDb: -35, gate: true, auto: true } }).vad.auto).toBe(true);
+    // vad.auto was an automatic threshold tried in a branch (#104, not shipped): a stored key is dropped, not used.
+    expect(clampSettings({ vad: { thresholdDb: -35, gate: true, auto: true } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -35, gate: true });
   });
 });

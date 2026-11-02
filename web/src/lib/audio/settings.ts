@@ -10,9 +10,8 @@ export type AudioSettings = {
   echoCancellation: true;
   noiseSuppression: boolean;
   autoGain: boolean;
-  /** thresholdDb: the level marker, a sample peak in dBFS. gate: mute the denoised output below it (deepfilter only).
-   * auto: the gate sets its own threshold from the noise floor instead of the marker (dynamics.ts). */
-  vad: { thresholdDb: number; gate: boolean; auto: boolean };
+  /** thresholdDb: the level marker, a sample peak in dBFS. gate: mute the denoised output below it (deepfilter only). */
+  vad: { thresholdDb: number; gate: boolean };
   pushToTalk: { enabled: boolean; key: string };
   micId: string | null;
   speakerId: string | null;
@@ -28,7 +27,7 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   echoCancellation: true,
   noiseSuppression: false,
   autoGain: false,
-  vad: { thresholdDb: -50, gate: false, auto: false }, // off by default: nobody's sound changes on upgrade
+  vad: { thresholdDb: -50, gate: false }, // off by default: nobody's sound changes on upgrade
   pushToTalk: { enabled: false, key: 'Space' },
   micId: null,
   speakerId: null,
@@ -56,7 +55,7 @@ export function clampSettings(s: Partial<AudioSettings>): AudioSettings {
     echoCancellation: true,
     noiseSuppression: bool(s.noiseSuppression, D.noiseSuppression),
     autoGain: bool(s.autoGain, D.autoGain),
-    vad: { thresholdDb: num(vad.thresholdDb, D.vad.thresholdDb, -100, 0), gate: bool(vad.gate, D.vad.gate), auto: bool(vad.auto, D.vad.auto) },
+    vad: { thresholdDb: num(vad.thresholdDb, D.vad.thresholdDb, -100, 0), gate: bool(vad.gate, D.vad.gate) },
     pushToTalk: { enabled: bool(ptt.enabled, D.pushToTalk.enabled), key: str(ptt.key, D.pushToTalk.key)! },
     micId: str(s.micId, D.micId),
     speakerId: str(s.speakerId, D.speakerId),

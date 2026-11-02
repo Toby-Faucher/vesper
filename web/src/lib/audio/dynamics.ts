@@ -74,17 +74,6 @@ const GATE_HOLD_S = 0.2;
 const GATE_RELEASE_S = 0.12;
 
 /**
- * The automatic threshold (an option, off by default): Fluxer's rule. The open level is 3 times the 10th percentile of
- * the frame RMS over the last 2 s, clamped to 3e-6 .. 0.04 RMS; the close level is 4 dB under it, as with the marker.
- * In this mode the gate compares frame RMS, not peak, since the floor is an RMS. Until 200 ms of frames are in, it stays open.
- */
-export const AUTO_FACTOR = 3;
-export const AUTO_MIN_RMS = 3e-6;
-export const AUTO_MAX_RMS = 0.04;
-const AUTO_WINDOW = 200; // 10 ms denoiser frames in 2 s
-const AUTO_MIN_FRAMES = 20;
-
-/**
  * Noise gate on the denoiser output. `detect` sees each denoised 10 ms frame when it arrives, and `apply` shapes the
  * samples as they play. The output queue holds about 20 to 80 ms between the two, so the gate opens before a word's
  * first sample plays: that queue is the lookahead, with no extra delay. It opens on a frame peak above the threshold
@@ -102,10 +91,6 @@ export class Gate {
   private holdSamples: number;
   private up: number;
   private down: number;
-  private auto = false;
-  private hist = new Float32Array(AUTO_WINDOW).fill(Infinity); // frame RMS ring; Infinity sorts after every real value
-  private sorted = new Float32Array(AUTO_WINDOW);
-  private seen = 0;
 
   constructor(sampleRate: number) {
     this.holdSamples = GATE_HOLD_S * sampleRate;
@@ -114,40 +99,19 @@ export class Gate {
   }
 
   /** Turning it on starts open, so the first word is not cut. Turning it off ramps open. A repeat set (a marker move) keeps the state. */
-  set(on: boolean, thresholdDb: number, auto = false) {
+  set(on: boolean, thresholdDb: number) {
     if (on !== this.on) [this.quiet, this.target] = [0, 1];
-    if (auto !== this.auto || !on) [this.seen, this.target] = [0, 1]; // a new floor is learnt from scratch, open meanwhile
-    if (!this.seen) this.hist.fill(Infinity);
     this.on = on;
-    this.auto = auto;
     this.open = db(thresholdDb);
     this.close = db(thresholdDb - GATE_HYSTERESIS_DB);
   }
 
-  /** The automatic open level now (linear RMS), or null before 200 ms of frames. For tests and the lab. */
-  autoLevel(): number | null {
-    if (this.seen < AUTO_MIN_FRAMES) return null;
-    this.sorted.set(this.hist);
-    this.sorted.sort();
-    const p10 = this.sorted[Math.floor(0.1 * (Math.min(this.seen, AUTO_WINDOW) - 1))];
-    return Math.min(AUTO_MAX_RMS, Math.max(AUTO_MIN_RMS, AUTO_FACTOR * p10));
-  }
-
   detect(frame: Float32Array) {
     if (!this.on) return;
-    let level = 0;
-    let open = this.open;
-    let close = this.close;
-    if (this.auto) {
-      for (let i = 0; i < frame.length; i++) level += frame[i] * frame[i];
-      level = Math.sqrt(level / frame.length);
-      if (level === level) this.hist[this.seen++ % AUTO_WINDOW] = level; // a NaN frame is left out of the floor
-      const a = this.autoLevel();
-      if (a === null) return void ([this.target, this.quiet] = [1, 0]);
-      [open, close] = [a, a * db(-GATE_HYSTERESIS_DB)];
-    } else for (let i = 0; i < frame.length; i++) level = Math.max(level, Math.abs(frame[i]));
-    if (level > open) this.target = 1;
-    if (level >= close) this.quiet = 0;
+    let peak = 0;
+    for (let i = 0; i < frame.length; i++) peak = Math.max(peak, Math.abs(frame[i]));
+    if (peak > this.open) this.target = 1;
+    if (peak >= this.close) this.quiet = 0;
     else if ((this.quiet += frame.length) >= this.holdSamples) this.target = 0;
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DenoiseCore } from './denoise-core';
-import { AUTO_MAX_RMS, AUTO_MIN_RMS, Gate, LIMIT_CEILING, LIMIT_KNEE, Limiter, softCurve } from './dynamics';
+import { Gate, LIMIT_CEILING, LIMIT_KNEE, Limiter, softCurve } from './dynamics';
 
 // Synthetic signals only: these numbers are not real-voice verified. web/scripts/gate-lab.test.mjs repeats the checks on
 // real denoised corpus speech when VESPER_LAB_DIR is set.
@@ -106,12 +106,12 @@ describe('Limiter', () => {
  * DenoiseCore with an identity "denoiser": each sent frame comes back after `delay()` quanta. The real denoiser's
  * reply time does not change how the gate and the queue interact, which is what is measured here.
  */
-function pipeline(x: Float32Array, gate: { on: boolean; thresholdDb: number; auto?: boolean }, delay: () => number) {
+function pipeline(x: Float32Array, gate: { on: boolean; thresholdDb: number }, delay: () => number) {
   const core = new DenoiseCore(() => {}, SR);
   const pending: { at: number; data: Float32Array }[] = [];
   let q = 0;
   core.connect((f) => pending.push({ at: q + delay(), data: f.slice() }));
-  core.gate.set(gate.on, gate.thresholdDb, gate.auto);
+  core.gate.set(gate.on, gate.thresholdDb);
   const y = new Float32Array(x.length);
   for (; q * Q < x.length; q++) {
     pending.sort((a, b) => a.at - b.at);
@@ -333,80 +333,5 @@ describe('Gate state', () => {
     console.log(`near underrun: ${left} samples queued ahead, first 2 ms ${first2.toFixed(2)} dB, first 20 ms ${loss.toFixed(2)} dB`);
     expect(left).toBeLessThan(96);
     expect(loss).toBeGreaterThan(-0.5);
-  });
-});
-
-describe('Gate automatic threshold', () => {
-  const noise = (rms: number, seed = 3) => {
-    const r = rng(seed);
-    return new Float32Array(480).map(() => r() * rms * Math.sqrt(3)); // uniform: rms is amplitude / sqrt(3)
-  };
-  const feed = (g: Gate, frames: number, rms: number) => { for (let k = 0; k < frames; k++) g.detect(noise(rms, k + 1)); };
-
-  it('learns nothing while the gate is off', () => {
-    const g = new Gate(SR);
-    g.set(false, -50, true);
-    feed(g, 300, 0.01);
-    expect(g.autoLevel()).toBeNull();
-  });
-
-  it('opens at 3 times the 10th percentile of frame RMS over 2 s, and stays open for the first 200 ms', () => {
-    const g = new Gate(SR);
-    g.set(true, -50, true);
-    feed(g, 19, 0.001);
-    expect(g.autoLevel()).toBeNull();
-    feed(g, 181, 0.001);
-    expect(g.autoLevel()!).toBeCloseTo(0.003, 3);
-    feed(g, 150, 0.1); // 1.5 s of loud sound: 25 % of the window is still the floor
-    expect(g.autoLevel()!).toBeCloseTo(0.003, 3);
-    feed(g, 60, 0.1); // the floor has left the 2 s window
-    expect(g.autoLevel()).toBe(AUTO_MAX_RMS);
-  });
-
-  it('clamps to 3e-6 .. 0.04 RMS', () => {
-    const g = new Gate(SR);
-    g.set(true, -50, true);
-    for (let k = 0; k < 200; k++) g.detect(new Float32Array(480));
-    expect(g.autoLevel()).toBe(AUTO_MIN_RMS);
-  });
-
-  it('NaN frames are left out of the floor', () => {
-    const g = new Gate(SR);
-    g.set(true, -50, true);
-    for (let k = 0; k < 200; k++) g.detect(new Float32Array(480).fill(NaN));
-    expect(g.autoLevel()).toBeNull();
-  });
-
-  it('a marker move keeps the floor; switching auto off and on starts again', () => {
-    const g = new Gate(SR);
-    g.set(true, -50, true);
-    feed(g, 200, 0.001);
-    g.set(true, -30, true);
-    expect(g.autoLevel()).not.toBeNull();
-    g.set(true, -30, false);
-    g.set(true, -30, true);
-    expect(g.autoLevel()).toBeNull();
-  });
-
-  it('on the speech scene: words pass, the noise between them is muted, the marker is ignored', () => {
-    const { x, words } = scene();
-    const ref = pipeline(x, { on: false, thresholdDb: 0 }, () => 2);
-    const out = pipeline(x, { on: true, thresholdDb: 0, auto: true }, () => 2); // a marker at 0 dBFS would mute everything
-    const L = lag(x, ref);
-    let wordRef = 0;
-    let wordOut = 0;
-    for (const [a, b] of words) [wordRef, wordOut] = [wordRef + energy(ref, a + L, b + L), wordOut + energy(out, a + L, b + L)];
-    // Noise from 400 ms after a word to 100 ms before the next: the gate has closed there.
-    let noiseRef = 0;
-    let noiseOut = 0;
-    for (let w = 0; w + 1 < words.length; w++) {
-      const [a, b] = [words[w][1] + 0.4 * SR + L, words[w + 1][0] - 0.1 * SR + L];
-      if (b > a) [noiseRef, noiseOut] = [noiseRef + energy(ref, a, b), noiseOut + energy(out, a, b)];
-    }
-    const speech = 10 * Math.log10(wordOut / wordRef);
-    const cut = 10 * Math.log10(noiseOut / noiseRef);
-    console.log(`auto gate, scene: speech ${speech.toFixed(2)} dB, noise between words ${cut.toFixed(1)} dB`);
-    expect(speech).toBeGreaterThan(-0.5);
-    expect(cut).toBeLessThan(-40);
   });
 });

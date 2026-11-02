@@ -43,7 +43,7 @@ function run(den, gate) {
   let q = 0;
   let sent = 0;
   core.connect(() => { pending.push({ at: q + 1 + Math.floor(r() * 8), data: den.slice(sent, sent + 480) }); sent += 480; });
-  core.gate.set(gate.on, gate.thresholdDb, gate.auto);
+  core.gate.set(gate.on, gate.thresholdDb);
   const y = new Float32Array(den.length);
   const zeros = new Float32Array(Q);
   for (; q * Q < den.length; q++) {
@@ -58,16 +58,14 @@ function run(den, gate) {
 const energy = (y, a, b) => { let e = 0; for (let i = a; i < b; i++) e += y[i] * y[i]; return e; };
 const peak = (y, a, b) => { let p = 0; for (let i = a; i < b; i++) p = Math.max(p, Math.abs(y[i])); return p; };
 
-// Each item twice: the marker (the default gate) and the automatic threshold (an option). The onsets are found at the
-// marker in both, so the two rows measure the same moments.
 describe.skipIf(!LAB || !CORPUS)('gate on real denoised speech (audio lab)', () => {
   const ids = LAB ? readdirSync(LAB).filter((f) => f.endsWith('.processed.wav')).map((f) => f.split('.')[0]).sort() : [];
-  it.each(ids.flatMap((id) => [[id, false], [id, true]]))('%s auto %s', (id, auto) => {
+  it.each(ids)('%s', (id) => {
     const den = wav(`${LAB}/${id}.processed.wav`);
     const clean = wav(`${CORPUS}/${id}.clean.wav`);
     const marker = Math.min(0, Math.round(db(peak(den, 0.2 * SR, 1.5 * SR))) + 6);
     const ref = run(den, { on: false, thresholdDb: marker });
-    const out = run(den, { on: true, thresholdDb: marker, auto });
+    const out = run(den, { on: true, thresholdDb: marker });
     const w = 3 * SR; // the output queue delay: where the ungated output repeats the denoised input
     let L = 0;
     while (L < 5000 && !den.subarray(w, w + 256).every((v, i) => v === ref[w + L + i])) L++;
@@ -97,13 +95,6 @@ describe.skipIf(!LAB || !CORPUS)('gate on real denoised speech (audio lab)', () 
       }
       quiet = 0;
     }
-    // Noise between words: pause frames at least 350 ms after speech (hold plus release) and 50 ms before the next.
-    let pause = [0, 0];
-    for (let f = 35; f < frames - 5; f++) {
-      if (active.slice(f - 35, f + 6).some(Boolean)) continue;
-      pause = [pause[0] + energy(out, f * 480 + L, f * 480 + 480 + L), pause[1] + energy(ref, f * 480 + L, f * 480 + 480 + L)];
-    }
-    const between = pause[1] > 0 ? db(Math.sqrt(pause[0] / pause[1])).toFixed(1) : '-';
     const lead = db(Math.sqrt(energy(out, 0.4 * SR + L, 1.4 * SR + L) / energy(ref, 0.4 * SR + L, 1.4 * SR + L)));
     let stepOut = 0;
     let stepRef = 0;
@@ -112,9 +103,9 @@ describe.skipIf(!LAB || !CORPUS)('gate on real denoised speech (audio lab)', () 
       stepOut = Math.max(stepOut, Math.abs(out[i] - out[i - 1]));
       stepRef = Math.max(stepRef, Math.abs(ref[i] - ref[i - 1]));
     }
-    console.log(`${id}${auto ? ' auto' : ''}: marker ${marker} dB, lag ${(L / MS).toFixed(1)} ms, speech ${speech.toFixed(2)} dB, ${onsets} onsets: first 20 ms ${worstOnset.toFixed(2)} dB, with the 20 ms before ${worstPre.toFixed(2)} dB, lead-in noise ${lead.toFixed(1)} dB, noise between words ${between} dB, max step outside speech ${stepOut.toExponential(1)} (ungated ${stepRef.toExponential(1)})`);
+    console.log(`${id}: marker ${marker} dB, lag ${(L / MS).toFixed(1)} ms, speech ${speech.toFixed(2)} dB, ${onsets} onsets: first 20 ms ${worstOnset.toFixed(2)} dB, with the 20 ms before ${worstPre.toFixed(2)} dB, lead-in noise ${lead.toFixed(1)} dB, max step outside speech ${stepOut.toExponential(1)} (ungated ${stepRef.toExponential(1)})`);
     expect(stepOut).toBeLessThanOrEqual(stepRef);
-    if (!auto) expect(worstOnset).toBeGreaterThan(-0.5); // the option is measured and reported, not held to it
+    expect(worstOnset).toBeGreaterThan(-0.5);
   });
 });
 

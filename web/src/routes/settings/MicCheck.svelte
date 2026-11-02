@@ -133,9 +133,6 @@
       ? 'Mutes sound under the marker, like fan hiss between words. It mutes about 0.2 s after you stop. Turn it off while you set the marker: the meter shows the gated sound.'
       : 'Works only with DeepFilterNet noise suppression.'}
     onchange={(e) => set({ vad: { ...settings.vad, gate: e.currentTarget.checked } })} />
-  <Switch label="Automatic threshold" checked={settings.vad.auto} disabled={settings.mode !== 'deepfilter' || !settings.vad.gate}
-    help="The gate ignores the marker and follows your background noise: it mutes sound under 3 times its level over the last 2 s. Off by default."
-    onchange={(e) => set({ vad: { ...settings.vad, auto: e.currentTarget.checked } })} />
 {/if}
 
 <div class="flex flex-wrap items-center gap-x-3 gap-y-1">

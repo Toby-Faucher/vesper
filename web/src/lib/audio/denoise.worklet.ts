@@ -22,7 +22,7 @@ class Denoise extends AudioWorkletProcessor {
         this.dsp?.close();
       } else if (data.type === 'dynamics') {
         this.core.limiter.set(data.limit);
-        this.core.gate.set(data.gate, data.thresholdDb, data.auto);
+        this.core.gate.set(data.gate, data.thresholdDb);
       } else if (data.type === 'port') {
         const p = (this.dsp = ports[0]);
         p.onmessage = ({ data }: MessageEvent<DspOut>) => this.core.reply(data);
