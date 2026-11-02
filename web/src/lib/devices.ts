@@ -25,8 +25,10 @@ export const DEVICE_MESSAGES: Record<DeviceError, string> = {
   unknown: 'The microphone failed. Try another device.',
 };
 
-export const MIC_FALLBACK = 'Your saved microphone was not found, so Vesper is using the default one. Pick another in Settings > Voice.';
-export const SPEAKER_FALLBACK = 'Your saved speaker was not found, so Vesper is using the default one. Pick another in Settings > Voice.';
+export const MIC_FALLBACK = 'Your saved microphone was not found, so Vesper is using the default one. Pick another in Settings > Voice > Microphone.';
+export const SPEAKER_FALLBACK = 'Your saved speaker was not found, so Vesper is using the default one. Pick another in Settings > Voice > Speaker.';
+/** Only these mean the device id is gone; an AbortError or a denial keeps the saved choice. */
+export const deviceGone = (e: unknown) => /^(NotFoundError|OverconstrainedError)$/.test(String((e as { name?: unknown } | null)?.name));
 
 // Before a call or mic test started, so "the call stays connected" would be wrong.
 const START: Record<DeviceError, string> = {

@@ -2,6 +2,7 @@ import type { DspOut } from './dsp-handler';
 import type { PipelineStats } from './denoise-core';
 import type { DenoiseMode } from './mode';
 import type { AudioSettings } from './settings';
+import { deviceGone } from '../devices';
 import workletUrl from './denoise.worklet.ts?worker&url';
 
 export interface CaptureDeps {
@@ -92,14 +93,18 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   // A saved id can be gone (unplugged, another profile, Firefox new ids after a permission change): try the default mic
   // once. Any other error, a denial above all, is not retried.
   async function mic(mode: DenoiseMode) {
-    if (!s.micId) return ask(mode, null);
+    const id = s.micId;
+    if (!id) return ask(mode, null);
     try {
-      return await ask(mode, s.micId);
+      return await ask(mode, id);
     } catch (e) {
-      if (!/^(OverconstrainedError|NotFoundError)$/.test(String((e as { name?: unknown } | null)?.name))) throw e;
+      if (!deviceGone(e)) throw e;
       const m = await ask(mode, null);
-      s = { ...s, micId: null };
-      d.onMicFallback?.();
+      // Not when another mic was picked while this ran: that choice stands (and its own build follows).
+      if (s.micId === id) {
+        s = { ...s, micId: null };
+        d.onMicFallback?.();
+      }
       return m;
     }
   }

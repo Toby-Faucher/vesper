@@ -167,9 +167,50 @@ describe('join', () => {
     expect(voice.error).toBe('');
   });
 
+  it('a saved speaker that fails for another reason is kept, without a notice', async () => {
+    stop();
+    stored.set(SETTINGS_KEY, JSON.stringify({ speakerId: 'usb' }));
+    stop = v.startVoice();
+    for (const name of ['AbortError', 'NotAllowedError']) {
+      h.sinkFail = new DOMException('x', name);
+      await joined();
+      expect(voice.settings.speakerId).toBe('usb');
+      expect(voice.notice).toBe('');
+      v.leave();
+    }
+  });
+
   it('a failing default speaker changes nothing', async () => {
     h.sinkFail = new DOMException('x', 'AbortError');
     await joined();
+    expect(voice.notice).toBe('');
+  });
+
+  it('in a call: a picked speaker that is gone goes back to the default with the notice; another failure says so', async () => {
+    await joined();
+    h.sinkFail = new DOMException('x', 'NotFoundError');
+    v.updateSettings({ ...voice.settings, speakerId: 'gone' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(voice.settings.speakerId).toBeNull();
+    expect(voice.notice).toBe(SPEAKER_FALLBACK);
+    expect(h.playbacks[0].setSink).toHaveBeenLastCalledWith(null);
+    h.sinkFail = new DOMException('x', 'AbortError');
+    v.updateSettings({ ...voice.settings, speakerId: 'usb' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(voice.settings.speakerId).toBe('usb');
+    expect(voice.error).toBe('could not switch speaker');
+  });
+
+  it('the fallback notice goes after NOTICE_MS', async () => {
+    stop();
+    stored.set(SETTINGS_KEY, JSON.stringify({ micId: 'gone' }));
+    stop = v.startVoice();
+    const p = joined();
+    vi.mocked(createCapture).mock.calls.at(-1)![1]!.onMicFallback!();
+    await p;
+    await vi.advanceTimersByTimeAsync(v.NOTICE_MS - 100);
+    expect(voice.notice).toBe(MIC_FALLBACK);
+    await vi.advanceTimersByTimeAsync(200);
     expect(voice.notice).toBe('');
   });
 

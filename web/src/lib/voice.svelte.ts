@@ -7,7 +7,7 @@ import { Playback } from './playback';
 import { restoreVolumes, saveVolumes } from './volume';
 import { createCapture, type Capture } from './audio/capture';
 import { loadSettings, saveSettings, type AudioSettings } from './audio/settings';
-import { DEVICE_MESSAGES, MIC_FALLBACK, SPEAKER_FALLBACK, applyBitrate, classifyMediaError, micStartError, missingDevice, newInputs, trackLive, watchDevices } from './devices';
+import { DEVICE_MESSAGES, MIC_FALLBACK, SPEAKER_FALLBACK, applyBitrate, classifyMediaError, deviceGone, micStartError, missingDevice, newInputs, trackLive, watchDevices } from './devices';
 import { pttKeyEvent } from './audio/ptt';
 import { isTyping } from './ui/keys';
 import { MIC_QUIET, micSilence, type MicWarning } from './audio/mic-silence';
@@ -86,13 +86,31 @@ export function updateSettings(next: AudioSettings): void {
   applyTrack();
   if (sender && next.bitrateKbps !== prev.bitrateKbps)
     applyBitrate(sender, next.bitrateKbps).catch((e) => (voice.error = `bitrate change failed: ${e}`));
-  if (next.speakerId !== prev.speakerId)
-    playback?.setSink(next.speakerId).catch(() => (voice.error = 'could not switch speaker'));
+  if (next.speakerId !== prev.speakerId) {
+    const pb = playback;
+    pb?.setSink(next.speakerId).catch((e) => {
+      if (!next.speakerId || !deviceGone(e)) return void (voice.error = 'could not switch speaker');
+      void pb.setSink(null).catch(() => {}); // a failed switch keeps the old output; the notice says default
+      speakerGone(pb);
+    });
+  }
 }
 // Drops a saved device id that no longer exists, without rebuilding the capture (it already uses the default).
 function forget(patch: Partial<AudioSettings>) {
   voice.settings = { ...voice.settings, ...patch };
   saveSettings(storage, voice.settings);
+}
+function speakerGone(pb: Playback) {
+  forget({ speakerId: null });
+  if (playback === pb) showNotice(SPEAKER_FALLBACK);
+}
+// The fallback notice is the call bar's lowest line and goes after a while: it must not hide a live warning for long.
+export const NOTICE_MS = 12_000;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+function showNotice(text: string) {
+  clearTimeout(noticeTimer);
+  voice.notice = text;
+  noticeTimer = setTimeout(() => (voice.notice = ''), NOTICE_MS);
 }
 export function useOfferedMic(): void {
   updateSettings({ ...voice.settings, micId: voice.offered!.deviceId });
@@ -234,6 +252,7 @@ function teardown() {
   voice.pc?.close();
   voice.pc = undefined;
   voice.deviceError = '';
+  clearTimeout(noticeTimer);
   voice.notice = '';
   voice.offered = null;
   voice.mic = undefined;
@@ -286,17 +305,15 @@ export async function join(roomId: number): Promise<boolean> {
   else console.warn('navigator.locks missing: audio may stop when the tab is backgrounded');
   const pb = playback;
   // A saved speaker that is gone: the context keeps the default output, so forget the id and say so; the join goes on.
-  void pb.setSink(voice.settings.speakerId).catch(() => {
-    if (!voice.settings.speakerId) return;
-    forget({ speakerId: null });
-    if (playback === pb) voice.notice = SPEAKER_FALLBACK;
+  void pb.setSink(voice.settings.speakerId).catch((e) => {
+    if (voice.settings.speakerId && deviceGone(e)) speakerGone(pb);
   });
   // Called before any await: it creates its AudioContext.
   const capturing = createCapture(voice.settings, {
     startLive: trackLive(false, voice.settings.pushToTalk.enabled, false),
     onMicFallback: () => {
       forget({ micId: null });
-      voice.notice = MIC_FALLBACK;
+      showNotice(MIC_FALLBACK);
     },
   });
   voice.mode = voice.settings.mode;

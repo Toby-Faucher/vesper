@@ -764,6 +764,14 @@ try {
     await g.getByRole('region', { name: 'Call' }).getByText('Your saved microphone was not found, so Vesper is using the default one.').waitFor();
     assert.equal(await g.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).micId), null, 'the stale mic id was kept');
     await g.getByRole('button', { name: 'Leave' }).click();
+    // The mic test in Settings falls back the same way (the init script seeds the gone id again on the reload).
+    await g.reload();
+    await signedIn(g);
+    await g.getByRole('button', { name: 'Settings' }).click();
+    await g.getByRole('button', { name: 'Mic test (hear yourself)' }).click();
+    await g.getByRole('status').filter({ hasText: 'Your saved microphone was not found' }).waitFor();
+    assert.equal(await g.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).micId), null, 'the mic test kept the stale id');
+    await g.getByRole('button', { name: 'Stop mic test' }).click();
     alice.errors.push(...gone.errors);
     console.log(`saved mic gone, ${ff ? 'Firefox' : 'Chromium'}: ok`);
   }
