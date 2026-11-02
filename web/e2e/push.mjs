@@ -120,7 +120,7 @@ try {
   await b.getByText(/^On for this device/).waitFor();
   // Both kinds start off; bob turns them on.
   for (const name of ['Mentions', 'Someone starts voice']) {
-    const s = b.getByRole('switch', { name });
+    const s = b.getByRole('switch', { name, exact: true });
     assert.equal(await s.isChecked(), false, `${name} starts off`);
     await s.check();
     await sleep(300);
