@@ -11,7 +11,7 @@
   import Dialog from '../lib/ui/c/Dialog.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   import LinkIcon from '../lib/ui/c/LinkIcon.svelte';
-  import { linkDetail } from '../lib/ui/link';
+  import { MEASURING, linkDetail } from '../lib/ui/link';
   import Popover from '../lib/ui/c/Popover.svelte';
   import Range from '../lib/ui/c/Range.svelte';
   // One person: who they are, where they are in voice, their volume when they are in your call, and the moderator voice
@@ -42,7 +42,8 @@
   const roomId = $derived(self ? voice.joinedRoom : peer?.room_id ?? null);
   const where = $derived(roomId === null ? 'Not in voice' : `In voice in ${session.state.rooms.find((r) => r.id === roomId)?.name ?? 'a room'}`);
   const inCall = $derived(!self && voice.joined && roomId === voice.joinedRoom);
-  const link = $derived(voice.joined && (self || inCall) ? voice.links[userId] : undefined);
+  // In a call the row is always there (measuring until the first stats poll): the card is placed once, on open, at its height.
+  const link = $derived(voice.joined && (self || inCall) ? voice.links[userId] ?? MEASURING : undefined);
   const volume = $derived(voice.volumes[userId] ?? 100);
   const outranks = $derived(canModerate(me, user));
 
