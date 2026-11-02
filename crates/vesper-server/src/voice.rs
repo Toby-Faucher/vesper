@@ -33,6 +33,8 @@ const REPLACE_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct JoinResult {
     pub user_id: String,
     pub session: u64,
+    /// The room was empty before this join ("started voice").
+    pub first: bool,
 }
 
 #[derive(Clone)]
@@ -175,6 +177,7 @@ impl Voice {
 
         let session = self.0.next_session.fetch_add(1, Ordering::Relaxed);
         let (closed_tx, closed_rx) = oneshot::channel();
+        let first;
         {
             let mut st = self.lock();
             // A change since `room` was read is already here (`refresh`): never put the old copy
@@ -214,6 +217,7 @@ impl Voice {
                 peer: member.peer(user_id),
             };
             st.tell(&self.0.hub, room.id, joined, &[&tx]);
+            first = !st.members.values().any(|m| m.room == room.id);
             st.members.insert(user_id.clone(), member);
         }
 
@@ -227,6 +231,7 @@ impl Voice {
         Ok(JoinResult {
             user_id: user_id.clone(),
             session,
+            first,
         })
     }
 
@@ -251,6 +256,7 @@ impl Voice {
         Ok(JoinResult {
             user_id: id,
             session: 0,
+            first: false,
         })
     }
 

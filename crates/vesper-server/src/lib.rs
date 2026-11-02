@@ -4,6 +4,7 @@
 pub mod api_accounts;
 pub mod api_admin;
 pub mod api_messages;
+pub mod api_push;
 pub mod api_rooms;
 pub mod auth;
 pub mod avatars;
@@ -12,6 +13,7 @@ pub mod config;
 pub mod hub;
 pub mod limits;
 pub mod public_addr;
+pub mod push;
 pub mod uploads;
 pub mod voice;
 pub mod ws;
@@ -43,6 +45,7 @@ pub use crate::api_accounts::{ApiError, Authed};
 use crate::config::Config;
 use crate::hub::Hub;
 use crate::limits::Limiter;
+use crate::push::Push;
 use crate::voice::Voice;
 
 /// Largest JSON body any `/api` route reads.
@@ -56,6 +59,7 @@ pub struct AppState {
     pub limits: Limiter,
     pub hub: Hub,
     pub voice: Voice,
+    pub push: Push,
 }
 
 /// The `/api` routes, with the Origin check and the body cap.
@@ -64,6 +68,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api_admin::routes())
         .merge(api_rooms::routes())
         .merge(api_messages::routes())
+        .merge(api_push::routes())
         .merge(uploads::routes())
         .merge(avatars::routes())
         .layer(middleware::from_fn_with_state(
@@ -125,8 +130,15 @@ pub async fn start_with_sfu(
         .map_err(|e| std::io::Error::other(format!("open {}: {e}", db.display())))?;
     let hub = Hub::default();
     let voice = Voice::new(sfu.clone(), hub.clone(), cfg.max_room_size);
+    let push = Push::new(store.clone(), hub.clone(), cfg.push_subject.clone())
+        .await
+        .map_err(std::io::Error::other)?;
+    if push.public_key().is_none() {
+        info!("web push is off: VESPER_ORIGIN is not https and VESPER_PUSH_SUBJECT is unset");
+    }
     let state = AppState {
         store,
+        push,
         cfg: Arc::new(cfg),
         limits: Limiter::default(),
         hub,

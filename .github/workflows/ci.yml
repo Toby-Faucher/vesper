@@ -125,6 +125,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: cargo build --release --locked -p vesper-server
+      # web/e2e/push.mjs: a debug server that may push to the fake push service on 127.0.0.1 (refused in release builds).
+      - run: cargo build --locked -p vesper-server --features test-push
       - run: npm ci && npm run build
         working-directory: web
       # playwright-core is pinned in web/package.json, so this fetches the matching Chromium.

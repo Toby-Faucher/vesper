@@ -25,6 +25,8 @@ private = { ignore = true }
 allow = [
     "Apache-2.0",
     "BSD-3-Clause", # subtle, matchit, aws-lc-sys
+    # webpki-roots: the Mozilla CA list as data, for TLS to the Web Push services (issue #58).
+    "CDLA-Permissive-2.0",
     "ISC",          # aws-lc-rs, aws-lc-sys
     "MIT",
     "Unicode-3.0",  # unicode-ident, unicode-normalization

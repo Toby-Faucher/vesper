@@ -59,6 +59,14 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 
 ## Web client
 
+- **Web Push is verified with a fake push service only.** Google, Mozilla, Apple and Microsoft were not reached; a notification on screen
+  and a click on it were not seen (headless Chromium). iOS needs Vesper on the Home Screen. Desktop Firefox gets push but cannot install
+  Vesper as an app (no manifest install in Firefox). There is no offline mode: the service worker caches nothing.
+- **Past 256 pending sends, pushes are dropped**, with a debug log line only. A storm of mentions loses some notifications rather than delaying them all.
+- **"Started voice" pushes are limited in memory.** A server restart forgets which people got one in the last 10 minutes.
+- **A push can arrive while a tab is open but asleep.** A push goes only to accounts with no socket open, but a tab whose socket dropped
+  (a laptop waking up) counts as closed until it reconnects.
+
 - **"Your current password is not right." relies on the server's message.** A wrong current password is a 403 with the generic `forbidden` code; the client tells it apart from other 403s by the message text "wrong password". A server wording change would show the plain forbidden text instead.
 - **Image boxes change shape when the image loads.** `Attachment` has no width or height, so the timeline keeps a 360 x 280 box and resizes it on load; the reader's place is kept, but rows under an image in view can move.
 - **The keyboard, focus and motion checks run in headless Chromium only.** Safari does not focus a clicked button (the image viewer focuses it itself); other focus returns are not checked there.

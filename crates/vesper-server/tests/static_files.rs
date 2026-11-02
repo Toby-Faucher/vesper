@@ -21,6 +21,8 @@ fn site() -> std::path::PathBuf {
     std::fs::write(web.join("assets/a.wasm"), b"\0asm\x01\0\0\0").unwrap();
     std::fs::write(web.join("assets/w.js"), "export {}").unwrap();
     std::fs::write(web.join(".env"), "DOTSECRET").unwrap();
+    std::fs::write(web.join("sw.js"), "self.addEventListener('push', () => {})").unwrap();
+    std::fs::write(web.join("manifest.webmanifest"), "{}").unwrap();
     web
 }
 
@@ -43,6 +45,7 @@ async fn start_at(web_dir: std::path::PathBuf, origin: &str) -> SocketAddr {
         origin: origin.into(),
         secure_cookies: false,
         upload_quota_bytes: 0,
+        push_subject: None,
     })
     .await
     .unwrap();
@@ -243,4 +246,24 @@ async fn https_origin_adds_hsts_and_wss() {
         csp.contains("connect-src 'self' wss://vesper.example.test;"),
         "{csp}"
     );
+}
+
+/// The push service worker and the install manifest: right types, revalidated on every load (an
+/// old worker must not linger), the page's CSP (`worker-src 'self'`, the manifest under
+/// `default-src 'self'`).
+#[tokio::test]
+async fn service_worker_and_manifest() {
+    let addr = start(site()).await;
+    let sw = get(addr, "/sw.js").await;
+    assert!(sw.starts_with("HTTP/1.1 200"), "{sw}");
+    assert!(header_has(&sw, "content-type: text/javascript"), "{sw}");
+    assert!(header_has(&sw, "cache-control: no-cache"), "{sw}");
+    assert!(header_has(&sw, "worker-src 'self'"), "{sw}");
+    let m = get(addr, "/manifest.webmanifest").await;
+    assert!(m.starts_with("HTTP/1.1 200"), "{m}");
+    assert!(
+        header_has(&m, "content-type: application/manifest+json"),
+        "{m}"
+    );
+    assert!(header_has(&m, "default-src 'self'"), "{m}");
 }

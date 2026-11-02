@@ -17,6 +17,7 @@ use vesper_protocol::{Role, UserInfo};
 use vesper_server::config::Config;
 use vesper_server::hub::Hub;
 use vesper_server::limits::Limiter;
+use vesper_server::push::Push;
 use vesper_server::voice::Voice;
 use vesper_server::{AppState, cli, router};
 use vesper_sfu::{Sfu, SfuConfig, SfuHandle};
@@ -51,6 +52,7 @@ pub fn config(data: &TempDir) -> Config {
         origin: ORIGIN.into(),
         secure_cookies: false,
         upload_quota_bytes: 1 << 30,
+        push_subject: Some("mailto:test@example.invalid".into()),
     }
 }
 
@@ -66,7 +68,11 @@ impl TestServer {
         edit(&mut cfg);
         let store = Store::open(&cfg.data_dir.join("vesper.db")).await.unwrap();
         let hub = Hub::default();
+        let push = Push::new(store.clone(), hub.clone(), cfg.push_subject.clone())
+            .await
+            .unwrap();
         let state = AppState {
+            push,
             store,
             voice: Voice::new(sfu.clone(), hub.clone(), cfg.max_room_size),
             cfg: Arc::new(cfg),

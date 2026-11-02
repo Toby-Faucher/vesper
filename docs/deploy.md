@@ -119,6 +119,25 @@ Everything after the backup time is lost, and every session made later is gone (
 
 Verified by tests on the dev machine: the copy opens as a valid database (`PRAGMA integrity_check`) with the same rows, a copy taken while another connection writes is consistent, the modes are 0700 and 0600, `uploads/tmp` is left out, an existing backup is never overwritten, a failed copy leaves nothing behind, a missing database is refused without creating one, and the database is not migrated. Not verified: the command through `docker compose exec`, the cron line, the `systemd-run` form, and the restore steps. The tests open the copy with the same store code the server uses, but no restored copy was started as a real server.
 
+A backup now also holds the Web Push signing key (VAPID, table `server_secrets` in `vesper.db`): keep the copy private and mode 600,
+like the database itself. Anyone with the key can sign pushes to the browsers that subscribed. After a restore, devices that turned on
+notifications keep getting them. A database restored without that row makes a new key: the server deletes each old subscription when
+its push service refuses it (401 or 403), and Settings asks each person to turn notifications on again.
+
+## Web Push
+
+Notifications while Vesper is closed ([architecture.md](architecture.md#web-push)). Nothing to set up when `VESPER_ORIGIN` is https:
+the origin is the VAPID contact; set `VESPER_PUSH_SUBJECT=mailto:<you>` to give push services an address instead ([env.md](env.md)).
+
+- **Outbound only.** The server opens HTTPS connections to `fcm.googleapis.com`, `updates.push.services.mozilla.com`,
+  `*.push.apple.com` and `*.notify.windows.com` on port 443. A firewall that blocks outbound traffic from the VM must allow those. The
+  Cloudflare tunnel is not involved: it carries only inbound requests, and the browser's subscription call is a normal `/api` request.
+- **What the push services see:** that a notification went to a browser, when, and its size. Not who sent it, which room, or any text:
+  the payload is encrypted for the browser.
+- **Keep the clock right (NTP on).** Each VAPID token is valid for 12 hours from the server's clock. A clock off by more than that makes
+  push services refuse it (401 or 403), and the server then deletes those subscriptions: people have to turn notifications on again.
+- **iPhone and iPad:** only from Vesper added to the Home Screen (Share, Add to Home Screen), iOS 16.4 or later. Not verified.
+
 ## Upgrade from the shared key
 
 For the instance that still runs the voice-only build with `VESPER_DEV_KEY`. Not verified (no Docker on the dev machine). In the stack directory (from a clone, add `-f deploy/compose.yaml`):

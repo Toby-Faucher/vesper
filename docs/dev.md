@@ -116,6 +116,7 @@ Other test commands:
 
 ```bash
 scripts/capped.sh cargo build --release -p vesper-server
+scripts/capped.sh cargo build -p vesper-server --features test-push   # push.mjs only: a debug build
 npm --prefix web ci && npm --prefix web run build
 npx --prefix web playwright-core install chromium   # once; CI adds --with-deps for the system libraries
 npm --prefix web run e2e
@@ -144,6 +145,17 @@ after a rejoin, and lifted), a kick ending the call, and a room made private end
 Ctrl+Shift+F after a failed chunk load and from the switcher, and picks a `from:` and an `in:` name from the box's lists with Enter and Tab. If `web/dist/dsp/` exists
 (`scripts/build-dsp.sh`, then `npm run build`), it also signs up a new account from an invite with DeepFilterNet on and checks the denoiser
 starts (the call bar and Diagnostics say `deepfilter`). CI copies the dsp-wasm job's build into the e2e job, so it runs there.
+
+`cargo test --release` (or nextest `--release`) on vesper-server fails to compile on purpose: the tests turn on `test-push`, which is a
+compile error without debug assertions. Run the tests in the debug profile, as `scripts/check.sh` and CI do.
+
+`web/e2e/push.mjs` runs last, on the debug server built with `test-push` (it may POST to 127.0.0.1; a release build refuses the
+feature) and a fake push service on a spare port. Bob runs in full Chromium in its new headless mode (the headless shell refuses the
+notification permission), with a stand-in `PushManager` that hands out a subscription holding keys the test made. He turns push on in
+Settings > Notifications and sends a test; the test checks the VAPID JWT against the key the page was given and decrypts the body. A
+push delivered through the DevTools protocol shows as a notification from the worker. Then bob leaves the app, alice mentions him and
+joins voice, and both pushes arrive encrypted with no message text in the clear. Logging out removes the worker. Not exercised: a real
+push service, the browser's own subscribe, a notification on screen, a click on it.
 
 `web/e2e/ui.mjs` runs third, on its own fresh server. First it opens the dev-only `/_gallery?primitives` page from a Vite dev server on
 a spare port and checks the primitives by keyboard (`web/e2e/primitives.mjs`): a focus ring on every Tab stop, Dialog focus in and back

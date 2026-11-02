@@ -203,6 +203,11 @@ async fn send(
             message: msg.clone(),
         },
     );
+    // Edits do not push: a fixed typo should not ping anyone again.
+    if !mentions.is_empty() {
+        let push = st.push.clone();
+        tokio::spawn(async move { push.mentioned(&room, &a.user, &mentions).await });
+    }
     Ok((StatusCode::CREATED, Json(msg)))
 }
 
