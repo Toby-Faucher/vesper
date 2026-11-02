@@ -27,7 +27,7 @@ it('shifts_inside_the_left_and_right_edges', () => {
   expect(tipSpot(btn(900, 100), size, view, false, true)).toEqual({ side: 'bottom', dx: 0 });
 });
 
-it('places_again_when_the_label_changes_while_shown', () => {
+it('places_again_when_the_label_changes_while_shown_and_stops_watching_once_gone', () => {
   // Fakes for the few DOM parts watchTips uses: the tip's width follows its label, the button sits at the right edge.
   const handlers: Record<string, (e: Event) => void> = {};
   let changed: MutationCallback = () => {};
@@ -57,6 +57,13 @@ it('places_again_when_the_label_changes_while_shown', () => {
     el.dataset.tip = 'Unmute and undeafen';
     changed([{ target: el } as unknown as MutationRecord], {} as MutationObserver);
     expect(el.style.setProperty).toHaveBeenLastCalledWith('--tip-dx', '-60px'); // 152 px: pulled inside the right edge
+    // Leaving (pointer or focus) ends the watch; showing again starts it.
+    handlers.pointerout({} as Event);
+    expect(watched).toHaveLength(0);
+    handlers.focusin({ target: el } as unknown as Event);
+    expect(watched).toHaveLength(1);
+    handlers.focusout({} as Event);
+    expect(watched).toHaveLength(0);
   } finally {
     vi.unstubAllGlobals();
   }
