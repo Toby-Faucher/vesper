@@ -31,21 +31,43 @@ async fn nobody_sees_anyone_elses_calls_whatever_the_role() {
         let other = &people[(i + 1) % people.len()].user.user_id;
         s["account_id"] = json!(other);
         s["user_id"] = json!(other);
-        assert_eq!(server.call(post("/api/me/calls", s, p)).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(
+            server.call(post("/api/me/calls", s, p)).await.0,
+            StatusCode::NO_CONTENT
+        );
     }
     for (i, p) in people.iter().enumerate() {
         let (st, _, v) = server.call(get("/api/me/calls", p)).await;
         assert_eq!(st, StatusCode::OK);
-        let durations: Vec<u64> = v.as_array().unwrap().iter().map(|c| c["duration_s"].as_u64().unwrap()).collect();
-        assert_eq!(durations, [i as u64 + 1; 2], "{} sees calls that are not theirs", p.user.username);
+        let durations: Vec<u64> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["duration_s"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            durations,
+            [i as u64 + 1; 2],
+            "{} sees calls that are not theirs",
+            p.user.username
+        );
         assert_eq!(v[0]["mode"], "deepfilter");
         assert_eq!(v[0]["browser_ns_loading"], true);
         assert!(v[0].get("account_id").is_none());
     }
     // Signed out: nothing.
-    let (st, _, _) = server.call(request(Method::GET, "/api/me/calls", None, None)).await;
+    let (st, _, _) = server
+        .call(request(Method::GET, "/api/me/calls", None, None))
+        .await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
-    let (st, _, _) = server.call(request(Method::POST, "/api/me/calls", Some(&summary(1)), None)).await;
+    let (st, _, _) = server
+        .call(request(
+            Method::POST,
+            "/api/me/calls",
+            Some(&summary(1)),
+            None,
+        ))
+        .await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
 }
 
@@ -75,7 +97,9 @@ async fn values_out_of_range_are_refused_and_unknown_fields_ignored() {
         json!({ "duration_s": 10 }),
     ];
     for (i, s) in refused.into_iter().enumerate() {
-        let (st, _, v) = server.call(post("/api/me/calls", s.clone(), &senders[i % 2])).await;
+        let (st, _, v) = server
+            .call(post("/api/me/calls", s.clone(), &senders[i % 2]))
+            .await;
         assert_eq!(st, StatusCode::BAD_REQUEST, "{s} was taken: {v}");
     }
     let ok = [
@@ -98,12 +122,21 @@ async fn the_post_is_rate_limited() {
     let server = TestServer::new().await;
     let me = server.member("mel").await;
     for _ in 0..10 {
-        assert_eq!(server.call(post("/api/me/calls", summary(1), &me)).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(
+            server.call(post("/api/me/calls", summary(1), &me)).await.0,
+            StatusCode::NO_CONTENT
+        );
     }
     let (st, h, _) = server.call(post("/api/me/calls", summary(1), &me)).await;
     assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
     assert!(h.contains_key("retry-after"));
     // Another account has its own budget.
     let other = server.member("max").await;
-    assert_eq!(server.call(post("/api/me/calls", summary(1), &other)).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(
+        server
+            .call(post("/api/me/calls", summary(1), &other))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
 }

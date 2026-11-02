@@ -44,11 +44,14 @@ async fn add(
 
 /// Every figure finite and in range, the reason short and printable.
 pub fn check(s: &CallSummary) -> Result<(), &'static str> {
-    let within = |v: Option<f64>, hi: f64| v.is_none_or(|v| v.is_finite() && (0.0..=hi).contains(&v));
+    let within =
+        |v: Option<f64>, hi: f64| v.is_none_or(|v| v.is_finite() && (0.0..=hi).contains(&v));
     if s.duration_s > MAX_DURATION_S {
         return Err("duration_s is over 24 hours");
     }
-    if s.fallback_reason.chars().count() > MAX_REASON_CHARS || s.fallback_reason.chars().any(char::is_control) {
+    if s.fallback_reason.chars().count() > MAX_REASON_CHARS
+        || s.fallback_reason.chars().any(char::is_control)
+    {
         return Err("fallback_reason is too long or has control characters");
     }
     if !within(s.loss_pct, 100.0) || !within(s.concealed_pct, 100.0) {
