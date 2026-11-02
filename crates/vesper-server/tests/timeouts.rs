@@ -71,7 +71,7 @@ async fn idle_kept_alive_connection_is_closed() {
             .unwrap();
         let res = String::from_utf8_lossy(&b[..n]);
         assert!(
-            res.starts_with("HTTP/1.1 200") && res.ends_with("ok"),
+            res.starts_with("HTTP/1.1 200") && res.contains(r#""status":"ok""#),
             "{res}"
         );
         tokio::time::sleep(HEADER / 2).await;

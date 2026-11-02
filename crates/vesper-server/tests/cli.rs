@@ -667,3 +667,104 @@ async fn prune_leaves_other_names_alone() {
         "{left:?}"
     );
 }
+
+/// A clock that went back makes the copy just written look oldest: prune keeps it anyway,
+/// because the server migrates right after it.
+#[tokio::test]
+async fn prune_never_deletes_the_copy_just_written() {
+    let data = TempDir::new().unwrap();
+    store(&data).await;
+    let mut cfg = config(&data);
+    cfg.backup_keep = 1;
+    cli::auto_backup(&cfg, cli::Auto::Scheduled, 5_000)
+        .await
+        .unwrap();
+    let p = cli::auto_backup(&cfg, cli::Auto::Scheduled, 1_000)
+        .await
+        .unwrap();
+    assert!(p.is_file(), "{p:?}");
+}
+
+/// At start the leftovers of killed backups go: automatic `.json` and `-uploads/` without
+/// their `.db`, and `vesper-*` `.partial` names older than an hour. Complete backups, a fresh
+/// manual `.partial` (it may be running) and other names stay.
+#[tokio::test]
+async fn start_removes_orphans_of_killed_backups() {
+    let data = TempDir::new().unwrap();
+    store(&data).await;
+    let cfg = config(&data);
+    let dir = data.path().join("backups");
+    cli::auto_backup(&cfg, cli::Auto::Scheduled, 1_000)
+        .await
+        .unwrap();
+    cli::backup(&cfg, &dir, 0).await.unwrap();
+    let orphan = "pre-schema-0009-19700101T000002.000Z";
+    std::fs::write(dir.join(format!("{orphan}.json")), b"{}").unwrap();
+    std::fs::create_dir_all(dir.join(format!("{orphan}-uploads/ab"))).unwrap();
+    let old = dir.join("vesper-19700101T000003Z.db.partial");
+    let f = std::fs::File::create(&old).unwrap();
+    f.set_modified(std::time::SystemTime::now() - Duration::from_secs(7200))
+        .unwrap();
+    std::fs::write(dir.join("vesper-19700101T000004Z.db.partial"), b"").unwrap();
+    std::fs::write(dir.join("notes.json"), b"").unwrap();
+    cli::clean_backups_dir(&cfg).await;
+    assert_eq!(
+        names(&dir),
+        [
+            "auto-19700101T000001.000Z.db",
+            "auto-19700101T000001.000Z.json",
+            "notes.json",
+            "vesper-19700101T000000Z-uploads",
+            "vesper-19700101T000000Z.db",
+            "vesper-19700101T000004Z.db.partial",
+        ]
+    );
+}
+
+/// With `VESPER_BACKUP_UPLOADS=1`, uploads that would leave less free disk than twice their
+/// size are not copied (the database still is), and the manifest says so.
+#[tokio::test]
+async fn automatic_backup_skips_uploads_that_would_fill_the_disk() {
+    let data = TempDir::new().unwrap();
+    let s = store(&data).await;
+    let user = s
+        .create_account(NewAccount {
+            username: "alice_1",
+            display_name: "alice_1",
+            password_phc: None,
+            role: Role::Member,
+        })
+        .await
+        .unwrap();
+    let room = s.rooms().await.unwrap()[0].id;
+    s.insert_upload(&vesper_store::UploadRow {
+        id: "ab".repeat(16),
+        room_id: room,
+        uploader_id: user.user_id.clone(),
+        message_id: None,
+        name: "big.bin".into(),
+        mime: "application/octet-stream".into(),
+        size: i64::MAX / 4,
+        created_at: 0,
+    })
+    .await
+    .unwrap();
+    std::fs::create_dir_all(data.path().join("uploads/ab")).unwrap();
+    std::fs::write(data.path().join("uploads/ab/x"), b"x").unwrap();
+    let mut cfg = config(&data);
+    cfg.backup_uploads = true;
+    let p = cli::auto_backup(&cfg, cli::Auto::Scheduled, 1_000)
+        .await
+        .unwrap();
+    let dir = data.path().join("backups");
+    assert_eq!(
+        names(&dir),
+        [
+            "auto-19700101T000001.000Z.db",
+            "auto-19700101T000001.000Z.json"
+        ]
+    );
+    let man: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(p.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(man["uploads"], false);
+}

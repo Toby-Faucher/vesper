@@ -143,8 +143,10 @@ pub struct Written {
 
 /// `<stem>.db`, then `<stem>-uploads/` when `uploads`, then `<stem>.json` when `manifest` is set,
 /// into `dir` (made 0700). Each is written under its name plus `.partial` and renamed into place
-/// only when all are written and synced, the database last: a `<stem>.db` on disk is complete,
-/// even after a kill or a power cut, and a `.partial` never is. The database copy comes first,
+/// only when all are written, the database last: a `<stem>.db` on disk is complete after a kill,
+/// and a `.partial` never is. The database, the manifest and the directory are synced, so the
+/// database copy also survives a power cut; the copied upload files are not synced (one fsync per
+/// file is slow), so after a power cut some of them can be empty. The database copy comes first,
 /// then the uploads: a file uploaded meanwhile is an extra file the restored server's sweep
 /// removes, and a file deleted meanwhile is counted as skipped. On an error every output is removed.
 async fn write_backup(
@@ -209,31 +211,46 @@ async fn write_backup(
             .map_err(io(&upp))?;
             copied = Some((up.clone(), n));
         }
-        if let Some(text) = &manifest {
-            private_file(&manp)
-                .and_then(|mut f| {
-                    std::io::Write::write_all(&mut f, text.as_bytes())?;
-                    f.sync_all()
-                })
-                .map_err(io(&manp))?;
-        }
-        std::fs::File::open(&dbp)
-            .and_then(|f| f.sync_all())
-            .map_err(io(&dbp))?;
-        if uploads {
-            std::fs::rename(&upp, &up).map_err(io(&up))?;
-        }
-        if manifest.is_some() {
-            std::fs::rename(&manp, &man).map_err(io(&man))?;
-        }
-        std::fs::rename(&dbp, &db).map_err(io(&db))?;
-        // The renames themselves, so the names survive a power cut.
-        std::fs::File::open(dir)
-            .and_then(|f| f.sync_all())
-            .map_err(io(dir))?;
-        let db_bytes = std::fs::metadata(&db).map(|m| m.len()).map_err(io(&db))?;
+        let (dir, db, up, man, dbp, upp, manp, last) = (
+            dir.to_path_buf(),
+            db.clone(),
+            up.clone(),
+            man.clone(),
+            dbp.clone(),
+            upp.clone(),
+            manp.clone(),
+            db.clone(),
+        );
+        // fsyncs can take a while on a slow disk: off the async workers.
+        let db_bytes = tokio::task::spawn_blocking(move || {
+            if let Some(text) = &manifest {
+                private_file(&manp)
+                    .and_then(|mut f| {
+                        std::io::Write::write_all(&mut f, text.as_bytes())?;
+                        f.sync_all()
+                    })
+                    .map_err(io(&manp))?;
+            }
+            std::fs::File::open(&dbp)
+                .and_then(|f| f.sync_all())
+                .map_err(io(&dbp))?;
+            if uploads {
+                std::fs::rename(&upp, &up).map_err(io(&up))?;
+            }
+            if manifest.is_some() {
+                std::fs::rename(&manp, &man).map_err(io(&man))?;
+            }
+            std::fs::rename(&dbp, &db).map_err(io(&db))?;
+            // The renames themselves, so the names survive a power cut.
+            std::fs::File::open(&dir)
+                .and_then(|f| f.sync_all())
+                .map_err(io(&dir))?;
+            std::fs::metadata(&db).map(|m| m.len()).map_err(io(&db))
+        })
+        .await
+        .map_err(|e| format!("{}: {e}", last.display()))??;
         Ok::<_, String>(Written {
-            db: db.clone(),
+            db: last,
             db_bytes,
             uploads: copied,
         })
@@ -286,6 +303,7 @@ pub async fn auto_backup(cfg: &Config, kind: Auto, now: i64) -> Result<PathBuf, 
             Auto::Scheduled => stamp.clone(),
         }
     );
+    let uploads = cfg.backup_uploads && uploads_fit(cfg).await;
     let (schema, to) = match kind {
         Auto::PreMigration { from, to } => (Some(from), Some(to)),
         Auto::Scheduled => (None, None),
@@ -297,22 +315,52 @@ pub async fn auto_backup(cfg: &Config, kind: Auto, now: i64) -> Result<PathBuf, 
         "server_build": cfg.build,
         "schema": schema,
         "schema_to": to,
-        "uploads": cfg.backup_uploads,
+        "uploads": uploads,
     });
-    let d = dir.clone();
-    blocking(move || remove_partials(&d)).await;
-    let w = write_backup(
-        cfg,
-        &dir,
-        &stem,
-        cfg.backup_uploads,
-        Some(format!("{manifest:#}\n")),
-    )
-    .await?;
+    clean_backups_dir(cfg).await;
+    let w = write_backup(cfg, &dir, &stem, uploads, Some(format!("{manifest:#}\n"))).await?;
     let (d, keep) = (dir.clone(), cfg.backup_keep);
     // The backup is written: a failed prune must not stop the start.
-    blocking(move || prune(&d, kind.prefix(), keep)).await;
+    blocking(move || prune(&d, kind.prefix(), keep, &stem)).await;
     Ok(w.db)
+}
+
+/// False, with the reason logged, when copying `uploads/` would leave less free disk than twice
+/// its size: a crash loop with `VESPER_BACKUP_UPLOADS=1` copies it at every start. The database
+/// is still copied.
+async fn uploads_fit(cfg: &Config) -> bool {
+    let size = match Store::open_existing(&cfg.data_dir.join("vesper.db")).await {
+        Ok(s) => s.upload_bytes().await.map(|n| n.max(0) as u64),
+        Err(e) => Err(e),
+    };
+    let free = rustix::fs::statvfs(cfg.data_dir.as_path())
+        .map(|v| v.f_bavail.saturating_mul(v.f_frsize))
+        .map_err(std::io::Error::from);
+    match (size, free) {
+        (Ok(size), Ok(free)) if free.saturating_sub(size) >= size.saturating_mul(2) => true,
+        (Ok(size), Ok(free)) => {
+            tracing::warn!(
+                "automatic backup without uploads: copying {size} bytes would leave {} of {free} free bytes, under twice the uploads",
+                free.saturating_sub(size)
+            );
+            false
+        }
+        (size, free) => {
+            tracing::warn!(
+                "automatic backup without uploads: could not measure them ({:?}, {:?})",
+                size.err(),
+                free.err()
+            );
+            false
+        }
+    }
+}
+
+/// Runs [`remove_leftovers`] on `<data>/backups`, at every start and before each automatic
+/// backup. Errors are logged.
+pub async fn clean_backups_dir(cfg: &Config) {
+    let d = cfg.data_dir.join("backups");
+    blocking(move || remove_leftovers(&d, std::time::SystemTime::now())).await;
 }
 
 /// `f` on a blocking thread; an error is logged, not returned.
@@ -324,19 +372,46 @@ async fn blocking(f: impl FnOnce() -> std::io::Result<()> + Send + 'static) {
     }
 }
 
-/// Deletes the `pre-*` and `auto-*` names ending in `.partial`: a backup killed while it was
-/// written. Only automatic backups run here, one at a time, so none is still being written.
-fn remove_partials(dir: &Path) -> std::io::Result<()> {
+/// Deletes what killed backups leave behind: `pre-*` and `auto-*` names ending in `.partial`,
+/// a `pre-schema-*` or `auto-*` `.json` or `-uploads/` whose `.db` is missing (a kill between
+/// the renames), and `vesper-*` `.partial` names older than an hour (a manual backup may be
+/// running now; none takes that long on this data). Complete manual `vesper-*` backups and any
+/// other name are never touched. Automatic backups run one at a time, so none is being written.
+fn remove_leftovers(dir: &Path, now: std::time::SystemTime) -> std::io::Result<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(d) => d,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e),
     };
+    let auto_db = |stem: &str| {
+        let n = format!("{stem}.db");
+        (parse_auto(&n, "pre-schema-").is_some() || parse_auto(&n, "auto-").is_some()).then_some(n)
+    };
     for e in entries {
         let e = e?;
         let name = e.file_name();
         let name = name.to_string_lossy();
-        if name.ends_with(PARTIAL) && (name.starts_with("pre-") || name.starts_with("auto-")) {
+        let partial = name.ends_with(PARTIAL);
+        let old = || {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| now.duration_since(t).is_ok_and(|d| d.as_secs() > 3600))
+        };
+        let orphan = || {
+            let stem = name
+                .strip_suffix(".json")
+                .or_else(|| name.strip_suffix("-uploads"));
+            stem.and_then(auto_db)
+                .is_some_and(|db| !dir.join(db).exists())
+        };
+        let gone = if partial {
+            name.starts_with("pre-")
+                || name.starts_with("auto-")
+                || (name.starts_with("vesper-") && old())
+        } else {
+            orphan()
+        };
+        if gone {
             let p = e.path();
             if e.file_type()?.is_dir() {
                 std::fs::remove_dir_all(&p)?;
@@ -378,7 +453,9 @@ fn parse_auto<'a>(name: &'a str, prefix: &str) -> Option<(i64, &'a str)> {
 /// number, the newest one of it: their `.db`, `.json` and `-uploads/`. The per-schema rule keeps
 /// the copy an older image can open through a crash loop after an upgrade that failed part way
 /// (each restart backs up the half-migrated schema; those never push out the older one).
-fn prune(dir: &Path, prefix: &str, keep: usize) -> std::io::Result<()> {
+/// `current`, the stem just written, is never deleted, even when a clock that went back makes it
+/// look old: the server migrates right after it.
+fn prune(dir: &Path, prefix: &str, keep: usize, current: &str) -> std::io::Result<()> {
     let names: Vec<String> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
         .collect();
@@ -393,7 +470,7 @@ fn prune(dir: &Path, prefix: &str, keep: usize) -> std::io::Result<()> {
     let mut seen = std::collections::HashSet::new();
     for (i, &(schema, _, stem)) in found.iter().enumerate() {
         let newest_of_schema = seen.insert(schema);
-        if i < keep || newest_of_schema {
+        if i < keep || newest_of_schema || stem == current {
             continue;
         }
         std::fs::remove_file(dir.join(format!("{stem}.db")))?;

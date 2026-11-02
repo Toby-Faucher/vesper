@@ -173,6 +173,7 @@ pub async fn start_with_sfu(
 /// `<data>/backups` first ([`cli::auto_backup`]). A failed copy stops the start: the data is
 /// worth more than the uptime.
 pub async fn backup_before_migration(cfg: &Config, db: &std::path::Path) -> std::io::Result<()> {
+    cli::clean_backups_dir(cfg).await;
     let versions = Store::schema_versions(db)
         .await
         .map_err(|e| std::io::Error::other(format!("read {}: {e}", db.display())))?;
