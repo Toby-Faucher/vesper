@@ -6,7 +6,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { ORIGIN, browser, cli, composer, cspViolations, inVoice, logout, openRoom, roomId, roomLink, searchFor, searchHits, signedIn, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, composer, cspViolations, hasFirefox, inVoice, logout, openRoom, roomId, roomLink, searchFor, searchHits, signedIn, signup, sleep, startServer } from './lib.mjs';
 
 // fetch from the page, so it sends the session cookie and the Origin header as the app does.
 const call = (page, method, path, body) =>
@@ -751,6 +751,23 @@ try {
   assert.equal(await searchHits(b).count(), 0, 'a hit from a room bob lost stayed in his open search');
   await b.keyboard.press('Escape');
   console.log('open search drops a room that became private: ok');
+
+  // A saved microphone that is gone (another machine, Firefox new ids): the join uses the default mic, says so once in the
+  // call bar, and forgets the id. In Chromium, and in Firefox where the bug was reported, when Playwright's Firefox is there.
+  for (const ff of hasFirefox() ? [false, true] : [false]) {
+    const who = ff ? 'fern' : 'erin';
+    const gone = await browser(who, [], { firefox: ff });
+    const g = gone.page;
+    await g.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'browser', micId: 'unplugged-mic-id' })));
+    await signup(g, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, who);
+    await join(g, 'general');
+    await g.getByRole('region', { name: 'Call' }).getByText('Your saved microphone was not found, so Vesper is using the default one.').waitFor();
+    assert.equal(await g.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).micId), null, 'the stale mic id was kept');
+    await g.getByRole('button', { name: 'Leave' }).click();
+    alice.errors.push(...gone.errors);
+    console.log(`saved mic gone, ${ff ? 'Firefox' : 'Chromium'}: ok`);
+  }
+  if (!hasFirefox()) console.log('saved mic gone, Firefox: skipped (npx playwright-core install firefox)');
 
   // The denoiser (worklet, worker, WASM, model) under the server's CSP. A CSP block in the worker is not a page console
   // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (CI downloads it from
