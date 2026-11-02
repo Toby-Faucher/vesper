@@ -46,7 +46,7 @@ Coming from the shared-key build: follow [deploy.md "Upgrade from the shared key
 1. On the host: `git pull`. Back up first: `docker compose exec vesper vesper-server backup /data/backups` ([deploy.md](deploy.md#backup)).
 2. Tag what runs now, so you can go back: `docker tag vesper:latest vesper:previous`.
 3. `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins.
-4. `docker compose -f deploy/compose.yaml ps` wants `healthy`, and `curl -fsS http://127.0.0.1:8080/health` wants `"status":"ok"` and the new `version`. If the update migrates the database, the log says `backed up to /data/backups/pre-...db first`.
+4. `docker compose -f deploy/compose.yaml ps` wants `healthy`, and `curl -fsS http://127.0.0.1:8080/health` wants `"status":"ok"` and the new `version`. If the update migrates the database, the log says `backed up to /data/backups/pre-schema-...db first`.
 5. Open the site from a second device and join.
 
 The first build is slow (it compiles the denoiser to wasm). Later builds reuse Docker layers.
@@ -70,7 +70,7 @@ Docker: start the image you tagged before the update. No rebuild. Use the `deplo
 
 Binary: `mv -T /opt/vesper/vesper-server.prev /opt/vesper/vesper-server && systemctl restart vesper`.
 
-A shared-key image runs without the data dir and leaves it alone; an accounts image keeps using it. A database migrated by a newer build does not open in an older one; restore the newest `data/backups/pre-*.db` in that case ([deploy.md](deploy.md#upgrade-and-rollback)).
+A shared-key image runs without the data dir and leaves it alone; an accounts image keeps using it. A database migrated by a newer build does not open in an older one; restore a `data/backups/pre-schema-<NNNN>-*.db` copy in that case: of those whose `<NNNN>` is at most the old image's schema, the newest. Not simply the newest file: after an upgrade that failed part way it holds a schema the old image refuses ([deploy.md](deploy.md#upgrade-and-rollback) has the steps).
 
 Prune old images only when disk is short: `docker image prune`. Keep the `previous` tag.
 
