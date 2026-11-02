@@ -1361,6 +1361,46 @@ async fn revoked_session_closes_socket() {
 }
 
 #[tokio::test]
+async fn reset_link_closes_every_socket_of_that_account() {
+    let server = TestServer::new().await;
+    let owner = server.owner().await;
+    let bob = server.member("bob").await;
+    let mut a = Conn::open(&server, &bob).await;
+    let mut o = Conn::open(&server, &owner).await;
+    let path = format!("/api/users/{}/reset", bob.user.user_id);
+    let (status, _, v) = server
+        .call(post(&path, json!({ "password": PASSWORD }), &owner))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    let code = v["url"].as_str().unwrap().split_once('#').unwrap().1;
+    let body = json!({ "code": code, "password": "test-password-2" });
+    let (status, _, v) = server
+        .call(request(Method::POST, "/api/reset", Some(&body), None))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{v}");
+    assert_eq!(
+        a.expect_closed_within(Duration::from_secs(1)).await,
+        Some(CLOSE_SESSION_ENDED)
+    );
+    // The owner's socket stays: it still hears a change.
+    let patch = json!({ "display_name": "Boss" });
+    let (status, _, _) = server
+        .call(request(
+            Method::PATCH,
+            "/api/me",
+            Some(&patch),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    o.until(
+        "UserUpdated",
+        |m| matches!(m, ServerMsg::UserUpdated { user } if user.display_name == "Boss"),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn password_change_closes_other_sessions_only() {
     let server = TestServer::new().await;
     let first = server.owner().await;
@@ -1815,4 +1855,58 @@ async fn signup_and_profile_changes_reach_every_socket() {
         |m| matches!(m, ServerMsg::UserUpdated { user } if user.avatar.is_some()),
     )
     .await;
+}
+
+/// Archiving a room ends its calls, the owner's too, and pushes the room list to everyone.
+#[tokio::test]
+async fn archive_ends_voice_in_the_room() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let bob = server.account("bob", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let secret = open_room(&server, &owner).await;
+    let mut c = Conn::open(&server, &carol).await;
+    let (mut o, o_id, _) = Conn::joined(&server, &owner, secret).await;
+    let (mut b, b_id, _) = Conn::joined(&server, &bob, secret).await;
+    let (status, _, _) = server
+        .call(request(
+            Method::PATCH,
+            &format!("/api/rooms/{secret}"),
+            Some(&json!({ "archived": true })),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    for (conn, id) in [(&mut o, &o_id), (&mut b, &b_id)] {
+        conn.until(
+            "own PeerLeft",
+            |m| matches!(m, ServerMsg::PeerLeft { user_id } if user_id == id),
+        )
+        .await;
+    }
+    match c.until("RoomsChanged", is_rooms_changed).await {
+        ServerMsg::RoomsChanged { rooms } => assert!(rooms.iter().all(|r| r.id != secret)),
+        _ => unreachable!(),
+    }
+    match o.until("RoomsChanged", is_rooms_changed).await {
+        ServerMsg::RoomsChanged { rooms } => {
+            assert!(rooms.iter().any(|r| r.id == secret && r.archived));
+        }
+        _ => unreachable!(),
+    }
+    assert!(server.state.voice.peers(|_| true).is_empty());
+    b.join(secret);
+    let refused = b
+        .until("Error", |m| matches!(m, ServerMsg::Error { .. }))
+        .await;
+    assert!(
+        matches!(
+            refused,
+            ServerMsg::Error {
+                code: ErrorCode::Forbidden,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
 }

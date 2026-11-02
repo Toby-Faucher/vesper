@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { InviteInfo } from '../../lib/gen/InviteInfo';
-import { byRole, bytes, canRevoke, inviteStatus, moveRoom, untilText } from './admin';
+import type { ResetInfo } from '../../lib/gen/ResetInfo';
+import { byRole, bytes, canReset, canRevoke, resetLine, resetStatus, inviteStatus, moveRoom, untilText } from './admin';
 
 const NOW = 1_800_000_000_000;
 const inv = (o: Partial<InviteInfo> = {}): InviteInfo =>
@@ -71,5 +72,35 @@ describe('bytes', () => {
     expect(bytes(10240 * 1024 ** 2)).toBe('10 GB');
     expect(bytes(9.99 * 1024 ** 2)).toBe('10 MB');
     expect(bytes(3 * 1024 ** 4)).toBe('3 TB');
+  });
+});
+
+describe('canReset', () => {
+  const u = (user_id: string, role: 'owner' | 'moderator' | 'member') => ({ user_id, role });
+  it('owner for anyone else, a moderator for members only, nobody for themself', () => {
+    const [o, m1, m2, a, b] = [u('o', 'owner'), u('m1', 'moderator'), u('m2', 'moderator'), u('a', 'member'), u('b', 'member')];
+    expect([m1, a].map((t) => canReset(o, t))).toEqual([true, true]);
+    expect(canReset(o, o)).toBe(false);
+    expect([o, m1, m2, a].map((t) => canReset(m1, t))).toEqual([false, false, false, true]);
+    expect([o, m1, a, b].map((t) => canReset(a, t))).toEqual([false, false, false, false]);
+  });
+});
+
+describe('resetStatus and resetLine', () => {
+  const r = (o: Partial<ResetInfo> = {}): ResetInfo =>
+    ({ user_id: 'b', created_by: 'a', created_at: NOW - 1000, expires_at: NOW + 1000, used_at: null, used_from: null, cancelled: false, ...o });
+  it('used, then cancelled, then expired, else unused', () => {
+    expect(resetStatus(r(), NOW)).toBe('unused');
+    expect(resetStatus(r({ expires_at: NOW }), NOW)).toBe('expired');
+    expect(resetStatus(r({ cancelled: true, expires_at: NOW - 1 }), NOW)).toBe('cancelled');
+    expect(resetStatus(r({ used_at: NOW - 5, expires_at: NOW - 1 }), NOW)).toBe('used');
+  });
+  it('names who made it, or the command line', () => {
+    expect(resetLine(r({ used_at: NOW }), 'alice', NOW)).toMatch(/^Password reset by alice on .+ \(used\)$/);
+    // A used one shows the day it was used, not the day it was made.
+    const day = 86_400_000;
+    expect(resetLine(r({ created_at: NOW - 3 * day, used_at: NOW }), 'a', NOW)).toBe(resetLine(r({ created_at: NOW, used_at: NOW }), 'a', NOW));
+    expect(resetLine(r({ created_at: NOW - 3 * day, used_at: NOW }), 'a', NOW)).not.toBe(resetLine(r({ created_at: NOW - 3 * day, used_at: NOW - 3 * day }), 'a', NOW));
+    expect(resetLine(r(), null, NOW)).toMatch(/^Password reset from the command line on .+ \(unused\)$/);
   });
 });

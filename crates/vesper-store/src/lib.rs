@@ -13,6 +13,7 @@ use vesper_protocol::Role;
 mod accounts;
 mod invites;
 mod messages;
+mod resets;
 mod rooms;
 mod search;
 mod sessions;
@@ -20,6 +21,7 @@ mod uploads;
 
 pub use accounts::{LoginRow, NewAccount};
 pub use messages::{Cursor, MAX_PINS, MAX_REACTIONS, NewMessage};
+pub use resets::RESET_TTL_MS;
 pub use search::{HITS as SEARCH_SQL, MAX_SEARCH, fts_query};
 pub use sessions::{NewSession, SESSION_TTL_MS};
 pub use uploads::UploadRow;
@@ -102,6 +104,38 @@ impl Store {
             .await
             .map_err(|e| StoreError::Db(e.into()))?;
         Ok(Store { pool })
+    }
+
+    /// Opens an existing database as it is: never creates the file and never runs migrations
+    /// (for `backup`, which must not touch a live database a newer binary could migrate).
+    /// A missing file is an error.
+    pub async fn open_existing(path: &Path) -> Result<Store> {
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(false)
+            .busy_timeout(Duration::from_millis(5000));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
+        Ok(Store { pool })
+    }
+
+    /// A consistent copy of the whole database at `dest` (`VACUUM INTO`), safe while others write.
+    /// `dest` must not exist or must be an empty file; SQLite refuses anything else.
+    pub async fn backup_into(&self, dest: &Path) -> Result<()> {
+        let dest = dest.to_str().ok_or_else(|| {
+            StoreError::Db(sqlx::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "backup path is not UTF-8",
+            )))
+        })?;
+        // Bound, never formatted into the SQL: SQLite 3.27+ takes an expression here.
+        sqlx::query("VACUUM INTO ?1")
+            .bind(dest)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// Raw pool, for this crate's tests only. Hidden so the server does not reach sqlx (ADR 0005).

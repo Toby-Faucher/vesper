@@ -94,6 +94,8 @@ pub enum ApiErrorCode {
     TooLarge,
     QuotaFull,
     InviteInvalid,
+    /// A reset code that is unknown, used, replaced or expired: all look the same.
+    ResetInvalid,
     Internal,
 }
 
@@ -212,6 +214,89 @@ impl std::fmt::Debug for InviteCreated {
     }
 }
 
+/// `POST /api/users/{id}/reset`: the caller's own password, checked again before a link is made.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetCreate {
+    pub password: String,
+}
+
+impl std::fmt::Debug for ResetCreate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetCreate")
+            .field("password", &"***")
+            .finish()
+    }
+}
+
+/// `GET /api/resets` (owner): for each account its latest reset link, plus every reset used in the
+/// last 30 days. Newest first. No code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetInfo {
+    pub user_id: String,
+    /// Null: made on the server command line.
+    pub created_by: Option<String>,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number")]
+    pub expires_at: i64,
+    #[ts(type = "number | null")]
+    pub used_at: Option<i64>,
+    /// `lan` or `internet` when used.
+    pub used_from: Option<String>,
+    /// Replaced, or ended by a role change, a ban or a password change.
+    pub cancelled: bool,
+}
+
+/// `POST /api/me/reset-notices`: resets of your password not shown to you yet; asking marks them shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetNotice {
+    /// Display name of who made the link; null for the server command line. Not unique: show
+    /// `by_username` with it.
+    pub by: Option<String>,
+    /// Username (unique) of who made the link; null for the server command line.
+    pub by_username: Option<String>,
+    #[ts(type = "number")]
+    pub at: i64,
+}
+
+/// `POST /api/users/{id}/reset`: a one-use link to set a new password, shown once.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetCreated {
+    pub url: String,
+    #[ts(type = "number")]
+    pub expires_at: i64,
+}
+
+impl std::fmt::Debug for ResetCreated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetCreated")
+            .field("url", &"***")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+/// `POST /api/reset`: the code from the link and the new password (8 to 128 characters).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResetReq {
+    pub code: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for ResetReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetReq")
+            .field("code", &"***")
+            .field("password", &"***")
+            .finish()
+    }
+}
+
 /// `PATCH /api/users/{id}/role`. `role` not `owner`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -226,7 +311,8 @@ pub struct ForceMute {
     pub muted: bool,
 }
 
-/// A room has text and voice. `members` is filled only when `restricted`.
+/// A room has text and voice. `members` is filled only when `restricted`. An `archived` room is
+/// sent to the owner only (for Admin > Rooms); nobody can open, post to, search or join it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct RoomInfo {
@@ -237,6 +323,7 @@ pub struct RoomInfo {
     pub position: i64,
     pub restricted: bool,
     pub members: Vec<String>,
+    pub archived: bool,
 }
 
 /// Unread state of one room for the signed-in user, sent in `Hello`.
@@ -445,6 +532,10 @@ pub struct RoomPatch {
     #[serde(default)]
     #[ts(optional)]
     pub restricted: Option<bool>,
+    /// The last room that is not archived cannot be archived (409).
+    #[serde(default)]
+    #[ts(optional)]
+    pub archived: Option<bool>,
 }
 
 /// `PUT /api/rooms/order`: every room id once, in the new order.
@@ -506,6 +597,26 @@ mod tests {
                         revoked: false,
                     },
                     url: format!("http://x/invite#{secret}"),
+                }
+            ),
+            format!(
+                "{:?}",
+                ResetCreated {
+                    url: format!("http://x/reset#{secret}"),
+                    expires_at: 0,
+                }
+            ),
+            format!(
+                "{:?}",
+                ResetCreate {
+                    password: secret.into()
+                }
+            ),
+            format!(
+                "{:?}",
+                ResetReq {
+                    code: secret.into(),
+                    password: secret.into(),
                 }
             ),
         ];

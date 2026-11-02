@@ -16,7 +16,7 @@ Shape: one server (`vesper-server`). HTTP/WebSocket on TCP 8080, media on UDP 40
 | Admin CLI | `docker compose exec vesper vesper-server <command>` | see [deploy.md](deploy.md#docker--dockge) (`systemd-run`) |
 | Binary / image | image `vesper:latest`, or the tag in `VESPER_TAG` | `/opt/vesper/vesper-server`, previous one as `.prev` |
 
-CLI commands: `create-owner` (one-use owner link, only while no owner exists), `invite [--role member|moderator] [--uses N] [--hours H]`, `help`. They print the link on stdout; it is a secret, send it only to the person it is for. Details: [deploy.md](deploy.md#first-owner-and-invites).
+CLI commands: `create-owner` (one-use owner link, only while no owner exists), `invite [--role member|moderator] [--uses N] [--hours H]`, `reset-password <username>` (one-use link to set a new password, 24 h, any account), `backup <dir>`, `help`. They print the link on stdout; it is a secret, send it only to the person it is for. Details: [deploy.md](deploy.md#first-owner-and-invites).
 
 Log level: set `RUST_LOG` (default `info`), for example `RUST_LOG=vesper_server=debug,info`, then recreate the container or restart the unit.
 
@@ -43,7 +43,7 @@ Quick end-to-end check from outside the LAN (phone on cellular): open the site, 
 
 Coming from the shared-key build: follow [deploy.md "Upgrade from the shared key"](deploy.md#upgrade-from-the-shared-key) once instead. In short: tag the image, `mkdir -m 700 data && sudo chown 10001:10001 data`, drop `VESPER_DEV_KEY` from `.env` and add `VESPER_ORIGIN=https://vesper.tfaucher.com`, `up -d --build`, `docker compose exec vesper vesper-server create-owner`, then send invites. The Proxmox snapshot must include `data/` from then on.
 
-1. On the host: `git pull`. Back up the data dir first ([deploy.md](deploy.md#backup)).
+1. On the host: `git pull`. Back up first: `docker compose exec vesper vesper-server backup /data/backups` ([deploy.md](deploy.md#backup)).
 2. Tag what runs now, so you can go back: `docker tag vesper:latest vesper:previous`.
 3. `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins.
 4. `docker compose -f deploy/compose.yaml ps` wants `healthy`, and `curl -fsS http://127.0.0.1:8080/health` wants `ok`.
@@ -70,7 +70,7 @@ Docker: start the image you tagged before the update. No rebuild. Use the `deplo
 
 Binary: `mv -T /opt/vesper/vesper-server.prev /opt/vesper/vesper-server && systemctl restart vesper`.
 
-A shared-key image runs without the data dir and leaves it alone; an accounts image keeps using it. A database migrated by a newer build may not open in an older one; restore the backup in that case.
+A shared-key image runs without the data dir and leaves it alone; an accounts image keeps using it. A database migrated by a newer build may not open in an older one; restore the backup in that case ([deploy.md](deploy.md#backup)).
 
 Prune old images only when disk is short: `docker image prune`. Keep the `previous` tag.
 
@@ -95,7 +95,9 @@ Start with: `ps` shows healthy? `/health` says `ok`? Logs for the last 100 lines
 | 502 from Caddy, or WebSocket fails only through the proxy | Caddy cannot reach 8080 | If Caddy is on another host, the compose mapping must be `8080:8080`, not `127.0.0.1:8080:8080`. Test `curl http://<vm>:8080/health` from the Caddy host. |
 | Join works, then the call drops after about 10 seconds | Proxy idle timeout | The server closes a socket only when it is silent for 2 x 25 s (the ping interval). Check the proxy does not cut idle WebSockets. |
 | Log says it cannot open or create the database (permission denied) | The `data` dir is not owned by uid 10001 | `sudo chown 10001:10001 data && chmod 700 data`, then `up -d`. |
-| Nobody can sign in after a move to a new VM | The data dir was not copied or not in the snapshot | Restore `data/` from the backup. Without it every account is gone: run `create-owner` again and send new invites. |
+| Nobody can sign in after a move to a new VM | The data dir was not copied or not in the snapshot | Restore `data/` from the backup ([deploy.md](deploy.md#backup) has the steps). Without it every account is gone: run `create-owner` again and send new invites. |
+| Someone forgot their password | No email reset | Owner or moderator: Admin > Members, Reset link on their row, send it to them. It works once, for 24 h, and signs them out everywhere. See [deploy.md](deploy.md#password-recovery). |
+| The owner forgot the owner password | No email reset | On the host: `docker compose exec vesper vesper-server reset-password <owner username>`, open the link on your own device, set a new password. |
 | Disk filling on the VM | Container logs or old images | Compose caps logs at 3 x 10 MB. `docker image prune` for images. |
 
 ## Before you ask for help

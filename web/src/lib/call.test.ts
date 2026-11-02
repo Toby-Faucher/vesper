@@ -3,7 +3,7 @@ import { CALL_ENDED, ROOM_GONE, callEvent, idleCall } from './call';
 
 const me = 'a'.repeat(32);
 const inCall = { userId: me, room: 1, muted: false };
-const room = (id: number) => ({ id, name: 'r', position: 0, restricted: false, members: [] });
+const room = (id: number) => ({ id, name: 'r', position: 0, restricted: false, members: [], archived: false });
 
 describe('callEvent', () => {
   it('peer_left with our own id ends the call; another id does not', () => {
@@ -18,6 +18,8 @@ describe('callEvent', () => {
   it('a room that left the list ends the call and tells the server', () => {
     expect(callEvent({ type: 'rooms_changed', rooms: [room(2)] }, inCall)).toEqual({ end: ROOM_GONE, leave: true });
     expect(callEvent({ type: 'rooms_changed', rooms: [room(1)] }, inCall)).toEqual({});
+    // The owner still gets an archived room, but the call in it is over.
+    expect(callEvent({ type: 'rooms_changed', rooms: [{ ...room(1), archived: true }] }, inCall)).toEqual({ end: ROOM_GONE, leave: true });
     expect(callEvent({ type: 'rooms_changed', rooms: [] }, { userId: '', room: null, muted: false })).toEqual({});
   });
   it('an ended call is not force-muted on rejoin until the server says so', () => {

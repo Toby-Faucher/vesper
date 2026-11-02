@@ -8,7 +8,7 @@ import type { Message } from './gen/Message';
 const user = (user_id: string, display_name = user_id): UserInfo => ({
   user_id, username: user_id, display_name, accent: '#888888', role: 'member', banned: false, bio: '', avatar: null, ui_accent: null,
 });
-const room = (id: number): RoomInfo => ({ id, name: `room${id}`, position: id, restricted: false, members: [] });
+const room = (id: number): RoomInfo => ({ id, name: `room${id}`, position: id, restricted: false, members: [], archived: false });
 const peer = (user_id: string, room_id: number): Peer => ({
   user_id, name: user_id, room_id, muted: false, deafened: false, force_muted: false,
 });
@@ -17,11 +17,11 @@ const unread1 = { room_id: 1, last_read_id: 5, unread: 2, mentions: 0 };
 
 describe('applyServerMsg', () => {
   it('hello_replaces_state', () => {
-    const old: AppState = { me: null, users: { x: user('x') }, rooms: [room(9)], voice: [peer('x', 9)], unread: {} };
+    const old: AppState = { me: null, users: { x: user('x') }, rooms: [room(9)], archived: [], voice: [peer('x', 9)], unread: {} };
     const s = applyServerMsg(old, {
       type: 'hello', me, users: [user('a'), user('b')], rooms: [room(1)], voice: [peer('b', 1)], unread: [unread1],
     });
-    expect(s).toEqual({ me, users: { a: user('a'), b: user('b') }, rooms: [room(1)], voice: [peer('b', 1)], unread: { 1: unread1 } });
+    expect(s).toEqual({ me, users: { a: user('a'), b: user('b') }, rooms: [room(1)], archived: [], voice: [peer('b', 1)], unread: { 1: unread1 } });
   });
   it('rooms_changed_keeps_voice', () => {
     const s: AppState = { ...emptyState(), rooms: [room(1), room(2)], voice: [peer('a', 1), peer('b', 2)] };
@@ -32,6 +32,16 @@ describe('applyServerMsg', () => {
   it('rooms_changed drops peers of rooms that disappeared', () => {
     const s: AppState = { ...emptyState(), rooms: [room(1), room(2)], voice: [peer('a', 1), peer('b', 2)] };
     expect(applyServerMsg(s, { type: 'rooms_changed', rooms: [room(1)] }).voice).toEqual([peer('a', 1)]);
+  });
+  it('archived rooms go to their own list, and their peers are dropped', () => {
+    const gone = { ...room(2), archived: true };
+    const s: AppState = { ...emptyState(), rooms: [room(1), room(2)], voice: [peer('a', 1), peer('b', 2)] };
+    const next = applyServerMsg(s, { type: 'rooms_changed', rooms: [room(1), gone] });
+    expect(next.rooms).toEqual([room(1)]);
+    expect(next.archived).toEqual([gone]);
+    expect(next.voice).toEqual([peer('a', 1)]);
+    const hello = applyServerMsg(s, { type: 'hello', me, users: [], rooms: [gone, room(1)], voice: [], unread: [] });
+    expect([hello.rooms, hello.archived]).toEqual([[room(1)], [gone]]);
   });
   it('user_updated_merges', () => {
     const s: AppState = { ...emptyState(), me, users: { a: user('a'), b: user('b') } };

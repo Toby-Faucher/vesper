@@ -54,7 +54,7 @@
     if (room) try { storage?.setItem(LAST, String(room.id)); } catch { /* storage blocked */ }
     recent = room ? pushRecent(storage, uid, room.id) : loadRecent(storage, uid);
   });
-  // The open room left the list (deleted, or made private): go to the first room, without a history entry.
+  // The open room left the list (made private, or archived): go to the first room, without a history entry.
   let had: number | null = null;
   $effect(() => {
     const id = room?.id ?? null;

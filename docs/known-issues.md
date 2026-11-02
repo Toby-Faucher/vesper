@@ -26,12 +26,19 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
   login limit per username still allows each address only 5 tries for one name, then 1 a minute. Unit-tested (`client_ip` in `auth.rs`); not verified on the deploy.
   If Caddy ever drops `CF-Connecting-IP`, every client looks like the tunnel's address and all share one per-IP limit; the per-username limit
   still holds. Keep Caddy's default headers ([deploy.md](deploy.md#network)).
-- **No password reset.** A user who forgets their password needs a new account from a new invite; the owner can ban the old one.
-  An owner who forgets theirs has no way back in through the app.
-- **No backup command.** Back up the data dir by hand ([deploy.md](deploy.md)); nothing does it on a schedule.
+- **Password reset is by hand.** There is no email. The owner (or a moderator, for a member) makes a one-use reset link
+  in Admin > Members and sends it; the owner's own way back in is `vesper-server reset-password` on the host
+  ([deploy.md](deploy.md#password-recovery)). Whoever holds the link can set the password, so it must reach the right
+  person. The reset page does not say whose account it is for.
+- **A moderator can take over a member's account through a reset link.** They make a link for the member (typing their
+  own password), use it themself and sign in as that member. It is not silent: the member is signed out everywhere and
+  their password stops working; the owner's Members table lists every reset used in the last 30 days with who made it;
+  the server log has both account ids. The taker sees the "your password was reset" notice first, so the member is told
+  only after they get back in through a new link (that reset shows the earlier ones again). The owner can give the member
+  a new link and ban the moderator, which ends every live link the moderator made. The owner can do the same to anyone.
 - **Uploads are not scanned for viruses.** Images are served inline only after their magic bytes match, everything else is a
   download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
-- **Rooms cannot be deleted.** The server has no delete route for a room. The admin Rooms page says so: restrict a room and list nobody to hide it from members.
+- **Rooms cannot be deleted, only archived.** An archived room's messages and files stay in the database and count toward disk use. Its search index rows stay too.
 - **No passkeys yet.** Sign in is username and password only (plan Task 6, a stretch goal, not built).
 - **A moderator disconnect does not keep anyone out.** The sessions stay valid and the client may reconnect at once; a ban is the way to keep someone out.
 

@@ -32,7 +32,13 @@ the `shortcut:` comment in `config.rs`, the join deadline (`VESPER_JOIN_DEADLINE
 a join. Sockets are now authenticated before the upgrade, so those two limits are gone. A signed-in user can still flood
 their socket, so each socket has its own message rate limit instead (`ws.rs`, see `docs/architecture.md`).
 
-Consequences: A lost owner password needs a manual database edit; there is no reset command. Clients that are not browsers
+Consequences: A lost owner password needed a manual database edit (superseded in v1.3, see the update below). Clients that are not browsers
 (`curl`, `vesper-loadtest`) must send the cookie and `Origin` themselves. Behind Vite dev, `VESPER_ORIGIN` must be
 `http://localhost:5173`. Each socket's outgoing queue is bounded (256 messages) and a full queue closes that socket, so a slow
 client reconnects instead of growing memory.
+
+Update, v1.3: one-use reset links (Admin > Members) and `vesper-server reset-password <username>` replace the manual database
+edit for a lost password ([deploy.md](../deploy.md#password-recovery)). The code is 32 random bytes kept as SHA-256, like an
+invite, and using it ends every session of the account. Making one needs the maker's own password and never works on yourself
+in the app. Every reset row is kept in the database; the owner's Members page lists the latest link and the resets used in
+the last 30 days.

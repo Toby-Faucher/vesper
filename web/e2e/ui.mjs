@@ -1,7 +1,7 @@
 // UI flows for the admin pages, in real Chromium against the release server: alice (owner) creates an invite in the UI,
 // copies the link, and bob signs up with it; a revoked link shows the bad-link text; making bob a moderator gives him the
 // Admin menu entry and the moderator view (no Revoke on a moderator invite); a member who opens /admin sees the not-allowed
-// page; a ban of carol ends her session. Invite links are never printed. Before those, the primitives' keyboard paths
+// page; a ban of carol ends her session; a reset link for bob ends his sessions and sets his new password. Invite links are never printed. Before those, the primitives' keyboard paths
 // (primitives.mjs, on the dev-only gallery page). After them: layout shift after a join, reduced motion, and a keyboard-only
 // walk with a focus ring on every Tab stop. Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
@@ -231,6 +231,36 @@ try {
   await sleep(500); // a late event would show it to carol here
   await order(c, ['general', 'hangout']);
   console.log('rooms: create, rename, reorder, restrict, live sidebars: ok');
+
+  // Archive: asks first, then hangout leaves every sidebar live (alice's too) and stays in Admin > Rooms, dimmed, with
+  // Unarchive. With music room archived as well, general is the last room: its Archive is off and the server says no.
+  await a.getByRole('button', { name: 'Archive hangout' }).click();
+  const ask = a.getByRole('dialog', { name: 'Archive hangout?' });
+  await ask.getByText('Its messages and files are kept.', { exact: false }).waitFor();
+  await ask.getByRole('button', { name: 'Archive', exact: true }).click();
+  await ask.waitFor({ state: 'hidden' });
+  await order(b, ['music room', 'general']);
+  await order(a, ['music room', 'general']);
+  await order(c, ['general']);
+  await a.locator('tr[data-room][data-archived]').getByRole('button', { name: 'Unarchive hangout' }).waitFor();
+  await a.getByRole('button', { name: 'Archive music room' }).click();
+  await a.getByRole('dialog', { name: 'Archive music room?' }).getByRole('button', { name: 'Archive', exact: true }).click();
+  await order(b, ['general']);
+  await a.getByRole('button', { name: 'Unarchive music room' }).waitFor(); // bob's event can land before alice's PATCH answers
+  assert.ok(await a.getByRole('button', { name: 'Archive general' }).isDisabled(), 'the last room can be archived');
+  const lastId = await a.locator('tr[data-room]:not([data-archived])').getAttribute('data-room');
+  const status = await a.evaluate((id) => fetch(`/api/rooms/${id}`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ archived: true }),
+  }).then((r) => r.status), lastId);
+  assert.equal(status, 409, 'the server archived the last room');
+  await a.getByRole('button', { name: 'Unarchive hangout' }).click();
+  await a.getByRole('button', { name: 'Archive hangout' }).waitFor(); // one change at a time: a click meanwhile is ignored
+  await a.getByRole('button', { name: 'Unarchive music room' }).click();
+  await order(b, ['music room', 'general', 'hangout']);
+  await order(c, ['general', 'hangout']);
+  // A late rooms_changed from the first unarchive can show music room archived for a moment: wait for the last one.
+  await a.waitForFunction(() => document.querySelectorAll('tr[data-room]').length === 3 && !document.querySelector('tr[data-archived]'));
+  console.log('rooms: archive asks, hides live, keeps the last room, unarchive restores: ok');
 
   // Disk use: two meters (the database shows its size only); uploads are counted against the default 10 GB quota.
   await openAdmin(a, 'Disk use');
@@ -529,8 +559,64 @@ try {
   assert.equal(await focusedName(), 'Hide sidebar', 'focus did not move to the sidebar toggle');
   console.log('message highlight and sidebar slide: ok');
 
-  for (const p of [a, b, s, r, k]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
-  assert.deepEqual([gallery, alice, bob, carol, stranger, calm, keys].flatMap((x) => x.errors), [], 'page errors');
+  // Reset link. Moderator bob gets it on members (carol) only, not on the owner. Alice makes one for bob: the dialog names
+  // him, the link shows once and takes focus. Bob sets a new password on /reset in another browser: the code leaves the
+  // address bar, his open session lands on sign in, the old password fails, the new one works and tells him once who
+  // reset it, the owner's table shows the reset as used, and the link fails twice. Alice must type her own password.
+  await openAdmin(b, 'Members');
+  await b.getByRole('button', { name: 'Create reset link for carol' }).waitFor();
+  assert.equal(await b.getByRole('button', { name: 'Create reset link for alice' }).count(), 0, 'a moderator can reset the owner');
+  await openAdmin(a, 'Members');
+  await a.getByRole('button', { name: 'Create reset link for bob' }).click();
+  const confirmReset = a.getByRole('dialog', { name: 'Create a reset link for bob?' });
+  await confirmReset.getByLabel('Your password', { exact: true }).fill('test-password-9');
+  await confirmReset.getByRole('button', { name: 'Create link' }).click();
+  await confirmReset.getByRole('alert').getByText('Your password is not right.').waitFor();
+  assert.equal(await confirmReset.getByLabel('Your password', { exact: true }).inputValue(), '', 'the password stayed after a failed try');
+  await confirmReset.getByLabel('Your password', { exact: true }).fill('test-password-1');
+  await confirmReset.getByRole('button', { name: 'Create link' }).click();
+  await confirmReset.waitFor({ state: 'hidden' });
+  const resetBox = a.getByRole('textbox', { name: 'Reset link for bob', exact: true });
+  const resetLink = await resetBox.inputValue();
+  assert.match(resetLink, new RegExp(`^${ORIGIN}/reset#[0-9a-f]{64}$`), 'not a reset link');
+  assert.ok(await resetBox.evaluate((e) => e === document.activeElement), 'focus did not move to the new link');
+  const bobNew = await browser('bob-new');
+  const bn = bobNew.page;
+  await bn.goto(resetLink);
+  await bn.getByRole('heading', { name: 'Set a new password' }).waitFor();
+  assert.equal(bn.url(), `${ORIGIN}/reset`, 'reset code stayed in the address bar');
+  await bn.getByLabel('New password', { exact: true }).fill('test-password-4');
+  await bn.getByRole('button', { name: 'Set password' }).click();
+  await bn.getByRole('heading', { name: 'Your password is set' }).waitFor();
+  await b.waitForURL(/\/login/);
+  await b.getByText('Your session ended. Sign in again.').waitFor();
+  await bn.getByRole('button', { name: 'Sign in' }).click();
+  await bn.getByText('Forgot your password? Ask the owner for a reset link.').waitFor();
+  const bobSignIn = async (password) => {
+    await bn.getByLabel('Username').fill('bob');
+    await bn.getByLabel('Password', { exact: true }).fill(password);
+    await bn.getByRole('button', { name: 'Sign in' }).click();
+  };
+  await bobSignIn('test-password-1');
+  await bn.getByText('Wrong username or password.').waitFor();
+  await bobSignIn('test-password-4');
+  // Told once who reset it, then the app; the owner's table says it was used.
+  await bn.getByText('Your password was reset by alice (@alice) on', { exact: false }).waitFor();
+  await bn.getByRole('button', { name: 'Continue' }).click();
+  await signedIn(bn);
+  await openAdmin(a, 'Invites');
+  await openAdmin(a, 'Members');
+  await a.locator('tr[data-user="bob"]').getByText(/^Password reset by alice \(@alice\) on .+ \(used\)$/).waitFor();
+  await bn.goto(resetLink);
+  await bn.getByLabel('New password', { exact: true }).fill('test-password-5');
+  await bn.getByRole('button', { name: 'Set password' }).click();
+  await bn.getByRole('alert').getByText('This reset link does not work.', { exact: false }).waitFor();
+  await bn.goto(`${ORIGIN}/`);
+  await signedIn(bn); // the failed try ended nothing
+  console.log('reset link: moderator scope, owner makes it, bob resets, old password and session dead, single use: ok');
+
+  for (const p of [a, b, s, r, k, bn]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
+  assert.deepEqual([gallery, alice, bob, carol, stranger, calm, keys, bobNew].flatMap((x) => x.errors), [], 'page errors');
   await signedIn(a);
   console.log('e2e ui: PASS');
 } finally {

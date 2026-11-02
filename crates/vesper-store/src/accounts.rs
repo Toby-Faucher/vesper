@@ -1,6 +1,7 @@
 use sqlx::{FromRow, SqliteConnection};
 use vesper_protocol::{Role, UserInfo};
 
+use crate::resets::{cancel_made_by, cancel_reset};
 use crate::sessions::{NewSession, insert_session};
 use crate::{Result, Store, StoreError, constraint, now_ms, parse_role, random_hex, role_str};
 
@@ -187,7 +188,7 @@ impl Store {
         user_by_id(&mut c, id).await
     }
 
-    /// Sets the password hash and deletes every other session of the user.
+    /// Sets the password hash, deletes every other session of the user and cancels a live reset link.
     pub async fn set_password(&self, id: &str, phc: &str, keep_session: i64) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         let n = sqlx::query("UPDATE accounts SET password_phc = ?2 WHERE id = ?1")
@@ -204,25 +205,33 @@ impl Store {
             .bind(keep_session)
             .execute(&mut *tx)
             .await?;
+        cancel_reset(&mut tx, id, now_ms()).await?;
         tx.commit().await?;
         Ok(())
     }
 
+    /// Also cancels the user's live reset link and the live links they made: who may make one, and
+    /// for whom, depends on the role.
     pub async fn set_role(&self, id: &str, role: Role) -> Result<UserInfo> {
-        let mut c = self.pool.acquire().await?;
+        let mut tx = self.pool.begin().await?;
         let n = sqlx::query("UPDATE accounts SET role = ?2 WHERE id = ?1")
             .bind(id)
             .bind(role_str(role))
-            .execute(&mut *c)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
         if n == 0 {
             return Err(StoreError::NotFound);
         }
-        user_by_id(&mut c, id).await
+        cancel_reset(&mut tx, id, now_ms()).await?;
+        cancel_made_by(&mut tx, id, now_ms()).await?;
+        let user = user_by_id(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(user)
     }
 
-    /// A ban deletes all of the user's sessions. Banning twice keeps the first time.
+    /// A ban deletes all of the user's sessions. Banning twice keeps the first time. A ban or an
+    /// unban cancels the user's live reset link and the live links they made.
     pub async fn set_banned(&self, id: &str, banned: bool, now: i64) -> Result<UserInfo> {
         let mut tx = self.pool.begin().await?;
         let n = sqlx::query(
@@ -244,6 +253,8 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
         }
+        cancel_reset(&mut tx, id, now).await?;
+        cancel_made_by(&mut tx, id, now).await?;
         let user = user_by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok(user)

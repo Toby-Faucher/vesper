@@ -1,14 +1,20 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { api, errorText } from '../../lib/api';
+  import { api, ApiFailure, errorText } from '../../lib/api';
   import { session } from '../../lib/session.svelte';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
-    import { ROLE_NAMES, byRole } from './admin';
+  import { copyText } from '../../lib/ui/clipboard';
+  import { ROLE_NAMES, byRole, canReset, resetLine } from './admin';
   import Avatar from '../../lib/ui/c/Avatar.svelte';
   import Button from '../../lib/ui/c/Button.svelte';
   import PersonButton from '../../lib/ui/c/PersonButton.svelte';
   import Dialog from '../../lib/ui/c/Dialog.svelte';
+  import Field from '../../lib/ui/c/Field.svelte';
+  import PasswordInput from '../../lib/ui/c/PasswordInput.svelte';
   import Select from '../../lib/ui/c/Select.svelte';
+  import type { ResetCreate } from '../../lib/gen/ResetCreate';
+  import type { ResetCreated } from '../../lib/gen/ResetCreated';
+  import type { ResetInfo } from '../../lib/gen/ResetInfo';
   import type { Role } from '../../lib/gen/Role';
   import type { RolePatch } from '../../lib/gen/RolePatch';
   import type { UserInfo } from '../../lib/gen/UserInfo';
@@ -40,7 +46,10 @@
     await tick();
     if (!failed) tableEl?.focus();
   }
-  onMount(() => void load());
+  onMount(() => {
+    void load();
+    void loadResets();
+  });
   const members = $derived(Object.values(session.state.users).sort(byRole));
   const editable = (u: UserInfo) => owner && u.user_id !== me.user_id && u.role !== 'owner';
 
@@ -82,6 +91,57 @@
     const ok = role ? await send(u, 'PATCH', 'role', { role }) : await send(u, 'POST', 'ban');
     if (ok) confirm = null;
   }
+
+  // Reset links: confirm naming the person and asking for your own password, then the link once, like a new invite
+  // (only in this state, never stored). The owner also sees each person's latest reset: who made it and if it was used.
+  // Per person, newest first: the latest link, then every reset used in the last 30 days (a newer link can not hide one).
+  let resets = $state<Record<string, ResetInfo[]>>({});
+  async function loadResets() {
+    if (!owner) return;
+    try {
+      const by: Record<string, ResetInfo[]> = {};
+      for (const r of await api<ResetInfo[]>('GET', '/api/resets')) (by[r.user_id] ??= []).push(r);
+      resets = by;
+    } catch {
+      // only the audit line; the table works without it
+    }
+  }
+  // With the unique @username: display names can be copied.
+  const resetBy = (r: ResetInfo) => {
+    const u = r.created_by === null ? null : session.state.users[r.created_by];
+    return r.created_by === null ? null : u ? `${u.display_name} (@${u.username})` : 'someone';
+  };
+  let resetPassword = $state('');
+  let resetFor = $state<UserInfo | null>(null);
+  let resetError = $state('');
+  let resetBusy = $state(false);
+  let made = $state<(ResetCreated & { name: string }) | null>(null);
+  let copied = $state<'' | 'ok' | 'failed'>('');
+  let linkEl = $state<HTMLInputElement>();
+  async function makeReset() {
+    if (!resetFor || resetBusy) return;
+    resetBusy = true;
+    resetError = '';
+    const u = resetFor;
+    try {
+      const body: ResetCreate = { password: resetPassword };
+      made = { ...(await api<ResetCreated>('POST', `/api/users/${u.user_id}/reset`, body)), name: u.display_name };
+      [copied, resetFor] = ['', null];
+      void loadResets();
+      await tick();
+      linkEl?.focus();
+    } catch (e) {
+      resetError = e instanceof ApiFailure && e.code === 'forbidden' && e.detail === 'wrong password' ? M.resetWrongPassword : errorText(e);
+    } finally {
+      resetPassword = '';
+      resetBusy = false;
+    }
+  }
+  async function copy() {
+    copied = (await copyText(made!.url)) ? 'ok' : 'failed';
+    if (copied === 'failed') linkEl?.select();
+  }
+  const dateOf = (ms: number) => new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 </script>
 
 {#if !owner}<p class="mb-4 text-sm text-fg-2">{M.membersOwnerOnly}</p>{/if}
@@ -95,7 +155,7 @@
 {:else}
   <table class="tbl table-fixed" aria-label="Members" tabindex="-1" bind:this={tableEl}>
     <thead>
-      <tr><th scope="col">Name</th><th scope="col" class="w-36">Role</th><th scope="col" class="w-20">Status</th><th class="w-36"><span class="sr-only">Actions</span></th></tr>
+      <tr><th scope="col">Name</th><th scope="col" class="w-36">Role</th><th scope="col" class="w-20">Status</th><th class="w-40"><span class="sr-only">Actions</span></th></tr>
     </thead>
     <tbody>
       {#each members as u (u.user_id)}
@@ -109,6 +169,9 @@
                 <span class="block truncate text-xs text-fg-2">@{u.username}{u.user_id === me.user_id ? ' (you)' : ''}</span>
               </span>
             </PersonButton>
+            {#each resets[u.user_id] ?? [] as r}
+              <p class="mt-0.5 pl-8 text-xs text-fg-2">{resetLine(r, resetBy(r), Date.now())}</p>
+            {/each}
           </td>
           <td>
             {#if editable(u)}
@@ -122,7 +185,11 @@
           </td>
           <td class="text-fg-2">{u.banned ? 'Banned' : ''}</td>
           <td>
-            <div class="flex justify-end gap-2">
+            <div class="flex flex-wrap justify-end gap-2">
+              {#if canReset(me, u)}
+                <Button size="sm" variant="ghost" aria-label="Create reset link for {u.display_name}" aria-haspopup="dialog"
+                  onclick={() => ([resetFor, resetError, resetPassword] = [u, '', ''])}>Reset link</Button>
+              {/if}
               {#if editable(u)}
                 {#if u.banned}
                   <Button size="sm" loading={busy === u.user_id} aria-label="Unban {u.display_name}" onclick={() => send(u, 'POST', 'unban')}>Unban</Button>
@@ -136,6 +203,27 @@
       {/each}
     </tbody>
   </table>
+  {#if made}
+    <div class="created" role="group" aria-label="Reset link for {made.name}">
+      <div class="flex flex-col gap-1.5">
+        <label for="reset-link" class="text-sm font-ui text-fg">Reset link for {made.name}</label>
+        <div class="flex gap-2">
+          <input id="reset-link" bind:this={linkEl} value={made.url} readonly onfocus={(e) => e.currentTarget.select()}
+            aria-describedby="reset-once" class="control h-8 min-w-0 flex-1 px-2.5 font-mono text-xs" />
+          <Button onclick={copy}>Copy link</Button>
+        </div>
+      </div>
+      <p id="reset-once" class="text-sm text-fg-2">{M.resetOnce(dateOf(made.expires_at))}</p>
+      <div class="flex items-center gap-3">
+        {#if copied === 'failed'}
+          <p role="alert" class="text-sm text-danger">{M.inviteCopyFailed}</p>
+        {:else}
+          <p role="status" class="text-sm text-fg-2">{copied === 'ok' ? M.inviteCopied : ''}</p>
+        {/if}
+        <span class="ml-auto"><Button variant="ghost" size="sm" onclick={() => (made = null)}>Done</Button></span>
+      </div>
+    </div>
+  {/if}
   {#if error && !confirm}<p bind:this={errorEl} role="alert" tabindex="-1" class="mt-3 text-sm text-danger">{error}</p>{/if}
 {/if}
 
@@ -154,3 +242,23 @@
     <Button variant={confirm?.role ? 'primary' : 'danger'} loading={!!busy} onclick={confirmed}>{confirm?.role ? 'Change role' : 'Ban'}</Button>
   {/snippet}
 </Dialog>
+
+<Dialog open={!!resetFor} title={resetFor ? `Create a reset link for ${resetFor.display_name}?` : ''} onclose={() => ([resetFor, resetPassword] = [null, ''])}>
+  {M.resetBody}
+  {#if resetFor}
+    <form id="reset-form" class="mt-4" onsubmit={(e) => (e.preventDefault(), void makeReset())}>
+      <Field label="Your password" help="To check it is you.">
+        <PasswordInput autocomplete="current-password" bind:value={resetPassword} required />
+      </Field>
+    </form>
+  {/if}
+  {#if resetError}<p role="alert" tabindex="-1" class="mt-3 text-danger">{resetError}</p>{/if}
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => ([resetFor, resetPassword] = [null, ''])}>Cancel</Button>
+    <Button variant="primary" type="submit" form="reset-form" loading={resetBusy}>Create link</Button>
+  {/snippet}
+</Dialog>
+
+<style>
+  .created { display: flex; max-width: 560px; margin-top: 16px; flex-direction: column; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); }
+</style>
