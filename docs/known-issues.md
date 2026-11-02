@@ -53,7 +53,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **A changed public IP needs a rejoin.** The name is re-resolved every 60 s, but only new sessions use the new address. A failed lookup at start advertises nothing until the next refresh, with a warning every 60 s.
 - **Without `VESPER_PUBLIC_HOST`, `VESPER_UDP_PORT_PUBLIC` is ignored**, and a `0.0.0.0` bind is advertised as is, with a warning.
 - **The ping interval (25 s) and the socket queue (256 messages) have no environment variable.**
-- **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are not pinned by digest, and assets are not precompressed.
+- **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `no-cache` header (not `immutable`, because the 404 check runs before the SPA fallback). Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are not pinned by digest, and assets are not precompressed.
 - **The SFU wakes every 10 ms when idle.** Cheap, but it is not zero.
 - **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof).
 
