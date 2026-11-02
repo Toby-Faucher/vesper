@@ -3,6 +3,7 @@ name = "vesper-dsp"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [features]
 tract = ["deep_filter/tract"]
