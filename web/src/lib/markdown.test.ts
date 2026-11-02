@@ -91,6 +91,7 @@ describe('markdown', () => {
       '@'.repeat(big), '@abc'.repeat(big / 4), '<script>'.repeat(big / 8), '**a *b ~~c _d '.repeat(big / 14), 'a'.repeat(big),
       '#'.repeat(big), '# a\n'.repeat(big / 4), '- '.repeat(big / 2), '- a\n'.repeat(big / 4), '1. a\n- b\n'.repeat(big / 10),
       '-'.repeat(big), '- - '.repeat(big / 4) + 'x', '1'.repeat(big) + '. a', '```js\n'.repeat(big / 6),
+      '- a\n    1. b\n'.repeat(big / 12), ' '.repeat(big) + '- a', ' - a\n  - b\n   - c\n    - d\n'.repeat(big / 32),
     ]) {
       expect(timed(() => parse(s)), s.slice(0, 16)).toBeLessThan(250);
       expect(timed(() => decorate(s)), s.slice(0, 16)).toBeLessThan(250);
@@ -116,6 +117,27 @@ describe('markdown', () => {
     expect(langOf('cobol')).toBeNull();
     expect(langOf(undefined)).toBeNull();
     expect(langOf('constructor')).toBeNull(); // not an Object.prototype key
+  });
+
+  it('indented items nest under the item above', () => {
+    const li = (v: string, ...sub: Md[]): Md => ({ t: 'li', c: [text(v), ...sub] });
+    expect(parse('- a\n  - b\n    1. c\n  - d\n- e')).toEqual([
+      { t: 'ul', c: [li('a', { t: 'ul', c: [li('b', { t: 'ol', start: 1, c: [li('c')] }), li('d')] }), li('e')] },
+    ]);
+    // A change of kind at one level starts a sibling list there; at the top it starts a new list, as before.
+    expect(parse('- a\n  - b\n  1. c\n3. d')).toEqual([
+      { t: 'ul', c: [li('a', { t: 'ul', c: [li('b')] }, { t: 'ol', start: 1, c: [li('c')] })] },
+      { t: 'ol', start: 3, c: [li('d')] },
+    ]);
+    // An indented first item is a list; a dedent past every level starts a new one.
+    expect(parse('  - a\n- b')).toEqual([{ t: 'ul', c: [li('a')] }, { t: 'ul', c: [li('b')] }]);
+    // Nesting stops at depth 4: deeper items stay at the fourth level.
+    const deep = parse(['- 1', ' - 2', '  - 3', '   - 4', '    - 5'].join('\n'));
+    const levels = (n: Md[]): number => Math.max(0, ...n.map((x) => (x.t === 'ul' ? 1 : 0) + ('c' in x ? levels(x.c) : 0)));
+    expect(levels(deep)).toBe(4);
+    expect(decorate('- a\n  - b')).toEqual([
+      { v: '- ', k: 'mk' }, { v: 'a\n', k: '' }, { v: '  - ', k: 'mk' }, { v: 'b', k: '' },
+    ]);
   });
 
   it('hostile input in blocks stays text', () => {

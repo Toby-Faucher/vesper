@@ -60,13 +60,13 @@ The "Not verified" list at the end says what was only read.
   | a line of ```` ``` ````, lines, a line of ```` ``` ```` | a code block. One word after the opening fence (`` ```rust ``) is the language, shown as the block's label. Other text on a fence line is shown as text |
   | `# `, `## `, `### ` at the start of a line | a heading at 20, 16 or 14 px; `####` to `######` show as `###` |
   | `> ` at the start of lines | one level of quote |
-  | `- `, `* ` or `+ `, and `1. ` or `1) ` at the start of lines | a bullet or numbered list, flat (no nesting); a numbered list starts at its first number |
+  | `- `, `* ` or `+ `, and `1. ` or `1) ` at the start of lines | a bullet or numbered list; a numbered list starts at its first number. An item indented with more spaces than the one above nests in it, up to 4 levels |
   | `---`, `***` or `___` alone on a line | a rule |
   | a bare `http://` or `https://` URL | a link |
   | `@name` | a mention |
 
   Not supported, shown as typed: raw HTML, images (`![x](y)`), `[text](url)` links (the text could hide where a link goes),
-  tables, nested lists, task lists, backslash escapes, setext (underlined) headings and indented code. An unclosed marker is text.
+  tables, task lists, backslash escapes, setext (underlined) headings and indented code. An unclosed marker is text.
   A link is kept only when `new URL` parses it as http or https with no user name or password, and its text is the full parsed
   `href` (ASCII: other characters percent-encoded, hosts punycoded) so it cannot read differently from where it goes. Links get
   `rel="noopener noreferrer nofollow"`, `target="_blank"` and `dir="ltr"`. No `{@html}`, `innerHTML` or similar sink exists in `web/src`
