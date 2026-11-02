@@ -11,7 +11,7 @@ as root on this machine, and no call has been measured with them.
 
 `scripts/netem-call.sh` puts netem on UDP packets going **into** the SFU (destination port 40000, the `VESPER_UDP_BIND`
 default; `--port` for another). Everything else on the device is untouched, so SSH and the WebSocket keep working. Each
-sender's audio is hit once on its way in, so the loss a listener sees is about the configured loss. RTCP from the browsers
+sender's audio is hit once (IPv4 only: the filter matches `protocol ip`) on its way in, so the loss a listener sees is about the configured loss. RTCP from the browsers
 to the SFU is hit too; the SFU's packets back out are not.
 
 | Profile | netem arguments | Meaning |
@@ -38,8 +38,8 @@ tc -s qdisc show dev lo                 # the netem line counts dropped packets
 scripts/netem-call.sh off --apply       # always remove it afterwards
 ```
 
-To switch profiles, run `off --apply` first: `add` fails when the qdisc is already there. `--dev` takes another device,
-for example one end of a veth pair between two network namespaces; that setup is not described or tried here. Do not
+To switch profiles, run `off --apply` first: `add` fails when the qdisc is already there. `--dev` takes another device: only
+`lo` or a `veth*` name is accepted, for example one end of a veth pair between two network namespaces; that setup is not described or tried here. Do not
 use this on a network interface you reach the machine through (on bawn, `bond0`).
 
 ## The call

@@ -29,8 +29,8 @@ netem_args() {
 profile="" dev=lo port=40000 apply=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dev) dev=$2; shift ;;
-    --port) port=$2; shift ;;
+    --dev) dev=${2:?--dev needs a device}; shift ;;
+    --port) port=${2:?--port needs a number}; shift ;;
     --apply) apply=1 ;;
     -h | --help) usage; exit 0 ;;
     *) [ -z "$profile" ] || { usage >&2; exit 2; }; profile=$1 ;;
@@ -38,8 +38,9 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$profile" ] || { usage >&2; exit 2; }
-[[ $port =~ ^[0-9]+$ ]] || { echo "bad port: $port" >&2; exit 2; }
-[[ $dev =~ ^[A-Za-z0-9._-]+$ ]] || { echo "bad device: $dev" >&2; exit 2; }
+[[ $port =~ ^[0-9]{1,5}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo "bad port: $port" >&2; exit 2; }
+# Only loopback or a test veth: never the interface the machine is reached through (bond0 on bawn).
+[[ $dev = lo || $dev =~ ^veth[A-Za-z0-9._-]*$ ]] || { echo "refused device: $dev (lo or veth* only)" >&2; exit 2; }
 
 cmds=()
 if [ "$profile" = off ]; then

@@ -323,8 +323,8 @@ mod tests {
         );
     }
 
-    /// RED (distance 1) recovers every isolated lost packet exactly, so with independent 5 percent
-    /// loss it beats FEC alone; and 10 ms packets keep the output aligned and the right length.
+    /// RED (distance 1) decodes an isolated lost packet from its full copy; the test checks only that with
+    /// independent 5 percent loss it beats FEC alone; and 10 ms packets keep the output aligned and the right length.
     #[test]
     fn red_recovers_isolated_losses_and_10ms_aligns() {
         let x = voice();

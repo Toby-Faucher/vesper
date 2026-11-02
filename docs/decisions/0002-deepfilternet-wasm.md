@@ -4,7 +4,7 @@ Status: accepted, 2026-10-30
 
 Context: Friends use ordinary mics in noisy rooms. Server-side denoising would need decoding and re-encoding, which the SFU must not do.
 
-Decision: DeepFilterNet3 (`deep_filter` crate, upstream `wasm` feature) runs in an AudioWorklet and worker on the client. Capture order: mic, browser echo cancellation, DeepFilterNet, gain, Opus through WebRTC.
+Decision: DeepFilterNet3 (`deep_filter` crate, upstream `wasm` feature; since v1.4 its `tract` feature, see Consequences) runs in an AudioWorklet and worker on the client. Capture order: mic, browser echo cancellation, DeepFilterNet, gain, Opus through WebRTC.
 
 Why: The spike measured 0.8 to 2 ms per 10 ms frame in Firefox, real time with margin. It cuts quiet speech by default, so attenuation, post-filter and input boost are user settings.
 
