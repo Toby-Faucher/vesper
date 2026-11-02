@@ -1,5 +1,5 @@
 // The texts the first load needs (the shell, the sidebar, the connection banner, sign in, uploads). The rest are in
-// messages.ts, which the lazy pages import: one table cost 1.5 kB gzip of first load (measured 2026-11-02).
+// messages.ts, which the lazy pages import: one table cost 1.5 kB gzip of first load (measured 2026-11-01).
 export const UI_MESSAGES = {
   connecting: 'Connecting to the server...',
   reconnecting: (s: number) => `Connection lost. Trying again in ${s} s.`,

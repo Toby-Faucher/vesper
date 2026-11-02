@@ -95,14 +95,15 @@ fails above each budget: first load JS 70 kB (the entry chunk in `dist/index.htm
 statically), the largest lazy JS chunk 35 kB (`import()` chunks and the workers), all JS 150 kB, first load CSS 12 kB (the stylesheets `dist/index.html`
 links; a lazy chunk's CSS loads with the chunk) and all CSS 20 kB. Sizes are
 KiB of Node's gzip, so they read a little lower than the kB figures Vite prints.
-First load JS also has a ratchet (`RATCHET_GZIP_KB` in `size-check.mjs`): the measured value after the 2026-11-02 trim plus
+First load JS also has a ratchet (`RATCHET_GZIP_KB` in `size-check.mjs`): the measured value after the 2026-11-01 trim plus
 1 kB. Lower it when first load shrinks.
 
-What is in the first load (measured 2026-11-02, gzip): the Svelte runtime chunk (21.2 kB) and `index` (the shell, the sidebar,
+What is in the first load (measured 2026-11-01, gzip): the Svelte runtime chunk (21.2 kB) and `index` (the shell, the sidebar,
 the room view, the socket, the call store and sign in). Out of it, loaded on use: anime.js (`motion.ts` imports it right
 after start; until it arrives every preset is instant), the call chunk (`lib/call-stack.ts`: playback, capture, `join.ts`,
-the stats and the call bar, one chunk by a `codeSplitting` group in `vite.config.ts`; a hover, focus or press of Join voice
-loads it, `join()` at the latest, and the AudioContexts are still made inside the click), the search parser (with the
+the stats and the call bar, one chunk by a `codeSplitting` group in `vite.config.ts`; it loads when the app is idle after
+start, or earlier on a hover, focus or press of Join voice, `join()` at the latest, and the AudioContexts are still made
+inside the click; a failed load at the join says Vesper was updated, since an old tab's chunk is gone after a deploy), the search parser (with the
 search dialog) and the page texts (`messages.ts`; the first load uses `messages-first.ts`). To see what a chunk holds, build
 with `npx vite build --sourcemap` and add up the mapped bytes per source.
 
