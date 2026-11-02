@@ -180,6 +180,14 @@ decodes from its full copy, before FEC is tried; the redundant bytes are not cou
 `--opus` like a config run. Used to score a rebuilt copy of another product's chain on the same items.
 
 - Loss is seeded per item (`seed` and the item index), so two runs match bit for bit.
+- **RED under burst loss (2026-11-02, holdout, 160 items, unfinished).** The shipped chain (empty config, 64 kbps, FEC
+  and DTX on, 20 ms), `red=0` against `red=1`, paired on the same loss pattern. 5 % loss, bursts of 1: OVRL +0.012
+  [+0.006, +0.018], UTMOS +0.008 [+0.004, +0.012]. 5 % loss, mean burst 3: OVRL +0.000 [-0.005, +0.005], UTMOS
+  +0.008 [+0.003, +0.013], while that loss costs OVRL -0.021 and UTMOS -0.101 against no loss. So RED with distance 1
+  wins back almost nothing in bursts: like FEC, it can only rebuild the last packet of a burst, from the packet after
+  it; it only gives a full-rate copy instead of FEC's lower-rate one. It costs about double the audio bitrate on the
+  wire (not counted by the lab). The 5 % burst 5 and all 10 % cells were not run. The lab does not model RED distance 2
+  or more, jitter, or NACK.
 - A lost packet is decoded from the next packet's in-band FEC when FEC is on and that packet arrived (one
   packet of jitter buffer), else concealed (PLC). The encoder is told the loss rate
   (`OPUS_SET_PACKET_LOSS_PERC`), as WebRTC does; without it libopus sends no FEC.
