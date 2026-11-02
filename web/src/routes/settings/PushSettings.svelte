@@ -12,7 +12,7 @@
   let error = $state('');
   let tested = $state('');
   const on = $derived(view?.state === 'on');
-  const canTurn = $derived(view?.state === 'on' || view?.state === 'off');
+  const canTurn = $derived(view?.state === 'on' || view?.state === 'off' || view?.state === 'renew');
 
   async function refresh() {
     try {

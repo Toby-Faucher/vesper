@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { keyBytes, pushState, sameBytes, subscribeBody, turnOn, turnOff, type PushEnv } from './push';
+import { keyBytes, loadPush, pushState, sameBytes, subscribeBody, turnOn, turnOff, type PushEnv } from './push';
 
 const env = (o: Partial<PushEnv> = {}): PushEnv => ({
-  supported: true, ios: false, standalone: false, publicKey: 'k', permission: 'default', subscribed: false, ...o,
+  supported: true, ios: false, standalone: false, publicKey: 'k', permission: 'default', subscribed: false, keyMatches: true, ...o,
 });
 
 describe('pushState', () => {
@@ -18,6 +18,10 @@ describe('pushState', () => {
     expect(pushState(env({ permission: 'granted' }))).toBe('off');
     expect(pushState(env({ subscribed: true }))).toBe('off');
     expect(pushState(env({ permission: 'granted', subscribed: true }))).toBe('on');
+  });
+  it('asks to set up again when the subscription is for another server key', () => {
+    expect(pushState(env({ permission: 'granted', subscribed: true, keyMatches: false }))).toBe('renew');
+    expect(pushState(env({ permission: 'denied', keyMatches: false }))).toBe('blocked');
   });
 });
 
@@ -36,6 +40,7 @@ describe('keys', () => {
 
 describe('turnOn and turnOff', () => {
   const calls: string[] = [];
+  const bodies: unknown[] = [];
   const sub = {
     options: { applicationServerKey: keyBytes('AQI').buffer },
     toJSON: () => ({ endpoint: 'https://e', keys: { p256dh: 'p', auth: 'a' } }),
@@ -60,6 +65,7 @@ describe('turnOn and turnOff', () => {
     });
     vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
       calls.push(`${init.method} ${url}`);
+      bodies.push(init.body);
       return new Response(null, { status: 204 });
     });
   }
@@ -74,6 +80,8 @@ describe('turnOn and turnOff', () => {
     stub('granted');
     expect(await turnOn('AQI')).toBe('granted');
     expect(calls).toEqual(['permission', 'register', 'get', 'subscribe', 'PUT /api/push/subscription']);
+    // Both kinds start off until the person turns them on.
+    expect(JSON.parse(bodies.at(-1) as string)).toMatchObject({ mentions: false, voice: false });
   });
   it('drops a subscription made for another server key', async () => {
     stub('granted');
@@ -86,5 +94,25 @@ describe('turnOn and turnOff', () => {
     reg.pushManager.getSubscription = async () => (calls.push('get'), sub);
     await turnOff();
     expect(calls).toEqual(['DELETE /api/push/subscription', 'get', 'unsubscribe', 'unregister']);
+  });
+});
+
+describe('loadPush', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it('says set up again when the browser subscription is for another server key', async () => {
+    const sub = { options: { applicationServerKey: keyBytes('AQI').buffer } };
+    vi.stubGlobal('PushManager', class {});
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.stubGlobal('navigator', {
+      userAgent: 'x', platform: 'Linux', maxTouchPoints: 0,
+      serviceWorker: { getRegistration: async () => ({ pushManager: { getSubscription: async () => sub } }) },
+    });
+    const device = { id: 1, label: 'Chrome on Linux', created_at: 0, last_ok_at: null, current: true, mentions: true, voice: false };
+    const serve = (key: string) => vi.stubGlobal('fetch', async () => Response.json({ public_key: key, devices: [device] }));
+    serve('AQI');
+    expect((await loadPush()).state).toBe('on');
+    serve('AQM');
+    expect((await loadPush()).state).toBe('renew');
   });
 });

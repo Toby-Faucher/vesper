@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use vesper_protocol::{ApiErrorCode, PushInfo, PushPayload, PushSubscribe};
-use vesper_store::{NewPushSub, StoreError, now_ms};
+use vesper_store::{NewPushSub, StoreError, TOO_MANY_DEVICES, now_ms};
 
 use crate::api_accounts::{body, limit};
 use crate::api_admin::{bad, path};
@@ -70,9 +70,15 @@ async fn subscribe(
         })
         .await
         .map_err(|e| match e {
-            StoreError::Conflict(_) => ApiError::new(
+            StoreError::Conflict(TOO_MANY_DEVICES) => ApiError::new(
                 ApiErrorCode::Conflict,
                 "at most 5 devices get notifications: remove one first",
+            ),
+            // Plain refusal: the endpoint is a capability URL the caller already holds, so
+            // this tells them nothing new, and pretending success would hide a real mix-up.
+            StoreError::Conflict(_) => ApiError::new(
+                ApiErrorCode::Conflict,
+                "this browser gets notifications for another session: turn them off there first",
             ),
             e => e.into(),
         })?;

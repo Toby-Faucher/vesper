@@ -21,7 +21,9 @@ mod uploads;
 
 pub use accounts::{LoginRow, NewAccount};
 pub use messages::{Cursor, MAX_PINS, MAX_REACTIONS, NewMessage};
-pub use push::{MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget};
+pub use push::{
+    ENDPOINT_TAKEN, MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget, TOO_MANY_DEVICES,
+};
 pub use search::{HITS as SEARCH_SQL, MAX_SEARCH, fts_query};
 pub use sessions::{NewSession, SESSION_TTL_MS};
 pub use uploads::UploadRow;

@@ -117,7 +117,16 @@ try {
   await b.getByText('Off on this device.').waitFor();
   assert.equal(await b.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => !!r)), false, 'worker before the switch');
   await toggle.check();
-  await b.getByText('On for this device.').waitFor();
+  await b.getByText(/^On for this device/).waitFor();
+  // Both kinds start off; bob turns them on.
+  for (const name of ['Mentions', 'Someone starts voice']) {
+    const s = b.getByRole('switch', { name });
+    assert.equal(await s.isChecked(), false, `${name} starts off`);
+    await s.check();
+    await sleep(300);
+  }
+  const kinds = await b.evaluate(() => fetch('/api/push').then((r) => r.json()).then((i) => i.devices[0]));
+  assert.deepEqual([kinds.mentions, kinds.voice], [true, true], 'switches saved');
   assert.equal(await b.evaluate(() => navigator.serviceWorker.ready.then((r) => r.active?.scriptURL)), `${ORIGIN}/sw.js`);
   await b.getByRole('list', { name: 'Devices that get notifications' }).getByText('This device').waitFor();
   const info = await b.evaluate(() => fetch('/api/push').then((r) => r.json()));
@@ -147,7 +156,7 @@ try {
     shown = await b.evaluate(() => navigator.serviceWorker.ready.then((r) => r.getNotifications())
       .then((ns) => ns.map((n) => ({ title: n.title, body: n.body, tag: n.tag }))));
   }
-  assert.deepEqual(shown, [{ title: 'Vesper', body: 'alice mentioned you in general', tag: 'room-1' }]);
+  assert.deepEqual(shown, [{ title: 'Vesper', body: 'alice mentioned you in general', tag: 'mention-1' }]);
   console.log('worker shows the push as a notification: ok');
   assert.deepEqual(await cspViolations(b), [], 'CSP violations');
 

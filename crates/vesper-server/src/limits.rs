@@ -22,7 +22,7 @@ pub enum Kind {
     Search,
     /// Edits, reactions and pins, shared. Key: user id.
     Change,
-    /// Push subscribe and test push, shared. Key: user id.
+    /// Push subscribe, switches and test push, shared. Key: user id.
     Push,
 }
 
@@ -39,7 +39,7 @@ impl Kind {
             Kind::Typing => (1.0, s(3)),
             Kind::Search => (10.0, s(1)),
             Kind::Change => (20.0, s(1)),
-            Kind::Push => (10.0, s(30)),
+            Kind::Push => (20.0, s(10)),
         }
     }
 }

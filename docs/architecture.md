@@ -247,10 +247,10 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
 | `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
 | `GET /api/push` | a session | `PushInfo`: the VAPID public key (null when push is off) and `PushDevice[]`, `current` marks this session's |
-| `PUT /api/push/subscription` (`PushSubscribe`) | a session, Push limit by user (10, then 1 per 30 s, shared with the test) | 204; replaces this session's subscription. 400 for an endpoint off the push service list or bad keys, 404 when push is off, 409 past 5 devices |
+| `PUT /api/push/subscription` (`PushSubscribe`) | a session, Push limit by user (20, then 1 per 10 s, shared with the switches and the test) | 204; replaces this session's subscription. 400 for an endpoint off the push service list or bad keys, 404 when push is off, 409 past 5 devices or for an endpoint another session holds with other keys |
 | `DELETE /api/push/subscription` | a session | 204, this session's subscription is gone |
 | `DELETE /api/push/devices/{id}` | a session | 204, or 404 if the id is not one of yours |
-| `POST /api/push/test` | a session, Push limit | 204 once the push service took it; 404 with no subscription or when the service says it is gone (then deleted), 500 for any other answer |
+| `POST /api/push/test` | a session, Push limit | 204 once the push service took it; 404 with no subscription or when the service says it is gone or refuses the key (then deleted), 500 for any other answer |
 | `GET /api/users` | a session | `UserInfo[]`, every account (role and banned included) to any signed-in member by design: the WebSocket hello sends the same list |
 | `GET /api/invites` | moderator or owner | `InviteInfo[]`, newest first |
 | `POST /api/invites` (`InviteCreate`) | moderator or owner; a moderator invite needs the owner | 201 `InviteCreated` with the link `<origin>/invite#<code>` |
@@ -448,8 +448,8 @@ Notifications while Vesper is closed (issue #58): "alice mentioned you in Games"
 `routes/settings/PushSettings.svelte` and `web/public/sw.js`.
 
 - **Opt-in per device.** Settings > Notifications > While Vesper is closed. The switch asks for permission (from the click), registers
-  `/sw.js` and subscribes with the server's VAPID public key. Each device has a mentions switch and a voice switch, both on once
-  push is on. Turning it off, or logging out, unregisters the worker; the server deletes the subscription with the session.
+  `/sw.js` and subscribes with the server's VAPID public key. Each device has a mentions switch and a voice switch, both off
+  until the person turns them on. Turning it off, or logging out, unregisters the worker; the server deletes the subscription with the session.
 - **Who gets one.** A new message pushes to the accounts it mentions (already limited to people who can see the room and are not
   banned). The first join of an empty voice room pushes to everyone who can see the room. Never to the sender, never to an account with a
   WebSocket open at that moment (its tab shows the event), never to a device with that switch off or a session unused for 90 days,
@@ -459,16 +459,22 @@ Notifications while Vesper is closed (issue #58): "alice mentioned you in Games"
   browser, its size and time. The body names the sender and the room, never the message text. TTL 24 h for mentions, 10 minutes for
   voice; `Topic` per room, so a waiting push is replaced by a newer one.
 - **VAPID.** An ES256 key made on first start and kept in the database (`server_secrets`), so a copy of `vesper.db` keeps it and
-  existing subscriptions keep working after a restore. JWTs last 12 hours. The contact (`sub`) is `VESPER_PUSH_SUBJECT`, else an https
+  existing subscriptions keep working after a restore. If the key changes (a restore without that row), push services refuse the old
+  subscriptions with 401 or 403 and the server deletes them; Settings compares the browser's subscription with the current key and
+  asks to turn it on again. JWTs last 12 hours. The contact (`sub`) is `VESPER_PUSH_SUBJECT`, else an https
   `VESPER_ORIGIN`; with neither, push is off ([env.md](env.md)).
 - **SSRF.** The server POSTs to a URL the browser gave it, so `parse_endpoint` allows only https on port 443 to `fcm.googleapis.com`,
   `updates.push.services.mozilla.com`, `*.push.apple.com` and `*.notify.windows.com`, with no user part and at most 2048 bytes. The
   name is resolved once; if any address is not public (loopback, private, link-local such as 169.254.169.254, CGNAT, documentation,
   multicast, IPv6 unique-local, or IPv4 wrapped in IPv6) the push is refused, and the connection goes to the checked address. TLS with
-  the Mozilla root list (`webpki-roots`), HTTP/1.1, no redirects followed, no cookies, 10 s for the whole exchange, only the status line
-  of the answer read. 404 or 410 deletes the subscription. The `test-push` cargo feature (tests and the push e2e) also allows
+  the Mozilla root list (`webpki-roots`), HTTP/1.1, no redirects followed, no cookies, 10 s for the lookup and the exchange together,
+  only the status line of the answer read. 404 or 410 (gone) and 401 or 403 (made for another VAPID key) delete the subscription. At
+  most 8 sends run at once and 256 wait or run; past that a push is dropped (a debug log line), so a mention storm cannot grow a
+  backlog. A port other than 443 is refused from the raw text (`http::Uri` reads `:65979` as no port), and so is a path that does not
+  start with `/`. A second session may take over an endpoint already stored only when its keys match too (the same browser, signed in
+  as someone else); otherwise 409, so knowing an endpoint is not enough to take another person's pushes. The `test-push` cargo feature (tests and the push e2e) also allows
   `http://127.0.0.1:<port>`; it is a compile error in a release build.
-- **The worker** shows the notification (tag `room-<id>`), focuses an open Vesper tab and asks it to open the room (the app navigates
+- **The worker** shows the notification (tag `<kind>-<room id>`, so a voice push never replaces a mention), focuses an open Vesper tab and asks it to open the room (the app navigates
   in place, so a call goes on) or opens `/r/<id>`, and resubscribes on `pushsubscriptionchange` with the device's switches. It has
   no fetch handler and caches nothing.
 - **Install.** `web/public/manifest.webmanifest` (standalone, `#100e0c`, 192 and 512 px icons) is linked from `index.html`. Under the

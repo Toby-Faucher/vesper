@@ -60,12 +60,16 @@ impl Fake {
                         buf.extend_from_slice(&chunk[..n]);
                     }
                     let c = code.load(Ordering::SeqCst);
-                    let reply = format!("HTTP/1.1 {c} X\r\nContent-Length: 0\r\n\r\n");
-                    s.write_all(reply.as_bytes()).await.unwrap();
                     let _ = tx.send(Got {
                         head,
                         body: buf[end..end + len].to_vec(),
                     });
+                    if c == 0 {
+                        // A push service that never answers: hold the connection open.
+                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                    }
+                    let reply = format!("HTTP/1.1 {c} X\r\nContent-Length: 0\r\n\r\n");
+                    let _ = s.write_all(reply.as_bytes()).await;
                 });
             }
         });
@@ -518,7 +522,7 @@ async fn subscribe_is_rate_limited() {
             &bob,
         )
     };
-    for _ in 0..10 {
+    for _ in 0..20 {
         assert_eq!(server.call(once()).await.0, StatusCode::NO_CONTENT);
     }
     assert_eq!(server.call(once()).await.0, StatusCode::TOO_MANY_REQUESTS);
@@ -532,4 +536,133 @@ async fn push_is_off_without_a_subject() {
     assert_eq!(info["public_key"], Value::Null);
     let sub = Browser::new().subscription("https://fcm.googleapis.com/fcm/send/x", true, true);
     assert_eq!(subscribe(&server, &bob, sub).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_rejected_vapid_key_deletes_the_subscription() {
+    let server = TestServer::new().await;
+    let fake = Fake::start().await;
+    let bob = server.account("bob", Role::Member).await;
+    let endpoint = format!("http://127.0.0.1:{}/push/bob", fake.port);
+    for code in [401, 403] {
+        subscribe(
+            &server,
+            &bob,
+            Browser::new().subscription(&endpoint, true, true),
+        )
+        .await;
+        fake.status.store(code, Ordering::SeqCst);
+        let (st, _, _) = server.call(post("/api/push/test", json!({}), &bob)).await;
+        assert_eq!(st, StatusCode::NOT_FOUND, "{code}");
+        let (_, _, info) = server.call(get("/api/push", &bob)).await;
+        assert_eq!(info["devices"], json!([]), "{code}");
+    }
+}
+
+#[tokio::test]
+async fn another_account_cannot_take_an_endpoint_without_its_keys() {
+    let server = TestServer::new().await;
+    let bob = server.account("bob", Role::Member).await;
+    let eve = server.account("eve", Role::Member).await;
+    let e = "https://fcm.googleapis.com/fcm/send/bob";
+    let b = Browser::new();
+    assert_eq!(
+        subscribe(&server, &bob, b.subscription(e, true, true))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    let (st, v) = subscribe(&server, &eve, Browser::new().subscription(e, true, true)).await;
+    assert_eq!(st, StatusCode::CONFLICT, "{v}");
+    let (_, _, info) = server.call(get("/api/push", &bob)).await;
+    assert_eq!(info["devices"].as_array().unwrap().len(), 1);
+    // The same browser (same keys) signed in as eve does move.
+    assert_eq!(
+        subscribe(&server, &eve, b.subscription(e, true, true))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    let (_, _, info) = server.call(get("/api/push", &bob)).await;
+    assert_eq!(info["devices"], json!([]));
+}
+
+/// A server whose push sender has a short timeout and a small queue.
+async fn limited(timeout: Duration, max_pending: usize) -> TestServer {
+    let server = TestServer::new().await;
+    let push = vesper_server::push::Push::with_limits(
+        server.state.store.clone(),
+        server.state.hub.clone(),
+        Some(SUBJECT.into()),
+        timeout,
+        max_pending,
+    )
+    .await
+    .unwrap();
+    TestServer {
+        state: vesper_server::AppState {
+            push,
+            ..server.state.clone()
+        },
+        ..server
+    }
+}
+
+#[tokio::test]
+async fn a_push_service_that_never_answers_frees_its_slot_in_time() {
+    let server = limited(Duration::from_millis(300), 256).await;
+    let mut fake = Fake::start().await;
+    fake.status.store(0, Ordering::SeqCst);
+    let bob = server.account("bob", Role::Member).await;
+    let endpoint = format!("http://127.0.0.1:{}/push/bob", fake.port);
+    subscribe(
+        &server,
+        &bob,
+        Browser::new().subscription(&endpoint, true, true),
+    )
+    .await;
+    let t = std::time::Instant::now();
+    let (st, _, _) = server.call(post("/api/push/test", json!({}), &bob)).await;
+    assert_eq!(st, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+    fake.next().await;
+    // A failure that is not a refusal keeps the subscription.
+    let (_, _, info) = server.call(get("/api/push", &bob)).await;
+    assert_eq!(info["devices"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn sends_past_the_queue_cap_are_dropped() {
+    let server = limited(Duration::from_secs(5), 2).await;
+    let mut fake = Fake::start().await;
+    fake.status.store(0, Ordering::SeqCst);
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let general = room(&server, &alice, "general").await;
+    for i in 0..4 {
+        let s = server.session(&bob.user).await;
+        let e = format!("http://127.0.0.1:{}/push/{i}", fake.port);
+        subscribe(&server, &s, Browser::new().subscription(&e, true, true)).await;
+    }
+    server
+        .state
+        .push
+        .mentioned(
+            &general,
+            &alice.user,
+            std::slice::from_ref(&bob.user.user_id),
+        )
+        .await;
+    fake.next().await;
+    fake.next().await;
+    fake.quiet().await;
+    assert_eq!(server.state.push.pending(), 2);
+    // Once the stuck ones time out, the queue is empty again.
+    for _ in 0..40 {
+        if server.state.push.pending() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert_eq!(server.state.push.pending(), 0);
 }

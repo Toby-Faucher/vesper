@@ -12,6 +12,7 @@ export type PushState =
   | 'install' // iPhone or iPad in Safari: push needs Vesper on the Home Screen
   | 'server-off' // the server has no VAPID subject
   | 'blocked' // notifications blocked in the browser's site settings
+  | 'renew' // this browser's subscription was made for another server key (a restored database): set up again
   | 'off'
   | 'on';
 
@@ -23,12 +24,15 @@ export interface PushEnv {
   permission: NotificationPermission;
   /** The browser has a subscription and the server has it as this session's device. */
   subscribed: boolean;
+  /** The browser's subscription was made for the server's current public key (true when there is none). */
+  keyMatches: boolean;
 }
 
 export function pushState(e: PushEnv): PushState {
   if (!e.supported) return e.ios && !e.standalone ? 'install' : 'unsupported';
   if (!e.publicKey) return 'server-off';
   if (e.permission === 'denied') return 'blocked';
+  if (!e.keyMatches) return 'renew';
   return e.subscribed && e.permission === 'granted' ? 'on' : 'off';
 }
 
@@ -37,8 +41,9 @@ export const STATE_TEXT: Record<PushState, string> = {
   install: 'On iPhone and iPad this works only from the Home Screen: tap Share, then Add to Home Screen, and open Vesper from there.',
   'server-off': 'This server is not set up for notifications while Vesper is closed.',
   blocked: 'Blocked by your browser. Allow notifications for this site in the address bar, then turn this on again.',
+  renew: 'The server has a new key, so this device no longer gets notifications. Turn this on again to set it up.',
   off: 'Off on this device.',
-  on: 'On for this device.',
+  on: 'On for this device. Choose below what it gets.',
 };
 
 export const supported = () => 'serviceWorker' in navigator && typeof PushManager !== 'undefined' && typeof Notification !== 'undefined';
@@ -77,15 +82,17 @@ export async function loadPush(): Promise<PushView> {
   const info = supported() ? await api<PushInfo>('GET', '/api/push') : { public_key: null, devices: [] };
   const sub = supported() ? await registration().then((r) => r?.pushManager.getSubscription() ?? null) : null;
   const mine = info.devices.find((d) => d.current) ?? null;
+  const keyMatches = !sub || !info.public_key || sameBytes(sub.options.applicationServerKey, keyBytes(info.public_key));
   const state = pushState({
     supported: supported(), ios: ios(), standalone: standalone(), publicKey: info.public_key,
-    permission: supported() ? Notification.permission : 'default', subscribed: !!sub && !!mine,
+    permission: supported() ? Notification.permission : 'default', subscribed: !!sub && !!mine, keyMatches,
   });
   return { state, devices: info.devices, mine, publicKey: info.public_key };
 }
 
-/** Only from a click: the permission prompt must come first, before any other await. */
-export async function turnOn(publicKey: string, kinds = { mentions: true, voice: true }): Promise<NotificationPermission> {
+/** Only from a click: the permission prompt must come first, before any other await. Both kinds start off: the person
+ * picks them (the ruling for #58). */
+export async function turnOn(publicKey: string, kinds = { mentions: false, voice: false }): Promise<NotificationPermission> {
   const p = await Notification.requestPermission();
   if (p !== 'granted') return p;
   await navigator.serviceWorker.register('/sw.js', { scope: '/' });

@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,7 +25,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
-use tracing::warn;
+use tracing::{debug, warn};
 use vesper_protocol::{PushPayload, RoomInfo, UserInfo};
 use vesper_store::{PushKind, PushTarget, Store, StoreError, now_ms};
 
@@ -42,9 +43,12 @@ const PUSH_HOSTS: &[(&str, bool)] = &[
     ("notify.windows.com", true),  // Edge on Windows (wns2-*.notify.windows.com)
 ];
 const MAX_ENDPOINT: usize = 2048;
-const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+/// Lookup, connect, TLS and the answer together, so a slow push service holds a slot this long at most.
+pub const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Sends in flight at once, server-wide.
 const PARALLEL: usize = 8;
+/// Sends waiting or in flight, server-wide; past this new pushes are dropped (a mention storm).
+pub const MAX_PENDING: usize = 256;
 /// One "started voice" push per room and person in this long.
 pub const VOICE_EVERY: Duration = Duration::from_secs(10 * 60);
 const VAPID_SECRET: &str = "vapid_es256_pkcs8";
@@ -90,8 +94,16 @@ pub fn parse_endpoint(s: &str, allow_loopback: bool) -> Result<Endpoint, &'stati
     if uri.scheme_str() != Some("https") {
         return Err("endpoint must be https");
     }
-    if auth.port_u16().is_some_and(|p| p != 443) {
+    // From the raw text: `port_u16` reads 65979 or 0x as "no port".
+    if auth
+        .as_str()
+        .rsplit_once(':')
+        .is_some_and(|(_, p)| p != "443")
+    {
         return Err("endpoint must use port 443");
+    }
+    if !path.starts_with('/') {
+        return Err("endpoint path must start with /");
     }
     let known = PUSH_HOSTS.iter().any(|&(h, sub)| {
         host == h || (sub && host.strip_suffix(h).is_some_and(|p| p.ends_with('.')))
@@ -154,14 +166,11 @@ pub fn pick_addr(addrs: &[SocketAddr], allow_loopback: bool) -> Result<SocketAdd
 
 /// Resolves once, checks every address, and returns the one to connect to.
 pub async fn resolve(ep: &Endpoint, allow_loopback: bool) -> Result<SocketAddr, &'static str> {
-    let addrs: Vec<SocketAddr> = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::net::lookup_host((ep.host.as_str(), ep.port)),
-    )
-    .await
-    .map_err(|_| "endpoint lookup timed out")?
-    .map_err(|_| "endpoint lookup failed")?
-    .collect();
+    // No timeout of its own: `Push::send` bounds the lookup and the exchange together.
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((ep.host.as_str(), ep.port))
+        .await
+        .map_err(|_| "endpoint lookup failed")?
+        .collect();
     pick_addr(&addrs, allow_loopback)
 }
 
@@ -347,11 +356,26 @@ struct Inner {
     allow_loopback: bool,
     tls: tokio_rustls::TlsConnector,
     slots: Arc<Semaphore>,
+    pending: AtomicUsize,
+    max_pending: usize,
+    timeout: Duration,
     voice: Mutex<VoiceDedupe>,
 }
 
 impl Push {
     pub async fn new(store: Store, hub: Hub, subject: Option<String>) -> Result<Push, String> {
+        Push::with_limits(store, hub, subject, SEND_TIMEOUT, MAX_PENDING).await
+    }
+
+    /// [`Push::new`] with another send timeout and queue cap, for tests.
+    #[doc(hidden)]
+    pub async fn with_limits(
+        store: Store,
+        hub: Hub,
+        subject: Option<String>,
+        timeout: Duration,
+        max_pending: usize,
+    ) -> Result<Push, String> {
         let vapid = Vapid::load(&store).await?;
         let roots =
             rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -375,6 +399,9 @@ impl Push {
             allow_loopback,
             tls: tokio_rustls::TlsConnector::from(Arc::new(tls)),
             slots: Arc::new(Semaphore::new(PARALLEL)),
+            pending: AtomicUsize::new(0),
+            max_pending,
+            timeout,
             voice: Mutex::default(),
         })))
     }
@@ -386,6 +413,11 @@ impl Push {
 
     pub fn allow_loopback(&self) -> bool {
         self.0.allow_loopback
+    }
+
+    /// Sends waiting for a slot or in flight.
+    pub fn pending(&self) -> usize {
+        self.0.pending.load(Ordering::SeqCst)
     }
 
     /// `room` got a message from `sender` that mentions `mentioned` (already filtered to people
@@ -472,19 +504,25 @@ impl Push {
             };
             let body = serde_json::to_vec(&payload).expect("payload serialises");
             for t in targets {
-                let Ok(slot) = push.0.slots.clone().acquire_owned().await else {
-                    return;
-                };
+                // Counted before waiting for a slot, so a backlog cannot grow without bound.
+                if push.0.pending.fetch_add(1, Ordering::SeqCst) >= push.0.max_pending {
+                    push.0.pending.fetch_sub(1, Ordering::SeqCst);
+                    debug!("push: {} sends pending, dropped one", push.0.max_pending);
+                    continue;
+                }
                 let (push, body, topic) = (push.clone(), body.clone(), topic.clone());
                 tokio::spawn(async move {
-                    push.send(&t, &body, ttl, urgency, &topic).await;
-                    drop(slot);
+                    if let Ok(_slot) = push.0.slots.clone().acquire_owned().await {
+                        push.send(&t, &body, ttl, urgency, &topic).await;
+                    }
+                    push.0.pending.fetch_sub(1, Ordering::SeqCst);
                 });
             }
         });
     }
 
-    /// One push to one subscription: deletes it on 404 or 410, stamps it on success. Logs the
+    /// One push to one subscription: deletes it on 404 or 410 (gone) and on 401 or 403 (it was
+    /// made for another VAPID key: a restored or lost key), stamps it on success. Logs the
     /// push service's host and status only, never the endpoint path.
     pub async fn send(
         &self,
@@ -497,7 +535,7 @@ impl Push {
         let Some(subject) = &self.0.subject else {
             return Sent::Failed("push is off".into());
         };
-        let result = async {
+        let exchange = async {
             let ep = parse_endpoint(&t.endpoint, self.0.allow_loopback)?;
             let addr = resolve(&ep, self.0.allow_loopback).await?;
             let body = encrypt(payload, &t.p256dh, &t.auth)?;
@@ -515,12 +553,13 @@ impl Push {
                 },
                 body.len()
             );
-            tokio::time::timeout(SEND_TIMEOUT, self.post(&ep, addr, head, &body))
+            self.post(&ep, addr, head, &body)
                 .await
-                .map_err(|_| "push service timed out")?
                 .map_err(|_| "push service connection failed")
-        }
-        .await;
+        };
+        let result = tokio::time::timeout(self.0.timeout, exchange)
+            .await
+            .unwrap_or(Err("push service timed out"));
         let host = t.endpoint.split('/').nth(2).unwrap_or("?").to_string();
         let r = match result {
             Ok(200..=299) => self
@@ -535,6 +574,17 @@ impl Push {
                 .delete_push_subscription(t.id)
                 .await
                 .map(|_| Sent::Gone),
+            // Bounded: the row is gone, so each subscription logs this once.
+            Ok(code @ (401 | 403)) => {
+                warn!(
+                    "push: {host} answered {code}: the subscription is for another VAPID key, deleted"
+                );
+                self.0
+                    .store
+                    .delete_push_subscription(t.id)
+                    .await
+                    .map(|_| Sent::Gone)
+            }
             Ok(code) => Ok(Sent::Failed(format!("{host} answered {code}"))),
             Err(e) => Ok(Sent::Failed(format!("{host}: {e}"))),
         };
@@ -707,6 +757,10 @@ mod tests {
             "https://user:pw@fcm.googleapis.com/x",
             "https://fcm.googleapis.com@10.0.0.1/x",
             "https://fcm.googleapis.com:8443/x",
+            "https://fcm.googleapis.com:0/x",
+            "https://fcm.googleapis.com:65979/x",
+            "https://fcm.googleapis.com:99999999/x",
+            "https://fcm.googleapis.com?x",
             "https://fcm.googleapis.com.evil.example/x",
             "https://evilfcm.googleapis.com/x",
             "https://push.apple.com.evil/x",
@@ -816,6 +870,8 @@ mod tests {
     }
 
     #[test]
+    // `..Default::default()` on purpose: a RoomInfo field added by another PR (archived) must not break this.
+    #[allow(clippy::needless_update)]
     fn recipients_skip_sender_online_banned_and_hidden() {
         let a = user('a', Role::Member);
         let b = user('b', Role::Member);
@@ -836,6 +892,8 @@ mod tests {
                 c.user_id.clone(),
                 d.user_id.clone(),
             ],
+            // A field added later (archived) keeps its default here.
+            ..Default::default()
         };
         let users = [
             a.clone(),

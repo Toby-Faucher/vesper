@@ -146,6 +146,9 @@ Ctrl+Shift+F after a failed chunk load and from the switcher, and picks a `from:
 (`scripts/build-dsp.sh`, then `npm run build`), it also signs up a new account from an invite with DeepFilterNet on and checks the denoiser
 starts (the call bar and Diagnostics say `deepfilter`). CI copies the dsp-wasm job's build into the e2e job, so it runs there.
 
+`cargo test --release` (or nextest `--release`) on vesper-server fails to compile on purpose: the tests turn on `test-push`, which is a
+compile error without debug assertions. Run the tests in the debug profile, as `scripts/check.sh` and CI do.
+
 `web/e2e/push.mjs` runs last, on the debug server built with `test-push` (it may POST to 127.0.0.1; a release build refuses the
 feature) and a fake push service on a spare port. Bob runs in full Chromium in its new headless mode (the headless shell refuses the
 notification permission), with a stand-in `PushManager` that hands out a subscription holding keys the test made. He turns push on in

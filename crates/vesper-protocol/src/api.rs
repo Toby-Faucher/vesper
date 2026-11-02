@@ -227,7 +227,7 @@ pub struct ForceMute {
 }
 
 /// A room has text and voice. `members` is filled only when `restricted`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct RoomInfo {
     #[ts(type = "number")]

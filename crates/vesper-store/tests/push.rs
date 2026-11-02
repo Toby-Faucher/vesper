@@ -78,7 +78,7 @@ async fn one_subscription_per_session_and_endpoint() {
         .await
         .unwrap();
     assert_eq!(s.push_devices(&alice, sa).await.unwrap().len(), 1);
-    // The same browser endpoint signed in as bob moves to bob.
+    // The same browser (endpoint and keys) signed in as bob moves to bob.
     s.put_push_subscription(sub(&bob, sb, "https://a/2"))
         .await
         .unwrap();
@@ -86,6 +86,18 @@ async fn one_subscription_per_session_and_endpoint() {
     let d = s.push_devices(&bob, sb).await.unwrap();
     assert_eq!(d.len(), 1);
     assert!(d[0].current && d[0].mentions && !d[0].voice);
+    // Someone who knows the endpoint but not the keys cannot take it.
+    let carol = account(&s, "carol").await;
+    let sc = session(&s, &carol, 3, now).await;
+    let other_keys = NewPushSub {
+        auth: &[9; 16],
+        ..sub(&carol, sc, "https://a/2")
+    };
+    assert!(matches!(
+        s.put_push_subscription(other_keys).await,
+        Err(StoreError::Conflict(vesper_store::ENDPOINT_TAKEN))
+    ));
+    assert_eq!(s.push_devices(&bob, sb).await.unwrap().len(), 1);
     // A session that is not the account's is refused.
     assert!(matches!(
         s.put_push_subscription(sub(&alice, sb, "https://a/3"))

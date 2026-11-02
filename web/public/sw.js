@@ -17,8 +17,9 @@ self.addEventListener('push', (e) => {
   const room = Number.isSafeInteger(p.room_id) && p.room_id > 0 ? p.room_id : 0;
   const title = typeof p.title === 'string' ? p.title.slice(0, 64) : 'Vesper';
   const body = typeof p.body === 'string' ? p.body.slice(0, 200) : 'Something happened in Vesper.';
-  // One notification per room: a newer one replaces the older.
-  const tag = room ? `room-${room}` : 'vesper';
+  // One notification per room and kind: a newer mention replaces an older one, but "started voice" never hides a mention.
+  const kind = ['mention', 'voice', 'test'].includes(p.kind) ? p.kind : 'other';
+  const tag = room ? `${kind}-${room}` : 'vesper';
   e.waitUntil(self.registration.showNotification(title, { body, tag, icon: '/icon-192.png', data: { room } }));
 });
 

@@ -61,9 +61,10 @@ If the voice engine thread dies (a bug on hostile input), `/health` returns 503 
 
 Back up the data dir (`data/` next to `compose.yaml`, or `/var/lib/private/vesper`). With the Proxmox snapshot of the VM, check that the snapshot includes that directory. For a copy while the server runs, use SQLite's own backup so the WAL is included: `sqlite3 data/vesper.db ".backup vesper-backup.db"` (needs the `sqlite3` tool; the data dir is owned by uid 10001 with mode 0700, so on the host run it with `sudo`, or run it inside the container), or stop the stack and copy the whole directory. The copy holds password and session hashes: keep it private. Not verified.
 
-The Web Push signing key (VAPID) is in `vesper.db` (table `server_secrets`), so a copy of the database covers it: after a restore,
-devices that turned on notifications keep getting them. A database restored without that row makes a new key, and every device has to
-turn notifications off and on again. Treat the copy as secret for this reason too.
+A backup now also holds the Web Push signing key (VAPID, table `server_secrets` in `vesper.db`): keep the copy private and mode 600,
+like the database itself. Anyone with the key can sign pushes to the browsers that subscribed. After a restore, devices that turned on
+notifications keep getting them. A database restored without that row makes a new key: the server deletes each old subscription when
+its push service refuses it (401 or 403), and Settings asks each person to turn notifications on again.
 
 ## Web Push
 
