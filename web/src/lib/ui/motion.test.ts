@@ -3,7 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 // motion.ts in node: matchMedia, the computed tokens and waapi.animate are stubbed; timers are fake.
 const animate = vi.hoisted(() => vi.fn(() => ({ animations: [] as { finished: Promise<void> }[] })));
 vi.mock('animejs/waapi', () => ({ waapi: { animate } }));
-import { enter, exit, flash, ghost, glide, motion, settle, slide } from './motion';
+import { enter, exit, flash, ghost, glide, motion, motionReady, settle, slide } from './motion';
+await motionReady; // anime loads lazily; these tests are about what it plays
 import { follows } from './timeline';
 
 let reduce = false;
