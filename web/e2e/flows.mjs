@@ -398,6 +398,23 @@ try {
     await b.getByRole('dialog', { name: 'bob' }).waitFor();
     await b.keyboard.press('Escape');
     await b.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
+    // Another name while a card is open (#65): the open card unmounts and its toggle event comes after; that must not
+    // throw or close the new card. Then a second click on a name closes its card, also while the open motion still runs.
+    await name.click();
+    await card.waitFor();
+    await row.getByRole('button', { name: 'Open profile of @bob' }).click();
+    await b.getByRole('dialog', { name: 'bob' }).waitFor();
+    await card.waitFor({ state: 'hidden' });
+    await sleep(300); // past a late toggle event of alice's card
+    assert.ok(await b.getByRole('dialog', { name: 'bob' }).isVisible(), "alice's card closing closed bob's card");
+    await row.getByRole('button', { name: 'Open profile of @bob' }).click();
+    await b.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
+    await name.click();
+    assert.ok(await card.evaluate((e) => e.getAnimations().length > 0), 'the open motion was over before the second click');
+    await name.click();
+    await card.waitFor({ state: 'hidden' });
+    await sleep(300);
+    assert.deepEqual(bob.errors, [], 'page errors after a person card unmounted while open');
     console.log('a name or a mention in a message opens the person card: ok');
   }
 
