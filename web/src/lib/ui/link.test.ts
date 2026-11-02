@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { LINK_FAIR, LINK_POOR, MEASURING, gradeSample, linkDetail, linkLabel, linkSamples, stepLink, type Link, type LinkSample } from './link';
+import { DEAD_WINDOWS, MEASURING, linkDetail, linkLabel, type Link, type LinkSample } from './link';
+import { LINK_FAIR, LINK_POOR, MIN_PACKETS, gradeSample, linkSamples, ownSample, stepLink } from './link-stats';
 
 const s = (p: Partial<LinkSample> = {}): LinkSample => ({ lossPct: null, jitterMs: null, concealedPct: null, rttMs: null, ...p });
 const run = (samples: (LinkSample | null)[], from: Link = MEASURING) => samples.reduce<Link>((l, x) => stepLink(l, x), from);
@@ -47,6 +48,20 @@ describe('stepLink', () => {
     expect(run([fair, poor], shown).grade).toBe('good');
     expect(run([fair, poor, poor], shown).grade).toBe('poor');
   });
+  it('a sender with no packets for DEAD_WINDOWS goes back to measuring, unless muted; packets again start a fresh measure', () => {
+    const shown = run([good, good]);
+    const none = s({ jitterMs: 5, packets: 0 }); // the jitter is the stale last value
+    expect(run(Array(DEAD_WINDOWS - 1).fill(none), shown).grade).toBe('good');
+    const dead = run(Array(DEAD_WINDOWS).fill(none), shown);
+    expect(dead.grade).toBe('measuring');
+    expect(linkDetail(dead)).toBe('No audio has arrived for a few seconds.');
+    const muted = [...Array(DEAD_WINDOWS + 2)].reduce<Link>((l) => stepLink(l, none, true), shown);
+    expect(muted.grade).toBe('good');
+    const back = run([s({ jitterMs: 5, packets: 50 })], dead);
+    expect(back.grade).toBe('measuring');
+    expect(linkDetail(back)).toMatch(/^Measuring/);
+    expect(run([s({ jitterMs: 5, packets: 50 })], back).grade).toBe('good');
+  });
   it('a window without data keeps the grade and figures', () => {
     const shown = run([poor, poor]);
     expect(run([null, s(), undefined as unknown as null], shown)).toEqual(shown);
@@ -67,7 +82,7 @@ describe('linkSamples', () => {
     expect(out.get('alice')!.lossPct).toBeCloseTo(5); // 5 lost of 100 expected
     expect(out.get('alice')!.jitterMs).toBeCloseTo(12);
     expect(out.get('alice')!.concealedPct).toBeCloseTo(5); // 2400 not silent of 48000
-    expect(out.get('bob')).toEqual({ lossPct: 0, jitterMs: 2, concealedPct: null, rttMs: null });
+    expect(out.get('bob')).toEqual({ lossPct: 0, jitterMs: 2, concealedPct: null, rttMs: null, packets: 100 });
   });
   it('no window yet, an unknown track, too few packets or a counter reset give no figure', () => {
     const cur = rep([inb('a', 'ta', { packetsLost: 0, packetsReceived: 105 }), inb('x', 'tx', { packetsLost: 0, packetsReceived: 50 })]);
@@ -78,6 +93,30 @@ describe('linkSamples', () => {
     const reset = linkSamples(rep([inb('a', 'ta', { packetsLost: 9, packetsReceived: 900 })]), cur, users);
     expect(reset.get('alice')!.lossPct).toBeNull();
     for (const v of Object.values(reset.get('alice')!)) expect(Number.isNaN(v)).toBe(false);
+  });
+});
+
+describe('DTX silence, a rejoin and your own row', () => {
+  const users = new Map([['ta', 'alice'], ['tb', 'alice']]);
+  it('a quiet DTX sender (a packet every 400 ms, clean) is graded good, not poor', () => {
+    const w = (n: number) => inb('a', 'ta', { packetsLost: 0, packetsReceived: n, jitter: 0.004, concealedSamples: 1000 * n, silentConcealedSamples: 1000 * n, totalSamplesReceived: 960 * n * 100 });
+    let l = MEASURING;
+    for (let n = 1; n < 5; n++) l = stepLink(l, linkSamples(rep([w(n * 5)]), rep([w(n * 5 + 5)]), users).get('alice'));
+    expect(l.grade).toBe('good');
+    expect(l.last!.lossPct).toBeNull(); // 5 packets: below MIN_PACKETS
+    expect(MIN_PACKETS).toBeGreaterThanOrEqual(25);
+  });
+  it('a rejoin (a new track and stats id) gives no figure in its first window', () => {
+    const old = inb('a', 'ta', { packetsLost: 0, packetsReceived: 500 });
+    const fresh = inb('b', 'tb', { packetsLost: 0, packetsReceived: 40 });
+    expect(linkSamples(rep([old]), rep([fresh]), users).size).toBe(0);
+    expect(linkSamples(rep([fresh]), rep([inb('b', 'tb', { packetsLost: 0, packetsReceived: 90 })]), users).get('alice')!.lossPct).toBe(0);
+  });
+  const diag = (p: Partial<Parameters<typeof ownSample>[0]>) => ({ rttMs: 40, jitterMs: null, lossDownPct: 1, lossUpPct: 0, sendKbps: null, codec: null, iceState: 'connected', selectedPair: null, ...p });
+  it('your own row: the worse loss and the round trip; all lost while ICE is down', () => {
+    expect(ownSample(diag({}))).toEqual({ lossPct: 1, rttMs: 40, jitterMs: null, concealedPct: null });
+    expect(ownSample(diag({ lossDownPct: null, lossUpPct: null })).lossPct).toBeNull();
+    for (const iceState of ['disconnected', 'failed']) expect(gradeSample(ownSample(diag({ iceState })))).toBe('poor');
   });
 });
 

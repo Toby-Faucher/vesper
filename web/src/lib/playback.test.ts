@@ -52,7 +52,7 @@ describe('Playback', () => {
     expect(() => p.remove('zzz')).not.toThrow();
     p.remove('a'); // idempotent
   });
-  it('levelling lifts a quiet talker under the manual volume, only when on, and off resets it', () => {
+  it('levelling lifts a quiet talker under the manual volume, only when on, and off resets it', async () => {
     const { p, gains, ctx } = setup(new Map([['a', 50]]));
     p.addLocal('me', {} as MediaStream);
     p.addRemote('a', {} as MediaStream);
@@ -62,13 +62,24 @@ describe('Playback', () => {
     talk(5);
     expect(level.gain.value).toBe(1); // off by default
     p.setLevelling(true);
+    await vi.dynamicImportSettled(); // the math loads when levelling is first turned on
     talk(20);
     expect(level.gain.value).toBeGreaterThan(2); // lifted by more than 6 dB
     expect(p.levelDb('a')).toBeLessThanOrEqual(10);
     expect(vol.gain.value).toBe(0.25); // the manual volume is untouched
     expect(p.levelDb('me')).toBeUndefined(); // the local mic is analysed only
     p.setLevelling(false);
-    expect(level.gain.value).toBe(1);
+    expect(level.gain.setTargetAtTime).toHaveBeenLastCalledWith(1, ctx.currentTime, 0.05); // ramped back, no jump
     expect(p.levelDb('a')).toBe(0);
+  });
+  it('levelling never lifts steady room noise under the floor', async () => {
+    const { p, gains, ctx } = setup();
+    p.addRemote('a', {} as MediaStream);
+    p.setLevelling(true);
+    await vi.dynamicImportSettled();
+    ctx.amp = 0.008; // about -45 dBFS RMS
+    for (let i = 0; i < 300; i++) { ctx.currentTime += 0.1; p.speaking(); }
+    expect(p.levelDb('a')).toBe(0);
+    expect(gains[1].gain.value).toBe(1);
   });
 });

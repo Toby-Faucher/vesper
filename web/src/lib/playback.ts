@@ -1,5 +1,5 @@
 import { effectiveGain, isSpeaking } from './volume';
-import { LEVEL_START, dbToGain, rmsDb, stepLevel, type LevelState } from './level';
+import type { LevelState } from './level';
 
 type Node = { gain?: GainNode; level?: GainNode; ls?: LevelState; analyser: AnalyserNode; src: MediaStreamAudioSourceNode; el?: HTMLAudioElement };
 
@@ -14,6 +14,7 @@ export class Playback {
   private deafened = false;
   private buf = new Float32Array(1024);
   private levelling = false;
+  private lv?: typeof import('./level'); // the levelling math, loaded when it is first turned on
   private lastTick = 0;
 
   constructor(volumes: Map<string, number>, ctx: AudioContext = new AudioContext()) {
@@ -41,7 +42,7 @@ export class Playback {
     this.remove(id);
     const gain = this.ctx.createGain();
     const level = this.ctx.createGain();
-    const n = { ...this.tap(stream), gain, level, ls: LEVEL_START } as Node;
+    const n = { ...this.tap(stream), gain, level } as Node;
     n.src.connect(level).connect(gain).connect(this.ctx.destination);
     // Chrome only pulls remote WebRTC audio when the stream is also attached to a media element.
     const el = new Audio();
@@ -90,11 +91,12 @@ export class Playback {
   /** Off resets every person's levelling, so turning it on again starts from 0 dB. */
   setLevelling(on: boolean) {
     this.levelling = on;
+    if (on && !this.lv) void import('./level').then((m) => (this.lv = m), () => {});
     for (const n of this.nodes.values()) {
       if (!n.level) continue;
-      n.ls = LEVEL_START;
-      n.level.gain.cancelScheduledValues(0);
-      n.level.gain.value = 1;
+      n.ls = undefined;
+      n.level.gain.cancelScheduledValues(this.ctx.currentTime);
+      n.level.gain.setTargetAtTime(1, this.ctx.currentTime, 0.05); // a ramp: a jump of up to 10 dB mid-call would click
     }
   }
   /** Who is speaking now. Called every 100 ms; with levelling on it also steps each person's level from the same frame. */
@@ -106,16 +108,19 @@ export class Playback {
     for (const [id, n] of this.nodes) {
       n.analyser.getFloatTimeDomainData(this.buf);
       if (isSpeaking(this.buf)) out.add(id);
-      if (!this.levelling || !n.level || !n.ls) continue;
-      const next = stepLevel(n.ls, rmsDb(this.buf), dt);
-      if (next.gainDb !== n.ls.gainDb) n.level.gain.setTargetAtTime(dbToGain(next.gainDb), t, 0.05); // 50 ms: no zipper noise
+      const m = this.lv;
+      if (!this.levelling || !n.level || !m) continue;
+      const ls = n.ls ?? m.LEVEL_START;
+      const next = m.stepLevel(ls, m.rmsDb(this.buf), dt);
+      if (next.gainDb !== ls.gainDb) n.level.gain.setTargetAtTime(m.dbToGain(next.gainDb), t, 0.05); // 50 ms: no zipper noise
       n.ls = next;
     }
     return out;
   }
   /** The levelling gain in dB per person, for tests. */
   levelDb(id: string): number | undefined {
-    return this.nodes.get(id)?.ls?.gainDb;
+    const n = this.nodes.get(id);
+    return n?.level ? (n.ls?.gainDb ?? 0) : undefined;
   }
   close() {
     [...this.nodes.keys()].forEach((id) => this.remove(id));

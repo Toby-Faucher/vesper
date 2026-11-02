@@ -18,7 +18,7 @@ describe('stepLevel', () => {
     ['on target', TARGET_DB, 0],
     ['6 dB quiet', TARGET_DB - 6, 6],
     ['6 dB loud', TARGET_DB + 6, -6],
-    ['very quiet: capped', TARGET_DB - 20, MAX_DB],
+    ['quiet, just over the floor: capped', FLOOR_DB + 1, MAX_DB],
     ['very loud: capped', TARGET_DB + 20, -MAX_DB],
   ])('a steady %s talker settles at %d dB', (_, level, want) => {
     expect(last(feed(() => level, 60)).gainDb).toBeCloseTo(want, 1);
@@ -26,17 +26,18 @@ describe('stepLevel', () => {
 
   it('a loud and a quiet talker converge within the cap', () => {
     const loud = last(feed(talker(-18), 40));
-    const quiet = last(feed(talker(-40), 40));
+    const quiet = last(feed(talker(-35), 40));
     const out = (s: LevelState, db: number) => db + s.gainDb;
-    expect(Math.abs(out(loud, -18) - out(quiet, -40))).toBeLessThan(4); // 22 dB apart before
+    expect(Math.abs(out(loud, -18) - out(quiet, -35))).toBeLessThan(4); // 17 dB apart before
     for (const s of [loud, quiet]) expect(Math.abs(s.gainDb)).toBeLessThanOrEqual(MAX_DB);
   });
 
   it('silence and noise under the floor do not drift the gain', () => {
-    const talked = last(feed(talker(-40), 30));
+    const talked = last(feed(talker(-35), 30));
     const after = last(feed(() => FLOOR_DB - 1, 120, talked));
     expect(after).toEqual(talked);
     expect(last(feed(() => -Infinity, 30))).toEqual(LEVEL_START); // digital silence from the start
+    expect(last(feed(() => -45, 60))).toEqual(LEVEL_START); // steady room noise is never lifted
   });
 
   it('waits for some speech before the first change', () => {

@@ -14,11 +14,10 @@ import { MIC_QUIET, micSilence, type MicWarning } from './audio/mic-silence';
 import type { DenoiseMode } from './audio/mode';
 import { summarize, type Diag } from './diag';
 import { quality, type Quality } from './ui/quality';
-import { loadLevelling, saveLevelling } from './level';
-import { linkSamples, stepLink, type Link } from './ui/link';
+import type { Link } from './ui/link';
 import { callCue, type CallSnap } from './ui/cues';
 import { chime } from './ui/chime';
-import { loadPrefs } from './ui/prefs';
+import { loadLevelling, loadPrefs, saveLevelling } from './ui/prefs';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();
@@ -66,6 +65,7 @@ let statsPoll: ReturnType<typeof setInterval> | undefined;
 let releaseLock: (() => void) | undefined;
 let silence = MIC_QUIET;
 const tracks = new Map<string, string>(); // remote track id to user_id, for the per-person stats
+let linkStats: typeof import('./ui/link-stats') | undefined; // the per-person stats math, loaded at the first join
 
 // Push to talk is mute-gated: the track is live only when not muted and (PTT off or key held).
 function applyTrack() {
@@ -290,12 +290,14 @@ function pollStats(conn: RTCPeerConnection) {
       const now = performance.now();
       voice.diag = summarize(prev, cur, (now - at) / 1000, conn.iceConnectionState);
       voice.quality = quality(voice.diag);
-      const d = voice.diag;
-      const samples = linkSamples(prev, cur, tracks);
-      samples.set(voice.userId, { lossPct: d.lossDownPct === null && d.lossUpPct === null ? null : Math.max(d.lossDownPct ?? 0, d.lossUpPct ?? 0),
-        rttMs: d.rttMs, jitterMs: null, concealedPct: null });
-      const live = new Set([...tracks.values(), voice.userId]);
-      voice.links = Object.fromEntries([...live].map((id) => [id, stepLink(voice.links[id], samples.get(id))]));
+      const m = linkStats; // loaded at join; until then the rows show nothing
+      if (m) {
+        const samples = m.linkSamples(prev, cur, tracks);
+        samples.set(voice.userId, m.ownSample(voice.diag));
+        const muted = (id: string) => session.state.voice.some((p) => p.user_id === id && (p.muted || p.force_muted));
+        const live = new Set([...tracks.values(), voice.userId]);
+        voice.links = Object.fromEntries([...live].map((id) => [id, m.stepLink(voice.links[id], samples.get(id), muted(id))]));
+      }
       prev = cur;
       at = now;
     }, () => {});
@@ -319,6 +321,7 @@ export async function join(roomId: number): Promise<boolean> {
   // Create and resume the AudioContext inside the click gesture, before any await.
   playback = new Playback(restoreVolumes(localStorage));
   playback.setLevelling(voice.levelling); // a new Playback each join, so the levelling starts from 0 dB
+  void import('./ui/link-stats').then((m) => (linkStats = m), () => {});
   // Held for the call's lifetime so the browser does not freeze the tab's audio in the background.
   // The resolver exists up front so teardown releases it even if the lock callback has not run yet.
   const held = new Promise<void>((res) => (releaseLock = res));
@@ -357,6 +360,7 @@ export async function join(roomId: number): Promise<boolean> {
       },
       onRemoteStreamEnd: (id) => {
         tracks.forEach((u, t) => u === id && tracks.delete(t));
+        if (id in voice.links) voice.links = Object.fromEntries(Object.entries(voice.links).filter(([u]) => u !== id)); // a rejoin starts measuring again
         playback?.remove(id);
       },
     });
