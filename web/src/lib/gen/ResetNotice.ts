@@ -5,6 +5,11 @@
  */
 export type ResetNotice = { 
 /**
- * Display name of who made the link; null for the server command line.
+ * Display name of who made the link; null for the server command line. Not unique: show
+ * `by_username` with it.
  */
-by: string | null, at: number, };
+by: string | null, 
+/**
+ * Username (unique) of who made the link; null for the server command line.
+ */
+by_username: string | null, at: number, };

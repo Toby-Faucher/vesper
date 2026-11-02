@@ -253,7 +253,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/invites` (`InviteCreate`) | moderator or owner; a moderator invite needs the owner | 201 `InviteCreated` with the link `<origin>/invite#<code>` |
 | `DELETE /api/invites/{id}` | moderator or owner | 204, or 404 for an unknown id |
 | `POST /api/users/{id}/reset` (`ResetCreate`: your own password) | owner for anyone else; a moderator for a member only; 400 on yourself; ResetCreate limit by user (10, then 1 every 6 minutes), then the Login limit | 201 `ResetCreated` with the link `<origin>/reset#<code>`, one use, 24 h; it cancels the account's older code. 403 `wrong password` |
-| `GET /api/resets` | owner | `ResetInfo[]`, the latest reset of each account (no code) |
+| `GET /api/resets` | owner | `ResetInfo[]`, each account's latest reset plus every reset used in the last 30 days, newest first (no code) |
 | `PATCH /api/users/{id}/role` (`RolePatch`) | owner | the new `UserInfo` |
 | `POST /api/users/{id}/ban` | owner | the new `UserInfo`; every session of that user is deleted |
 | `POST /api/users/{id}/unban` | owner | the new `UserInfo` |

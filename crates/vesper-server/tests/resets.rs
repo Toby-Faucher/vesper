@@ -434,6 +434,7 @@ async fn the_member_is_told_once() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
     assert_eq!(v[0]["by"], "mod");
+    assert_eq!(v[0]["by_username"], "mod");
     assert!(v[0]["at"].as_i64().is_some());
     assert_eq!(t.call(take()).await.2, json!([]));
 }

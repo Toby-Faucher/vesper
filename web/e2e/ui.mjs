@@ -571,12 +571,12 @@ try {
   await bn.getByText('Wrong username or password.').waitFor();
   await bobSignIn('test-password-4');
   // Told once who reset it, then the app; the owner's table says it was used.
-  await bn.getByText('Your password was reset by alice on', { exact: false }).waitFor();
+  await bn.getByText('Your password was reset by alice (@alice) on', { exact: false }).waitFor();
   await bn.getByRole('button', { name: 'Continue' }).click();
   await signedIn(bn);
   await openAdmin(a, 'Invites');
   await openAdmin(a, 'Members');
-  await a.locator('tr[data-user="bob"]').getByText(/^Password reset by alice on .+ \(used\)$/).waitFor();
+  await a.locator('tr[data-user="bob"]').getByText(/^Password reset by alice \(@alice\) on .+ \(used\)$/).waitFor();
   await bn.goto(resetLink);
   await bn.getByLabel('New password', { exact: true }).fill('test-password-5');
   await bn.getByRole('button', { name: 'Set password' }).click();

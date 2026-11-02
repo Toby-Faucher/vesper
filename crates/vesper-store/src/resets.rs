@@ -101,6 +101,8 @@ impl Store {
         .await?)
     }
 
+    /// The code works only while its maker may still make it: not banned, and the owner, or a
+    /// moderator for a member. That holds even when a ban or role change raced the link's creation.
     /// Uses the code: marks it used (with `used_from`, `lan` or `internet`), sets the password and
     /// deletes every session of the account, in one transaction. Returns the account id and who
     /// made the link, or None when the code is unknown, used, cancelled or expired.
@@ -115,6 +117,11 @@ impl Store {
         let row: Option<(String, Option<String>)> = sqlx::query_as(
             "UPDATE password_resets SET used_at = ?2, used_from = ?3
              WHERE code_hash = ?1 AND used_at IS NULL AND cancelled_at IS NULL AND expires_at > ?2
+             AND (created_by IS NULL OR EXISTS (
+                 SELECT 1 FROM accounts m, accounts t
+                 WHERE m.id = password_resets.created_by AND t.id = password_resets.account_id
+                 AND m.banned_at IS NULL
+                 AND (m.role = 'owner' OR (m.role = 'moderator' AND t.role = 'member'))))
              RETURNING account_id, created_by",
         )
         .bind(&code_hash[..])
@@ -175,8 +182,8 @@ impl Store {
     /// Used resets of the account not yet shown to it, oldest first, and marks them shown.
     pub async fn take_reset_notices(&self, account_id: &str, now: i64) -> Result<Vec<ResetNotice>> {
         let mut tx = self.pool.begin().await?;
-        let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
-            "SELECT b.display_name, r.used_at FROM password_resets r
+        let rows: Vec<(Option<String>, Option<String>, i64)> = sqlx::query_as(
+            "SELECT b.display_name, b.username, r.used_at FROM password_resets r
              LEFT JOIN accounts b ON b.id = r.created_by
              WHERE r.account_id = ?1 AND r.used_at IS NOT NULL AND r.seen_at IS NULL
              ORDER BY r.id",
@@ -195,7 +202,11 @@ impl Store {
         tx.commit().await?;
         Ok(rows
             .into_iter()
-            .map(|(by, at)| ResetNotice { by, at })
+            .map(|(by, by_username, at)| ResetNotice {
+                by,
+                by_username,
+                at,
+            })
             .collect())
     }
 }

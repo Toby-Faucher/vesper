@@ -180,7 +180,8 @@ async fn create_reset(
     Ok((StatusCode::CREATED, Json(ResetCreated { url, expires_at })))
 }
 
-/// The latest reset link of each account, so the owner sees who reset whom. Owner only.
+/// Each account's latest reset link plus every reset used in the last 30 days, so the owner sees
+/// who reset whom. Owner only.
 async fn resets(State(st): State<AppState>, a: Authed) -> Result<Json<Vec<ResetInfo>>, ApiError> {
     require(&a.user, Role::Owner)?;
     Ok(Json(st.store.resets(now_ms()).await?))

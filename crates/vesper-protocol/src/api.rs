@@ -253,8 +253,11 @@ pub struct ResetInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ResetNotice {
-    /// Display name of who made the link; null for the server command line.
+    /// Display name of who made the link; null for the server command line. Not unique: show
+    /// `by_username` with it.
     pub by: Option<String>,
+    /// Username (unique) of who made the link; null for the server command line.
+    pub by_username: Option<String>,
     #[ts(type = "number")]
     pub at: i64,
 }

@@ -52,6 +52,10 @@ There is no email, so a reset is a link someone hands over, like an invite.
   in the last 30 days ("Password reset by alice on 2 Nov (used)"; the date is the day it was used). Older used resets
   stay in the database (who made it, when, when it was used and whether from the LAN or the internet, never the code)
   and in the server log, but not in the app.
+- **A taker who keeps changing the password:** someone who took over an account and is still signed in can change its
+  password again, and a password change ends a live reset link, so your recovery link may stop working. Then: ban the
+  account (that ends its sessions; you can still make a link for it), make the link, let the person use it, and only
+  then unban. An unban before the link is used ends the link too.
 - **The owner's own password:** on the host, `docker compose exec vesper vesper-server reset-password <username>` prints
   the same kind of link, valid 24 h. It works for any account, the owner's too. Open it on your own device.
   For the binary install use the `systemd-run` form above with `reset-password <username>` (not verified).

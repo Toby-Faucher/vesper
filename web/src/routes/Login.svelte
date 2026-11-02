@@ -50,7 +50,7 @@
   {#if notices.length}
     <h1 class="mb-3 text-xl font-semibold text-fg">Before you go on</h1>
     <div role="status" class="mb-5 flex flex-col gap-2 text-fg-2">
-      {#each notices as n (n.at)}<p>{M.resetNotice(n.by, dayOf(n.at))}</p>{/each}
+      {#each notices as n (n.at)}<p>{M.resetNotice(n.by, n.by_username, dayOf(n.at))}</p>{/each}
       <p>If that was not you, tell the owner.</p>
     </div>
     <div class="flex flex-col"><Button variant="primary" bind:el={continueEl} onclick={next}>Continue</Button></div>

@@ -9,11 +9,16 @@ async fn open() -> (TempDir, Store) {
 }
 
 async fn user(s: &Store, name: &str) -> String {
+    staff(s, name, Role::Member).await
+}
+
+/// An account with `role`: links only work while their maker may make them.
+async fn staff(s: &Store, name: &str, role: Role) -> String {
     s.create_account(NewAccount {
         username: name,
         display_name: name,
         password_phc: Some("old"),
-        role: Role::Member,
+        role,
     })
     .await
     .unwrap()
@@ -41,7 +46,7 @@ async fn sess(s: &Store, id: &str, n: u8) -> i64 {
 async fn reset_sets_password_and_ends_every_session_once() {
     let (_tmp, s) = open().await;
     let bob = user(&s, "bob").await;
-    let alice = user(&s, "alice").await;
+    let alice = staff(&s, "alice", Role::Owner).await;
     let now = now_ms();
     sess(&s, &bob, 1).await;
     sess(&s, &bob, 2).await;
@@ -97,7 +102,7 @@ async fn expired_and_unknown_codes_do_nothing() {
 async fn a_new_code_cancels_the_old_one() {
     let (_tmp, s) = open().await;
     let bob = user(&s, "bob").await;
-    let alice = user(&s, "alice").await;
+    let alice = staff(&s, "alice", Role::Owner).await;
     let now = now_ms();
     let later = now + RESET_TTL_MS;
     s.create_reset(&bob, &[1; 32], later, None).await.unwrap();
@@ -163,7 +168,7 @@ async fn role_ban_and_password_change_cancel_a_live_code() {
 async fn reset_notices_are_shown_once() {
     let (_tmp, s) = open().await;
     let bob = user(&s, "bob").await;
-    let alice = user(&s, "alice").await;
+    let alice = staff(&s, "alice", Role::Owner).await;
     let now = now_ms();
     s.create_reset(&bob, &[1; 32], now + RESET_TTL_MS, Some(&alice))
         .await
@@ -183,10 +188,12 @@ async fn reset_notices_are_shown_once() {
         [
             ResetNotice {
                 by: Some("alice".into()),
+                by_username: Some("alice".into()),
                 at: now
             },
             ResetNotice {
                 by: None,
+                by_username: None,
                 at: now + 1
             },
         ]
@@ -198,8 +205,8 @@ async fn reset_notices_are_shown_once() {
 #[tokio::test]
 async fn demoting_or_banning_the_maker_cancels_their_links() {
     let (_tmp, s) = open().await;
-    let m = user(&s, "mod").await;
-    let owner = user(&s, "owner").await;
+    let m = staff(&s, "mod", Role::Moderator).await;
+    let owner = staff(&s, "owner", Role::Owner).await;
     let (a, b, c) = (
         user(&s, "a").await,
         user(&s, "b").await,
@@ -229,7 +236,7 @@ async fn demoting_or_banning_the_maker_cancels_their_links() {
 async fn used_resets_stay_listed_after_newer_links() {
     let (_tmp, s) = open().await;
     let bob = user(&s, "bob").await;
-    let m = user(&s, "mod").await;
+    let m = staff(&s, "mod", Role::Moderator).await;
     let now = now_ms();
     let later = now + RESET_TTL_MS;
     s.create_reset(&bob, &[1; 32], later, Some(&m))
@@ -258,7 +265,7 @@ async fn used_resets_stay_listed_after_newer_links() {
 async fn a_later_reset_shows_earlier_notices_again() {
     let (_tmp, s) = open().await;
     let bob = user(&s, "bob").await;
-    let m = user(&s, "mod").await;
+    let m = staff(&s, "mod", Role::Moderator).await;
     let now = now_ms();
     let later = now + RESET_TTL_MS;
     s.create_reset(&bob, &[1; 32], later, Some(&m))
@@ -284,6 +291,95 @@ async fn a_later_reset_shows_earlier_notices_again() {
         s.take_reset_notices(&bob, now + month).await.unwrap().len(),
         1
     );
+}
+
+/// A link made in the moment between the maker check and the insert, while a ban or role change
+/// committed (so the cancel missed it), still does not work: the maker is checked again on use.
+#[tokio::test]
+async fn a_link_whose_maker_lost_the_right_does_not_work() {
+    let (_tmp, s) = open().await;
+    let m = staff(&s, "mod", Role::Moderator).await;
+    let owner = staff(&s, "owner", Role::Owner).await;
+    let bob = user(&s, "bob").await;
+    let sql = |q: &'static str, id: String| {
+        let pool = s.pool().clone();
+        async move { sqlx::query(q).bind(id).execute(&pool).await.unwrap() }
+    };
+    sql(
+        "UPDATE accounts SET role = 'moderator' WHERE id = ?1",
+        m.clone(),
+    )
+    .await;
+    sql(
+        "UPDATE accounts SET role = 'owner' WHERE id = ?1",
+        owner.clone(),
+    )
+    .await;
+    let now = now_ms();
+    let later = now + RESET_TTL_MS;
+    // Maker banned behind the store's back (no cancel ran).
+    s.create_reset(&bob, &[1; 32], later, Some(&m))
+        .await
+        .unwrap();
+    sql("UPDATE accounts SET banned_at = 1 WHERE id = ?1", m.clone()).await;
+    assert_eq!(
+        s.use_reset(&[1; 32], "new", now, "lan").await.unwrap(),
+        None
+    );
+    sql(
+        "UPDATE accounts SET banned_at = NULL WHERE id = ?1",
+        m.clone(),
+    )
+    .await;
+    // Maker demoted.
+    s.create_reset(&bob, &[2; 32], later, Some(&m))
+        .await
+        .unwrap();
+    sql(
+        "UPDATE accounts SET role = 'member' WHERE id = ?1",
+        m.clone(),
+    )
+    .await;
+    assert_eq!(
+        s.use_reset(&[2; 32], "new", now, "lan").await.unwrap(),
+        None
+    );
+    sql(
+        "UPDATE accounts SET role = 'moderator' WHERE id = ?1",
+        m.clone(),
+    )
+    .await;
+    // Target promoted.
+    s.create_reset(&bob, &[3; 32], later, Some(&m))
+        .await
+        .unwrap();
+    sql(
+        "UPDATE accounts SET role = 'moderator' WHERE id = ?1",
+        bob.clone(),
+    )
+    .await;
+    assert_eq!(
+        s.use_reset(&[3; 32], "new", now, "lan").await.unwrap(),
+        None
+    );
+    // The owner's link for a moderator, and a command line link, still work.
+    s.create_reset(&bob, &[4; 32], later, Some(&owner))
+        .await
+        .unwrap();
+    assert!(
+        s.use_reset(&[4; 32], "new", now, "lan")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    s.create_reset(&bob, &[5; 32], later, None).await.unwrap();
+    assert!(
+        s.use_reset(&[5; 32], "new", now, "lan")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(phc(&s, "bob").await.as_deref(), Some("new"));
 }
 
 #[tokio::test]

@@ -61,7 +61,9 @@ export const UI_MESSAGES = {
   banBody: 'They are signed out everywhere and cannot sign in.',
   resetBody: 'You get a link to send them. It works once, for 24 hours. When they use it, they set a new password and are signed out everywhere, and they are told who made the link. An older reset link for them stops working.',
   resetWrongPassword: 'Your password is not right.',
-  resetNotice: (by: string | null, when: string) => `Your password was reset ${by === null ? 'from the server command line' : `by ${by}`} on ${when}.`,
+  // Display names are not unique, so the unique @username goes with it: a taker can not pose as the owner.
+  resetNotice: (by: string | null, username: string | null, when: string) =>
+    `Your password was reset ${by === null ? 'from the server command line' : `by ${by} (@${username})`} on ${when}.`,
   resetOnce: (until: string) => `This link is shown only now. It works once, until ${until}.`,
   roomNameBad: 'Room names are 1 to 32 characters, with no hidden characters.',
   roomOrderChanged: 'The room list changed. Try again.',

@@ -106,7 +106,11 @@
       // only the audit line; the table works without it
     }
   }
-  const resetBy = (r: ResetInfo) => (r.created_by === null ? null : (session.state.users[r.created_by]?.display_name ?? 'someone'));
+  // With the unique @username: display names can be copied.
+  const resetBy = (r: ResetInfo) => {
+    const u = r.created_by === null ? null : session.state.users[r.created_by];
+    return r.created_by === null ? null : u ? `${u.display_name} (@${u.username})` : 'someone';
+  };
   let resetPassword = $state('');
   let resetFor = $state<UserInfo | null>(null);
   let resetError = $state('');
