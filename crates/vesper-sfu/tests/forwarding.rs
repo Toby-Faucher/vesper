@@ -448,3 +448,72 @@ async fn panic_in_the_loop_is_observable() {
     let err = sfu.join("r".into(), "u".into(), "v=0".into()).await;
     assert_eq!(err.unwrap_err(), vesper_sfu::JoinError::Shutdown);
 }
+
+/// Packets in `got` that `from` sent.
+fn heard(got: &[Vec<u8>], from: &FakeClient) -> usize {
+    let sent = from.sent();
+    got.iter().filter(|p| sent.contains(p)).count()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn force_muted_audio_is_not_forwarded() {
+    let t = Ctx::loopback();
+    let a = t.join("r", "a").await;
+    let b = t.join("r", "b").await;
+    let c = t.join("r", "c").await;
+    t.ready(&a, 2).await;
+    t.ready(&b, 2).await;
+    t.ready(&c, 2).await;
+
+    // A is muted but keeps sending, like a client that ignores the mute. C is not muted.
+    t.h.set_muted("a", true);
+    a.client.send_audio(30);
+    t.wait_until("a sent 30", CONNECT, || a.client.sent().len() == 30)
+        .await;
+    c.client.send_audio(30);
+    t.wait_until("b heard c", CONNECT, || {
+        heard(&b.client.received(), &c.client) >= 25
+    })
+    .await;
+    // C's packets went out after A's, so A's would have arrived by now.
+    assert_eq!(heard(&b.client.received(), &a.client), 0, "b heard muted a");
+    assert_eq!(heard(&c.client.received(), &a.client), 0, "c heard muted a");
+    assert!(
+        heard(&a.client.received(), &c.client) >= 25,
+        "a stops hearing c"
+    );
+
+    // Lifting it resumes A's audio.
+    t.h.set_muted("a", false);
+    a.client.send_audio(30);
+    t.wait_until("b hears a again", CONNECT, || {
+        heard(&b.client.received(), &a.client) >= 25
+    })
+    .await;
+
+    // The mute is keyed by user, so it holds for A's next session.
+    t.h.set_muted("a", true);
+    let a2 = t.join("r", "a").await;
+    t.wait_until("a closed", CONNECT, || a.closed()).await;
+    t.wait_until("a2 connected", CONNECT, || a2.client.is_connected())
+        .await;
+    // B is offered A's new track, so the drop is what keeps B from hearing it.
+    t.wait_until("b has a2's track", CONNECT, || {
+        b.client.remote_tracks() == 3
+    })
+    .await;
+    a2.client.send_audio(30);
+    t.wait_until("a2 sent 30", CONNECT, || a2.client.sent().len() == 30)
+        .await;
+    let before = heard(&b.client.received(), &c.client);
+    c.client.send_audio(30);
+    t.wait_until("b heard c again", CONNECT, || {
+        heard(&b.client.received(), &c.client) >= before + 25
+    })
+    .await;
+    assert_eq!(
+        heard(&b.client.received(), &a2.client),
+        0,
+        "b heard rejoined a"
+    );
+}

@@ -137,8 +137,9 @@ the SFU keys sessions by that id, not the account. A new `check` ends the last o
 
 Force-mute (`Voice::force_mute`): sets `force_muted` on the account, sends `force_muted { muted }` to all of that user's sockets
 and `peer_state` to the room. While it holds, `set_voice_state` cannot clear `muted`. It holds across leave and rejoin until a
-moderator lifts it, and lifting does not unmute. It lives in memory, so a restart lifts it. Only the client stops sending audio
-([known-issues.md](known-issues.md#security-and-abuse)).
+moderator lifts it, and lifting does not unmute. It lives in memory, so a restart lifts it. The SFU enforces it too:
+`force_mute` calls `SfuHandle::set_muted`, and the SFU drops every audio packet from that user at the forward point, so a
+client that ignores the mute is not heard. The SFU keys it by user id, not by session, so it holds across a rejoin as well.
 
 Pushed from REST (`hub.rs`): a room change sends each socket `rooms_changed` with only the rooms in its user's list (`listed`: what it can see, plus archived rooms for the owner); a role
 change also does, since the role decides that. A role, ban, profile or picture change sends everyone `user_updated`; a signup sends everyone `user_created`
@@ -171,7 +172,7 @@ unit tests in `hub.rs` and `voice.rs`.
 ## SFU ownership
 
 - The SFU thread owns the UDP socket, every str0m `Rtc` client and all media state. Nothing else touches them. The server sends it commands
-  (`join`, `answer`, `leave`, `set_advertised`) over a channel and gets `SfuEvent::Offer` and `SfuEvent::Closed` back per session.
+  (`join`, `answer`, `leave`, `set_muted`, `set_advertised`) over a channel and gets `SfuEvent::Offer` and `SfuEvent::Closed` back per session.
 - `Voice` owns presence: who is in which room, muted, deafened or force-muted, and the socket for each session. It keeps the
   latest copy of each room for visibility checks. It does not touch media.
 - A session ends on ICE timeout, an error, an offer unanswered for `answer_timeout` (10 s), `leave`, or a new join by the same user

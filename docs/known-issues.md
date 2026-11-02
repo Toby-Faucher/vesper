@@ -26,8 +26,6 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
   login limit per username still allows each address only 5 tries for one name, then 1 a minute. Unit-tested (`client_ip` in `auth.rs`); not verified on the deploy.
   If Caddy ever drops `CF-Connecting-IP`, every client looks like the tunnel's address and all share one per-IP limit; the per-username limit
   still holds. Keep Caddy's default headers ([deploy.md](deploy.md#network)).
-- **Force-mute is enforced by the client only.** The server marks the user muted and tells everyone, but the SFU still forwards their audio,
-  so a modified client can keep talking. A moderator then disconnects them, or the owner bans them. A server restart lifts every force-mute.
 - **Password reset is by hand.** There is no email. The owner (or a moderator, for a member) makes a one-use reset link
   in Admin > Members and sends it; the owner's own way back in is `vesper-server reset-password` on the host
   ([deploy.md](deploy.md#password-recovery)). Whoever holds the link can set the password, so it must reach the right

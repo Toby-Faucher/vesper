@@ -329,8 +329,9 @@ impl Voice {
     }
 
     /// Set or lift a force-mute and tell the user's sockets with `ForceMuted`. It holds across
-    /// leave and rejoin until lifted. Lifting does not unmute: the user does that. Only the
-    /// client enforces it (docs/known-issues.md). True if the user is in voice now.
+    /// leave and rejoin until lifted. Lifting does not unmute: the user does that. The SFU drops
+    /// their audio while it holds, so a client that ignores it is not heard. True if the user is
+    /// in voice now.
     pub fn force_mute(&self, user_id: &str, muted: bool) -> bool {
         let mut st = self.lock();
         if muted {
@@ -338,6 +339,8 @@ impl Voice {
         } else {
             st.force_muted.remove(user_id);
         }
+        // Under the lock, so two force-mutes reach the SFU in the order they change `force_muted`.
+        self.0.sfu.set_muted(user_id, muted);
         self.0
             .hub
             .send_user(user_id, ServerMsg::ForceMuted { muted });
