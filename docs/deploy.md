@@ -168,6 +168,7 @@ only HSTS (the same value), so the headers do not depend on Caddy. Verified in h
 
 Last updated 2026-11-01. Written and checked for syntax and against the real files, but not executed (no Docker or browser on the dev machine):
 
+- The pinned base image digests (read from Docker Hub's registry API on 2026-11-02 and checked against the sha256 of each index; no image was pulled).
 - `docker build` / `docker compose up`, the image's healthcheck, non-root and read-only operation, the `VESPER_BUILD_ID` build arg and `build-id.txt` inside the image build.
 - The automatic backup before a migration on the live data dir (tested on a temporary dir with an old-schema database: `crates/vesper-server/tests/cli.rs`), and starting an older image on a restored `pre-*` copy.
 - The Dockerfile's `cargo install wasm-bindgen-cli` and wasm build inside the image.

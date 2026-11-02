@@ -271,3 +271,68 @@ async fn service_worker_and_manifest() {
     );
     assert!(header_has(&m, "default-src 'self'"), "{m}");
 }
+
+/// Raw GET with an `Accept-Encoding` header.
+async fn get_enc(addr: SocketAddr, path: &str, enc: &str) -> String {
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: x\r\nAccept-Encoding: {enc}\r\nConnection: close\r\n\r\n"
+    );
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut b = Vec::new();
+    s.read_to_end(&mut b).await.unwrap();
+    String::from_utf8_lossy(&b).into_owned()
+}
+
+/// The `.br` or `.gz` next to a file goes out as that file with `Content-Encoding` and
+/// `Vary`, chosen by `Accept-Encoding`; without a variant or an accepted encoding, the file as is.
+#[tokio::test]
+async fn precompressed_variants_by_accept_encoding() {
+    let web = site();
+    std::fs::write(web.join("assets/w.js.br"), "BROTLI").unwrap();
+    std::fs::write(web.join("assets/w.js.gz"), "GZIP").unwrap();
+    std::fs::write(web.join("index.html.br"), "BRINDEX").unwrap();
+    let addr = start(web).await;
+    let cases = [
+        ("/assets/w.js", "br, gzip", Some("br"), "BROTLI"),
+        ("/assets/w.js", "gzip", Some("gzip"), "GZIP"),
+        ("/assets/w.js", "identity", None, "export {}"),
+        ("/", "gzip, br", Some("br"), "BRINDEX"),
+        ("/room/abc", "br", None, "<!doctype html>INDEX"), // the SPA fallback is read as it is
+        ("/assets/a.wasm", "br", None, "\0asm"),
+    ];
+    for (path, enc, want, body) in cases {
+        let r = get_enc(addr, path, enc).await;
+        assert!(r.starts_with("HTTP/1.1 200"), "{path} {enc}: {r}");
+        assert_eq!(
+            header_value(&r, "content-encoding").as_deref(),
+            want,
+            "{path} {enc}: {r}"
+        );
+        assert!(
+            r.split("\r\n\r\n").nth(1).unwrap().starts_with(body),
+            "{path} {enc}: {r}"
+        );
+    }
+    let r = get_enc(addr, "/assets/w.js", "br").await;
+    assert_eq!(
+        header_value(&r, "content-type").as_deref(),
+        Some("text/javascript"),
+        "{r}"
+    );
+    assert_eq!(
+        header_value(&r, "vary").as_deref(),
+        Some("accept-encoding"),
+        "{r}"
+    );
+    assert!(
+        header_has(&r, "cache-control: public, max-age=31536000, immutable"),
+        "{r}"
+    );
+    let r = get_enc(addr, "/", "br").await;
+    assert_eq!(
+        header_value(&r, "content-type").as_deref(),
+        Some("text/html"),
+        "{r}"
+    );
+}

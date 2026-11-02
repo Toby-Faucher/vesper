@@ -1,6 +1,7 @@
 import { ApiFailure, api } from './api';
 import { applyChatMsg, chat, resync } from './chat.svelte';
 import { loginHref } from './route';
+import { badge } from './ui/badge';
 import { onServerMsg } from './ui/notify';
 import { recentKey } from './ui/recent';
 import { tray } from './ui/tray.svelte';
@@ -106,6 +107,7 @@ function open(): void {
     session.state = applyServerMsg(prev, m);
     chat.state = applyChatMsg(chat.state, m);
     onServerMsg(m, prev); // mention notifications and the join and leave sounds
+    badge(session.state.unread);
     if (m.type === 'hello') void resync(); // events may have been missed while the socket was down
   });
   sig.onClose((byClient, code) => {
@@ -173,6 +175,7 @@ function stop(): void {
 function toLogin(notice: string): void {
   stop();
   session.state = emptyState();
+  badge({}); // the next account starts with none
   Object.assign(chat, { state: { rooms: {}, typing: {} }, active: null, drafts: {} }); // the next account sees none of it
   tray.clear(); // and the uploads stop
   session.notice = notice;

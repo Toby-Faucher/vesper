@@ -20,7 +20,10 @@ self.addEventListener('push', (e) => {
   // One notification per room and kind: a newer mention replaces an older one, but "started voice" never hides a mention.
   const kind = ['mention', 'voice', 'test'].includes(p.kind) ? p.kind : 'other';
   const tag = room ? `${kind}-${room}` : 'vesper';
-  e.waitUntil(self.registration.showNotification(title, { body, tag, icon: '/icon-192.png', data: { room } }));
+  // A mention marks the app's badge (no number: the worker does not know the count; the page sets it when it opens).
+  // Only where the Badging API exists: Firefox has none.
+  const mark = kind === 'mention' ? self.navigator.setAppBadge?.()?.catch(() => {}) : undefined;
+  e.waitUntil(Promise.all([self.registration.showNotification(title, { body, tag, icon: '/icon-192.png', data: { room } }), mark]));
 });
 
 // Focus an open Vesper tab and open the room in it (the app navigates in place, so a call goes on), else open a new one.

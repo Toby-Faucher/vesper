@@ -1,14 +1,14 @@
 // Paths and the screens they open. App.svelte renders from parse(route.path).
 export const SETTINGS_SECTIONS = ['voice', 'notifications', 'appearance', 'account', 'diagnostics'] as const;
-export const ADMIN_SECTIONS = ['invites', 'members', 'rooms', 'disk'] as const;
+export const ADMIN_SECTIONS = ['invites', 'members', 'rooms', 'disk', 'server'] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 export const SETTINGS_NAMES: Record<SettingsSection, string> = {
   voice: 'Voice', notifications: 'Notifications', appearance: 'Appearance', account: 'Account', diagnostics: 'Diagnostics',
 };
-export const ADMIN_NAMES: Record<AdminSection, string> = { invites: 'Invites', members: 'Members', rooms: 'Rooms', disk: 'Disk use' };
-/** Moderators see Invites and Members; Rooms and Disk use are the owner's, as the server rules. */
-export const ADMIN_OWNER_ONLY: readonly AdminSection[] = ['rooms', 'disk'];
+export const ADMIN_NAMES: Record<AdminSection, string> = { invites: 'Invites', members: 'Members', rooms: 'Rooms', disk: 'Disk use', server: 'Server' };
+/** Moderators see Invites and Members; Rooms, Disk use and Server are the owner's, as the server rules. */
+export const ADMIN_OWNER_ONLY: readonly AdminSection[] = ['rooms', 'disk', 'server'];
 
 export type Route =
   | { name: 'room'; id: number }

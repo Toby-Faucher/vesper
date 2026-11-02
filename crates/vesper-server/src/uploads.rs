@@ -452,6 +452,11 @@ async fn download(
 
 async fn disk(State(st): State<AppState>, a: Authed) -> Result<Json<DiskUse>, ApiError> {
     require(&a.user, Role::Owner)?;
+    disk_use(&st).await.map(Json)
+}
+
+/// The numbers of Admin > Disk use (also on Admin > Server).
+pub(crate) async fn disk_use(st: &AppState) -> Result<DiskUse, ApiError> {
     let dir = &st.cfg.data_dir;
     let len = |name: &str| std::fs::metadata(dir.join(name)).map_or(0, |m| m.len());
     let db_bytes = len("vesper.db") + len("vesper.db-wal");
@@ -464,14 +469,14 @@ async fn disk(State(st): State<AppState>, a: Authed) -> Result<Json<DiskUse>, Ap
     let over = |used: u64, of: u64| u128::from(used) * 5 > u128::from(of) * 4;
     let warn = over(upload_bytes, quota) || over(total - free, total);
     let i = |n: u64| i64::try_from(n).unwrap_or(i64::MAX);
-    Ok(Json(DiskUse {
+    Ok(DiskUse {
         db_bytes: i(db_bytes),
         upload_bytes: i(upload_bytes),
         quota_bytes: i(quota),
         fs_total: i(total),
         fs_free: i(free),
         warn,
-    }))
+    })
 }
 
 #[cfg(test)]

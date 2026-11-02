@@ -53,6 +53,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The build id compiled in (`build.rs`): the git commit, else the version.
 pub const BUILD: &str = env!("VESPER_BUILD");
 
+/// When [`serve`] started, for the uptime on Admin > Server.
+pub(crate) static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 /// Largest JSON body any `/api` route reads.
 pub const API_BODY_LIMIT: usize = 32 * 1024;
 
@@ -205,6 +208,7 @@ pub async fn serve(
     sfu: SfuHandle,
 ) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
     let cfg = state.cfg.clone();
+    STARTED.get_or_init(std::time::Instant::now);
     uploads::clean_tmp(&cfg.data_dir)?;
     uploads::spawn_sweep(state.clone());
     match cfg.public_host.clone() {
@@ -231,8 +235,14 @@ pub async fn serve(
     let app = Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws::upgrade))
-        // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`.
-        .fallback_service(ServeDir::new(&cfg.web_dir))
+        // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`. It sends
+        // the `.br` or `.gz` beside a file (web/scripts/precompress.mjs) when Accept-Encoding allows,
+        // with the original's Content-Type and `Vary: accept-encoding`.
+        .fallback_service(
+            ServeDir::new(&cfg.web_dir)
+                .precompressed_br()
+                .precompressed_gzip(),
+        )
         .with_state(ws::WsState {
             app: state,
             sockets: Arc::new(Semaphore::new(cfg.max_sockets)),

@@ -271,6 +271,18 @@ try {
   await a.locator('#main').getByText('Database').waitFor();
   console.log('disk use: ok');
 
+  // Admin > Server, the owner's: version and build, uptime, voice, failed pushes, no backup yet, a link to Disk use.
+  await openAdmin(a, 'Server');
+  const facts = a.locator('#main dl');
+  await facts.getByText('Running for').waitFor();
+  const health = await (await fetch(`${ORIGIN}/health`)).json();
+  await facts.getByText(`${health.version}, build ${health.build}`).waitFor();
+  await facts.getByText('None in the backups folder').waitFor();
+  assert.equal(await facts.locator('dt').count(), 7);
+  await a.locator('#main p', { hasText: 'Uploads and the quota' }).getByRole('link', { name: 'Disk use' }).click();
+  await a.waitForURL(`${ORIGIN}/admin/disk`);
+  console.log('server page: ok');
+
   // The role change asks first and names bob; Cancel keeps him a member. Then bob is a moderator: the Admin entry, no role
   // or ban controls, no owner sections, and /admin/rooms says it is the owner's.
   // A failed load says so and offers Try again.
