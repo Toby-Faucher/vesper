@@ -261,6 +261,9 @@ async fn service_worker_and_manifest() {
     assert!(header_has(&sw, "worker-src 'self'"), "{sw}");
     let m = get(addr, "/manifest.webmanifest").await;
     assert!(m.starts_with("HTTP/1.1 200"), "{m}");
-    assert!(header_has(&m, "content-type: application/manifest+json"), "{m}");
+    assert!(
+        header_has(&m, "content-type: application/manifest+json"),
+        "{m}"
+    );
     assert!(header_has(&m, "default-src 'self'"), "{m}");
 }

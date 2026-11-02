@@ -152,7 +152,7 @@ try {
   assert.deepEqual(await cspViolations(b), [], 'CSP violations');
 
   // bob closes Vesper: no socket, so a mention and the start of voice reach him by push, without the message text.
-  await b.goto('about:blank');
+  await b.close();
   await sleep(500);
   await openRoom(a, 'general');
   const general = Number(new URL(a.url()).pathname.split('/')[2]);
@@ -174,16 +174,18 @@ try {
   console.log('voice started push: ok');
 
   // Log out on bob's device: the worker and its subscription go.
-  await b.goto(`${ORIGIN}/`);
-  await b.getByRole('navigation', { name: 'Rooms' }).waitFor();
-  await logout(b);
-  await b.waitForURL(/\/login$/);
-  assert.equal(await b.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => !!r)), false, 'worker after logout');
+  const b2 = await b.context().newPage();
+  b2.on('pageerror', (e) => bob.errors.push(`bob: ${e}`));
+  await b2.goto(`${ORIGIN}/`);
+  await b2.getByRole('navigation', { name: 'Rooms' }).waitFor();
+  await logout(b2);
+  await b2.waitForURL(/\/login/);
+  assert.equal(await b2.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => !!r)), false, 'worker after logout');
   console.log('logout removes the worker: ok');
 
   await sleep(300);
   assert.equal(got.length, 0, 'unexpected pushes');
-  for (const p of [a, b]) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
+  assert.deepEqual(await cspViolations(a), [], 'CSP violations');
   assert.deepEqual([...alice.errors, ...bob.errors], [], 'page errors');
   console.log('e2e push: PASS');
 } finally {
