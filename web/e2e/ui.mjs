@@ -43,6 +43,23 @@ const motionSince = (page) => page.evaluate(() => {
   return all;
 });
 const moves = (frames) => frames.filter((f) => /"(transform|translate|scale|rotate)"/.test(f));
+// Resolves once nothing animates and the timeline's scrollTop and every row's box stayed the same for two frames.
+const settled = (page) => page.evaluate(() => new Promise((done, fail) => {
+  const state = (list) => JSON.stringify([list.scrollTop, ...[...list.querySelectorAll('article')].map((e) => [e.offsetTop, e.offsetLeft, e.offsetWidth, e.offsetHeight])]);
+  const end = performance.now() + 5000;
+  let last = null;
+  let same = 0;
+  const frame = () => {
+    const list = document.querySelector('[data-timeline]'); // not there yet right after the room opens
+    const now = !list || document.getAnimations().length ? null : state(list);
+    same = now !== null && now === last ? same + 1 : 0;
+    last = now;
+    if (same >= 2) done();
+    else if (performance.now() > end) fail(new Error(`the timeline did not settle: ${now ?? document.getAnimations().map((a) => a.effect?.target?.tagName)}`));
+    else requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}));
 
 async function signIn(page, name) {
   await page.goto(`${ORIGIN}/login`);
@@ -527,15 +544,18 @@ try {
   await k.getByRole('button', { name: 'Leave' }).waitFor(); // still in the call
   console.log('keyboard only: ok');
 
-  // The message highlight fades (paint only: background, text colour, opacity) and never moves the row.
-  const lastRow = k.locator('article').last();
+  // The message highlight fades (paint only: background, text colour, opacity) and never moves the row. Measured once the
+  // reopened room has settled: a new row is first laid out at its content-visibility placeholder size (56 px), then at its
+  // real size once the browser finds it on screen, hover or not; measuring in between failed at random (#83).
+  await settled(k);
+  const lastRow = await k.locator('article').last().elementHandle(); // the same row both times
   const box = () => lastRow.evaluate((e) => [e.offsetTop, e.offsetLeft, e.offsetWidth, e.offsetHeight].join()); // layout, not scroll
   const still = await box();
   await lastRow.hover();
   const fades = await lastRow.evaluate((e) => e.getAnimations({ subtree: true }).map((a) => a.transitionProperty ?? 'script'));
   assert.ok(fades.includes('background-color'), `the hover highlight does not fade: ${fades}`);
   assert.deepEqual(fades.filter((x) => !['background-color', 'color', 'opacity'].includes(x)), [], 'the hover highlight animates more than paint');
-  assert.equal(await box(), still, 'the hover highlight moved the row');
+  assert.equal(await box(), still, `the hover highlight moved the row (offsetTop, offsetLeft, offsetWidth, offsetHeight was ${still})`);
   // The sidebar slides out (inert at once, the main pane following by transform) and back; focus stays where it was.
   await composer(k).focus();
   await k.keyboard.press('Control+Backslash');
