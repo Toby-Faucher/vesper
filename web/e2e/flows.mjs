@@ -851,6 +851,31 @@ try {
   for (const p of pages) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
   console.log('no CSP violations: ok');
   assert.deepEqual([...alice.errors, ...bob.errors], [], 'page errors');
+
+  // A release while a tab is open: the server comes back on another build. The tab says so, offers Reload, stops sending,
+  // and never reloads by itself; after Reload it works on the new build.
+  await a.goto(`${ORIGIN}/`);
+  await signedIn(a);
+  await a.waitForURL(/\/r\/\d+$/);
+  const here = roomId(a);
+  await stop.restart(async () => {}, { VESPER_BUILD_ID: 'e2e-next-build' });
+  const updated = a.getByRole('alert').filter({ hasText: 'Vesper was updated. Reload to continue.' });
+  await updated.waitFor({ timeout: 40000 });
+  await composer(a).fill('sent after the update');
+  await composer(a).press('Enter');
+  await sleep(2000);
+  assert.equal(await composer(a).inputValue(), 'sent after the update', 'the stale tab sent its text');
+  const hist = await call(a, 'GET', `/api/rooms/${here}/messages`);
+  assert.ok(!hist.messages.some((m) => m.body === 'sent after the update'), 'the stale tab posted a message');
+  assert.ok(await updated.isVisible(), 'the banner went away by itself');
+  const health = await (await fetch(`${ORIGIN}/health`)).json();
+  assert.equal(health.build, 'e2e-next-build', '/health build');
+  await updated.getByRole('button', { name: 'Reload' }).click();
+  await signedIn(a);
+  await a.waitForURL(/\/r\/\d+$/);
+  await sleep(1000);
+  assert.equal(await updated.count(), 0, 'the banner is back after Reload');
+  console.log('a new build asks open tabs to reload, blocks sends, no loop: ok');
   console.log('e2e flows: PASS');
 } finally {
   await stop();

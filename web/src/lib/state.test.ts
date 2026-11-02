@@ -12,7 +12,8 @@ const room = (id: number): RoomInfo => ({ id, name: `room${id}`, position: id, r
 const peer = (user_id: string, room_id: number): Peer => ({
   user_id, name: user_id, room_id, muted: false, deafened: false, force_muted: false,
 });
-const me = { user: user('a'), session_id: 1 };
+const server = { version: '1.4.0', build: 'b1' };
+const me = { user: user('a'), session_id: 1, server };
 const unread1 = { room_id: 1, last_read_id: 5, unread: 2, mentions: 0 };
 
 describe('applyServerMsg', () => {
@@ -49,7 +50,7 @@ describe('applyServerMsg', () => {
     expect(other.users).toEqual({ a: user('a'), b: user('b', 'Bee') });
     expect(other.me).toBe(me);
     const self = applyServerMsg(s, { type: 'user_updated', user: user('a', 'Ay') });
-    expect(self.me).toEqual({ user: user('a', 'Ay'), session_id: 1 });
+    expect(self.me).toEqual({ user: user('a', 'Ay'), session_id: 1, server });
     expect(applyServerMsg(s, { type: 'user_updated', user: user('c') }).users.c).toEqual(user('c'));
   });
   it('user_created adds the new person', () => {

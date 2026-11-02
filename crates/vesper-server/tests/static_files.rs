@@ -46,6 +46,10 @@ async fn start_at(web_dir: std::path::PathBuf, origin: &str) -> SocketAddr {
         secure_cookies: false,
         upload_quota_bytes: 0,
         push_subject: None,
+        build: "test-build".into(),
+        backup_keep: 5,
+        backup_every_hours: 0,
+        backup_uploads: false,
     })
     .await
     .unwrap();
@@ -87,7 +91,7 @@ async fn health_and_ws_take_precedence() {
     let addr = start(site()).await;
     let r = get(addr, "/health").await;
     assert!(
-        r.starts_with("HTTP/1.1 200") && r.ends_with("\r\n\r\nok"),
+        r.starts_with("HTTP/1.1 200") && r.contains(r#""status":"ok""#),
         "{r}"
     );
     // A plain GET /ws is not an upgrade: the ws route answers (4xx), the SPA index does not.

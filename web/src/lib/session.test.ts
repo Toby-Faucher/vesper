@@ -10,15 +10,17 @@ class FakeWS {
   send() {}
   close() { this.onclose?.({ code: 1000 }); }
   drop(code: number) { this.onclose?.({ code }); }
-  hello() {
-    const me = { user: { user_id: 'a', username: 'a', display_name: 'A', accent: '#888888', role: 'member', banned: false }, session_id: 1 };
+  hello(build = 'b1') {
+    const me = { user: { user_id: 'a', username: 'a', display_name: 'A', accent: '#888888', role: 'member', banned: false }, session_id: 1, server: { version: '1.4.0', build } };
     this.onmessage?.({ data: JSON.stringify({ type: 'hello', me, users: [me.user], rooms: [], voice: [], unread: [] }) });
   }
 }
 
 let meStatus = 200;
 let calls: string[] = []; // history calls
-const fetchMock = vi.fn(async () => new Response(meStatus === 204 ? null : '{"code":"unauthorized"}', { status: meStatus }));
+// A 200 is /api/me from the build the fake hello names.
+const meBody = (st: number) => (st === 204 ? null : st === 200 ? '{"server":{"version":"1.4.0","build":"b1"}}' : '{"code":"unauthorized"}');
+const fetchMock = vi.fn(async () => new Response(meBody(meStatus), { status: meStatus }));
 
 async function load() {
   vi.resetModules();
@@ -116,6 +118,45 @@ describe('session', () => {
     FakeWS.all.at(-1)!.drop(1013);
     await vi.advanceTimersByTimeAsync(1000);
     expect(FakeWS.all).toHaveLength(8);
+  });
+  it('a hello from another build stops the socket and asks for a reload, once', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { session } = await load();
+    session.connect();
+    FakeWS.all[0].hello('b1');
+    FakeWS.all[0].drop(1006);
+    // The /api/me before the new socket still answers the old build, so it opens.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeWS.all).toHaveLength(2);
+    FakeWS.all[1].hello('b2');
+    expect(session.stale).toBe(true);
+    expect(session.online).toBe(false);
+    expect(session.state.me?.server.build).toBe('b1'); // the new hello was not applied
+    await vi.advanceTimersByTimeAsync(60000);
+    session.connect();
+    expect(FakeWS.all).toHaveLength(2); // no reconnect, no loop
+  });
+  it('an /api/me from another build stops before a new socket', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { session } = await load();
+    session.connect();
+    FakeWS.all[0].hello('b1');
+    FakeWS.all[0].drop(1006);
+    fetchMock.mockImplementationOnce(async () => Response.json({ server: { version: '1.4.1', build: 'b9' } }));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(session.stale).toBe(true);
+    expect(FakeWS.all).toHaveLength(1);
+  });
+  it('the same build on reconnect goes on as before', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { session } = await load();
+    session.connect();
+    FakeWS.all[0].hello('b1');
+    FakeWS.all[0].drop(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    FakeWS.all[1].hello('b1');
+    expect(session.stale).toBe(false);
+    expect(session.online).toBe(true);
   });
   it('logout while a retry asks /api/me opens no socket afterwards', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);

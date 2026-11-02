@@ -180,6 +180,17 @@ pub struct Me {
     pub user: UserInfo,
     #[ts(type = "number")]
     pub session_id: i64,
+    /// The server that answered. A tab compares `build` with the one it loaded under (v1.4).
+    pub server: ServerBuild,
+}
+
+/// The running server: `version` is the release number, `build` tells two builds of it apart
+/// (the git commit, else the version). In `Me` (so in `hello` too) and in `/health`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ServerBuild {
+    pub version: String,
+    pub build: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

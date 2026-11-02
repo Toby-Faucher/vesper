@@ -7,6 +7,8 @@ export const UI_MESSAGES = {
   backOnline: 'Back online.',
   retryNow: 'Try now',
   reconnect: 'Reconnect',
+  updated: 'Vesper was updated. Reload to continue.',
+  reload: 'Reload',
   noRooms: 'No rooms yet.',
   noRoomsBody: 'The owner can add one in the admin pages.',
   roomMissing: 'This room is not here.',

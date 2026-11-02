@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use vesper_protocol::Role;
 use vesper_store::{NewAccount, NewSession, RESET_TTL_MS, Store, now_ms, random_hex};
@@ -119,10 +119,40 @@ pub async fn run(args: &[String], cfg: &Config) -> Result<Option<String>, String
 }
 
 /// `backup <dir>` with the clock passed in, so a test can pin the file names.
-/// The database copy comes first, then the uploads: a file uploaded meanwhile is an extra file
-/// the restored server's sweep removes, and a file deleted meanwhile is counted as skipped.
-/// On any error after the first file is made, both outputs are removed: a pair left on disk is complete.
 pub async fn backup(cfg: &Config, dir: &Path, now: i64) -> Result<String, String> {
+    let w = write_backup(cfg, dir, &format!("vesper-{}", utc_stamp(now)), true, None).await?;
+    let (up, n) = w.uploads.unwrap_or_default();
+    Ok(format!(
+        "backup written to {}\n  database: {} ({} bytes)\n  uploads:  {} ({} files, {} bytes; {} vanished during the copy and were skipped)\nIt holds password and session hashes: keep it private.",
+        dir.display(),
+        w.db.display(),
+        w.db_bytes,
+        up.display(),
+        n.files,
+        n.bytes,
+        n.skipped,
+    ))
+}
+
+/// What one backup wrote.
+pub struct Written {
+    pub db: PathBuf,
+    pub db_bytes: u64,
+    uploads: Option<(PathBuf, Copied)>,
+}
+
+/// `<stem>.db`, then `<stem>-uploads/` when `uploads`, then `<stem>.json` when `manifest` is set,
+/// into `dir` (made 0700). The database copy comes first, then the uploads: a file uploaded
+/// meanwhile is an extra file the restored server's sweep removes, and a file deleted meanwhile
+/// is counted as skipped. On any error after the first file is made, every output is removed:
+/// what is left on disk is complete.
+async fn write_backup(
+    cfg: &Config,
+    dir: &Path,
+    stem: &str,
+    uploads: bool,
+    manifest: Option<String>,
+) -> Result<Written, String> {
     let path = cfg.data_dir.join("vesper.db");
     // Not `open`: a wrong data dir must fail, not create, migrate and back up an empty database.
     if !path.is_file() {
@@ -134,56 +164,129 @@ pub async fn backup(cfg: &Config, dir: &Path, now: i64) -> Result<String, String
     let store = Store::open_existing(&path)
         .await
         .map_err(|e| format!("open {}: {e}", path.display()))?;
-    let uploads = cfg.data_dir.join("uploads");
+    let src = cfg.data_dir.join("uploads");
     private_dir(dir, true).map_err(io(dir))?;
     // A backup dir inside uploads/ would be copied into the next backup as a shard.
-    if let (Ok(d), Ok(u)) = (dir.canonicalize(), uploads.canonicalize())
+    if let (Ok(d), Ok(u)) = (dir.canonicalize(), src.canonicalize())
         && d.starts_with(&u)
     {
         return Err(format!(
             "{} is inside {}; pick a dir outside it",
             dir.display(),
-            uploads.display()
+            src.display()
         ));
     }
-    let stamp = utc_stamp(now);
-    let db = dir.join(format!("vesper-{stamp}.db"));
-    let up = dir.join(format!("vesper-{stamp}-uploads"));
-    for p in [&db, &up] {
+    let db = dir.join(format!("{stem}.db"));
+    let up = dir.join(format!("{stem}-uploads"));
+    let man = dir.join(format!("{stem}.json"));
+    for p in [&db, &up, &man] {
         if p.symlink_metadata().is_ok() {
             return Err(format!("{} exists; not overwriting", p.display()));
         }
     }
     // Created empty with mode 600 first: VACUUM INTO writes into an empty file and keeps its mode.
     private_file(&db).map_err(io(&db))?;
-    let mut n = Copied::default();
     let written = async {
         store
             .backup_into(&db)
             .await
             .map_err(|e| format!("{}: {e}", db.display()))?;
-        private_dir(&up, false).map_err(io(&up))?;
-        copy_uploads(&uploads, &up, &mut n).map_err(io(&up))?;
-        std::fs::metadata(&db).map(|m| m.len()).map_err(io(&db))
+        let mut copied = None;
+        if uploads {
+            let mut n = Copied::default();
+            private_dir(&up, false).map_err(io(&up))?;
+            copy_uploads(&src, &up, &mut n).map_err(io(&up))?;
+            copied = Some((up.clone(), n));
+        }
+        if let Some(text) = &manifest {
+            private_file(&man)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()))
+                .map_err(io(&man))?;
+        }
+        let db_bytes = std::fs::metadata(&db).map(|m| m.len()).map_err(io(&db))?;
+        Ok::<_, String>(Written {
+            db: db.clone(),
+            db_bytes,
+            uploads: copied,
+        })
     }
     .await;
-    let db_bytes = match written {
-        Ok(b) => b,
-        Err(e) => {
-            let _ = std::fs::remove_file(&db);
-            let _ = std::fs::remove_dir_all(&up);
-            return Err(format!("{e}; the partial backup was removed"));
+    drop(store);
+    written.map_err(|e| {
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&up);
+        let _ = std::fs::remove_file(&man);
+        format!("{e}; the partial backup was removed")
+    })
+}
+
+/// The two kinds of automatic backup in `<data>/backups`. Each keeps its own newest
+/// `backup_keep`, so hourly ones never push out the copy taken before a migration.
+#[derive(Clone, Copy, Debug)]
+pub enum Auto {
+    /// At start, before the server migrates the database from schema `from` to `to`.
+    PreMigration { from: i64, to: i64 },
+    /// Every `VESPER_BACKUP_EVERY` hours.
+    Scheduled,
+}
+
+impl Auto {
+    fn prefix(self) -> &'static str {
+        match self {
+            Auto::PreMigration { .. } => "pre-",
+            Auto::Scheduled => "auto-",
         }
+    }
+}
+
+/// An automatic backup into `<data>/backups`: `pre-<from>-to-<to>-<UTC time>` or
+/// `auto-<UTC time>`, the database and a small JSON manifest, plus the uploads only with
+/// `VESPER_BACKUP_UPLOADS=1` (they can be large). Then the oldest of that kind past
+/// `backup_keep` are deleted. Returns the database copy's path.
+pub async fn auto_backup(cfg: &Config, kind: Auto, now: i64) -> Result<PathBuf, String> {
+    let dir = cfg.data_dir.join("backups");
+    let stamp = utc_stamp(now);
+    let (stem, from, to) = match kind {
+        Auto::PreMigration { from, to } => (format!("pre-{from:04}-to-{to:04}-{stamp}"), from, to),
+        Auto::Scheduled => (format!("auto-{stamp}"), 0, 0),
     };
-    Ok(format!(
-        "backup written to {}\n  database: {} ({db_bytes} bytes)\n  uploads:  {} ({} files, {} bytes; {} vanished during the copy and were skipped)\nIt holds password and session hashes: keep it private.",
-        dir.display(),
-        db.display(),
-        up.display(),
-        n.files,
-        n.bytes,
-        n.skipped,
-    ))
+    let manifest = serde_json::json!({
+        "kind": match kind { Auto::PreMigration { .. } => "pre-migration", Auto::Scheduled => "scheduled" },
+        "time": stamp,
+        "server_version": crate::VERSION,
+        "server_build": cfg.build,
+        "schema_from": from,
+        "schema_to": to,
+        "uploads": cfg.backup_uploads,
+    });
+    let w = write_backup(
+        cfg,
+        &dir,
+        &stem,
+        cfg.backup_uploads,
+        Some(format!("{manifest:#}\n")),
+    )
+    .await?;
+    prune(&dir, kind.prefix(), cfg.backup_keep).map_err(io(&dir))?;
+    Ok(w.db)
+}
+
+/// Deletes all but the newest `keep` backups whose name starts with `prefix`: their `.db`,
+/// `.json` and `-uploads/`. Newest by the UTC time that ends every name.
+fn prune(dir: &Path, prefix: &str, keep: usize) -> std::io::Result<()> {
+    let mut stems: Vec<String> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter_map(|n| Some(n.strip_suffix(".db")?.to_owned()))
+        .filter(|n| n.starts_with(prefix) && n.len() >= 16)
+        .collect();
+    stems.sort_by(|a, b| a[a.len() - 16..].cmp(&b[b.len() - 16..]));
+    let old = stems.len().saturating_sub(keep);
+    for stem in &stems[..old] {
+        std::fs::remove_file(dir.join(format!("{stem}.db")))?;
+        let _ = std::fs::remove_file(dir.join(format!("{stem}.json")));
+        let _ = std::fs::remove_dir_all(dir.join(format!("{stem}-uploads")));
+    }
+    Ok(())
 }
 
 #[derive(Default)]

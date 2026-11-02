@@ -13,7 +13,7 @@ Files: `deploy/Dockerfile` (build from the repo root), `deploy/compose.yaml`.
 1. Put `VESPER_ORIGIN` and `VESPER_PUBLIC_HOST` (see Network: it must resolve to the public IP from this host) in a `.env` next to `compose.yaml`. Compose refuses to start without either one.
 2. Create the data dir next to `compose.yaml` and give it to the container user: `mkdir -m 700 data && sudo chown 10001:10001 data`. Compose mounts it at `/data` (`VESPER_DATA_DIR`); it holds the SQLite database with accounts, sessions and rooms.
 3. `docker compose -f deploy/compose.yaml up -d --build` (in Dockge: create the stack from this repo and add the `.env`; it is not verified that the compose file's `context: ..` finds the repo inside a Dockge stack directory). The first build is slow: it compiles the denoiser to wasm and downloads the DeepFilterNet model (sha256-checked by `scripts/fetch-model.sh`).
-4. `curl http://127.0.0.1:8080/health` returns `ok`; `docker compose ps` shows `healthy`.
+4. `curl http://127.0.0.1:8080/health` returns `{"status":"ok","version":"...","build":"..."}`; `docker compose ps` shows `healthy`.
 5. Make the owner account (below).
 
 If Docker's UDP NAT misbehaves, `network_mode: host` is the alternative (see the comment in `compose.yaml`): drop `ports:`, the server binds the host directly, and the `VESPER_HTTP_BIND`/`VESPER_UDP_BIND` values are the real host listeners.
@@ -82,7 +82,11 @@ person and of who made it, never the link.
 
 ## Upgrade and rollback
 
-After an image with a new migration has started on a database (v1.3 adds 0007 password resets, 0008 room archive and 0009 push), an older image will not start on that database: it stops with "migration 7 was previously applied but is missing". Rollback then means the older image and the backup taken before the upgrade. Back up before you upgrade: `docker compose exec vesper vesper-server backup /data/backups`. To roll back, restore that backup ([Backup](#backup)) and start the old image.
+After an image with a new migration has started on a database (v1.3 adds 0007 password resets, 0008 room archive and 0009 push), an older image will not start on that database: it stops with "migration 7 was previously applied but is missing". Rollback then means the older image and the backup taken before the upgrade.
+
+From v1.4 the server takes that backup itself: at start, when `vesper.db` exists and the image carries migrations the database does not have yet, it writes `data/backups/pre-<from>-to-<to>-<UTC time>.db` (from and to are migration numbers, for example `pre-0009-to-0010-20261102T040000Z.db`) and a small `.json` manifest next to it (the new server's version and build, the schema numbers, whether uploads were copied), and only then migrates. Uploads are not copied unless `VESPER_BACKUP_UPLOADS=1` ([env.md](env.md)): they stay in `data/uploads` and an older image reads them as they are. Directories are mode 0700 and files 0600. If that backup fails (for example the disk is full), the server does not start and says why: free space and start again. The newest 5 `pre-*` backups are kept (`VESPER_BACKUP_KEEP`). The check runs in the new image, so it already covers the upgrade from v1.3 to v1.4. A release with no migration takes no automatic backup. A manual one is still the way to keep uploads too: `docker compose exec vesper vesper-server backup /data/backups`.
+
+To roll back after a migration: stop the stack, restore the `pre-*` copy as `vesper.db` (steps 1 to 4 of [Restore](#backup), with `data/backups/pre-<...>.db` in step 3 and the uploads left in place), and start the old image. Everything written after the upgrade is lost. Files uploaded after it have no row in the old copy and are removed by the hourly sweep after 24 h; files deleted after it answer 404.
 
 Upgrade: first tag the current image, `docker tag vesper:latest vesper:previous`; then `git pull` and `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins. The database in the data dir stays; the server applies its schema migrations at start, so an older image may not read a database a newer one migrated: take a backup before an upgrade that changes the schema. Rollback: the image and `deploy/compose.yaml` must match, because compose only passes the variables it lists. Check out the previous commit's `deploy/compose.yaml` (`git checkout <old> -- deploy/compose.yaml`) and run `VESPER_TAG=previous docker compose -f deploy/compose.yaml up -d` (no `--build`), or `git checkout <old>` and rebuild. An image from before accounts needs its old compose file (or a local `VESPER_DEV_KEY: ${VESPER_DEV_KEY:?}` line) and the key in `.env`. Not verified. For the binary install keep the previous binary next to the new one and swap the file, then `systemctl restart vesper`.
 
@@ -95,7 +99,7 @@ If the voice engine thread dies (a bug on hostile input), `/health` returns 503 
 - `vesper-<UTC time>.db`, for example `vesper-20261101T040000Z.db`: a copy of the database made with SQLite's `VACUUM INTO`, so it is consistent while the server runs and needs no WAL file next to it. Profile pictures live in the database, so they are in this file.
 - `vesper-<UTC time>-uploads/`: a copy of `uploads/` (attachments), without `uploads/tmp`. A file deleted while the copy runs is skipped and counted in the summary; its row is still in the database copy, so after a restore that one attachment answers 404.
 
-Directories are mode 0700 and files 0600. It never overwrites: a second run in the same second fails. `<dir>` must be outside `uploads/`. It reads `vesper.db` in `VESPER_DATA_DIR` as it is: a missing file is an error (a wrong data dir), and it never creates or migrates the database. If any step fails, it removes both outputs and exits non-zero, so a pair left in `<dir>` is complete. It prints the paths, the file count and the bytes. The copy holds password and session hashes: keep it private.
+Directories are mode 0700 and files 0600. It never overwrites: a second run in the same second fails. Automatic backups (before a migration, and every `VESPER_BACKUP_EVERY` hours when set) go to `<data dir>/backups` as `pre-*` and `auto-*`, the database and a manifest only unless `VESPER_BACKUP_UPLOADS=1`; the newest `VESPER_BACKUP_KEEP` (5) of each kind are kept and `vesper-*` ones are never deleted ([Upgrade and rollback](#upgrade-and-rollback), [env.md](env.md)). `<dir>` must be outside `uploads/`. It reads `vesper.db` in `VESPER_DATA_DIR` as it is: a missing file is an error (a wrong data dir), and it never creates or migrates the database. If any step fails, it removes both outputs and exits non-zero, so a pair left in `<dir>` is complete. It prints the paths, the file count and the bytes. The copy holds password and session hashes: keep it private.
 
 In the container (Docker / Dockge), from the stack directory:
 
@@ -164,7 +168,8 @@ only HSTS (the same value), so the headers do not depend on Caddy. Verified in h
 
 Last updated 2026-11-01. Written and checked for syntax and against the real files, but not executed (no Docker or browser on the dev machine):
 
-- `docker build` / `docker compose up`, the image's healthcheck, non-root and read-only operation.
+- `docker build` / `docker compose up`, the image's healthcheck, non-root and read-only operation, the `VESPER_BUILD_ID` build arg and `build-id.txt` inside the image build.
+- The automatic backup before a migration on the live data dir (tested on a temporary dir with an old-schema database: `crates/vesper-server/tests/cli.rs`), and starting an older image on a restored `pre-*` copy.
 - The Dockerfile's `cargo install wasm-bindgen-cli` and wasm build inside the image.
 - `compose.yaml` was read, not parsed by compose; `vesper.service` passes `systemd-analyze verify` apart from the binary not existing, and its hardening options were not run (check `MemoryDenyWriteExecute` and `SystemCallFilter` with a real start).
 - Dockge deploy, router forward, split DNS, Caddy, certificates.

@@ -6,6 +6,7 @@ import { recentKey } from './ui/recent';
 import { tray } from './ui/tray.svelte';
 import { Signaling } from './signaling';
 import { applyServerMsg, emptyState, type AppState } from './state';
+import type { Me } from './gen/Me';
 
 /** The current path, without the query and the fragment. App.svelte renders from it. */
 export const route = $state({ path: location.pathname });
@@ -61,10 +62,13 @@ export const session = $state({
   notice: '',
   /** When the next reconnect try starts (ms since epoch), while one waits. */
   retryAt: null as number | null,
+  /** The server now runs another build than the one this page started with: the socket is closed for good and the page
+   * asks for a reload. Never reloads by itself, so a mismatch can not loop. */
+  stale: false,
 
   /** Opens the one socket for this page. Reconnects after a drop, except on 4001 (go to sign in) and 4003. */
   connect(): void {
-    if (session.sig || timer) return;
+    if (session.sig || timer || session.stale) return;
     session.notice = '';
     tries = 0;
     open();
@@ -93,6 +97,7 @@ function open(): void {
   session.sig = sig;
   let upAt = 0;
   sig.onMessage((m) => {
+    if (m.type === 'hello' && !sameBuild(m.me)) return; // its messages may be of a kind this code does not know
     if (m.type === 'hello') {
       upAt = Date.now();
       session.online = true;
@@ -126,11 +131,11 @@ function retry(): void {
 function attempt(): void {
   const g = gen;
   session.retryAt = null;
-  api('GET', '/api/me').then(
-    () => {
+  api<Me>('GET', '/api/me').then(
+    (me) => {
       if (g !== gen) return;
       timer = undefined;
-      open();
+      if (sameBuild(me)) open();
     },
     (e) => {
       if (g !== gen) return;
@@ -139,6 +144,19 @@ function attempt(): void {
       else retry();
     },
   );
+}
+
+let build: string | null = null; // the server build of this page's first hello (or /api/me)
+
+/** False, and the socket stops, once the server is on another build than this page started with. Build ids, not versions,
+ * so a rebuild of one version counts too. An older server sends none: that is a change as well. */
+function sameBuild(me: Me | undefined): boolean {
+  const b = me?.server?.build ?? '';
+  build ??= b;
+  if (b === build) return true;
+  stop();
+  session.stale = true;
+  return false;
 }
 
 function stop(): void {

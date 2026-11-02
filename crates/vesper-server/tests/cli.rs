@@ -23,6 +23,10 @@ fn config(data: &TempDir) -> Config {
         secure_cookies: false,
         upload_quota_bytes: 0,
         push_subject: None,
+        build: "test-build".into(),
+        backup_keep: 5,
+        backup_every_hours: 0,
+        backup_uploads: false,
     }
 }
 
@@ -312,4 +316,136 @@ async fn backup_dir_inside_uploads_is_refused() {
         .await
         .unwrap_err();
     assert!(e.contains("inside"), "{e}");
+}
+
+fn names(dir: &std::path::Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    v.sort();
+    v
+}
+
+fn sfu() -> vesper_sfu::SfuHandle {
+    vesper_sfu::Sfu::spawn(vesper_sfu::SfuConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+/// An old-schema database (the first 8 migrations, v1.2's schema plus 0007 and 0008): the start
+/// writes `pre-0008-to-<newest>-<t>.db` and its manifest before it migrates, and the copy is
+/// still at schema 8.
+#[cfg(unix)]
+#[tokio::test]
+async fn start_backs_up_an_old_database_before_migrating() {
+    use std::os::unix::fs::PermissionsExt;
+    let data = TempDir::new().unwrap();
+    let db = data.path().join("vesper.db");
+    Store::create_at_schema(&db, 8).await.unwrap();
+    let (_, newest) = Store::schema_versions(&db).await.unwrap().unwrap();
+    std::fs::create_dir_all(data.path().join("uploads/ab")).unwrap();
+    std::fs::write(data.path().join("uploads/ab/ab00"), b"big file").unwrap();
+
+    let (_addr, _serving) = vesper_server::start_with_sfu(config(&data), sfu())
+        .await
+        .unwrap();
+    assert_eq!(
+        Store::schema_versions(&db).await.unwrap(),
+        Some((newest, newest))
+    );
+    let dir = data.path().join("backups");
+    let files = names(&dir);
+    assert_eq!(files.len(), 2, "{files:?}");
+    let stem = files[0].strip_suffix(".db").unwrap();
+    assert!(
+        stem.starts_with(&format!("pre-0008-to-{newest:04}-")),
+        "{stem}"
+    );
+    assert_eq!(files[1], format!("{stem}.json"));
+    let copy = dir.join(&files[0]);
+    assert_eq!(
+        Store::schema_versions(&copy).await.unwrap(),
+        Some((8, newest))
+    );
+    let man: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join(&files[1])).unwrap()).unwrap();
+    assert_eq!(man["kind"], "pre-migration");
+    assert_eq!(man["schema_from"], 8);
+    assert_eq!(man["server_build"], "test-build");
+    assert_eq!(man["uploads"], false);
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&dir), 0o700);
+    assert_eq!(mode(&copy), 0o600);
+    assert_eq!(mode(&dir.join(&files[1])), 0o600);
+    // The copy opens on this code and holds the rooms.
+    let rooms = Store::open(&copy).await.unwrap().rooms().await.unwrap();
+    assert!(rooms.iter().any(|r| r.name == "general"), "{rooms:?}");
+
+    // Nothing pending now: a second start takes no backup.
+    let (_addr, _serving) = vesper_server::start_with_sfu(config(&data), sfu())
+        .await
+        .unwrap();
+    assert_eq!(names(&dir).len(), 2, "no new backup");
+}
+
+/// A new data dir has nothing to back up; a failed backup stops the start before any migration.
+#[tokio::test]
+async fn failed_backup_before_migration_stops_the_start() {
+    let data = TempDir::new().unwrap();
+    let (_addr, _serving) = vesper_server::start_with_sfu(config(&data), sfu())
+        .await
+        .unwrap();
+    assert!(!data.path().join("backups").exists());
+
+    let data = TempDir::new().unwrap();
+    let db = data.path().join("vesper.db");
+    Store::create_at_schema(&db, 8).await.unwrap();
+    // A file where the backups dir goes: the backup can not be written.
+    std::fs::write(data.path().join("backups"), b"").unwrap();
+    let e = vesper_server::start_with_sfu(config(&data), sfu())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("does not start"), "{e}");
+    assert_eq!(Store::schema_versions(&db).await.unwrap().unwrap().0, 8);
+}
+
+/// Each kind keeps its newest `backup_keep`; uploads only with `backup_uploads`; manual
+/// `vesper-*` backups are never deleted.
+#[tokio::test]
+async fn automatic_backups_keep_the_newest_of_each_kind() {
+    let data = TempDir::new().unwrap();
+    let mut cfg = config(&data);
+    cfg.backup_keep = 2;
+    store(&data).await;
+    let dir = data.path().join("backups");
+    cli::backup(&cfg, &dir, 0).await.unwrap();
+    let pre = cli::Auto::PreMigration { from: 7, to: 9 };
+    cli::auto_backup(&cfg, pre, 1_000).await.unwrap();
+    for t in [5_000, 3_000, 4_000, 2_000] {
+        cli::auto_backup(&cfg, cli::Auto::Scheduled, t)
+            .await
+            .unwrap();
+    }
+    cfg.backup_uploads = true;
+    cli::auto_backup(&cfg, cli::Auto::Scheduled, 6_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        names(&dir),
+        [
+            "auto-19700101T000005Z.db",
+            "auto-19700101T000005Z.json",
+            "auto-19700101T000006Z-uploads",
+            "auto-19700101T000006Z.db",
+            "auto-19700101T000006Z.json",
+            "pre-0007-to-0009-19700101T000001Z.db",
+            "pre-0007-to-0009-19700101T000001Z.json",
+            "vesper-19700101T000000Z-uploads",
+            "vesper-19700101T000000Z.db",
+        ]
+    );
 }
