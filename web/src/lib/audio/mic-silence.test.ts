@@ -11,7 +11,7 @@ type Step = {
 const stats = (s: Step): CaptureStats => ({
   pipeline: s.noPipeline ? null : ({ inputRms: s.rms ?? LOUD } as PipelineStats),
   ageMs: s.noPipeline ? null : (s.ageMs ?? 100),
-  mic: { readyState: 'live', muted: false, enabled: true },
+  mic: { readyState: 'live', muted: false, enabled: true, settings: {}, reopens: 0 },
   context: { state: s.context ?? 'running', sampleRate: 48000 },
 });
 /** Polls every 100 ms through the steps; returns the warning at each poll. */
