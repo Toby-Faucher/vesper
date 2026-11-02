@@ -71,6 +71,7 @@ async function walkWelcome(page) {
   const focusedHeading = () => page.evaluate(() => document.activeElement?.tagName === 'H1' && document.activeElement.textContent);
   await page.getByText('Step 1 of 3').waitFor();
   assert.equal(await focusedHeading(), 'How others see you');
+  assert.equal(await page.getByRole('img', { name: 'Vesper' }).count(), 1, 'the welcome pane shows the logo next to the sidebar one');
   await page.getByRole('radio', { name: 'Teal' }).check();
   await page.getByRole('button', { name: 'Next' }).click();
   await page.getByText('Step 2 of 3').waitFor();
