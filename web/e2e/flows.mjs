@@ -888,6 +888,16 @@ try {
     const d = dsp.page;
     // With the noise gate on, so its worklet message runs in a real browser too.
     await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter', vad: { thresholdDb: -50, gate: true } })));
+    // The mics the app asks for: the browser filter must be on while the model loads and off once it runs.
+    await d.addInitScript(() => {
+      window.__mics = [];
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (q) => {
+        const m = await gum(q);
+        window.__mics.push({ asked: q.audio?.noiseSuppression, track: m.getAudioTracks()[0] });
+        return m;
+      };
+    });
     await signup(d, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, 'dana');
     await join(d, 'general');
     const line = d.getByText('Noise suppression:').first();
@@ -897,6 +907,11 @@ try {
       status = await line.innerText();
     }
     assert.equal(status, 'Noise suppression: deepfilter', 'denoiser did not start under the CSP');
+    const ns = await d.evaluate(() => window.__mics.map((x) => [x.asked, x.track.getConstraints().noiseSuppression, x.track.getSettings().noiseSuppression]));
+    assert.deepEqual(ns.map((x) => x[0]), [true], 'the mic was not asked for with the browser filter on while loading');
+    assert.equal(ns[0][1], false, 'the browser filter was not turned off when DeepFilterNet took over');
+    assert.notEqual(ns[0][2], true, 'the track still reports the browser filter on');
+    console.log(`browser filter while the denoiser loads: asked ${ns[0][0]}, after ready constraint ${ns[0][1]}, setting ${ns[0][2]}: ok`);
     await d.getByRole('link', { name: 'Call details' }).click();
     const diag = d.getByRole('group', { name: 'Call numbers' }).getByText('Noise suppression:');
     assert.equal(await diag.innerText(), 'Noise suppression: deepfilter', 'Diagnostics shows another mode');

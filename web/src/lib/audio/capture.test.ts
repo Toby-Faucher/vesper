@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCapture, READY_TIMEOUT_MS, type CaptureDeps } from './capture';
+import { createCapture, LOADING, READY_TIMEOUT_MS, type CaptureDeps } from './capture';
 import { DEFAULT_AUDIO_SETTINGS, clampSettings } from './settings';
 
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
@@ -12,10 +12,15 @@ class FakeStream {
   getAudioTracks() { return this.tracks; }
   getTracks() { return this.tracks; }
 }
-const track = (label: string) => ({
-  kind: 'audio', label, enabled: true, muted: false, readyState: 'live', stop: vi.fn(),
-  onended: null as any, onmute: null as any, onunmute: null as any,
-});
+const track = (label: string, c: MediaTrackConstraints = {}) => {
+  const t = {
+    kind: 'audio', label, enabled: true, muted: false, readyState: 'live', stop: vi.fn(),
+    onended: null as any, onmute: null as any, onunmute: null as any,
+    getConstraints: () => c,
+    applyConstraints: vi.fn(async (n: MediaTrackConstraints) => void (c = n)),
+  };
+  return t;
+};
 const node = () => ({ connect: vi.fn((n: unknown) => n), disconnect: vi.fn() });
 
 const clock = { t: 0 };
@@ -41,7 +46,7 @@ function setup(over: Partial<CaptureDeps> = {}) {
   const deps: CaptureDeps = {
     getUserMedia: async (c) => {
       if (micFail) throw micFail;
-      const t = track(`mic${mics.length}`);
+      const t = track(`mic${mics.length}`, { ...(c.audio as MediaTrackConstraints) });
       mics.push({ c: c.audio as MediaTrackConstraints, t });
       return new FakeStream([t]) as unknown as MediaStream;
     },
@@ -72,7 +77,8 @@ describe('createCapture', () => {
   it('deepfilter: browser NS/AGC off, EC on, sends the denoised track, init then port after ready', async () => {
     const t = setup();
     const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
-    expect(t.mics[0].c).toMatchObject({ echoCancellation: true, noiseSuppression: false, autoGainControl: false });
+    // The browser filter is on while the model loads, and off once DeepFilterNet takes over.
+    expect(t.mics[0].c).toMatchObject({ echoCancellation: true, noiseSuppression: true, autoGainControl: false });
     expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
     const w = t.workers[0];
     expect(w.postMessage).toHaveBeenCalledWith({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: 100, beta: 0.02 });
@@ -80,9 +86,11 @@ describe('createCapture', () => {
     expect(t.worklets[0].port.postMessage.mock.calls).toEqual([[{ type: 'dynamics', limit: false, gate: false, thresholdDb: -50, auto: false }]]);
     const cb = vi.fn();
     cap.onModeChange(cb);
-    expect(cb).toHaveBeenLastCalledWith('deepfilter', 'loading, unfiltered');
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', LOADING);
+    expect(t.mics[0].t.applyConstraints).not.toHaveBeenCalled();
     w.onmessage({ data: { type: 'ready' } });
     expect(cb).toHaveBeenLastCalledWith('deepfilter', '');
+    expect(t.mics[0].t.getConstraints()).toMatchObject({ echoCancellation: true, noiseSuppression: false, autoGainControl: false, sampleRate: 48000 });
     const [msg, transfer] = w.postMessage.mock.calls[1];
     expect(msg).toEqual({ type: 'port' });
     const [wmsg, wtransfer] = t.worklets[0].port.postMessage.mock.calls[1];
@@ -168,6 +176,23 @@ describe('createCapture', () => {
     expect(cb).toHaveBeenCalledWith('browser', expect.stringContaining('no AudioWorklet'));
   });
 
+  it('the browser filter stays on after ready when the user wants it on top; a failed switch-off is named', async () => {
+    const t = setup();
+    const cap = await createCapture(clampSettings({ noiseSuppression: true }), t.deps);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    expect(t.mics[0].t.applyConstraints).not.toHaveBeenCalled();
+    cap.close();
+    const u = setup();
+    const cap2 = await createCapture(DEFAULT_AUDIO_SETTINGS, u.deps);
+    const cb = vi.fn();
+    cap2.onModeChange(cb);
+    u.mics[0].t.applyConstraints.mockRejectedValueOnce(new Error('OverconstrainedError'));
+    u.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', 'the browser filter could not be turned off');
+    cap2.close();
+  });
+
   it('browser and off modes use no worker; mic denial propagates and closes the context', async () => {
     const t = setup();
     await createCapture(clampSettings({ mode: 'browser' }), t.deps);
@@ -186,7 +211,7 @@ describe('createCapture', () => {
     cap.setSettings(clampSettings({ attenDb: 30, postFilter: 0.01 }));
     expect(t.workers[0].postMessage).toHaveBeenLastCalledWith({ type: 'set', atten: 30, beta: 0.01 });
     expect(t.worklets[0].port.postMessage).toHaveBeenLastCalledWith({ type: 'dynamics', limit: false, gate: false, thresholdDb: -50, auto: false });
-    cap.setSettings(clampSettings({ vad: { thresholdDb: -42, gate: true }, inputBoostDb: 3 })); // live, no rebuild
+    cap.setSettings(clampSettings({ vad: { thresholdDb: -42, gate: true, auto: false }, inputBoostDb: 3 })); // live, no rebuild
     expect(t.worklets[0].port.postMessage).toHaveBeenLastCalledWith({ type: 'dynamics', limit: true, gate: true, thresholdDb: -42, auto: false });
     expect(t.mics).toHaveLength(1);
     const cb = vi.fn();
@@ -323,7 +348,7 @@ describe('createCapture', () => {
     expect(seen.at(-1)).toEqual(['browser', 'input boost applies only in deepfilter mode']);
     cap.setSettings({ ...browser, inputBoostDb: 6, mode: 'deepfilter' });
     await flush();
-    expect(seen.at(-1)).toEqual(['deepfilter', 'loading, unfiltered']);
+    expect(seen.at(-1)).toEqual(['deepfilter', LOADING]);
     cap.close();
   });
 

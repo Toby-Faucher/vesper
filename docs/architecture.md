@@ -206,7 +206,7 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
     3 times the 10th percentile of the frame RMS over the last 2 s, clamped to 3e-6 .. 0.04 RMS, and closes 4 dB under that
     (Fluxer's rule). It compares frame RMS, not peak, and stays open for the first 200 ms of frames. It learns nothing while the gate is off.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
-  suppression is on only in `browser` mode, or in `deepfilter` mode if the user turned it on.
+  suppression is on in `browser` mode, in `deepfilter` mode while the model loads, and in `deepfilter` mode if the user turned it on.
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is
   also set on the sender (`web/src/lib/devices.ts`). Remote SDP is tuned too, then applied (`signaling.ts`).
 
@@ -225,7 +225,10 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
   The numbers are set in `denoise-core.ts`.
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
-- The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). The raw mic passes through, and the status line says `loading, unfiltered`, until then.
+- The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). Until then the mic passes through with the browser's noise suppression on
+  (the mic is asked for with `noiseSuppression: true`), and the status line says `loading, browser filter until then`. At `ready` the capture turns the
+  browser filter off with `applyConstraints` (unless "Browser noise suppression on top" is on), so the two never stack; if that call fails, the line says
+  `the browser filter could not be turned off`. The e2e checks the request and the constraint after ready in headless Chromium; whether the switch is heard is not verified.
 - The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. Skipped when the browser asks to save data. Not verified in a real browser.
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.
 

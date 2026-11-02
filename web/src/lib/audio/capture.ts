@@ -20,8 +20,10 @@ export interface CaptureDeps {
   onMicFallback?(): void;
 }
 
-/** The unfiltered mic passes through while the model loads, and a slow first download can take longer than 5 s. */
+/** The mic passes through (with the browser's filter) while the model loads, and a slow first download can take longer than 5 s. */
 export const READY_TIMEOUT_MS = 20_000;
+/** The status while DeepFilterNet loads: the browser filter is on meanwhile, and goes off when the model takes over. */
+export const LOADING = 'loading, browser filter until then';
 
 const modules = new WeakMap<BaseAudioContext, Promise<void>>();
 const browserDeps: CaptureDeps = {
@@ -80,11 +82,12 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   let closed = false;
   let live = d.startLive; // applied to every new track, so mute/PTT survive swaps and rebuilds
 
+  // deepfilter asks with the browser filter on (`loading`) and turns it off when the model is ready, unless the user wants it on top.
   const ask = (mode: DenoiseMode, id: string | null) =>
     d.getUserMedia({
       audio: {
         echoCancellation: true,
-        noiseSuppression: mode === 'browser' || (mode === 'deepfilter' && s.noiseSuppression),
+        noiseSuppression: mode !== 'off',
         autoGainControl: s.autoGain,
         channelCount: 1,
         sampleRate: 48000,
@@ -203,6 +206,12 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         n.port.postMessage({ type: 'port' }, [ch.port2]);
         set(); // settings may have changed while the model loaded
         me!.status = '';
+        const raw = m.getAudioTracks()[0];
+        // DeepFilterNet takes over now: the browser filter goes off, so the two never stack. A failure is named, not hidden.
+        if (!s.noiseSuppression)
+          void raw.applyConstraints({ ...raw.getConstraints(), noiseSuppression: false }).catch(() => {
+            if (pipe === me && !dead) notify('deepfilter', (me!.status = 'the browser filter could not be turned off'));
+          });
         if (pipe === me) notify('deepfilter', '');
       };
       w.onerror = (e) => fail(`denoiser worker failed: ${e.message ?? ''}`);
@@ -217,7 +226,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       w.postMessage({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: s.attenDb, beta: s.postFilter });
       me = {
         mode: 'deepfilter',
-        status: 'loading, unfiltered',
+        status: LOADING,
         track: out.stream.getAudioTracks()[0],
         raw: m.getAudioTracks()[0],
         stop,
