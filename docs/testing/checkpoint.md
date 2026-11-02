@@ -236,6 +236,7 @@ Last updated 2026-10-30. Tick as you check. Use two tabs (or two machines) where
 - [ ] Copy report button: paste into a text file, check it has user agent, mode, RTT, jitter, loss, codec, ICE state, the audio pipeline lines and nothing secret (no cookie, no invite code).
 - [ ] Bitrate change mid-call: lower to 32 kbps while joined (applies now; Send kbps in Diagnostics drops); raise above the joined value (shows the "applies on rejoin" note).
 - [ ] DTX: with DTX on, Send kbps drops during silence.
+- [ ] Bad network call ([bad-network.md](bad-network.md)): two browsers in one room, one speaking. Apply `burst5`, then `jitter`, then `wifi` with `scripts/netem-call.sh <profile> --apply` (root through sudoq), 30 s each, `off` between them. For each, note on the listener `Loss (incoming)` and `Jitter` (Diagnostics), "% of sound filled in" (the speaker's connection icon) and `concealedSamples` in `chrome://webrtc-internals`, and how it sounds (words lost, robotic, fine). The call must stay up, the connection icon must turn fair or poor, and it must go back to good within about 10 s of `off`. Remove netem afterwards: `scripts/netem-call.sh off --apply`.
 
 ## 10. Order of work
 
