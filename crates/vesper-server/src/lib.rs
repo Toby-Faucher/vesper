@@ -181,7 +181,8 @@ pub async fn serve(
         .route("/health", get(health))
         .route("/ws", get(ws::upgrade))
         // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`.
-        .fallback_service(ServeDir::new(&cfg.web_dir))
+        // A `<file>.gz` next to a file is sent to gzip clients: build-dsp.sh writes one for the denoiser wasm.
+        .fallback_service(ServeDir::new(&cfg.web_dir).precompressed_gzip())
         .with_state(ws::WsState {
             app: state,
             sockets: Arc::new(Semaphore::new(cfg.max_sockets)),

@@ -53,7 +53,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **A changed public IP needs a rejoin.** The name is re-resolved every 60 s, but only new sessions use the new address. A failed lookup at start advertises nothing until the next refresh, with a warning every 60 s.
 - **Without `VESPER_PUBLIC_HOST`, `VESPER_UDP_PORT_PUBLIC` is ignored**, and a `0.0.0.0` bind is advertised as is, with a warning.
 - **The ping interval (25 s) and the socket queue (256 messages) have no environment variable.**
-- **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are not pinned by digest, and assets are not precompressed.
+- **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are not pinned by digest, and assets are not precompressed, except the denoiser wasm.
 - **The SFU wakes every 10 ms when idle.** Cheap, but it is not zero.
 - **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof).
 
@@ -71,7 +71,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Image boxes change shape when the image loads.** `Attachment` has no width or height, so the timeline keeps a 360 x 280 box and resizes it on load; the reader's place is kept, but rows under an image in view can move.
 - **The keyboard, focus and motion checks run in headless Chromium only.** Safari does not focus a clicked button (the image viewer focuses it itself); other focus returns are not checked there.
 
-- **A very slow first visit can still fall back.** The denoiser files (about 23 MB) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
+- **A very slow first visit can still fall back.** The denoiser files (about 10 MB, see Denoiser) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
 - **Not tried in real Chrome or Firefox.** Firefox may refuse a mic and AudioContext rate mismatch, which forces the browser fallback every time.
 - **The noise gate and the limiter work in DeepFilterNet mode only.** In browser and off mode the raw mic track is sent; the gate switch is disabled there. After an automatic fallback to browser mode the setting stays on but does nothing. With the gate on, the Settings meter shows the gated sound, so the noise under the marker is not visible; turn the gate off to set the marker.
 - **Soft word starts under the marker are muted.** The gate opens on the first frame above the marker, so a quiet "s" or "h" before it can lose up to about 1.5 dB over the first 20 ms (measured on corpus speech).
@@ -91,7 +91,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 
 ## Denoiser
 
-- **The wasm is about 15 MB** because the `wasm` feature of `deep_filter` embeds a second copy of the model. A build on `deep_filter/tract` plus `getrandom` with the `js` feature should halve it. Not tried.
+- **The first download is about 10 MB:** the wasm is 10.9 MB, sent as a 2.2 MB gzip copy, plus the 8.0 MB model, which is already gzip. It was 23.3 MB with the wasm sent as is. The model was never inside the wasm: the linker drops the unused copy, so leaving out `deep_filter`'s `wasm` feature saved only 4 kB. The 4.4 MB name section was the waste. The rest is tract's code. The gzip copy needs a browser that sends `Accept-Encoding: gzip`, and Caddy and Cloudflare must pass `Content-Encoding` through: not verified on the live host. The model is the larger part now and is not smaller.
 - **No panic hook in the wasm**, so a Rust panic shows as an opaque error.
 - **Added delay is not measured.** The output queue starts at 30 ms and may grow to 80 ms, on top of the algorithm's lookahead. From the code we estimate about 30 ms more than before the larger buffers. The [checkpoint](testing/checkpoint.md) must measure it.
 - **`ndarray` and the `tract-core` pin in `vesper-dsp` are not optional**, although only the `tract` feature needs them. A featureless build pulls them in for nothing.

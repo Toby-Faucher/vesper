@@ -21,7 +21,7 @@ scripts/build-dsp.sh
 ```
 
 This fetches the DeepFilterNet3 model if it is missing (`scripts/fetch-model.sh`, pinned revision, sha256 checked), builds `vesper-dsp` to WASM with
-`-C target-feature=+simd128`, runs `wasm-bindgen`, and writes `web/public/dsp/` (the `.wasm`, the JS glue and `model.tar.gz`).
+`-C target-feature=+simd128`, runs `wasm-bindgen` without the name section, and writes `web/public/dsp/` (the `.wasm`, its gzip copy `.wasm.gz` that the server sends to gzip clients, the JS glue and `model.tar.gz`).
 Neither the model nor `web/public/dsp/` is committed. Run it again after any change to `crates/vesper-dsp` or a `wasm-bindgen` bump.
 The Docker build does the same inside the image.
 

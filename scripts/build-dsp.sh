@@ -16,6 +16,10 @@ OUT=web/public/dsp
 RUSTFLAGS="-C target-feature=+simd128" cargo build --locked -p vesper-dsp --lib --release \
   --target wasm32-unknown-unknown --no-default-features --features wasm
 mkdir -p "$OUT"
-wasm-bindgen --target web --out-dir "$OUT" target/wasm32-unknown-unknown/release/vesper_dsp.wasm
+# No name section: it is 4.4 of the 15 MB and only names functions in a stack trace.
+wasm-bindgen --target web --remove-name-section --out-dir "$OUT" target/wasm32-unknown-unknown/release/vesper_dsp.wasm
 install -m 644 "$MODEL" "$OUT/model.tar.gz"
+# The server sends this to browsers that accept gzip (ServeDir precompressed_gzip): about 2.2 MB instead of 11.
+# The model is already gzip and gets no copy.
+gzip -9 -n -f -k "$OUT/vesper_dsp_bg.wasm"
 ls -la "$OUT"
