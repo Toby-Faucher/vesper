@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 // motion.ts in node: matchMedia, the computed tokens and waapi.animate are stubbed; timers are fake.
 const animate = vi.hoisted(() => vi.fn(() => ({ animations: [] as { finished: Promise<void> }[] })));
 vi.mock('animejs/waapi', () => ({ waapi: { animate } }));
-import { enter, exit, flash, ghost, glide, motion, settle } from './motion';
+import { enter, exit, flash, ghost, glide, motion, settle, slide } from './motion';
 import { follows } from './timeline';
 
 let reduce = false;
@@ -114,9 +114,10 @@ it('at_most_three_transitions_start_in_one_task', () => {
   expect(motion(el(), 'row', { direction: 'in' })).toEqual({ duration: 160 });
 });
 
-it('flash_fades_after_a_600ms_hold', () => {
+it('flash_fades_in_holds_and_fades_out_a_fifth_each_way', () => {
   flash(el());
-  expect(animate).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ duration: 600 + 220 }));
+  const a = 'var(--accent-subtle)';
+  expect(animate).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ backgroundColor: ['transparent', a, a, a, a, 'transparent'], duration: 800, ease: 'linear' }));
 });
 
 it('reduced_motion_flash_holds_600ms_then_clears_without_animating', () => {
@@ -214,4 +215,29 @@ it('glide_under_reduced_motion_or_across_parents_does_not_animate', () => {
   expect(to.style.backgroundColor).toBe('');
   expect((nav.children[0] as Box).removed).toBe(true);
   expect(nav.children).toHaveLength(1);
+});
+
+const side = () => ({ offsetWidth: 248, getAnimations: () => [{ cancel }] }) as unknown as HTMLElement;
+const transforms = () => (animate.mock.calls as unknown as [unknown, { transform: string[] }][]).map(([, o]) => o.transform);
+
+it('slide_moves_the_sidebar_by_its_width_and_the_main_pane_along_its_edge', () => {
+  void slide(side(), el(), true);
+  expect(transforms()).toEqual([['translateX(-248px)', 'translateX(0)'], ['translateX(-248px)', 'translateX(0)']]);
+  animate.mockClear();
+  void slide(side(), el(), false);
+  expect(transforms()).toEqual([['translateX(0)', 'translateX(-248px)'], ['translateX(248px)', 'translateX(0)']]);
+  // Only transforms, 220 ms easing out; the closing sidebar holds its end frame until the shell hides it.
+  expect(opts().map((o) => [o.duration, o.ease, !!o.persist, Object.keys(o).filter((k) => !['transform', 'duration', 'ease', 'persist'].includes(k))]))
+    .toEqual([[220, TOKENS['--ease-out'], true, []], [220, TOKENS['--ease-out'], false, []]]);
+});
+
+it('slide_cancels_a_slide_under_way_and_under_reduced_motion_does_not_move', async () => {
+  cancel.mockClear();
+  reduce = true;
+  let ended = false;
+  void slide(side(), el(), false).then(() => (ended = true));
+  expect(cancel).toHaveBeenCalledTimes(2);
+  expect(animate).not.toHaveBeenCalled();
+  await Promise.resolve();
+  expect(ended).toBe(true);
 });

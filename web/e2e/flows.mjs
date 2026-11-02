@@ -380,6 +380,25 @@ try {
     await b.goto(`${ORIGIN}/r/${general}`);
     await b.waitForFunction(() => document.title === 'Vesper'); // general read at the bottom: the count clears
     console.log('mention notifications and title count: ok');
+
+    // A name in a message opens the card with the bio; Esc gives focus back to the name. Enter on a mention opens theirs.
+    await call(a, 'PATCH', '/api/me', { bio: 'Plays bass on Sundays' });
+    const row = b.locator('article').filter({ hasText: 'hey @bob can you look at this' });
+    // Her messages above group under one head row: its name is the button.
+    const name = b.getByRole('main').getByRole('button', { name: 'Open profile of alice' }).last();
+    await name.click();
+    const card = b.getByRole('dialog', { name: 'alice' });
+    await card.getByText('Plays bass on Sundays').waitFor();
+    const [c, vw] = [await card.boundingBox(), b.viewportSize()];
+    assert.ok(c.x >= 0 && c.y >= 0 && c.x + c.width <= vw.width && c.y + c.height <= vw.height, 'the card is outside the viewport');
+    await b.keyboard.press('Escape');
+    await card.waitFor({ state: 'hidden' });
+    assert.ok(await name.evaluate((e) => e === document.activeElement), 'focus did not go back to the name after Esc');
+    await row.getByRole('button', { name: 'Open profile of @bob' }).press('Enter');
+    await b.getByRole('dialog', { name: 'bob' }).waitFor();
+    await b.keyboard.press('Escape');
+    await b.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
+    console.log('a name or a mention in a message opens the person card: ok');
   }
 
   // Settings > Account, devices: alice signs in on a second browser, the first lists both and signs the other out, and
@@ -391,6 +410,43 @@ try {
   await a2.getByLabel('Password', { exact: true }).fill('test-password-1');
   await a2.getByRole('button', { name: 'Sign in' }).click();
   await signedIn(a2);
+
+  // Settings > Appearance, the accent: a preset paints at once, follows the account to the second browser (live and after
+  // a reload), and survives a reload here. A custom colour that fails the contrast rules is refused with its ratio; the
+  // nearest allowed one is taken. Reset goes back to amber. The server refuses a value that is not a preset or #rrggbb.
+  const accentOf = (p) => p.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+  const accentIs = (p, hex) => p.waitForFunction((h) => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() === h, hex);
+  assert.equal(await accentOf(a2), '#f0b010', 'amber is the default');
+  await a.goto(`${ORIGIN}/settings/appearance`);
+  const [saved] = await Promise.all([
+    a.waitForResponse((r) => r.url().endsWith('/api/me') && r.request().method() === 'PATCH'),
+    a.getByRole('radio', { name: 'Teal' }).check(),
+  ]);
+  assert.equal(await accentOf(a), '#2fc4b2', 'the preview did not apply at once');
+  assert.equal(saved.status(), 200);
+  await accentIs(a2, '#2fc4b2');
+  await a2.reload();
+  await signedIn(a2);
+  assert.equal(await accentOf(a2), '#2fc4b2', 'the other device lost the accent on reload');
+  await a.reload();
+  await a.getByRole('radio', { name: 'Teal' }).waitFor();
+  assert.ok(await a.getByRole('radio', { name: 'Teal' }).isChecked(), 'Teal is not checked after a reload');
+  assert.equal(await accentOf(a), '#2fc4b2');
+  await a.getByLabel('Custom colour', { exact: true }).fill('#3050a0');
+  await a.getByText(/^Not allowed\. Dark text on this colour is \d\.\d:1 and needs 4\.5:1\.$/).waitFor();
+  assert.ok(await a.getByRole('button', { name: 'Use colour' }).isDisabled(), 'a refused colour can be used');
+  await a.getByRole('button', { name: /^Use nearest allowed/ }).click();
+  await a.getByText(/^Allowed\./).waitFor();
+  const near = await a.getByLabel('Custom colour', { exact: true }).inputValue();
+  await a.getByRole('button', { name: 'Use colour' }).click();
+  await accentIs(a, near);
+  await accentIs(a2, near);
+  await a.getByRole('button', { name: 'Reset to amber' }).click();
+  await accentIs(a2, '#f0b010');
+  assert.equal((await call(a, 'GET', '/api/me')).user.ui_accent, 'amber');
+  await assert.rejects(call(a, 'PATCH', '/api/me', { ui_accent: 'red' }), /400/);
+  console.log('accent follows the account, custom checked: ok');
+
   await a.goto(`${ORIGIN}/settings/account`);
   const deviceRows = a.getByRole('list', { name: 'Signed-in devices' }).getByRole('listitem');
   await deviceRows.nth(1).waitFor();

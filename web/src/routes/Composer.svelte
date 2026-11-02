@@ -7,6 +7,7 @@
   // decorate() (markers dimmed, content styled). The textarea stays the real control, so IME, undo, paste, the caret and
   // selection are the browser's. The layer may only change colour, background and decoration, never glyph widths.
   import { tick, untrack } from 'svelte';
+  import { motion } from '../lib/ui/motion';
   import { ApiFailure, errorText } from '../lib/api';
   import { chat, lastOwn, send, typers } from '../lib/chat.svelte';
   import type { Message } from '../lib/gen/Message';
@@ -293,7 +294,7 @@
     </div>
 
     {#if listOpen}
-      <ul class="people" id="{uid}-people" role="listbox" aria-label="People">
+      <ul class="people" id="{uid}-people" role="listbox" aria-label="People" in:motion={'pop'} out:motion={'pop'}>
         {#each people as p, i (p.user_id)}
           <!-- The textarea keeps focus and the keys (aria-activedescendant); a click picks without taking it. -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->

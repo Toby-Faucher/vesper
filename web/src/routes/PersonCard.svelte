@@ -75,7 +75,7 @@
       {#if user}<Avatar {user} size={40} muted={peer?.muted || peer?.force_muted} deafened={peer?.deafened} />{/if}
       <div class="min-w-0">
         <p class="truncate text-base font-medium text-fg" title={name}>{name}</p>
-        <p class="truncate text-xs text-fg-2">{#if user}@{user.username} · {ROLE[user.role]}{/if}</p>
+        <p class="truncate text-xs text-fg-2">{#if user}@{user.username} · {ROLE[user.role]}{user.banned ? ' · Banned' : ''}{/if}</p>
       </div>
     </div>
     {#if user?.bio}<p class="bio text-fg">{user.bio}</p>{/if}
