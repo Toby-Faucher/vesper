@@ -14,6 +14,7 @@ export function classifyMediaError(e: unknown): DeviceError {
   return 'unknown';
 }
 
+/** For a mic that fails during a call. */
 export const DEVICE_MESSAGES: Record<DeviceError, string> = {
   denied: 'Microphone access was denied. Allow it in the browser site settings; the call stays connected.',
   'no-device': 'No microphone found. Plug one in or pick another; the call stays connected.',
@@ -23,6 +24,27 @@ export const DEVICE_MESSAGES: Record<DeviceError, string> = {
   muted: 'The microphone has been muted by the system or another app; the call stays connected.',
   unknown: 'The microphone failed. Try another device.',
 };
+
+export const MIC_FALLBACK = 'Your saved microphone was not found, so Vesper is using the default one. Pick another in Settings > Voice > Microphone.';
+export const SPEAKER_FALLBACK = 'Your saved speaker was not found, so Vesper is using the default one. Pick another in Settings > Voice > Speaker.';
+/** Only these mean the device id is gone; an AbortError or a denial keeps the saved choice. */
+export const deviceGone = (e: unknown) => /^(NotFoundError|OverconstrainedError)$/.test(String((e as { name?: unknown } | null)?.name));
+
+// Before a call or mic test started, so "the call stays connected" would be wrong.
+const START: Record<DeviceError, string> = {
+  ...DEVICE_MESSAGES,
+  denied: 'Microphone access was denied. Allow it in the browser site settings, then try again.',
+  'no-device': 'Vesper could not find a microphone. Plug one in or pick one in Settings > Voice > Microphone, then try again.',
+  'in-use': 'The microphone is in use by another app. Close that app or pick another in Settings > Voice > Microphone.',
+  unknown: 'Vesper could not start the microphone. Pick another in Settings > Voice > Microphone, or reload the page.',
+};
+
+/** The sentence for a mic that would not start, with the browser's own words after "Details:" for bug reports. */
+export function micStartError(e: unknown): string {
+  const { name, message } = (e ?? {}) as { name?: unknown; message?: unknown };
+  const details = typeof name === 'string' ? (message ? `${name}: ${message}` : name) : String(e);
+  return `${START[classifyMediaError(e)]} Details: ${details}`;
+}
 
 /** Headset profiles (HFP) drop to 8 to 16 kHz mono, which wrecks the denoiser input. */
 export const isBluetoothLabel = (label: string) => /bluetooth|hands-free|\bhfp\b|airpods|\bbuds/i.test(label);

@@ -6,7 +6,8 @@ import type { ServerMsg } from './gen/ServerMsg';
 const calls: string[] = [];
 const h = vi.hoisted(() => ({
   capture: null as null | { resolve: (c: unknown) => void; reject: (e: unknown) => void },
-  playbacks: [] as { close: ReturnType<typeof vi.fn> }[],
+  playbacks: [] as { close: ReturnType<typeof vi.fn>; setSink: ReturnType<typeof vi.fn> }[],
+  sinkFail: null as unknown,
 }));
 vi.mock('./playback', () => ({
   Playback: class {
@@ -15,7 +16,7 @@ vi.mock('./playback', () => ({
       h.playbacks.push(this as never);
     }
     close = vi.fn();
-    setSink = vi.fn(async () => true);
+    setSink = vi.fn(async () => { if (h.sinkFail) throw h.sinkFail; return true; });
     addLocal = vi.fn();
     addRemote = vi.fn();
     remove = vi.fn();
@@ -57,6 +58,8 @@ const v = await import('./voice.svelte');
 const { voice } = v;
 const { CALL_ENDED, ROOM_GONE } = await import('./call');
 const { SETTINGS_KEY } = await import('./audio/settings');
+const { createCapture } = await import('./audio/capture');
+const { MIC_FALLBACK, SPEAKER_FALLBACK } = await import('./devices');
 
 class FakeSig {
   msg = new Set<(m: ServerMsg) => void>();
@@ -82,6 +85,7 @@ beforeEach(() => {
   h.playbacks.length = 0;
   devices = [];
   stored.clear();
+  h.sinkFail = null;
   sig = new FakeSig();
   session.sig = sig as never;
   session.online = true;
@@ -124,6 +128,90 @@ describe('join', () => {
     expect(voice.error).not.toBe('');
     expect(voice.joining).toBe(false);
     expect(h.playbacks[0].close).toHaveBeenCalled();
+  });
+
+  it('a mic that would not start shows a sentence with the way out, and the browser words as details', async () => {
+    const p = v.join(1);
+    h.capture!.reject({ name: 'OverconstrainedError', message: 'Constraints could not be satisfied.' }); // Firefox: no DOMException
+    expect(await p).toBe(true);
+    expect(voice.error).toMatch(/^Vesper could not find a microphone\. .*Settings > Voice > Microphone/);
+    expect(voice.error).toMatch(/Details: OverconstrainedError: Constraints could not be satisfied\.$/);
+  });
+
+  it('a saved mic that is gone: the join goes on with the default, the id is forgotten and stored, one notice', async () => {
+    stop();
+    stored.set(SETTINGS_KEY, JSON.stringify({ micId: 'gone' }));
+    stop = v.startVoice();
+    const p = joined();
+    const deps = vi.mocked(createCapture).mock.calls.at(-1)![1]!;
+    expect(vi.mocked(createCapture).mock.calls.at(-1)![0].micId).toBe('gone');
+    writes.length = 0;
+    deps.onMicFallback!(); // the capture got the default mic after the saved one failed
+    await p;
+    expect(voice.settings.micId).toBeNull();
+    expect(JSON.parse(writes.at(-1)!.split('=')[1]).micId).toBeNull();
+    expect(voice.notice).toBe(MIC_FALLBACK);
+    v.leave();
+    expect(voice.notice).toBe('');
+  });
+
+  it('a saved speaker that is gone: the join goes on, the id is forgotten, one notice', async () => {
+    stop();
+    stored.set(SETTINGS_KEY, JSON.stringify({ speakerId: 'gone' }));
+    stop = v.startVoice();
+    h.sinkFail = new DOMException('not found', 'NotFoundError');
+    await joined();
+    expect(h.playbacks[0].setSink).toHaveBeenCalledWith('gone');
+    expect(voice.settings.speakerId).toBeNull();
+    expect(voice.notice).toBe(SPEAKER_FALLBACK);
+    expect(voice.error).toBe('');
+  });
+
+  it('a saved speaker that fails for another reason is kept, without a notice', async () => {
+    stop();
+    stored.set(SETTINGS_KEY, JSON.stringify({ speakerId: 'usb' }));
+    stop = v.startVoice();
+    for (const name of ['AbortError', 'NotAllowedError']) {
+      h.sinkFail = new DOMException('x', name);
+      await joined();
+      expect(voice.settings.speakerId).toBe('usb');
+      expect(voice.notice).toBe('');
+      v.leave();
+    }
+  });
+
+  it('a failing default speaker changes nothing', async () => {
+    h.sinkFail = new DOMException('x', 'AbortError');
+    await joined();
+    expect(voice.notice).toBe('');
+  });
+
+  it('in a call: a picked speaker that is gone goes back to the default with the notice; another failure says so', async () => {
+    await joined();
+    h.sinkFail = new DOMException('x', 'NotFoundError');
+    v.updateSettings({ ...voice.settings, speakerId: 'gone' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(voice.settings.speakerId).toBeNull();
+    expect(voice.notice).toBe(SPEAKER_FALLBACK);
+    expect(h.playbacks[0].setSink).toHaveBeenLastCalledWith(null);
+    h.sinkFail = new DOMException('x', 'AbortError');
+    v.updateSettings({ ...voice.settings, speakerId: 'usb' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(voice.settings.speakerId).toBe('usb');
+    expect(voice.error).toBe('could not switch speaker');
+  });
+
+  it('the fallback notice goes after NOTICE_MS', async () => {
+    stop();
+    stored.set(SETTINGS_KEY, JSON.stringify({ micId: 'gone' }));
+    stop = v.startVoice();
+    const p = joined();
+    vi.mocked(createCapture).mock.calls.at(-1)![1]!.onMicFallback!();
+    await p;
+    await vi.advanceTimersByTimeAsync(v.NOTICE_MS - 100);
+    expect(voice.notice).toBe(MIC_FALLBACK);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(voice.notice).toBe('');
   });
 
   it('refuses while offline', async () => {

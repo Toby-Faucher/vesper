@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { crc32, deflateSync } from 'node:zlib';
-import { chromium } from 'playwright-core';
+import { chromium, firefox } from 'playwright-core';
+import { existsSync } from 'node:fs';
 
 const web = fileURLToPath(new URL('..', import.meta.url));
 const bin = process.env.VESPER_SERVER_BIN || '../target/release/vesper-server';
@@ -110,15 +111,23 @@ const hook = () => {
   window.RTCPeerConnection.prototype = Orig.prototype;
 };
 
+// Playwright's Firefox, when it is installed (`npx playwright-core install firefox`); CI installs only Chromium.
+export const hasFirefox = () => existsSync(firefox.executablePath());
+
 // A headless Chromium with a fake microphone; `args` are extra Chromium flags, `viewport` e.g. { width: 1440, height: 900 }.
-// Returns { page, errors }.
-export async function browser(name, args = [], { viewport } = {}) {
-  const b = await chromium.launch({
-    executablePath: process.env.E2E_CHROMIUM || undefined, // local only: a browser Playwright did not download
-    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', ...args],
-  });
+// `firefox: true` starts a headless Firefox with a fake microphone instead (`args` are ignored). Returns { page, errors }.
+export async function browser(name, args = [], { viewport, firefox: ff = false } = {}) {
+  const b = ff
+    ? await firefox.launch({
+      firefoxUserPrefs: { 'media.navigator.streams.fake': true, 'media.navigator.permission.disabled': true, 'media.autoplay.default': 0 },
+    })
+    : await chromium.launch({
+      executablePath: process.env.E2E_CHROMIUM || undefined, // local only: a browser Playwright did not download
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', ...args],
+    });
   browsers.push(b);
-  const page = await (await b.newContext({ permissions: ['microphone'], ...(viewport && { viewport }) })).newPage();
+  // Firefox has no microphone permission to grant here: the pref above allows it.
+  const page = await (await b.newContext({ ...(!ff && { permissions: ['microphone'] }), ...(viewport && { viewport }) })).newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(`${name}: ${e}`));
   // The server sends a strict CSP: a blocked load in the page shows as a console error and an event. A block inside a worker
