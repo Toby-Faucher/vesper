@@ -45,7 +45,8 @@ class Target {
   addEventListener(_t: string, fn: () => void) { this.n++; this.last = fn; }
   removeEventListener() { this.n--; }
 }
-const win = new Target();
+const idleDefaults = { requestIdleCallback: () => 0, cancelIdleCallback: () => {} }; // never runs: tests load the chunk themselves
+const win = Object.assign(new Target(), idleDefaults);
 const doc = Object.assign(new Target(), { visibilityState: 'visible' });
 let devices: MediaDeviceInfo[] = [];
 const md = Object.assign(new Target(), { enumerateDevices: async () => devices });
@@ -164,6 +165,28 @@ describe('join', () => {
     expect(voice.joining).toBe(true);
     h.capture!.reject(new Error('stop'));
     return p;
+  });
+
+  it('a second join while the first is still starting does nothing (the switcher has no busy state)', async () => {
+    const p = v.join(1);
+    expect(await v.join(2)).toBe(false);
+    expect(h.playbacks).toHaveLength(1); // no second Playback, capture or mic
+    h.capture!.reject(new Error('stop'));
+    await p;
+  });
+
+  it('startVoice loads the call chunk when the browser is idle, and its cleanup cancels that', () => {
+    const ric = vi.fn((_cb: () => void, _o: unknown) => 7);
+    const cic = vi.fn();
+    Object.assign(win, { requestIdleCallback: ric, cancelIdleCallback: cic });
+    try {
+      const stop2 = v.startVoice();
+      expect(ric).toHaveBeenCalledWith(expect.any(Function), { timeout: 5000 });
+      stop2();
+      expect(cic).toHaveBeenCalledWith(7);
+    } finally {
+      Object.assign(win, idleDefaults);
+    }
   });
 
   it('a failed mic ends the attempt without telling the server, and asks for focus on the error', async () => {

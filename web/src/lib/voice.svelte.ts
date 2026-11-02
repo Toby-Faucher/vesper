@@ -72,8 +72,11 @@ let silence = MIC_QUIET;
 let tally: CallTally | undefined; // this call's summary for Your recent calls, sent when it ends
 const tracks = new Map<string, string>(); // remote track id to user_id, for the per-person stats
 
-// The call code (call-stack.ts) is a chunk of its own: loaded on a hover, focus or press of Join voice, else at the join.
+// The call code (call-stack.ts) is a chunk of its own: loaded at idle after start (startVoice), on a hover, focus or press
+// of Join voice, else at the join.
 let stack: typeof import('./call-stack') | undefined;
+// The chunk is preloaded at idle, so a failed load at the join is most likely a deploy that replaced its file.
+export const CALL_LOAD_FAILED = 'Vesper was updated. Reload the page to join.';
 export const loadCall = lazy(() => import('./call-stack').then((m) => (stack = m)));
 export const preloadCall = (): Promise<unknown> => loadCall().catch(() => {});
 
@@ -164,6 +167,10 @@ function onKey(type: 'keydown' | 'keyup') {
 /** Starts the key, blur, visibility and device listeners and the socket subscription. Returns the cleanup, which also ends the call. */
 export function startVoice(): () => void {
   voice.settings = loadSettings(storage); // a fresh start, as a new Room mount had
+  // The call chunk loads once the app is idle: a join is then warm, and a tab left open over a deploy already has it
+  // (the old hashed file is gone after one).
+  const ric = 'requestIdleCallback' in window; // not in Safari before 26
+  const idle = ric ? window.requestIdleCallback(() => void preloadCall(), { timeout: 5000 }) : setTimeout(() => void preloadCall(), 2000);
   const [kd, ku] = [onKey('keydown'), onKey('keyup')];
   window.addEventListener('keydown', kd);
   window.addEventListener('keyup', ku);
@@ -224,6 +231,8 @@ export function startVoice(): () => void {
     });
   });
   return () => {
+    if (ric) window.cancelIdleCallback(idle);
+    else clearTimeout(idle);
     teardown();
     // Nothing from this call may reach the next sign-in (the 4001 close handler can run just before this).
     voice.error = '';
@@ -331,6 +340,7 @@ function pollStats(conn: RTCPeerConnection, m: NonNullable<typeof stack>) {
  * Resolves true when the join failed after it started, so the caller moves focus to `voice.error`.
  */
 export async function join(roomId: number): Promise<boolean> {
+  if (voice.joining) return false; // a second Join (the switcher) while the first waits for the chunk or the mic
   voice.error = '';
   const sig = session.sig;
   if (!sig || !session.online) {
@@ -341,7 +351,7 @@ export async function join(roomId: number): Promise<boolean> {
   voice.joining = true;
   ({ muted: voice.muted, deafened: voice.deafened, forceMuted: voice.forceMuted } = idleCall()); // before the join: the server re-sends force_muted after it
   // Create and resume the AudioContexts inside the click gesture, before any await (autoplay policy). Usually the call
-  // code is here already (a hover, focus or press of Join voice loaded it). If not, make both contexts now and wait for it.
+  // code is here already (loaded at idle, or by a hover, focus or press of Join voice). If not, make both contexts now and wait for it.
   let code = stack;
   let early: [AudioContext, AudioContext] | undefined;
   if (!code) {
@@ -351,7 +361,7 @@ export async function join(roomId: number): Promise<boolean> {
       code = await loadCall();
     } catch {
       early.forEach((c) => void c.close().catch(() => {}));
-      voice.error = 'Could not load the call. Check your connection and try again.';
+      voice.error = CALL_LOAD_FAILED;
       voice.joining = false;
       await tick();
       return true;

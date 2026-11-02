@@ -59,8 +59,8 @@ shows the ratio and offers the nearest allowed colour, and a stored one that fai
 accent role (`--accent`, `--accent-hover`, `--accent-fg`, `--accent-subtle`, `--accent-line`, `--focus`) from the one fill and
 sets them on `<html>`; `accent.test.ts` checks each preset. The logo and the tab icon follow the accent: `tint()` gives a colour
 matrix that moves amber to the fill and keeps every grey, applied to the logo by the `#logo-tint` SVG filter in `index.html`
-(set before the first paint, so the logo never shows amber first) and to the 32 px favicon on a canvas (`favicon.ts`, lazy,
-the PNG fetched as a file, a `blob:` URL). Amber leaves both files untouched. The avatar colours, the notification icon and the speaking ring do not
+(set before the first paint, so the logo never shows amber first) and to the 32 px favicon on a canvas (`favicon.ts`, lazy:
+it fetches the PNG and makes a `blob:` URL). Amber leaves both files untouched. The avatar colours, the notification icon and the speaking ring do not
 change. There is no coral: it sat between the danger red and the warning orange.
 
 **The switch point.** The look is chosen in one place: `data-style` on `<html>`, set by `web/src/lib/ui/style.ts` before the app

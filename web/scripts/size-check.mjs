@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url';
 // the sum is not what a user waits for. Measured then: first load 52.9, largest lazy 6.0, sum 73.7, css 8.1 kB.
 // Ruling #2 (2026-11-01, UI Task 9 fix round): CSS is judged like JS, first load 12 and sum 20 (measured 11.1 then).
 export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 150, cssFirst: 12, css: 20 };
-// The ratchet: first load may not grow back. Trimmed on 2026-11-02 (#88) from 68.8 to 55.9 kB; the limit is that plus
+// The ratchet: first load may not grow back. Trimmed on 2026-11-01 (#88) from 68.8 to 55.9 kB; the limit is that plus
 // 1 kB. Lower it when the first load shrinks; raise it only on purpose, in the commit that needs it, and say why.
 export const RATCHET_GZIP_KB = { first: 56.9 };
 
