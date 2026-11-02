@@ -70,6 +70,14 @@ export function moveRoom(ids: number[], id: number, by: -1 | 1): number[] {
   return out;
 }
 
+/** An uptime in seconds, two units at most: "3 d 4 h", "2 h 5 min", "12 min", "under a minute". */
+export function uptimeText(s: number): string {
+  const [d, h, m] = [Math.floor(s / 86400), Math.floor((s % 86400) / 3600), Math.floor((s % 3600) / 60)];
+  if (d) return `${d} d ${h} h`;
+  if (h) return `${h} h ${m} min`;
+  return m ? `${m} min` : 'under a minute';
+}
+
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
 /** Bytes in 1024 steps, as the quota is set in MiB (10240 shows as 10 GB): "512 MB", "2.1 GB", one decimal under 10. */
 export function bytes(n: number): string {

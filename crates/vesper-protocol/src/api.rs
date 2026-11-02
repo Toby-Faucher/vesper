@@ -433,6 +433,32 @@ pub struct DiskUse {
     pub warn: bool,
 }
 
+/// `GET /api/admin/server` (owner): how the server is doing. No secrets and no one's address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ServerStatus {
+    pub server: ServerBuild,
+    /// Seconds since this process started serving.
+    #[ts(type = "number")]
+    pub uptime_s: i64,
+    pub disk: DiskUse,
+    /// People in a voice room now (connection checks not counted).
+    pub voice: u32,
+    /// Pushes the push services did not take in the last 24 hours (since start, if shorter).
+    pub push_failures: u32,
+    /// The newest `*.db` in `<data dir>/backups`, made by hand or automatically.
+    pub last_backup: Option<BackupInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BackupInfo {
+    pub name: String,
+    /// When the file was last written, unix ms.
+    #[ts(type = "number")]
+    pub at: i64,
+}
+
 /// A slice of a room's history, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]

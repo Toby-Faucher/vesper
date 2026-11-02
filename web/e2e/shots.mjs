@@ -1479,6 +1479,14 @@ scene('admin-disk', async (ctx) => {
   await ctx.shot(ctx.alice.page, 'admin-disk');
   await narrow(ctx.alice.page, ctx, 'admin-disk-narrow');
 });
+scene('admin-server', async (ctx) => {
+  const page = ctx.alice.page;
+  await home(page);
+  await adminPage(page, 'Server');
+  await page.getByText('Running for').waitFor();
+  await rest(page);
+  await ctx.shot(page, 'admin-server');
+});
 // A 1 MiB quota and a 900 KB upload: the warn line. The server is started again without the quota after.
 scene('admin-disk-warn', async (ctx) => {
   const page = ctx.alice.page;
@@ -1554,7 +1562,7 @@ const LINES = [
 const GROUPS = {
   all: [...scenes.keys()],
   uploads: ['message-image', 'drop-overlay', 'upload-tray'],
-  admin: ['admin-invites', 'admin-invite-created', 'admin-members', 'admin-members-moderator-view', 'admin-rooms', 'admin-room-members', 'admin-disk', 'admin-disk-warn'],
+  admin: ['admin-invites', 'admin-invite-created', 'admin-members', 'admin-members-moderator-view', 'admin-rooms', 'admin-room-members', 'admin-disk', 'admin-disk-warn', 'admin-server'],
 };
 const names = process.argv.slice(2).flatMap((n) => GROUPS[n] ?? [n]);
 for (const n of names) if (!scenes.has(n)) throw new Error(`unknown scene ${n}; known: ${[...scenes.keys()].join(' ')}`);

@@ -50,10 +50,13 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **A socket keeps the role it had at the upgrade until the next user update.** A role change between the upgrade and the hub add reaches that socket's room filter only with the next change to that user.
 - **A display name change does not reach voice presence** until the user joins again (`peer_joined` carries the name from the join).
 - **An open socket outlives a session that expires.** A session unused for 90 days stops working for requests, but a socket opened on it stays until it closes. Logout, revoke, password change and ban do close it.
+- **Admin > Server does not show the advertised address or its age.** The server does not record when the address last changed.
+- **The Admin > Server push failure count lives in memory.** A restart starts it at 0.
+- **The app badge from the service worker is a plain mark, not a number.** The worker does not know the count; the page sets the number when it opens.
 - **A changed public IP needs a rejoin.** The name is re-resolved every 60 s, but only new sessions use the new address. A failed lookup at start advertises nothing until the next refresh, with a warning every 60 s.
 - **Without `VESPER_PUBLIC_HOST`, `VESPER_UDP_PORT_PUBLIC` is ignored**, and a `0.0.0.0` bind is advertised as is, with a warning.
 - **The ping interval (25 s) and the socket queue (256 messages) have no environment variable.**
-- **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are not pinned by digest, and assets are not precompressed, except the denoiser wasm.
+- **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are pinned by digest (v1.4), so they get no security updates until someone bumps the digests on purpose. Precompressed `.br` and `.gz` files (v1.4) are served only for files read from `web/dist`; the SPA fallback page (`index.html` for a path like `/r/1`) goes out as it is. Whether this gains anything behind the Cloudflare tunnel, which may compress too, is not measured.
 - **The SFU wakes every 10 ms when idle.** Cheap, but it is not zero.
 - **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof).
 

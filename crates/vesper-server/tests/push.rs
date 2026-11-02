@@ -381,6 +381,9 @@ async fn a_gone_subscription_is_deleted() {
     let server = TestServer::new().await;
     let fake = Fake::start().await;
     let bob = server.account("bob", Role::Member).await;
+    let owner = server.account("olive", Role::Owner).await;
+    let failures =
+        async || server.call(get("/api/admin/server", &owner)).await.2["push_failures"].clone();
     let endpoint = format!("http://127.0.0.1:{}/push/bob", fake.port);
     subscribe(
         &server,
@@ -395,6 +398,7 @@ async fn a_gone_subscription_is_deleted() {
     assert_eq!(st, StatusCode::NOT_FOUND);
     let (_, _, info) = server.call(get("/api/push", &bob)).await;
     assert_eq!(info["devices"], json!([]));
+    assert_eq!(failures().await, 0, "a gone subscription is not a failure");
     // A refusal that is not 404 or 410 keeps the subscription.
     subscribe(
         &server,
@@ -407,6 +411,11 @@ async fn a_gone_subscription_is_deleted() {
     assert_eq!(st, StatusCode::INTERNAL_SERVER_ERROR);
     let (_, _, info) = server.call(get("/api/push", &bob)).await;
     assert_eq!(info["devices"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        failures().await,
+        1,
+        "Admin > Server counts the refused push"
+    );
 }
 
 #[tokio::test]

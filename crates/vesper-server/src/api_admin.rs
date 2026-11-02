@@ -12,8 +12,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use vesper_protocol::{
-    ApiErrorCode, CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ForceMute, InviteCreate, InviteCreated,
-    InviteInfo, ResetCreate, ResetCreated, ResetInfo, Role, RolePatch, UserInfo,
+    ApiErrorCode, BackupInfo, CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ForceMute, InviteCreate,
+    InviteCreated, InviteInfo, ResetCreate, ResetCreated, ResetInfo, Role, RolePatch, ServerStatus,
+    UserInfo,
 };
 use vesper_store::{RESET_TTL_MS, now_ms};
 
@@ -63,6 +64,42 @@ pub fn routes() -> Router<AppState> {
         .route("/users/{id}/kick", post(kick))
         .route("/users/{id}/force-mute", post(force_mute))
         .route("/users/{id}/disconnect", post(disconnect))
+        .route("/admin/server", get(server))
+}
+
+/// Admin > Server, the owner's: version, uptime, disk, people in voice, failed pushes, the last
+/// backup. Nothing secret and no one's address.
+async fn server(State(st): State<AppState>, a: Authed) -> Result<Json<ServerStatus>, ApiError> {
+    require(&a.user, Role::Owner)?;
+    let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+    let uptime = crate::STARTED.get().map_or(0, |t| t.elapsed().as_secs());
+    Ok(Json(ServerStatus {
+        server: st.cfg.server_build(),
+        uptime_s: i64::try_from(uptime).unwrap_or(i64::MAX),
+        disk: crate::uploads::disk_use(&st).await?,
+        voice: n(st.voice.peers(|_| true).len()),
+        push_failures: n(st.push.failures_24h()),
+        last_backup: last_backup(&st.cfg.data_dir.join("backups")),
+    }))
+}
+
+/// The newest `*.db` in `dir` by modification time. A backup written elsewhere is not seen.
+fn last_backup(dir: &std::path::Path) -> Option<BackupInfo> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let name = e.file_name().into_string().ok()?;
+            let at = e.metadata().ok()?.modified().ok()?;
+            name.ends_with(".db").then_some((at, name))
+        })
+        .max()
+        .map(|(at, name)| BackupInfo {
+            name,
+            at: at
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as i64),
+        })
 }
 
 async fn users(State(st): State<AppState>, _a: Authed) -> Result<Json<Vec<UserInfo>>, ApiError> {

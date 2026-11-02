@@ -659,6 +659,42 @@ async fn disk_use_is_owner_only() {
     assert_eq!(v["warn"], true);
 }
 
+/// Admin > Server: owner only; the build, the disk numbers of Admin > Disk use, who is in voice
+/// and the newest backup in `<data>/backups`. No addresses and no secrets in the answer.
+#[tokio::test]
+async fn server_status_is_for_the_owner() {
+    let server = TestServer::new().await;
+    let owner = server.account("olive", Role::Owner).await;
+    let moder = server.account("mo", Role::Moderator).await;
+    let member = server.account("mel", Role::Member).await;
+    for who in [&moder, &member] {
+        let (status, _, _) = server.call(get("/api/admin/server", who)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+    let (status, _, v) = server.call(get("/api/admin/server", &owner)).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let s: vesper_protocol::ServerStatus = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(s.server.build, "test-build");
+    assert!(s.disk.db_bytes > 0 && s.disk.fs_total > 0);
+    assert_eq!((s.voice, s.push_failures, s.last_backup), (0, 0, None));
+    let text = v.to_string();
+    for no in ["127.0.0.1", "session", "token", "vapid", "endpoint"] {
+        assert!(!text.to_ascii_lowercase().contains(no), "{no} in {text}");
+    }
+    let dir = server.data.path().join("backups");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("old.db"), b"x").unwrap();
+    std::fs::write(dir.join("old.json"), b"{}").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(dir.join("pre-0009-to-0010-20261102T000000Z.db"), b"x").unwrap();
+    let (_, _, v) = server.call(get("/api/admin/server", &owner)).await;
+    assert_eq!(
+        v["last_backup"]["name"],
+        "pre-0009-to-0010-20261102T000000Z.db"
+    );
+    assert!(v["last_backup"]["at"].as_i64().unwrap() > 1_700_000_000_000);
+}
+
 /// Raw HTTP/1.1 GET to the whole app (with `guard`), the path sent byte for byte.
 async fn wire_get(server: &TestServer, path: &str, s: &Session) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
