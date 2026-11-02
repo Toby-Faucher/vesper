@@ -117,3 +117,35 @@ async fn open_existing_never_creates_or_migrates() {
     e.backup_into(&tmp.path().join("copy.db")).await.unwrap();
     assert_eq!(count(&s, "_sqlx_migrations").await, all - 1);
 }
+
+#[tokio::test]
+async fn schema_versions_tell_a_pending_migration() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("v.db");
+    assert_eq!(Store::schema_versions(&path).await.unwrap(), None);
+    assert!(
+        !path.exists(),
+        "reading the versions must not create the file"
+    );
+    Store::create_at_schema(&path, 8).await.unwrap();
+    let (applied, embedded) = Store::schema_versions(&path).await.unwrap().unwrap();
+    assert_eq!(applied, 8);
+    assert!(embedded >= 9, "{embedded}");
+    // Reading changed nothing; opening migrates to the newest.
+    assert_eq!(
+        Store::schema_versions(&path).await.unwrap(),
+        Some((8, embedded))
+    );
+    drop(Store::open(&path).await.unwrap());
+    assert_eq!(
+        Store::schema_versions(&path).await.unwrap(),
+        Some((embedded, embedded))
+    );
+    // A file never migrated counts as 0.
+    let empty = tmp.path().join("empty.db");
+    std::fs::File::create(&empty).unwrap();
+    assert_eq!(
+        Store::schema_versions(&empty).await.unwrap(),
+        Some((0, embedded))
+    );
+}

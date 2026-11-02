@@ -347,6 +347,8 @@ async fn hello_is_first_message() {
     };
     assert_eq!(me.user.user_id, alice.user.user_id);
     assert_eq!(me.user.user_id.len(), 32);
+    assert_eq!(me.server.build, "test-build");
+    assert_eq!(me.server.version, env!("CARGO_PKG_VERSION"));
     assert!(rooms.iter().any(|r| r.name == "general"), "{rooms:?}");
     assert!(users.iter().any(|u| u.user_id == alice.user.user_id));
     assert!(voice.is_empty());
@@ -1657,7 +1659,12 @@ async fn health(addr: SocketAddr) -> String {
 async fn health_returns_ok() {
     let resp = health(TestServer::new().await.addr).await;
     assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
-    assert!(resp.ends_with("\r\n\r\nok"), "{resp}");
+    // JSON for people and monitors; `curl -f` only needs the 200. The test config's build id.
+    let body = resp.split("\r\n\r\n").nth(1).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(v["build"], "test-build");
 }
 
 #[tokio::test]
@@ -1670,7 +1677,7 @@ async fn dead_sfu_fails_health_and_joins_say_why() {
     wait_until("SFU death", || !sfu.is_alive()).await;
     let resp = health(server.addr).await;
     assert!(resp.starts_with("HTTP/1.1 503"), "{resp}");
-    assert!(resp.ends_with("\r\n\r\nsfu down"), "{resp}");
+    assert!(resp.contains(r#""status":"sfu down""#), "{resp}");
     let mut c = Conn::open(&server, &alice).await;
     c.join(general(&server).await);
     match c.next().await {

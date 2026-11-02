@@ -127,6 +127,36 @@ impl Store {
         Ok(Store { pool })
     }
 
+    /// The newest migration applied to the database at `path`, and the newest this binary
+    /// carries, read without creating or changing anything. `None` when there is no database
+    /// file yet. An empty file (or one never migrated) has applied 0. When the first is smaller,
+    /// [`Store::open`] will migrate: the server takes a backup before that.
+    pub async fn schema_versions(path: &Path) -> Result<Option<(i64, i64)>> {
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let s = Store::open_existing(path).await?;
+        let table: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+        )
+        .fetch_one(&s.pool)
+        .await?;
+        let applied: Option<i64> = if table == 0 {
+            None
+        } else {
+            sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success")
+                .fetch_one(&s.pool)
+                .await?
+        };
+        s.pool.close().await;
+        let embedded = sqlx::migrate!()
+            .iter()
+            .map(|m| m.version)
+            .max()
+            .unwrap_or(0);
+        Ok(Some((applied.unwrap_or(0), embedded)))
+    }
+
     /// A consistent copy of the whole database at `dest` (`VACUUM INTO`), safe while others write.
     /// `dest` must not exist or must be an empty file; SQLite refuses anything else.
     pub async fn backup_into(&self, dest: &Path) -> Result<()> {
@@ -142,6 +172,43 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// A database migrated to the first `n` migrations only: the schema of an older release,
+    /// for tests of the backup before a migration.
+    #[doc(hidden)]
+    pub async fn create_at_schema(path: &Path, n: usize) -> Result<()> {
+        Store::migrate_first(path, n, false).await
+    }
+
+    /// The first `n` migrations, but number `n` is replaced by one that fails: an upgrade that
+    /// stops part way (sqlx commits each migration on its own), for tests.
+    #[doc(hidden)]
+    pub async fn migrate_failing_at(path: &Path, n: usize) -> Result<()> {
+        Store::migrate_first(path, n, true).await
+    }
+
+    async fn migrate_first(path: &Path, n: usize, fail_last: bool) -> Result<()> {
+        use sqlx::SqlSafeStr;
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+        let mut m = sqlx::migrate!();
+        let mut list = m.migrations[..n].to_vec();
+        if fail_last && let Some(last) = list.last_mut() {
+            *last = sqlx::migrate::Migration::new(
+                last.version,
+                last.description.clone(),
+                last.migration_type,
+                "SELECT no_such_column FROM no_such_table".into_sql_str(),
+                false,
+            );
+        }
+        m.migrations = list.into();
+        let r = m.run(&pool).await.map_err(|e| StoreError::Db(e.into()));
+        pool.close().await;
+        r
     }
 
     /// Raw pool, for this crate's tests only. Hidden so the server does not reach sqlx (ADR 0005).

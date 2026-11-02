@@ -11,7 +11,7 @@ Shape: one server (`vesper-server`). HTTP/WebSocket on TCP 8080, media on UDP 40
 |---|---|---|
 | Config | `.env` next to `compose.yaml` (`chmod 600`) | `/etc/vesper/vesper.env` (mode 600, root) |
 | Logs | `docker compose logs vesper` | `journalctl -u vesper` |
-| Health | `curl -fsS http://127.0.0.1:8080/health` prints `ok` | same |
+| Health | `curl -fsS http://127.0.0.1:8080/health` prints `{"status":"ok",...}` with the version and build | same |
 | Data dir (database) | `data/` next to `compose.yaml`, mounted at `/data`, owned by uid 10001 | `/var/lib/private/vesper` (`StateDirectory`) |
 | Admin CLI | `docker compose exec vesper vesper-server <command>` | see [deploy.md](deploy.md#docker--dockge) (`systemd-run`) |
 | Binary / image | image `vesper:latest`, or the tag in `VESPER_TAG` | `/opt/vesper/vesper-server`, previous one as `.prev` |
@@ -46,7 +46,7 @@ Coming from the shared-key build: follow [deploy.md "Upgrade from the shared key
 1. On the host: `git pull`. Back up first: `docker compose exec vesper vesper-server backup /data/backups` ([deploy.md](deploy.md#backup)).
 2. Tag what runs now, so you can go back: `docker tag vesper:latest vesper:previous`.
 3. `docker compose -f deploy/compose.yaml up -d --build`. Everyone connected is dropped and rejoins.
-4. `docker compose -f deploy/compose.yaml ps` wants `healthy`, and `curl -fsS http://127.0.0.1:8080/health` wants `ok`.
+4. `docker compose -f deploy/compose.yaml ps` wants `healthy`, and `curl -fsS http://127.0.0.1:8080/health` wants `"status":"ok"` and the new `version`. If the update migrates the database, the log says `backed up to /data/backups/pre-schema-...db first`.
 5. Open the site from a second device and join.
 
 The first build is slow (it compiles the denoiser to wasm). Later builds reuse Docker layers.
@@ -70,13 +70,13 @@ Docker: start the image you tagged before the update. No rebuild. Use the `deplo
 
 Binary: `mv -T /opt/vesper/vesper-server.prev /opt/vesper/vesper-server && systemctl restart vesper`.
 
-A shared-key image runs without the data dir and leaves it alone; an accounts image keeps using it. A database migrated by a newer build may not open in an older one; restore the backup in that case ([deploy.md](deploy.md#backup)).
+A shared-key image runs without the data dir and leaves it alone; an accounts image keeps using it. A database migrated by a newer build does not open in an older one; restore a `data/backups/pre-schema-<NNNN>-*.db` copy in that case: of those whose `<NNNN>` is at most the old image's schema, the newest. Not simply the newest file: after an upgrade that failed part way it holds a schema the old image refuses ([deploy.md](deploy.md#upgrade-and-rollback) has the steps).
 
 Prune old images only when disk is short: `docker image prune`. Keep the `previous` tag.
 
 ## When something breaks
 
-Start with: `ps` shows healthy? `/health` says `ok`? Logs for the last 100 lines? Then match the symptom.
+Start with: `ps` shows healthy? `/health` says `"status":"ok"`? Logs for the last 100 lines? Then match the symptom.
 
 | Symptom | Likely cause | Check and fix |
 |---|---|---|
@@ -87,6 +87,7 @@ Start with: `ps` shows healthy? `/health` says `ok`? Logs for the last 100 lines
 | No audio for anyone; Diagnostics shows a LAN or Docker address | `VESPER_PUBLIC_HOST` resolves to the wrong address from the server | It must resolve to the public IP as the server sees it. Use the literal IP or a public-only name, not a name your LAN DNS overrides. Check with `docker compose exec vesper getent hosts <name>`. Fix `.env`, `up -d`. |
 | Log says `VESPER_PUBLIC_HOST unset and UDP bound to ...` | Variable missing | Set it in the env file, restart. |
 | It worked, then stopped working for new calls after the ISP changed your IP | Public IP changed | The name is re-resolved every 60 s, but running calls keep the old address. New joins recover by themselves; ask everyone to rejoin. |
+| The server does not start, log says `the backup before migrating the database ... failed, so the server does not start` | The new image wanted to migrate, and the copy into `data/backups` failed first (disk full, or `data/backups` not writable by uid 10001) | Free space (old `data/backups/*` you have copied off), fix the owner (`sudo chown -R 10001:10001 data/backups`), start again. Or roll back to the previous image: the database was not touched. |
 | `/health` returns 503 `sfu down`, log has `voice engine (SFU thread) died` | The media thread crashed | The process exits non-zero and Docker or systemd restarts it within seconds. If it repeats, keep the log lines before it and stop the stack. Check `docker compose ps` for a restart loop. |
 | Container restarts forever, log says `vesper-server: ...` and exits | Bad config (bad bind address or `VESPER_ORIGIN`, port in use) | Read the first log line. Fix the env file. An empty `VESPER_UDP_PORT_PUBLIC` is a parse error: remove the line instead. |
 | Site loads blank or 404 | Web app missing from the image or `VESPER_WEB_DIR` wrong | Log has `.../index.html not found`. Rebuild the image. |

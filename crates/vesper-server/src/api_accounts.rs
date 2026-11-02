@@ -286,7 +286,11 @@ async fn signup(
     Ok((
         StatusCode::CREATED,
         [(header::SET_COOKIE, cookie)],
-        Json(Me { user, session_id }),
+        Json(Me {
+            user,
+            session_id,
+            server: st.cfg.server_build(),
+        }),
     )
         .into_response())
 }
@@ -318,7 +322,11 @@ async fn login(
     let user = st.store.user(&row.user_id).await?;
     Ok((
         [(header::SET_COOKIE, cookie)],
-        Json(Me { user, session_id }),
+        Json(Me {
+            user,
+            session_id,
+            server: st.cfg.server_build(),
+        }),
     )
         .into_response())
 }
@@ -332,10 +340,11 @@ async fn logout(State(st): State<AppState>, a: Authed) -> Result<Response, ApiEr
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response())
 }
 
-async fn me(a: Authed) -> Json<Me> {
+async fn me(State(st): State<AppState>, a: Authed) -> Json<Me> {
     Json(Me {
         user: a.user,
         session_id: a.session_id,
+        server: st.cfg.server_build(),
     })
 }
 

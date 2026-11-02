@@ -33,6 +33,14 @@ pub struct Config {
     pub upload_quota_bytes: u64,
     /// VAPID contact (`mailto:` or `https:`) sent to push services. None turns Web Push off.
     pub push_subject: Option<String>,
+    /// The build id in `hello` and `/health`: `VESPER_BUILD_ID`, else the one compiled in.
+    pub build: String,
+    /// Automatic backups of each kind kept in `<data>/backups` (`VESPER_BACKUP_KEEP`).
+    pub backup_keep: usize,
+    /// Scheduled backups every this many hours; 0 is off (`VESPER_BACKUP_EVERY`).
+    pub backup_every_hours: u64,
+    /// Automatic backups copy `uploads/` too (`VESPER_BACKUP_UPLOADS=1`).
+    pub backup_uploads: bool,
     /// A request head must arrive within this. hyper runs the same timer while a kept-alive
     /// HTTP/1 connection waits for its next request, so it is also the idle limit.
     pub header_timeout: Duration,
@@ -98,11 +106,46 @@ impl Config {
                 .checked_mul(1024 * 1024)
                 .ok_or("VESPER_UPLOAD_QUOTA_MB is too large")?,
             push_subject,
+            build: match get("VESPER_BUILD_ID").filter(|s| !s.is_empty()) {
+                Some(b) if valid_build(&b) => b,
+                Some(b) => {
+                    return Err(format!(
+                        "VESPER_BUILD_ID={b}: must be 1 to 40 letters, digits, '.', '-' or '_'"
+                    ));
+                }
+                None => crate::BUILD.into(),
+            },
+            backup_keep: usize::try_from(num("VESPER_BACKUP_KEEP", 5)?)
+                .ok()
+                .filter(|&n| n >= 1)
+                .ok_or("VESPER_BACKUP_KEEP must be at least 1")?,
+            backup_every_hours: Some(num("VESPER_BACKUP_EVERY", 0)?)
+                .filter(|&h| h <= 8760)
+                .ok_or("VESPER_BACKUP_EVERY must be 0 to 8760 hours")?,
+            backup_uploads: match get("VESPER_BACKUP_UPLOADS").as_deref() {
+                None | Some("" | "0") => false,
+                Some("1") => true,
+                Some(v) => return Err(format!("VESPER_BACKUP_UPLOADS={v}: must be 0 or 1")),
+            },
             header_timeout: HEADER_TIMEOUT,
             body_idle: BODY_IDLE,
             body_total: BODY_TOTAL,
         })
     }
+
+    /// What `Me` and `/health` say about this server.
+    pub fn server_build(&self) -> vesper_protocol::ServerBuild {
+        vesper_protocol::ServerBuild {
+            version: crate::VERSION.into(),
+            build: self.build.clone(),
+        }
+    }
+}
+
+fn valid_build(s: &str) -> bool {
+    s.len() <= 40
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
 
 /// RFC 8292 contact: `mailto:` or `https://`, printable ASCII without spaces or quotes, short.
@@ -291,5 +334,36 @@ mod tests {
     #[test]
     fn bad_address_is_an_error() {
         assert!(lookup(&[("VESPER_HTTP_BIND", "nope")]).is_err());
+    }
+
+    #[test]
+    fn build_and_backup_variables() {
+        let c = lookup(&[]).unwrap();
+        assert_eq!(c.build, crate::BUILD);
+        assert_eq!(
+            (c.backup_keep, c.backup_every_hours, c.backup_uploads),
+            (5, 0, false)
+        );
+        let c = lookup(&[
+            ("VESPER_BUILD_ID", "test-2"),
+            ("VESPER_BACKUP_KEEP", "2"),
+            ("VESPER_BACKUP_EVERY", "24"),
+            ("VESPER_BACKUP_UPLOADS", "1"),
+        ])
+        .unwrap();
+        assert_eq!(c.server_build().build, "test-2");
+        assert_eq!(
+            (c.backup_keep, c.backup_every_hours, c.backup_uploads),
+            (2, 24, true)
+        );
+        for bad in [
+            ("VESPER_BUILD_ID", "a b"),
+            ("VESPER_BUILD_ID", "\"<x>\""),
+            ("VESPER_BACKUP_KEEP", "0"),
+            ("VESPER_BACKUP_EVERY", "9000"),
+            ("VESPER_BACKUP_UPLOADS", "yes"),
+        ] {
+            assert!(lookup(&[bad]).is_err(), "{bad:?}");
+        }
     }
 }

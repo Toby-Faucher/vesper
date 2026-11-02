@@ -28,6 +28,9 @@ WORKDIR /src
 COPY . .
 # Install the pinned toolchain explicitly; do not rely on rustup auto-installing it.
 RUN rustup toolchain install
+# The build id in `hello` and /health (crates/vesper-server/build.rs). .git is not in the context, so
+# without this arg it comes from build-id.txt as `git archive` filled it in, else it is the version.
+ARG VESPER_BUILD_ID=
 RUN cargo build --release --locked -p vesper-server
 
 # --- 4. runtime ---------------------------------------------------------------------------------
