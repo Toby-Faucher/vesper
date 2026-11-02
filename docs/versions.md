@@ -17,6 +17,7 @@ Vesper uses `vMAJOR.MINOR.PATCH`. One number covers the whole app: the server, t
 - **v1.2.1**: join no longer fails when the saved microphone is gone (issue #68); the logo and tab icon follow the accent colour (issue #69). No migration.
 - **v1.2.2**: reliability and CI: a person card removed while open no longer throws, flaky end-to-end steps fixed, the end-to-end harness cleans up its servers, and a lighter CI pipeline for version-bump pull requests. No migration.
 - **v1.3**: account recovery without email (owner-issued reset links and `vesper-server reset-password`), the `vesper-server backup` command, archiving a room, force-mute enforced by the server, a connection quality icon per person and an opt-in "Even out voices" switch, and Web Push for mentions and "started voice" with an install manifest. Adds migrations 0007 to 0009. An older image cannot start on the migrated database: roll back with the backup taken before the upgrade.
+- **v1.3.1**: fixes: a search hit inside a link, a second logo on the welcome page, tooltips that kept an old position, a Firefox error when the open room was archived or made private (#82), flaky end-to-end tests, and connection timeouts on the server (header, idle and body). Needs a one-line Caddy change on existing deployments (see deploy.md). No migration.
 
 ## How a release is cut
 
