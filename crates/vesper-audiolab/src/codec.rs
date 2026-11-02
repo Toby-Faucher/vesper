@@ -1,6 +1,7 @@
-//! Opus round trip with simulated packet loss: encode at 48 kHz mono in 20 ms packets, drop
-//! packets (independent or Gilbert-Elliott bursts, seeded), decode with in-band FEC from the next
-//! packet when it arrived and FEC is on, else packet loss concealment. libopus is the bundled
+//! Opus round trip with simulated packet loss: encode at 48 kHz mono in 20 ms (or 10 ms) packets,
+//! drop packets (independent or Gilbert-Elliott bursts, seeded), decode a lost packet from the
+//! next one when it arrived: its RED copy (RFC 2198, distance 1) if RED is on, else its in-band
+//! FEC if FEC is on, else packet loss concealment. libopus is the bundled
 //! build of the `opus` crate (opusic-sys), so results do not depend on the system library.
 
 use std::str::FromStr;
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::SR;
 
-/// 20 ms at 48 kHz, the browser's packet size.
+/// 20 ms at 48 kHz, the browser's default packet size.
 pub const FRAME: usize = 960;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -32,6 +33,18 @@ pub struct OpusCfg {
     /// VOIP round trip stays near 10 dB on low voices at any bitrate.
     #[serde(default)]
     pub audio: bool,
+    /// Packet length in ms: 20 (the default) or 10.
+    #[serde(default = "default_frame_ms")]
+    pub frame_ms: u32,
+    /// RFC 2198 redundancy with distance 1: each packet also carries the previous packet's
+    /// payload, so a single lost packet decodes at full quality when the next one arrived.
+    /// Extra bits are not counted against `bitrate` (WebRTC sends RED on top of the Opus rate).
+    #[serde(default)]
+    pub red: bool,
+}
+
+fn default_frame_ms() -> u32 {
+    20
 }
 
 impl Default for OpusCfg {
@@ -45,6 +58,8 @@ impl Default for OpusCfg {
             burst: None,
             seed: 1,
             audio: false,
+            frame_ms: 20,
+            red: false,
         }
     }
 }
@@ -52,7 +67,7 @@ impl Default for OpusCfg {
 impl FromStr for OpusCfg {
     type Err = anyhow::Error;
 
-    /// `bitrate=64000,complexity=10,fec=1,dtx=0,loss=0.0,seed=1[,burst=3][,app=voip|audio]`;
+    /// `bitrate=64000,complexity=10,fec=1,dtx=0,loss=0.0,seed=1[,burst=3][,app=voip|audio][,frame=10|20][,red=1]`;
     /// missing keys keep the default.
     fn from_str(s: &str) -> Result<Self> {
         let mut c = OpusCfg::default();
@@ -75,6 +90,8 @@ impl FromStr for OpusCfg {
                 "loss" => c.loss = v.parse()?,
                 "burst" => c.burst = Some(v.parse()?),
                 "seed" => c.seed = v.parse()?,
+                "frame" => c.frame_ms = v.parse()?,
+                "red" => c.red = flag(v)?,
                 "app" => {
                     c.audio = match v {
                         "voip" => false,
@@ -87,6 +104,9 @@ impl FromStr for OpusCfg {
         }
         if !(0.0..1.0).contains(&c.loss) {
             bail!("loss must be in [0, 1)");
+        }
+        if c.frame_ms != 10 && c.frame_ms != 20 {
+            bail!("frame must be 10 or 20 (ms)");
         }
         if c.burst.is_some_and(|b| b < 1.0) {
             bail!("burst must be at least 1 packet");
@@ -134,29 +154,32 @@ pub fn roundtrip(x: &[f32], cfg: &OpusCfg, seed: u64) -> Result<(Vec<f32>, usize
     enc.set_dtx(cfg.dtx)?;
     enc.set_packet_loss_perc((cfg.loss * 100.0).round() as i32)?;
     let delay = enc.get_lookahead()? as usize;
+    let fl = SR as usize * cfg.frame_ms as usize / 1000;
     let mut input = x.to_vec();
-    input.resize((x.len() + delay).div_ceil(FRAME) * FRAME, 0.0);
-    let mut packets = Vec::with_capacity(input.len() / FRAME);
+    input.resize((x.len() + delay).div_ceil(fl) * fl, 0.0);
+    let mut packets = Vec::with_capacity(input.len() / fl);
     let mut buf = [0u8; 1500];
-    for f in input.as_chunks::<FRAME>().0 {
+    for f in input.chunks_exact(fl) {
         let n = enc.encode_float(f, &mut buf)?;
         packets.push(buf[..n].to_vec());
     }
     let lost = loss_pattern(packets.len(), cfg.loss, cfg.burst, seed);
     let mut dec = Decoder::new(SR, Channels::Mono)?;
     let mut out = Vec::with_capacity(input.len());
-    let mut frame = [0.0f32; FRAME];
+    let mut frame = vec![0.0f32; fl];
     for i in 0..packets.len() {
-        let n = if !lost[i] {
+        let next_arrived = i + 1 < packets.len() && !lost[i + 1];
+        let n = if !lost[i] || (cfg.red && next_arrived) {
+            // Arrived, or its RED copy rode in the next packet: the same bytes either way.
             dec.decode_float(&packets[i], &mut frame, false)?
-        } else if cfg.fec && i + 1 < packets.len() && !lost[i + 1] {
+        } else if cfg.fec && next_arrived {
             // One packet of jitter buffer: the next packet carries this one's FEC copy.
             dec.decode_float(&packets[i + 1], &mut frame, true)?
         } else {
             dec.decode_float(&[], &mut frame, false)?
         };
-        if n != FRAME {
-            bail!("opus decoded {n} samples, expected {FRAME}");
+        if n != fl {
+            bail!("opus decoded {n} samples, expected {fl}");
         }
         out.extend_from_slice(&frame);
     }
@@ -213,8 +236,13 @@ mod tests {
                 burst: Some(2.5),
                 seed: 4,
                 audio: true,
+                frame_ms: 20,
+                red: false,
             }
         );
+        let r: OpusCfg = "frame=10,red=1".parse().unwrap();
+        assert_eq!((r.frame_ms, r.red), (10, true));
+        assert!("frame=5".parse::<OpusCfg>().is_err());
         assert!("loss=1.0".parse::<OpusCfg>().is_err());
         assert!("bitrat=1".parse::<OpusCfg>().is_err());
         assert_eq!("".parse::<OpusCfg>().unwrap(), OpusCfg::default());
@@ -292,6 +320,51 @@ mod tests {
         assert!(
             with.1 < without.1 - 0.2,
             "LSD fec {with:?} vs plc {without:?}"
+        );
+    }
+
+    /// RED (distance 1) decodes an isolated lost packet from its full copy; the test checks only that with
+    /// independent 5 percent loss it beats FEC alone; and 10 ms packets keep the output aligned and the right length.
+    #[test]
+    fn red_recovers_isolated_losses_and_10ms_aligns() {
+        let x = voice();
+        let base = OpusCfg {
+            loss: 0.05,
+            frame_ms: 10,
+            ..OpusCfg::default()
+        };
+        let clean = roundtrip(
+            &x,
+            &OpusCfg {
+                loss: 0.0,
+                ..base.clone()
+            },
+            1,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(clean.len(), x.len());
+        let s0 = si_sdr(&clean, &x);
+        assert!(
+            si_sdr(&clean[1..], &x[..x.len() - 1]) < s0,
+            "10 ms output misaligned"
+        );
+        let (red, lost) = roundtrip(
+            &x,
+            &OpusCfg {
+                red: true,
+                ..base.clone()
+            },
+            1,
+        )
+        .unwrap();
+        assert!(lost > 0);
+        let fec = roundtrip(&x, &base, 1).unwrap().0;
+        assert!(
+            si_sdr(&red, &x) > si_sdr(&fec, &x),
+            "RED {} vs FEC {}",
+            si_sdr(&red, &x),
+            si_sdr(&fec, &x)
         );
     }
 }

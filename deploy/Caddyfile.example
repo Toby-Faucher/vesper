@@ -1,8 +1,8 @@
 # Caddy terminates HTTPS on 443 and proxies to Vesper's HTTP port. WebSocket upgrades (/ws) work
 # without extra config. Media does NOT go through Caddy: it is UDP 40000 straight to the server.
 vesper.tfaucher.com {
-	# Compress text assets only: the 15 MB DSP wasm and the model tarball under /dsp/ would be
-	# recompressed on every load, which costs a small host real CPU for little gain.
+	# Compress text assets only. Under /dsp/ Vesper already sends a gzip copy of the wasm, and the model
+	# tarball is gzip itself: recompressing them on every load costs a small host real CPU for little gain.
 	@compressible not path /dsp/*
 	encode @compressible zstd gzip
 	# Not verified with a real Caddy. By its documented defaults Caddy sets X-Forwarded-For to its own peer

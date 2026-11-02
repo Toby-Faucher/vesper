@@ -7,7 +7,9 @@ license.workspace = true
 
 [features]
 tract = ["deep_filter/tract"]
-wasm = ["tract", "deep_filter/wasm", "dep:wasm-bindgen"]
+# Not `deep_filter/wasm`: it adds its own JS exports and a panic hook we do not use. `tract` pulls `rand` (tract-onnx-opl),
+# which needs getrandom's `js` backend on wasm32-unknown-unknown.
+wasm = ["tract", "dep:wasm-bindgen", "dep:getrandom"]
 # Config (de)serialisation for the audio lab. Off for the WASM build.
 serde = ["dep:serde"]
 
@@ -16,6 +18,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wasm-bindgen = { version = "0.2", optional = true }
+getrandom = { version = "0.2", features = ["js"], optional = true }
 serde = { workspace = true, optional = true }
 deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", rev = "d375b2d", default-features = false }
 ndarray = "0.15"

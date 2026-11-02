@@ -48,6 +48,8 @@ When you only need network behaviour (RTT, jitter, packet loss) and not the full
 
 ## 4. Simulating loss and jitter with `tc netem`
 
+For a two-browser call use [bad-network.md](bad-network.md) and `scripts/netem-call.sh` instead: it shapes only the media into the SFU and runs root steps through `sudoq`. The recipe below shapes all of `lo`, for the load test.
+
 **These commands need root (shown with `sudo`). Do not run this on a machine you reach over the network: `lo` is shared by everything on the box, and it affects everything using loopback, including SSH tunnels to localhost. The recipe is unverified (never run by the author).** The recipe below uses `lo`, with server and load test both on 127.0.0.1 as in section 1.
 
 Add 5% loss and 20 ms delay with 10 ms jitter on loopback:

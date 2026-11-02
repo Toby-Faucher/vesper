@@ -27,6 +27,10 @@ pub enum Proc {
         model: std::sync::Arc<Vec<u8>>,
     },
     Unprocessed,
+    /// Output made by another tool: `<dir>/<item id>.wav`, 48 kHz mono, already aligned with the
+    /// mixture (no delay to drop) and at least as long. Used to score a reconstruction of another
+    /// product's chain on the same items.
+    External(PathBuf),
 }
 
 impl Proc {
@@ -36,6 +40,7 @@ impl Proc {
     pub fn run(&self, x: &[f32]) -> Result<(Vec<f32>, usize, usize)> {
         match self {
             Proc::Unprocessed => Ok((x.to_vec(), 0, 0)),
+            Proc::External(_) => bail!("external output is read per item (Proc::run_item)"),
             Proc::Pipeline { cfg, model } => {
                 let mut p = Pipeline::new(model, cfg)?;
                 let mut out = Vec::with_capacity(x.len() + HOP);
@@ -51,6 +56,24 @@ impl Proc {
                 Ok((out.split_off(delay.min(out.len())), ours, model))
             }
         }
+    }
+
+    /// `run`, but an external output is read from its file for item `id`.
+    pub fn run_item(&self, id: &str, x: &[f32]) -> Result<(Vec<f32>, usize, usize)> {
+        let Proc::External(dir) = self else {
+            return self.run(x);
+        };
+        let path = dir.join(format!("{id}.wav"));
+        let (mut y, sr) = audio::read_wav(&path)?;
+        if sr != SR || y.len() < x.len() {
+            bail!(
+                "{}: expected 48 kHz and at least {} samples",
+                path.display(),
+                x.len()
+            );
+        }
+        y.truncate(x.len());
+        Ok((y, 0, 0))
     }
 
     /// Real-time factor on `clip`: one thread, pipeline construction excluded, median of 3 runs.
@@ -322,7 +345,7 @@ pub fn eval(a: EvalArgs) -> Result<EvalResult> {
             let Some(it) = items.get(i) else { break };
             let r = (|| -> Result<_> {
                 let (m, c) = read_item(&dir, it)?;
-                let (mut out, ours, model) = a.proc.run(&m)?;
+                let (mut out, ours, model) = a.proc.run_item(&it.id, &m)?;
                 let mut lost = 0;
                 if let Some(o) = &a.opus {
                     // A different loss pattern per item, the same on every run.
@@ -360,7 +383,7 @@ pub fn eval(a: EvalArgs) -> Result<EvalResult> {
             Some(cfg.clone()),
             a.model_path.as_ref().map(|p| p.display().to_string()),
         ),
-        Proc::Unprocessed => (None, None),
+        Proc::Unprocessed | Proc::External(_) => (None, None),
     };
     Ok(EvalResult {
         split: a.split.to_string(),
@@ -620,6 +643,20 @@ mod tests {
         let lag = c.iter().max_by(|a, b| a.1.total_cmp(&b.1)).unwrap().0;
         assert!(lag.abs() < 3, "residual lag {lag}");
         assert_eq!(Proc::Unprocessed.run(&x).unwrap().0, x);
+    }
+
+    #[test]
+    fn external_output_is_read_per_item_and_trimmed() {
+        let dir = std::env::temp_dir().join(format!("audiolab-ext-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let y: Vec<f32> = (0..1200).map(|i| i as f32 / 4000.0).collect();
+        audio::write_wav_f32(&dir.join("it-1.wav"), &y).unwrap();
+        let p = Proc::External(dir.clone());
+        let x = vec![0.0f32; 1000];
+        assert_eq!(p.run_item("it-1", &x).unwrap().0, y[..1000]);
+        assert!(p.run_item("it-1", &vec![0.0; 1300]).is_err(), "too short");
+        assert!(p.run_item("missing", &x).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

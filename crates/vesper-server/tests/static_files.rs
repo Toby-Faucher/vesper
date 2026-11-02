@@ -175,6 +175,44 @@ async fn cache_control_and_extension_paths_do_not_fall_back() {
     assert!(header_has(&r, "cache-control: no-store"), "{r}");
 }
 
+/// Raw GET with extra request header lines.
+async fn get_with(addr: SocketAddr, path: &str, headers: &str) -> Vec<u8> {
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(
+        format!("GET {path} HTTP/1.1\r\nHost: x\r\n{headers}Connection: close\r\n\r\n").as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut b = Vec::new();
+    s.read_to_end(&mut b).await.unwrap();
+    b
+}
+
+#[tokio::test]
+async fn sends_the_gzip_copy_of_the_denoiser_wasm_to_gzip_clients() {
+    let web = site();
+    std::fs::create_dir_all(web.join("dsp")).unwrap();
+    std::fs::write(web.join("dsp/d.wasm"), b"\0asm\x01\0\0\0RAW").unwrap();
+    std::fs::write(web.join("dsp/d.wasm.gz"), b"GZBYTES").unwrap();
+    let addr = start(web).await;
+    let r = get_with(addr, "/dsp/d.wasm", "Accept-Encoding: gzip, br\r\n").await;
+    let r = String::from_utf8_lossy(&r);
+    assert!(
+        r.starts_with("HTTP/1.1 200") && r.ends_with("GZBYTES"),
+        "{r}"
+    );
+    assert!(header_has(&r, "content-encoding: gzip"), "{r}");
+    assert!(header_has(&r, "content-type: application/wasm"), "{r}");
+    assert!(header_has(&r, "vary: accept-encoding"), "{r}");
+    assert!(header_has(&r, "cache-control: no-cache"), "{r}");
+    // No gzip in Accept-Encoding: the plain file.
+    let r = get(addr, "/dsp/d.wasm").await;
+    assert!(
+        r.ends_with("RAW") && !header_has(&r, "content-encoding"),
+        "{r}"
+    );
+}
+
 /// The value of header `name` (lowercase) in a raw response, or None. Panics if it appears twice.
 fn header_value(resp: &str, name: &str) -> Option<String> {
     let head = resp.split("\r\n\r\n").next().unwrap();
