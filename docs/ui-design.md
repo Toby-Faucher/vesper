@@ -59,8 +59,8 @@ shows the ratio and offers the nearest allowed colour, and a stored one that fai
 accent role (`--accent`, `--accent-hover`, `--accent-fg`, `--accent-subtle`, `--accent-line`, `--focus`) from the one fill and
 sets them on `<html>`; `accent.test.ts` checks each preset. The logo and the tab icon follow the accent: `tint()` gives a colour
 matrix that moves amber to the fill and keeps every grey, applied to the logo by the `#logo-tint` SVG filter in `index.html`
-(set before the first paint, so the logo never shows amber first) and to the 32 px favicon on a canvas (`favicon.ts`, lazy,
-a `blob:` URL). Amber leaves both files untouched. The avatar colours, the notification icon and the speaking ring do not
+(set before the first paint, so the logo never shows amber first) and to the 32 px favicon on a canvas (`favicon.ts`, lazy:
+it fetches the PNG and makes a `blob:` URL). Amber leaves both files untouched. The avatar colours, the notification icon and the speaking ring do not
 change. There is no coral: it sat between the danger red and the warning orange.
 
 **The switch point.** The look is chosen in one place: `data-style` on `<html>`, set by `web/src/lib/ui/style.ts` before the app
@@ -81,6 +81,8 @@ To see every role, the type scale, the radii and the focus ring, run `npm --pref
 
 Every animation goes through [`web/src/lib/ui/motion.ts`](../web/src/lib/ui/motion.ts) as a named preset, played by anime.js's WAAPI
 build (`waapi.animate` only). Only `opacity` and `transform` move, except the jump flash, which fades a background colour.
+anime.js is not in the first load: it loads right after start, and until it arrives every preset is instant (the jump flash
+is the instant change it has under reduced motion).
 
 | Preset | Pose | Used by |
 | --- | --- | --- |

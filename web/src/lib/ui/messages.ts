@@ -1,32 +1,12 @@
 // Texts for client-side states. Errors from the server and devices have their own tables (api.ts, devices.ts, call.ts).
+import { UI_MESSAGES as FIRST } from './messages-first';
+
+// All of them, for the lazy pages. A text the first load needs goes in messages-first.ts.
 export const UI_MESSAGES = {
-  connecting: 'Connecting to the server...',
-  reconnecting: (s: number) => `Connection lost. Trying again in ${s} s.`,
-  reconnectingNow: 'Connection lost. Trying again now.',
-  reconnectingSr: 'Reconnecting to the server.', // read once per drop; the countdown above is not read
-  backOnline: 'Back online.',
-  retryNow: 'Try now',
-  reconnect: 'Reconnect',
-  noRooms: 'No rooms yet.',
-  noRoomsBody: 'The owner can add one in the admin pages.',
-  roomMissing: 'This room is not here.',
-  roomMissingBody: 'It was removed, or you do not have access to it.',
-  pageMissing: 'There is no page at this address.',
-  goHome: 'Go to your rooms',
-  openFirstRoom: (name: string) => `Open ${name}`,
-  chatLoading: 'Loading messages...',
-  chatFailed: 'The chat did not load. Reload the page to try again.',
-  switcherLoading: 'Loading...',
-  switcherFailed: 'Could not load the switcher. Check your connection and try again.',
-  searchFailed: 'Could not load search. Check your connection and try again.',
-  offlineAction: 'You are offline. This works again once the connection is back.',
+  ...FIRST,
   composerOffline: 'You are offline. Your text is kept here, and Send works again once the connection is back.',
   tooLong: (over: number) => `Too long by ${over} ${over === 1 ? 'character' : 'characters'}.`,
   attachFailed: 'That file could not be attached. Upload it again.',
-  fileTooLarge: 'Files can be up to 25 MB.',
-  uploadQuota: 'The server has no room for more files. Ask the owner to free some space.',
-  uploadRate: 'Too many uploads in a short time. Wait a minute and try again.',
-  uploadNetwork: 'The upload stopped. Check your connection and try again.',
   dropFiles: 'Drop files to attach',
   accentFormat: (example: string) => `Six hex digits after #, like ${example}.`,
   accentOk: (ratio: number) => `Allowed. Dark text on it is ${ratio}:1.`,
@@ -44,7 +24,6 @@ export const UI_MESSAGES = {
   pictureRemoved: 'Picture removed.',
   viewerFailed: 'Could not open the image. Check your connection and try again.',
   pinsFull: 'This room has 50 pins, the most it can hold. Unpin one first.',
-  pinsFailed: 'The pins did not load.',
   copyFailed: 'Could not copy. Select the text and copy it yourself.',
   adminDenied: 'You do not have access to admin pages.',
   adminOwnerOnly: 'Only the owner can open this page.',
@@ -61,9 +40,6 @@ export const UI_MESSAGES = {
   banBody: 'They are signed out everywhere and cannot sign in.',
   resetBody: 'You get a link to send them. It works once, for 24 hours. When they use it, they set a new password and are signed out everywhere, and they are told who made the link. An older reset link for them stops working.',
   resetWrongPassword: 'Your password is not right.',
-  // Display names are not unique, so the unique @username goes with it: a taker can not pose as the owner.
-  resetNotice: (by: string | null, username: string | null, when: string) =>
-    `Your password was reset ${by === null ? 'from the server command line' : `by ${by} (@${username})`} on ${when}.`,
   resetOnce: (until: string) => `This link is shown only now. It works once, until ${until}.`,
   roomNameBad: 'Room names are 1 to 32 characters, with no hidden characters.',
   roomOrderChanged: 'The room list changed. Try again.',

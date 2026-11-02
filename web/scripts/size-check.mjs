@@ -16,6 +16,9 @@ import { pathToFileURL } from 'node:url';
 // the sum is not what a user waits for. Measured then: first load 52.9, largest lazy 6.0, sum 73.7, css 8.1 kB.
 // Ruling #2 (2026-11-01, UI Task 9 fix round): CSS is judged like JS, first load 12 and sum 20 (measured 11.1 then).
 export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 150, cssFirst: 12, css: 20 };
+// The ratchet: first load may not grow back. Trimmed on 2026-11-01 (#88) from 68.8 to 55.9 kB; the limit is that plus
+// 1 kB. Lower it when the first load shrinks; raise it only on purpose, in the commit that needs it, and say why.
+export const RATCHET_GZIP_KB = { first: 56.9 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.
@@ -67,9 +70,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let bad = false;
   for (const [k, max] of Object.entries(BUDGET_GZIP_KB)) {
     const kb = r[k] / 1024;
+    const cap = Math.min(max, RATCHET_GZIP_KB[k] ?? Infinity);
     const label = { first: 'first load js', lazy: `largest lazy js (${r.lazyName})`, sum: 'all js', cssFirst: 'first load css', css: 'all css' }[k];
-    console.log(`${label}: ${kb.toFixed(1)} kB gzip (budget ${max})`);
-    if (kb > max) bad = true;
+    console.log(`${label}: ${kb.toFixed(1)} kB gzip (budget ${max}${cap < max ? `, ratchet ${cap}` : ''})`);
+    if (kb > cap) bad = true;
   }
   if (bad) console.error('size-check: over budget');
   process.exit(bad ? 1 : 0);

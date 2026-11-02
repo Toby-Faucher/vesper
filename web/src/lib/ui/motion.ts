@@ -2,7 +2,12 @@
 // them on the compositor; only opacity and transform move (the jump flash fades a background colour). Hover and press
 // feedback stay plain CSS on the same tokens.
 // Under prefers-reduced-motion every preset is an 80 ms opacity fade (--dur-calm) and the jump flash is an instant change.
-import { waapi } from 'animejs/waapi';
+import type { waapi as Waapi } from 'animejs/waapi';
+
+// anime is not in the first load: it loads right after, and until it arrives every preset is instant (the first paint
+// is calm anyway, see settle). A failed load leaves the app without motion until the next page load.
+let waapi: typeof Waapi | undefined;
+export const motionReady: Promise<void> = import('animejs/waapi').then((m) => void (waapi = m.waapi), () => {});
 
 export type Preset = 'pop' | 'rise' | 'swap' | 'row' | 'bump';
 
@@ -35,11 +40,12 @@ function frames(p: Preset, out: boolean): Frames {
 }
 
 export function enter(el: Element, p: Preset): void {
-  waapi.animate(el as HTMLElement, frames(p, false));
+  waapi?.animate(el as HTMLElement, frames(p, false));
 }
 
 export function exit(el: Element, p: Preset): Promise<void> {
   (el as HTMLElement).inert = true; // leaving: no focus, no click, no second Enter on it
+  if (!waapi) return Promise.resolve();
   // persist: hold the end frame until the caller removes the element.
   const a = waapi.animate(el as HTMLElement, { ...frames(p, true), persist: true });
   // anime never completes a persisted animation (its then() would wait forever): wait for the browser's own instead.
@@ -51,7 +57,7 @@ export function exit(el: Element, p: Preset): Promise<void> {
 // page twice. Call it while `el` is still shown.
 export function ghost(el: HTMLElement, p: Preset): void {
   const r = el.getBoundingClientRect();
-  if (!r.width) return;
+  if (!r.width || !waapi) return;
   const { backgroundColor, border, borderRadius, boxShadow } = getComputedStyle(el);
   const g = document.createElement('div');
   g.dataset.ghost = '';
@@ -75,7 +81,7 @@ let batch = 0;
 // the returned duration, then removes it.
 export function motion(el: Element, p: Preset | null, { direction }: { direction: 'in' | 'out' | 'both' }): { duration?: number } {
   // Svelte passes {} for a null parameter.
-  if (typeof p !== 'string' || performance.now() < calmUntil) return {};
+  if (typeof p !== 'string' || !waapi || performance.now() < calmUntil) return {};
   if (batch++ === 0) setTimeout(() => (batch = 0));
   if (batch > BATCH) return {};
   const out = direction === 'out';
@@ -100,7 +106,7 @@ export function glide(from: HTMLElement, to: HTMLElement): void {
   parent.append(g);
   to.style.backgroundColor = 'transparent';
   const done = () => { to.style.backgroundColor = ''; g.remove(); };
-  if (reduced()) return void setTimeout(done);
+  if (!waapi || reduced()) return void setTimeout(done);
   const dy = from.offsetTop - to.offsetTop;
   const a = waapi.animate(g, { transform: [`translateY(${dy}px)`, 'translateY(0)'], duration: ms('--dur-2'), ease: token('--ease-out'), persist: true });
   void Promise.all(a.animations.map((x) => x.finished)).then(done, done);
@@ -109,7 +115,7 @@ export function glide(from: HTMLElement, to: HTMLElement): void {
 // The jump flash: the message background fades in to --accent-subtle, holds and fades back (a fifth of the time each way).
 export function flash(el: Element): void {
   const h = el as HTMLElement;
-  if (reduced()) {
+  if (!waapi || reduced()) {
     // An instant change held 600 ms, then removed: no fade.
     h.style.backgroundColor = 'var(--accent-subtle)';
     setTimeout(() => (h.style.backgroundColor = ''), 600);
@@ -124,7 +130,7 @@ export function flash(el: Element): void {
 // was back to 0. A closing side keeps its end frame until the shell hides it. Reduced motion: no slide at all.
 export function slide(side: HTMLElement, main: HTMLElement, open: boolean): Promise<void> {
   for (const e of [side, main]) e.getAnimations().forEach((x) => x.cancel()); // a toggle during the slide starts over
-  if (reduced()) return Promise.resolve();
+  if (!waapi || reduced()) return Promise.resolve();
   const w = side.offsetWidth;
   const o = { duration: ms('--dur-3'), ease: token('--ease-out') };
   const away = `translateX(${-w}px)`;

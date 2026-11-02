@@ -873,6 +873,58 @@ try {
   }
   if (!hasFirefox()) console.log('saved mic gone, Firefox: skipped (npx playwright-core install firefox)');
 
+  // Join voice on a cold page (#88): the call code is a lazy chunk, preloaded at idle. Here it is held back until after
+  // the click, so join() takes its cold path. Each try is a fresh browser context with the account's cookie and a page
+  // that was never clicked: the first click joins, and so does Enter on the focused button. The mic is asked for once
+  // and both call contexts (playback, then capture: the first two made) run. Not checked: the autoplay policy itself. Headless Chromium and Playwright's Firefox
+  // run every AudioContext, with or without a gesture, whatever the flags and prefs say (tried 2026-11-01); voice.test.ts
+  // checks that join() makes both contexts before its first await.
+  for (const ff of hasFirefox() ? [false, true] : [false]) {
+    const who = ff ? 'gwen' : 'hana';
+    const cold = await browser(who, [], { firefox: ff });
+    await signup(cold.page, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, who);
+    await openRoom(cold.page, 'general');
+    const state = await cold.page.context().storageState();
+    for (const how of ['click', 'Enter']) {
+      const ctx = await cold.page.context().browser().newContext({ storageState: state, ...(!ff && { permissions: ['microphone'] }) });
+      const c = await ctx.newPage();
+      c.on('pageerror', (e) => cold.errors.push(`${who}: ${e.stack || e}`));
+      await c.addInitScript(() => {
+        const AC = window.AudioContext;
+        window.__ctx = [];
+        window.AudioContext = class extends AC { constructor(...a) { super(...a); window.__ctx.push(this); } };
+        window.__gum = 0;
+        const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        navigator.mediaDevices.getUserMedia = (q) => (window.__gum++, gum(q));
+      });
+      let chunk = 0; // requests for the call chunk
+      let release;
+      const held = new Promise((r) => (release = r));
+      await c.route(/\/assets\/call-[^/]+\.js$/, async (r) => { chunk++; await held; await r.continue(); });
+      await c.goto(cold.page.url());
+      await signedIn(c);
+      const btn = c.getByRole('button', { name: 'Join voice' });
+      await btn.waitFor();
+      if (how === 'click') await btn.click();
+      else {
+        await btn.focus();
+        await c.keyboard.press('Enter');
+      }
+      release(); // after the gesture: join() is waiting for the chunk
+      await c.getByRole('button', { name: 'Leave' }).waitFor();
+      await c.waitForFunction(() => window.__ctx.length >= 2 && window.__ctx.slice(0, 2).every((x) => x.state === 'running'), null, { timeout: 5000 })
+        .catch(async () => assert.fail(`${who} ${how}: call audio did not start: ${await c.evaluate(() => window.__ctx.map((x) => x.state).join(', '))}`));
+      assert.equal(await c.evaluate(() => window.__gum), 1, `${who} ${how}: the mic was not asked for once`);
+      assert.ok(chunk > 0, `${who}: the call chunk was never loaded`);
+      await c.getByRole('button', { name: 'Leave' }).click();
+      await btn.waitFor();
+      await ctx.close();
+    }
+    alice.errors.push(...cold.errors);
+    console.log(`cold join voice (first click, Enter), ${ff ? 'Firefox' : 'Chromium'}: ok`);
+  }
+  if (!hasFirefox()) console.log('cold join voice, Firefox: skipped (npx playwright-core install firefox)');
+
   // The denoiser (worklet, worker, WASM, model) under the server's CSP. A CSP block in the worker is not a page console
   // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (CI downloads it from
   // the dsp-wasm job). A new account from an invite: alice has used up her sign-in budget (5 a minute) by now.

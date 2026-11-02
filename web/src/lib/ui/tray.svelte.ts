@@ -6,7 +6,7 @@
 import { ApiFailure, errorText } from '../api';
 import { MAX_UPLOAD, upload } from '../chat.svelte';
 import type { Attachment } from '../gen/Attachment';
-import { UI_MESSAGES } from './messages';
+import { UI_MESSAGES } from './messages-first';
 
 export const LIMIT = 3; // uploads in flight at once; the server takes 10, then 1 every 30 s
 export type TrayItem = {

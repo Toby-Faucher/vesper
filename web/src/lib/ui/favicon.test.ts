@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { tint } from './accent';
 
-// favicon() with the canvas APIs stubbed: each draw makes blob:N, and a draw can be held open or made to fail.
+// favicon() with fetch and the canvas APIs stubbed: each draw makes blob:N, and a draw can be held open or made to fail.
 const link = { href: '/favicon.ico' };
 let made = 0;
 let revoked: string[] = [];
@@ -13,12 +13,12 @@ beforeEach(() => {
   vi.resetModules();
   [link.href, made, revoked, fail, gate, closed] = ['/favicon.ico', 0, [], false, Promise.resolve(), 0];
   vi.stubGlobal('document', { querySelector: () => link });
-  vi.stubGlobal('createImageBitmap', async () => {
+  vi.stubGlobal('fetch', async () => {
     const broken = fail; // decided when the draw starts
     await gate;
-    if (broken) throw new Error('no decoder');
-    return { close: () => closed++ };
+    return new Response(new Blob(), { status: broken ? 404 : 200 });
   });
+  vi.stubGlobal('createImageBitmap', async () => ({ close: () => closed++ }));
   vi.stubGlobal('OffscreenCanvas', class {
     getContext() {
       const data = new Uint8ClampedArray(32 * 32 * 4);

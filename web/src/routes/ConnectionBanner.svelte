@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { motion } from '../lib/ui/motion';
   import { session } from '../lib/session.svelte';
-  import { UI_MESSAGES } from '../lib/ui/messages';
+  import { UI_MESSAGES } from '../lib/ui/messages-first';
   import Button from '../lib/ui/c/Button.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   // The socket's state at the top of the main pane. It takes height only while shown and pushes the page down; it never

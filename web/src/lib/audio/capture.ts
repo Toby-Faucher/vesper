@@ -3,6 +3,7 @@ import type { PipelineStats } from './denoise-core';
 import type { DenoiseMode } from './mode';
 import type { AudioSettings } from './settings';
 import { deviceGone } from '../devices';
+import { captureContext } from './context';
 import workletUrl from './denoise.worklet.ts?worker&url';
 
 export interface CaptureDeps {
@@ -25,7 +26,7 @@ export const READY_TIMEOUT_MS = 20_000;
 const modules = new WeakMap<BaseAudioContext, Promise<void>>();
 const browserDeps: CaptureDeps = {
   getUserMedia: (c) => navigator.mediaDevices.getUserMedia(c),
-  createContext: () => new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' }),
+  createContext: captureContext,
   createWorkletNode: async (ctx) => {
     if (!modules.has(ctx)) modules.set(ctx, ctx.audioWorklet.addModule(workletUrl));
     await modules.get(ctx);

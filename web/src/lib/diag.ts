@@ -1,4 +1,5 @@
-import { Signaling, joinRoom } from './signaling';
+import { Signaling } from './signaling';
+import { joinRoom } from './join';
 
 export type Diag = {
   rttMs: number | null;

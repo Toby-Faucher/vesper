@@ -9,7 +9,7 @@
   import { glide } from '../lib/ui/motion';
   import { layers } from '../lib/ui/layers.svelte';
   import { isMac } from '../lib/ui/keys';
-  import { UI_MESSAGES } from '../lib/ui/messages';
+  import { UI_MESSAGES } from '../lib/ui/messages-first';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
