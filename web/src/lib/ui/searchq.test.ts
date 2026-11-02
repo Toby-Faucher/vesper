@@ -242,6 +242,22 @@ describe('snippet marks', () => {
     expect(shown(`snake_${H}case${E}_name`)).toBe('snake_[case]_name');
   });
 
+  it('counts emoji and CJK text right, inside and next to a URL', () => {
+    expect(shown(`🎉 ${H}東京${E} 😀 https://例え.jp/${H}駅${E}/🚀 **${H}😀${E}**`)).toBe('🎉 [東京] 😀 https://例え.jp/[駅]/🚀 [😀]');
+    expect(shown(`𝒜𝒷 ${H}word${E}`)).toBe('𝒜𝒷 [word]');
+  });
+
+  it('joins adjacent hits and reads nested or overlapping markers as one flag', () => {
+    expect(marks(`${H}ab${E}${H}cd${E} e`)).toEqual([{ text: 'abcd', mark: true }, { text: ' e', mark: false }]);
+    expect(shown(`${H}a${H}b${E}c${E}d`)).toBe('[ab]cd');
+  });
+
+  it('never shows a marker character, also one typed by a user', () => {
+    // The server drops every marker from a snippet whose body holds one, so a typed one only arrives as plain text.
+    expect(shown('typed \u0002 here')).toBe('typed [here]');
+    expect(marks(`x${H}\u0002y${E}\u0003z`).map((p) => p.text).join('')).not.toMatch(/[\u0002\u0003]/);
+  });
+
   it('keeps hostile text as text and survives odd markers', () => {
     expect(shown(`<img src=x onerror=${H}alert${E}(1)>`)).toBe('<img src=x onerror=[alert](1)>');
     expect(shown(`${H}${E}${E}${H}`)).toBe('');
