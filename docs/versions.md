@@ -14,11 +14,13 @@ Vesper uses `vMAJOR.MINOR.PATCH`. One number covers the whole app: the server, t
 - **v1.1**: the first round of critique issues: logo, markdown with a live composer preview, profile pictures and bios, call sounds, a noise gate and soft limiter, motion with anime.js, visual fixes (milestone `v1.1`, PRs #32 to #42). It adds one database migration (0005, additive).
 - **v1.1.1**: fixes silence after someone leaves and rejoins a call in Firefox (issue #45, PR #46). No migration.
 - **v1.2**: click a name to open a profile popup, a choice of accent colour per account, smoother motion (message highlight, popups, the sliding sidebar). It adds one database migration (0006, additive).
+- **v1.2.1**: join no longer fails when the saved microphone is gone (issue #68); the logo and tab icon follow the accent colour (issue #69). No migration.
+- **v1.2.2**: reliability and CI: a person card removed while open no longer throws, flaky end-to-end steps fixed, the end-to-end harness cleans up its servers, and a lighter CI pipeline for version-bump pull requests. No migration.
 
 ## How a release is cut
 
 1. Work lands on `main` by pull request. CI must be green. Nothing is merged to `main` without a pull request.
-2. When the milestone's issues are done, open a pull request named `Release vX.Y.Z` that sets `version` in `Cargo.toml` (`[workspace.package]`) and `web/package.json` to the same number, and updates any doc that names the version. Run `scripts/check.sh` and `cd web && npm run e2e` first.
+2. When the milestone's issues are done, open a pull request named `Release vX.Y.Z` that sets `version` in `Cargo.toml` (`[workspace.package]`) and `web/package.json` to the same number, and updates any doc that names the version. Run `scripts/check.sh` and `cd web && npm run e2e` first. CI gives a pull request that only changes versions the light pipeline (no `e2e` or `dsp-wasm` job, see the CI section of [dev.md](dev.md#ci)), so the local e2e run is the one that counts.
 3. After it is merged, tag the merge commit: `git tag -a vX.Y.Z -m "Vesper vX.Y.Z" && git push origin vX.Y.Z`.
 4. Create the GitHub release from the tag (`gh release create vX.Y.Z --generate-notes`). The notes are the merged pull requests and the issues they close. There is no CHANGELOG file.
 5. Deploy from the tag, never from a branch: `git archive vX.Y.Z` into the stack, then follow [deploy.md](deploy.md). Before it, tag the running image (`docker tag vesper:latest vesper:previous`) and, if the release adds a migration, back up `data/`.

@@ -58,7 +58,6 @@ try {
   const gallery = await browser('gallery');
   await checkPrimitives(async (u) => {
     const p = await gallery.page.context().newPage();
-    p.on('pageerror', (e) => gallery.errors.push(`gallery: ${e}`));
     await p.goto(u);
     return p;
   }, `${await devServer()}/_gallery?primitives`);

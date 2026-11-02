@@ -105,7 +105,7 @@ Other test commands:
 
 | Command | What it covers |
 |---|---|
-| `scripts/check.sh dsp` | The denoiser tests (4 tests behind the `tract` feature, so a plain workspace run skips them) and the wasm build. Fetches the model if missing. |
+| `scripts/check.sh dsp` | The denoiser tests (4 tests behind the `tract` feature, so a plain workspace run skips them), the audio lab tests and the wasm build. Fetches the models if missing. The steps `denoiser`, `audiolab` and `wasm` run one part each. |
 | `npm --prefix web run e2e` | Two headless Chromium browsers join one room; checks that the second one receives and hears the first one's audio, then chat, upload and search. Then the UI flows test. The `e2e` CI job. See below. |
 | `npm --prefix web run shots -- [scene...]` | Screenshots for review, 1440x900, full page, in `web/e2e/shots/` (git-ignored). Starts the release server like the e2e tests (same ports, needs `dist/`), signs up alice (owner) and bob, then runs the named scenes, or all of them. Scenes that need content seed two more rooms and 40 messages first. Scenes: `tokens` (the dev-only `/_gallery` page, from a Vite dev server on a spare port), `gallery` (`/_gallery?primitives`: writes `gallery.png`, `gallery-open.png` with a dialog and a menu open, and `gallery-nested`; the keyboard checks moved to `ui.mjs`), `login`, `signup`, `shell-empty` (before any seeding), `shell` (five people in voice, unread and mention pills; also `shell-folded`), `shell-collapsed`, `hidden-room` (also `room-restricted`), `not-found`, `call-bar` (alice in a five-person call; also `call-muted-deafened` and `call-narrow` at 1024x640), `call-ptt` (also `call-ptt-idle`), `call-force-muted`, `call-weak` (420 ms round trip injected through `window.__pcs`), `person-card` (a member sets a volume), `person-card-mod` (a moderator on a member; also `person-card-confirm`), `switcher-empty`, `switcher-query` ("gen"), `switcher-actions` ("> "), `switcher-none`, `switcher-loading`, `switcher-failed` (its chunk held back, or failing) and `shortcuts` (the Ctrl+K switcher and the shortcuts list on the five-person scene), `timeline` (a room over three days with groups, a reply, reactions, edited, pinned and deleted messages, a mention and the New row; older messages are moved back a day or two in the harness; also `timeline-read` (the New row folded away once read; fails if "Jump to latest" shows at the bottom), `timeline-hover`, `timeline-menu`, `timeline-row-focus` (Down from the toolbar), `timeline-copy-failed` (no clipboard: the plain note), `timeline-collapsed`, `timeline-expanded` and `timeline-jump`, the flash after a reply quote click), `timeline-older` (small pages: the unread pill, then an older page loading; also `timeline-unread-pill`), `timeline-empty`, `composer` (the composer above the call bar: `composer-empty`, `composer-multiline`, `composer-mention` with three people, `composer-reply`, `composer-edit-last`, `composer-typing`, `composer-help`, `composer-error` (a send answered 429) and `composer-limit`), `pins` (three pins in the header list; also `pins-empty`), `message-image` (a room "photos" with a wide and a tall image and a file card: `message-image-loading` with the images held back, then loaded with the view still, `image-viewer` and `image-viewer-next` after Right), `drop-overlay` (files dragged over the room), `upload-tray` (a fake XMLHttpRequest holds each upload: `upload-progress` with a 5 MB file at 40 percent, the tray with a failed, three running and one waiting file, the same at 1024 px as `upload-tray-narrow`, `upload-elsewhere` (another room while they upload: "Uploading in photos"), and `upload-errors`: too large, quota, rate limit, network; `uploads` names these three scenes), `room`, `settings`, `settings-picture` (Account with a profile picture and a bio, the error for an SVG, and the shell with the picture), `accent` (Appearance with Rose chosen as `settings-accent`, a refused custom colour as `settings-accent-refused`, then a room in rose, sky and lime as `accent-<key>`; ends on amber), `diagnostics`, `motion` (the five-person scene with each animation frozen half way by the Web Animations API: `motion-arrive`, `motion-react`, `motion-room-switch` with the sidebar glide, `motion-menu` and `motion-leave`; then prints rAF frame gaps over a room switch, three arrivals and a reaction), `cpu-baseline` (no picture: prints bob's main-thread CPU in a call, see below), `composer-offline` (restarts the server and shoots the offline line; name it before `reconnecting`), and `reconnecting` (stops the server, shoots the banner, starts it again; runs last). Prints each file path. |
 | `node scripts/bench-wasm.mjs chromium` | Real-browser speed of the built denoiser (needs `web/public/dsp` and Playwright; `PW_PKG` points at a `package.json` that has it). Prints median, p95, max and RTF over 20 s. Add `firefox`, or a CPU throttle rate such as `4` (Chromium, main thread). |
@@ -122,10 +122,10 @@ npx --prefix web playwright-core install chromium   # once; CI adds --with-deps 
 npm --prefix web run e2e
 ```
 
-`web/e2e/two-browser.mjs` starts `target/release/vesper-server` itself on 127.0.0.1:18090 (UDP 18091) on a new temp data dir with `VESPER_ORIGIN=http://127.0.0.1:18090`, and stops it and deletes the dir at the end
+`web/e2e/two-browser.mjs` starts `target/release/vesper-server` itself on 127.0.0.1 on a free HTTP and a free UDP port picked at start (`VESPER_ORIGIN` follows), on a new temp data dir, and stops it and deletes the dir at the end
 (helpers in `web/e2e/lib.mjs`). It runs `vesper-server create-owner`, signs alice up through that link, has alice's page make bob's
 invite with `POST /api/invites`, signs bob up, and joins both to `general`.
-Those ports must be free. It opens two Chromium browsers with fake microphones: alice plays `web/e2e/fixtures/speech.wav`, bob uses the default fake
+A crash (an uncaught exception or rejection, SIGINT, SIGTERM, SIGHUP) also stops the server, the Vite dev server and the browsers before the script exits: `lib.mjs` runs each spawned server in its own process group and kills the group. `node web/e2e/cleanup.mjs` (about 15 s, the first step of `npm run e2e`) checks this: it ends a child script by an uncaught exception, an unhandled rejection, SIGTERM and SIGINT, and fails if any of its processes or its port is left. It opens two Chromium browsers with fake microphones: alice plays `web/e2e/fixtures/speech.wav`, bob uses the default fake
 device. It passes when bob's ICE is connected, his inbound audio packets and bytes rise, alice's speaking ring lights on bob's page, alice's inbound
 packets rise too (only that count: audio content is proven alice to bob through the speaking ring, not bob to alice), each page lists the other in the people list, and neither page throws.
 Then bob leaves and joins again three times (after 2 s, within a second, and after a page reload) while alice stays: each time both pages'
@@ -221,6 +221,37 @@ cd web && VESPER_LAB_DIR=/tmp/gate-lab VESPER_CORPUS_DIR=../research/corpus48/bu
 It replays each denoised item through `DenoiseCore` as the worker's replies, sets the marker 6 dB over the lead-in noise peak and prints,
 per item, the speech level change, word onsets, the lead-in noise cut and the largest sample step. The limiter part boosts the clean
 speech 6 and 12 dB over full scale and compares it with a hard clip.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. The jobs call `scripts/check.sh` steps:
+
+| Job | Runs |
+|---|---|
+| `lint-rust` | `fmt clippy shell scripts secrets wording` |
+| `test-rust` | `test bindings` |
+| `supply-chain` | `deny` |
+| `web` | `web`, then `npm audit --audit-level=high` |
+| `dsp-wasm` | `wasm`, uploaded as the `dsp` artifact, then `denoiser audiolab` |
+| `e2e` | the release server and `npm run e2e`, with the `dsp` artifact in `web/dist/dsp` |
+| `changes` | decides whether `e2e` and `dsp-wasm` run (below) |
+
+- `dsp-wasm` caches the built `web/public/dsp`, keyed on a hash of `crates/vesper-dsp/**`, `Cargo.toml`, `Cargo.lock` (which holds the
+  wasm-bindgen version), `.cargo/config.toml`, `rust-toolchain.toml`, `scripts/build-dsp.sh` and `scripts/fetch-model.sh` (which holds the
+  model's sha256). On a hit it uploads the artifact without building. The denoiser and audio lab tests run either way. Only green `main`
+  runs save the cache.
+- `e2e` polls for the `dsp` artifact instead of `needs: dsp-wasm`. `dsp-wasm` uploads it before its tests, so `e2e` rarely waits.
+- A pull request that only bumps the release version gets the light pipeline: `e2e` and `dsp-wasm` are skipped, the other jobs run.
+  `scripts/version-only.py` decides it: the only changed files are `Cargo.toml`, `Cargo.lock`, `web/package.json`, `web/package-lock.json`
+  and `docs/versions.md`, and the first four differ only in the release version (the workspace members in `Cargo.lock`, the root package
+  in the npm files). Any other change, a push to `main`, an error in the script, or a failed `changes` job means the full pipeline.
+  `scripts/test-version-only.sh` tests it. The `changes` job runs the base branch's copy of the script, so a PR that edits the script is
+  judged by the old one (and gets the full pipeline, since the script is not on the list). `ci.yml` itself comes from the PR, so the
+  gate guards against mistakes, not against a PR that rewrites the workflow.
+  A job skipped by `if:` reports "skipped", which a required status check counts as passing. Whether `main` has branch protection could
+  not be checked: the protection API answers 403 for this repo.
+- Rust caches (Swatinem/rust-cache) are saved by `main` runs only; pull requests restore them. The repo's caches are close to the 10 GB limit.
+- A newer push to the same pull request cancels the running one.
 
 ## Memory on a small machine
 
