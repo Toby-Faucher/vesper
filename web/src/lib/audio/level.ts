@@ -5,8 +5,8 @@ export const dbfs = (rms: number, floor = -100) => (rms > 0 ? Math.max(floor, 20
 export const fmtDb = (rms: number) => (dbfs(rms) <= -100 ? 'silent (below -100 dBFS)' : `${dbfs(rms).toFixed(1)} dBFS`);
 export const fmtMs = (ms: number) => `${ms.toFixed(1)} ms`;
 
-const micSettings = ({ settings: g, reopens }: CaptureStats['mic']) =>
-  `${Object.entries(g).filter(([, v]) => v !== undefined).map(([k, v]) => `${k} ${v}`).join(', ') || 'none reported'}; reopened ${reopens}x`;
+const micSettings = ({ settings: g, opens }: CaptureStats['mic']) =>
+  `${Object.entries(g).filter(([, v]) => v !== undefined).map(([k, v]) => `${k} ${v}`).join(', ') || 'none reported'}; mic opened ${opens}x`;
 
 /** The "Audio pipeline" lines for Diagnostics and its copied report. */
 export function audioRows(s: CaptureStats | null): [string, string][] {
@@ -29,6 +29,7 @@ export function audioRows(s: CaptureStats | null): [string, string][] {
       : []),
     ['Mic track', `${readyState}, ${muted ? 'muted by the system' : 'not muted'}, ${enabled ? 'enabled' : 'disabled'}`],
     ['Mic settings', micSettings(s.mic)],
+    ['Filter swap', s.mic.swap],
     ['Capture context', `${s.context.state}, ${s.context.sampleRate} Hz`],
   ];
 }

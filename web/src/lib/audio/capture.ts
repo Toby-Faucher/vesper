@@ -25,11 +25,15 @@ export interface CaptureDeps {
 export const READY_TIMEOUT_MS = 20_000;
 /** The status while DeepFilterNet loads: the browser filter is on meanwhile, and goes off when the model takes over. */
 export const LOADING = 'loading, browser filter until then';
-/** The mic reopened without the browser filter (Chromium) must answer within this, or the call falls back to browser mode. */
+/** The second, unfiltered track of the mic (Chromium) must answer within this, or the filtered one stays. */
 export const REOPEN_TIMEOUT_MS = 3000;
+/** The second track must show any sound above digital silence within this before the graph moves to it. */
+export const CHECK_MS = 1500;
 /** Worklet reports (500 ms each) of digital silence from the reopened mic before the filtered track comes back. */
 export const SILENT_REPORTS = 4;
-export const SWAP_SKIPPED = 'swap skipped: reopened mic was silent';
+const SILENT_WHY = 'reopened mic was silent';
+export const SWAP_SKIPPED = `swap skipped: ${SILENT_WHY}`;
+const rmsOf = (b: Float32Array) => Math.sqrt(b.reduce((a, v) => a + v * v, 0) / b.length);
 // Kept for the page session, so the swap is not tried again (and cannot ping-pong) once a reopened mic was silent.
 let swapSkipped = false;
 /** For tests. */
@@ -53,7 +57,9 @@ const browserDeps: CaptureDeps = {
 };
 
 type Pipe = {
-  mode: DenoiseMode; track: MediaStreamTrack; raw: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string; reopens?: number;
+  mode: DenoiseMode; track: MediaStreamTrack; raw: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string;
+  /** How the browser filter went off at ready: applied-constraints, reopened, or why it did not. */
+  swap?: string;
   stats?: PipelineStats;
   statsAt?: number;
 };
@@ -62,8 +68,9 @@ export interface CaptureStats {
   pipeline: PipelineStats | null;
   /** ms since that snapshot arrived; a growing age means the worklet stopped running. null with no pipeline. */
   ageMs: number | null;
-  /** readyState and muted of the raw mic track; enabled is the sent track's mute gate. */
-  mic: { readyState: MediaStreamTrackState; muted: boolean; enabled: boolean; settings: MicSettings; reopens: number };
+  /** readyState and muted of the raw mic track; enabled is the sent track's mute gate. opens: getUserMedia calls that
+   * answered with a mic in this capture. swap: how the browser filter went off at ready ('none' when not tried). */
+  mic: { readyState: MediaStreamTrackState; muted: boolean; enabled: boolean; settings: MicSettings; opens: number; swap: string };
   context: { state: AudioContextState; sampleRate: number };
 }
 /** The raw track's getSettings() without deviceId (it identifies the hardware). */
@@ -97,9 +104,10 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   let gen = 0;
   let closed = false;
   let live = d.startLive; // applied to every new track, so mute/PTT survive swaps and rebuilds
+  let opens = 0;
 
   // deepfilter asks with the browser filter on (while the model loads); `deep` asks again without it once the model is ready.
-  const ask = (mode: DenoiseMode, id: string | null, ns = mode !== 'off') =>
+  const ask = (mode: DenoiseMode, id: string | null, ns: ConstrainBoolean = mode !== 'off') =>
     d.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -109,7 +117,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         sampleRate: 48000,
         ...(id ? { deviceId: { exact: id } } : {}),
       },
-    });
+    }).then((m) => (opens++, m));
   // A saved id can be gone (unplugged, another profile, Firefox new ids after a permission change): try the default mic
   // once. Any other error, a denial above all, is not retried.
   async function mic(mode: DenoiseMode) {
@@ -181,6 +189,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     let worker: Worker | undefined;
     let ready = false;
     let silent = -1; // silent reports since the reopen; -1 when not watching
+    let held: { m: MediaStream; src: MediaStreamAudioSourceNode } | undefined; // the filtered track, kept running until the reopened one is proven
     const nodes: AudioNode[] = [];
     let out: MediaStreamAudioDestinationNode | undefined;
     const stop = () => {
@@ -191,8 +200,14 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       node?.port.postMessage({ type: 'stop' });
       nodes.forEach((n) => n.disconnect());
       stopAll(m);
+      release();
       if (out) stopAll(out.stream);
     };
+    function release() {
+      held?.src.disconnect();
+      if (held) stopAll(held.m);
+      held = undefined;
+    }
     const fail = (reason: string) => {
       if (dead) return;
       dead = true;
@@ -223,55 +238,97 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         n.port.postMessage({ type: 'port' }, [ch.port2]);
         set(); // settings may have changed while the model loaded
         me!.status = !s.noiseSuppression && swapSkipped ? SWAP_SKIPPED : '';
-        // DeepFilterNet takes over now: the browser filter goes off, so the two never stack. A failure is named, not hidden.
-        if (!s.noiseSuppression && !swapSkipped) void unfiltered().catch((e) => fail(`the mic did not reopen without the browser filter: ${msg(e)}`));
+        if (me!.status) me!.swap = 'skipped: earlier this session';
+        if (!s.noiseSuppression && !swapSkipped) void unfiltered().catch((e) => skip(msg(e)));
         if (pipe === me) notify('deepfilter', me!.status);
       };
-      // applyConstraints turns the filter off where the browser can (Firefox). Chromium resolves it but keeps the filter
-      // (getSettings() stays true), and a second track from the same mic opened while the first runs shares it. There only,
-      // the first track ends and the graph's source moves to a new track asked for without the filter: a gap of one
-      // getUserMedia call as the model starts. The sent track stays. A request that does not answer (a hidden tab can hold
-      // it) would leave the call silent, so it gets REOPEN_TIMEOUT_MS.
+      const skip = (why: string) => {
+        me!.status = `swap skipped: ${why}`;
+        me!.swap = `skipped: ${why}`;
+        if (pipe === me) notify('deepfilter', me!.status);
+      };
+      // DeepFilterNet takes over at ready, so the browser filter goes off and the two never stack. Nothing depends on a
+      // second getUserMedia working (Edge on Windows was seen to hand back a live track of zeros): the filtered track keeps
+      // running and feeding the graph until the other one has shown sound, and comes back if it does not.
       const unfiltered = async () => {
         const t = m.getAudioTracks()[0];
-        await t.applyConstraints({ ...t.getConstraints(), noiseSuppression: false }).catch(() => {});
-        if (dead || t.getSettings().noiseSuppression !== true) return;
+        // Firefox applies this live. Chromium rejects an exact false (OverconstrainedError) or keeps the filter, tried 2026-11-02.
+        const ok = await t.applyConstraints({ ...t.getConstraints(), noiseSuppression: { exact: false } }).then(() => true, () => false);
+        if (dead) return;
+        if (ok && t.getSettings().noiseSuppression !== true) return void (me!.swap = 'applied-constraints');
         const heard = (me!.stats?.inputRms ?? 1) >= SILENT_RMS; // no report yet counts as sound
-        await reopen(false);
-        if (heard && !dead) silent = 0;
+        let next: MediaStream;
+        try {
+          next = await second();
+        } catch (e) {
+          return skip(`the mic did not reopen without the browser filter: ${msg(e)}`);
+        }
+        if (dead) return stopAll(next);
+        const s2 = ctx.createMediaStreamSource(next);
+        if (!(await loud(s2)) || dead) {
+          s2.disconnect();
+          stopAll(next);
+          if (dead) return;
+          if (heard) swapSkipped = true;
+          return skip(SILENT_WHY);
+        }
+        s2.connect(gain);
+        src.disconnect();
+        held = { m, src };
+        move(next, s2);
+        me!.swap = 'reopened';
+        if (heard) silent = 0; // the filtered track stays held until a worklet report has sound
+        else release();
       };
-      // Edge was seen to hand back a live, unmuted reopened track that delivers only zeros: then the filtered track comes back.
-      const silentCheck = (rms: number) => {
-        if (silent < 0) return;
-        if (rms >= SILENT_RMS) return void (silent = -1);
-        if (++silent < SILENT_REPORTS) return;
-        silent = -1;
-        swapSkipped = true;
-        void reopen(true).then(() => {
-          me!.status = SWAP_SKIPPED;
-          if (pipe === me) notify('deepfilter', SWAP_SKIPPED);
-        }, (e) => fail(`the mic did not reopen with the browser filter: ${msg(e)}`));
-      };
-      const reopen = async (ns: boolean) => {
-        const id = m.getAudioTracks()[0].getSettings().deviceId ?? null;
+      const move = (next: MediaStream, n: MediaStreamAudioSourceNode) => {
+        nodes[0] = src = n;
+        m = next;
         unwatch();
-        stopAll(m);
-        const asked = ask('deepfilter', id, ns);
+        unwatch = watch(next.getAudioTracks()[0], () => me);
+        me!.raw = next.getAudioTracks()[0];
+      };
+      // Chromium gives a second track of the same mic its own unfiltered source while the first runs only for an exact false.
+      const second = async () => {
+        const id = m.getAudioTracks()[0].getSettings().deviceId ?? null;
+        const asked = ask('deepfilter', id, { exact: false });
         let timer: ReturnType<typeof setTimeout> | undefined;
         const late = new Promise<never>((_, no) => (timer = setTimeout(() => no(new Error(`no answer in ${REOPEN_TIMEOUT_MS / 1000} s`)), REOPEN_TIMEOUT_MS)));
-        const next = await Promise.race([asked, late]).catch((e) => {
+        return Promise.race([asked, late]).catch((e) => {
           void asked.then(stopAll, () => {}); // a late answer is not used
           throw e;
         }).finally(() => clearTimeout(timer));
-        if (dead) return stopAll(next);
-        const s2 = ctx.createMediaStreamSource(next);
-        s2.connect(gain);
+      };
+      // Any level above digital silence within CHECK_MS: a real mic's own noise is enough, no speech needed. The longest
+      // analyser window (0.68 s) polled every 100 ms misses nothing in between (Chromium's fake mic beeps between zeros).
+      const loud = async (n: AudioNode) => {
+        const a = ctx.createAnalyser();
+        a.fftSize = 32768;
+        n.connect(a);
+        const b = new Float32Array(a.fftSize);
+        let heard = false;
+        for (let i = 0; i <= CHECK_MS / 100 && !dead && !heard; i++) {
+          if (i) await new Promise((r) => setTimeout(r, 100));
+          a.getFloatTimeDomainData(b);
+          heard = rmsOf(b) >= SILENT_RMS;
+        }
+        n.disconnect(a);
+        return heard;
+      };
+      // The reopened track went silent right after the move: the held filtered track feeds the graph again. No new getUserMedia.
+      const silentCheck = (rms: number) => {
+        if (silent < 0 || !held) return; // a late report after stop() finds nothing held
+        if (rms >= SILENT_RMS) return void ((silent = -1), release());
+        if (++silent < SILENT_REPORTS) return;
+        silent = -1;
+        swapSkipped = true;
+        const h = held!;
+        held = undefined;
+        h.src.connect(gain);
         src.disconnect();
-        nodes[0] = src = s2;
-        m = next;
-        unwatch = watch(next.getAudioTracks()[0], () => me);
-        me!.raw = next.getAudioTracks()[0];
-        me!.reopens = (me!.reopens ?? 0) + 1;
+        stopAll(m);
+        move(h.m, h.src);
+        if (h.m.getAudioTracks()[0].readyState === 'ended') return fail('the reopened mic was silent and the first one ended');
+        skip(SILENT_WHY);
       };
       w.onerror = (e) => fail(`denoiser worker failed: ${e.message ?? ''}`);
       n.port.onmessage = ({ data }: MessageEvent<{ type: 'error'; message: string } | ({ type: 'stats' } & PipelineStats)>) => {
@@ -310,7 +367,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       pipeline: pipe.stats ?? null,
       ageMs: pipe.statsAt === undefined ? null : d.now() - pipe.statsAt,
       mic: {
-        readyState: raw.readyState, muted: raw.muted, enabled: track.enabled, reopens: pipe.reopens ?? 0,
+        readyState: raw.readyState, muted: raw.muted, enabled: track.enabled, opens, swap: pipe.swap ?? 'none',
         settings: (({ sampleRate, channelCount, echoCancellation, noiseSuppression, autoGainControl, latency }) => ({
           sampleRate, channelCount, echoCancellation, noiseSuppression, autoGainControl, latency,
         }))(raw.getSettings() as MediaTrackSettings & { latency?: number }),
@@ -405,6 +462,9 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
      */
     async retry(skipSwap = false): Promise<boolean> {
       if (skipSwap) swapSkipped = true; // "no sound" in a call: the swap is the one known suspect
+      // The old track goes first: while it runs, Chromium hands the new request the same (maybe silent) source.
+      pipe?.stop();
+      pipe = null;
       await switchTo(s.mode, '').catch(lost);
       return !!pipe;
     },

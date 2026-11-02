@@ -230,13 +230,20 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
 - The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). Until then the mic passes through with the browser's noise suppression on
   (the mic is asked for with `noiseSuppression: true`), and the status line says `loading, browser filter until then`. At `ready` (unless "Browser noise suppression on top"
-  is on, when the line says only `loading`) the capture calls `applyConstraints({ noiseSuppression: false })` on the track. Where that works
-  (`getSettings()` then says false; Firefox is expected to, not verified) nothing else happens. Chromium resolves it but keeps the filter, and a
-  second track opened while the first runs gets the first one's filter (both seen in headless Chromium, 2026-11-02). There the capture ends the
-  track, asks for the same mic again without the filter and moves the graph's source to it, so the two filters never stack. The sent track does
-  not change; the input has a gap of one `getUserMedia` call as the model starts. If the mic does not answer within 3 s (`REOPEN_TIMEOUT_MS`; a
-  hidden tab can hold the request) or fails, the call falls back to `browser` with `the mic did not reopen without the browser filter: ...`. The e2e checks both tracks in
-  headless Chromium; whether the switch is heard is not verified.
+  is on, when the line says only `loading`) the capture calls `applyConstraints({ noiseSuppression: { exact: false } })` on the track. Where that works
+  (`getSettings()` then says false; Firefox is expected to, not verified) nothing else happens. Chromium rejects it (OverconstrainedError; without
+  `exact` it resolves and keeps the filter), and a second track asked for with a plain `false` while the first runs gets the first one's filter.
+  Asked for with `{ exact: false }` it gets its own unfiltered source (all seen in headless Chromium 156, 2026-11-02). So the capture opens that
+  second track while the first keeps running and feeding the graph (make before break), and listens to it with an analyser for up to 1.5 s
+  (`CHECK_MS`). Only when it shows any level above digital silence does the graph's source move to it. The filtered track is kept, unconnected,
+  until a worklet report shows sound, then ended. Nothing depends on the second `getUserMedia` working: if it fails, does not answer within 3 s
+  (`REOPEN_TIMEOUT_MS`; a hidden tab can hold the request), is silent at the check, or goes silent for 4 reports right after the move (Edge on
+  Windows was seen to hand back a live track of zeros), DeepFilterNet goes on over the filtered track (the two filters stack) and the line says
+  `swap skipped: ...`. A silent second track also turns the swap off for the rest of the page session. No further `getUserMedia` call is made on
+  that path. Diagnostics and its copied report show how many mic requests answered (`mic opened Nx`) and the `Filter swap` outcome
+  (`applied-constraints`, `reopened`, `skipped: <why>` or `none`). The sent track does not change. Retry from the "no sound" banner ends the old
+  track before it asks again, since a running track would hand the new request its own (silent) source. The e2e checks both tracks in headless
+  Chromium, and a second track of zeros (the filtered one stays); whether the switch is heard, and real Edge on Windows, are not verified.
 - The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. `scripts/build-dsp.sh` writes `vesper_dsp_bg.wasm.gz` next to the wasm and the server sends it to browsers that accept gzip (`ServeDir` `precompressed_gzip`): 2.2 MB instead of 10.9 MB. `npm run build` also writes a `.br` of it in `dist/dsp` (1.3 MB, measured 2026-11-02), sent to browsers that accept brotli. With the 8.0 MB model the first visit downloads about 9 to 10 MB. Skipped when the browser asks to save data. Not verified in a real browser.
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.
 
