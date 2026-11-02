@@ -77,18 +77,6 @@ export function applyChatMsg(s: ChatState, m: ServerMsg): ChatState {
 export const typers = (s: ChatState, roomId: number, now = Date.now()) =>
   Object.entries(s.typing[roomId] ?? {}).filter(([, until]) => until > now).map(([id]) => id);
 
-/** A search snippet split at its \u0002 ... \u0003 match markers, for rendering as text with <mark>. */
-export function marks(snippet: string): { text: string; mark: boolean }[] {
-  const out: { text: string; mark: boolean }[] = [];
-  let mark = false;
-  for (const part of snippet.split(/([\u0002\u0003])/)) {
-    if (part === '\u0002') mark = true;
-    else if (part === '\u0003') mark = false;
-    else if (part) out.push({ text: part, mark });
-  }
-  return out;
-}
-
 /** The scrollTop that keeps the same content in view after rows were added above it. */
 export const anchorTop = (oldTop: number, oldHeight: number, newHeight: number) => oldTop + (newHeight - oldHeight);
 

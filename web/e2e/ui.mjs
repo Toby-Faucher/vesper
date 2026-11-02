@@ -167,6 +167,18 @@ try {
     return { left, top, right: left + parseFloat(s.width), bottom: top + parseFloat(s.height), shown: s.opacity === '1' };
   });
   assert.ok(tip.shown && inside(tip), `the Settings tooltip is not inside the viewport: ${JSON.stringify(tip)}`);
+  // A label that changes while the tip shows (as Mute turns to Unmute) is placed again: a long one by the left edge
+  // would start off screen if the shift for the short one stayed.
+  const tipBox = () => cog.evaluate((el) => {
+    const r = el.getBoundingClientRect(), s = getComputedStyle(el, '::after'), m = new DOMMatrix(s.transform);
+    const left = r.left + parseFloat(s.left) + m.e, top = r.top + parseFloat(s.top) + m.f;
+    return { left, top, right: left + parseFloat(s.width), bottom: top + parseFloat(s.height) };
+  });
+  await cog.evaluate((el) => (el.dataset.tip = 'Settings for your account, voice, notifications and more'));
+  await sleep(300); // the observer runs after the change; the tip has no transition on its shift
+  const relabelled = await tipBox();
+  assert.ok(inside(relabelled) && relabelled.right - relabelled.left > 200, `a relabelled tooltip kept its old place: ${JSON.stringify(relabelled)}`);
+  await cog.evaluate((el) => (el.dataset.tip = 'Settings'));
   await b.mouse.move(600, 300);
   await b.getByRole('button', { name: /^Account, / }).click();
   const menu = await b.getByRole('menu', { name: 'Account' }).evaluate((el) => el.getBoundingClientRect().toJSON());

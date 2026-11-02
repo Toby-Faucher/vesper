@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CAP, anchorTop, applyChatMsg, cap, chat, lastOwn, loadLatest, marks, mergeLatest, openRoom, trimRooms, typers, upload, type ChatState } from './chat.svelte';
+import { CAP, anchorTop, applyChatMsg, cap, chat, lastOwn, loadLatest, mergeLatest, openRoom, trimRooms, typers, upload, type ChatState } from './chat.svelte';
 import type { Message } from './gen/Message';
 
 const msg = (id: number, over: Partial<Message> = {}): Message => ({
@@ -124,14 +124,6 @@ describe('mergeLatest (refetch after a reconnect)', () => {
 });
 
 describe('helpers', () => {
-  it('marks splits a snippet at the markers, as text', () => {
-    expect(marks('...say \u0002hello\u0003 to <b>\u0002hel\u0003...')).toEqual([
-      { text: '...say ', mark: false }, { text: 'hello', mark: true }, { text: ' to <b>', mark: false },
-      { text: 'hel', mark: true }, { text: '...', mark: false },
-    ]);
-    expect(marks('a\u0003b\u0002c')).toEqual([{ text: 'a', mark: false }, { text: 'b', mark: false }, { text: 'c', mark: true }]);
-  });
-
   it('anchorTop keeps the viewport stable when older rows are prepended', () => {
     // 300 px of older messages arrived above; the reader stays on the same row.
     expect(anchorTop(40, 1000, 1300)).toBe(340);

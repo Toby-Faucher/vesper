@@ -71,6 +71,16 @@ async function walkWelcome(page) {
   const focusedHeading = () => page.evaluate(() => document.activeElement?.tagName === 'H1' && document.activeElement.textContent);
   await page.getByText('Step 1 of 3').waitFor();
   assert.equal(await focusedHeading(), 'How others see you');
+  // One logo: the sidebar's, or with the sidebar hidden the card's, also while it slides away.
+  const logos = () => page.evaluate(() => [...document.querySelectorAll('img[alt="Vesper"]')].filter((e) => e.checkVisibility()).length);
+  assert.equal(await logos(), 1, 'the welcome pane shows the logo next to the sidebar one');
+  await page.keyboard.press('Control+Backslash');
+  assert.equal(await logos(), 1, 'two logos while the sidebar slides away');
+  await page.waitForFunction(() => document.getElementById('sidebar')?.hidden);
+  assert.equal(await logos(), 1, 'no logo on the welcome pane with the sidebar hidden');
+  await page.keyboard.press('Control+Backslash');
+  await page.waitForFunction(() => !document.getElementById('sidebar')?.hidden);
+  assert.equal(await logos(), 1, 'the card kept its logo with the sidebar back');
   await page.getByRole('radio', { name: 'Teal' }).check();
   await page.getByRole('button', { name: 'Next' }).click();
   await page.getByText('Step 2 of 3').waitFor();
