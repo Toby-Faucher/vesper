@@ -999,13 +999,19 @@ try {
     const d = dsp.page;
     // With the noise gate on, so its worklet message runs in a real browser too.
     await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter', vad: { thresholdDb: -50, gate: true } })));
-    // The mics the app asks for: the browser filter must be on while the model loads and off once it runs.
+    // The mics the app asks for: the browser filter must be on while the model loads and off once it runs. With
+    // e2e.silent set, the unfiltered request answers with a live track of zeros, as Edge on Windows did.
     await d.addInitScript(() => {
       window.__mics = [];
       const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
       navigator.mediaDevices.getUserMedia = async (q) => {
-        const m = await gum(q);
-        window.__mics.push({ asked: q.audio?.noiseSuppression, track: m.getAudioTracks()[0] });
+        let m = await gum(q);
+        const asked = q.audio?.noiseSuppression;
+        if (typeof asked === 'object' && sessionStorage.getItem('e2e.silent')) {
+          m.getTracks().forEach((t) => t.stop());
+          m = new AudioContext().createMediaStreamDestination().stream;
+        }
+        window.__mics.push({ asked, track: m.getAudioTracks()[0] });
         return m;
       };
     });
@@ -1018,17 +1024,29 @@ try {
       status = await line.innerText();
     }
     assert.equal(status, 'Noise suppression: deepfilter', 'denoiser did not start under the CSP');
-    // Chromium cannot turn a track's filter off (applyConstraints leaves getSettings() at true, tried 2026-11-02), so at ready
-    // the app moves the graph to a second track of the same mic asked for without it, and ends the first.
+    // Chromium cannot turn a track's filter off (applyConstraints with an exact false rejects, tried 2026-11-02), so at
+    // ready the app opens a second track of the same mic without it while the first runs, moves the graph once the second
+    // has sound, and ends the first once a worklet report confirms it.
     await d.waitForFunction(() => window.__mics.length === 2 && window.__mics[0].track.readyState === 'ended', null, { timeout: 5000 })
       .catch(() => assert.fail('the browser-filtered mic was not replaced at ready'));
     const ns = await d.evaluate(() => window.__mics.map((x) => [x.asked, x.track.readyState]));
-    assert.deepEqual(ns, [[true, 'ended'], [false, 'live']], 'browser filter while loading, then off under DeepFilterNet');
+    assert.deepEqual(ns, [[true, 'ended'], [{ exact: false }, 'live']], 'browser filter while loading, then off under DeepFilterNet');
     assert.equal(await d.evaluate(() => window.__mics[1].track.getSettings().noiseSuppression), false, 'the track under DeepFilterNet reports the browser filter on');
     console.log('browser filter while the denoiser loads, off once it runs: ok');
     await d.getByRole('link', { name: 'Call details' }).click();
     const diag = d.getByRole('group', { name: 'Call numbers' }).getByText('Noise suppression:');
     assert.equal(await diag.innerText(), 'Noise suppression: deepfilter', 'Diagnostics shows another mode');
+    await d.getByText('reopened', { exact: true }).waitFor({ timeout: 5000 }).catch(() => assert.fail('Diagnostics lacks the filter swap row'));
+    // The unfiltered track is all zeros: the filtered one keeps running and the line says why. No third request.
+    await d.evaluate(() => sessionStorage.setItem('e2e.silent', '1'));
+    await d.reload();
+    await join(d, 'general');
+    await d.getByText('Noise suppression: deepfilter (swap skipped: reopened mic was silent)').first().waitFor({ timeout: 20000 })
+      .catch(() => assert.fail('a silent unfiltered mic was not caught'));
+    const kept = await d.evaluate(() => window.__mics.map((x) => [x.asked, x.track.readyState]));
+    assert.deepEqual(kept, [[true, 'live'], [{ exact: false }, 'ended']], 'the filtered mic must stay, the silent one go');
+    await d.evaluate(() => sessionStorage.removeItem('e2e.silent'));
+    console.log('a silent unfiltered mic keeps the filtered one: ok');
     pages.push(d);
     alice.errors.push(...dsp.errors);
     console.log('denoiser under CSP: ok');
