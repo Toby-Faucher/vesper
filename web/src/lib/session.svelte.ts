@@ -89,8 +89,8 @@ export const session = $state({
   async logout(): Promise<void> {
     const id = session.state.me?.user.user_id;
     if (id) try { storage?.removeItem(lastRoomKey(id)); storage?.removeItem(recentKey(id)); } catch { /* storage blocked */ }
-    await runBeforeLogout();
     stop();
+    await runBeforeLogout(); // after stop(), so no reconnect can start meanwhile; HTTP still has the session
     await api('POST', '/api/logout').catch(() => {}); // signed out either way
     // The server drops this device's push subscription with the session; unregistering also ends it in the browser.
     await navigator.serviceWorker?.getRegistration().then((r) => r?.unregister()).catch(() => {});
