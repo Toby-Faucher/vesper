@@ -2,6 +2,47 @@ import { ApiFailure, errorText } from '../api';
 import type { SearchHit } from '../gen/SearchHit';
 import type { SearchPage } from '../gen/SearchPage';
 import type { SearchQuery } from '../gen/SearchQuery';
+import { decorate } from '../markdown';
+
+/**
+ * A search snippet as plain text with its matches marked. The \u0002 ... \u0003 markers come out first, as one flag per
+ * character, so they never reach the Markdown rules (a marker inside a URL was percent-encoded into the link). Then
+ * decorate() cuts the clean text and the syntax markers are dropped by position, so links, mentions and code stay as
+ * typed and every highlight lands on the characters it marked. White space runs read as one space.
+ */
+export function marks(snippet: string): { text: string; mark: boolean }[] {
+  let src = '';
+  const hit: boolean[] = [];
+  let on = false;
+  for (const ch of snippet.split('')) { // UTF-16 units, as decorate() counts
+    if (ch === '\u0002') on = true;
+    else if (ch === '\u0003') on = false;
+    else {
+      src += ch;
+      hit.push(on);
+    }
+  }
+  const out: { text: string; mark: boolean }[] = [];
+  let at = 0;
+  let space = true; // drops leading white space
+  for (const r of decorate(src)) {
+    const shown = !r.k.split(' ').includes('mk');
+    for (let i = 0; shown && i < r.v.length; i++) {
+      const sp = /\s/.test(r.v[i]);
+      if (sp && space) continue;
+      space = sp;
+      const mark = hit[at + i];
+      const last = out[out.length - 1];
+      if (last?.mark === mark) last.text += sp ? ' ' : r.v[i];
+      else out.push({ text: sp ? ' ' : r.v[i], mark });
+    }
+    at += r.v.length;
+  }
+  const last = out[out.length - 1];
+  if (last) last.text = last.text.trimEnd();
+  if (last && !last.text) out.pop();
+  return out;
+}
 
 export type Query = Omit<SearchQuery, 'before'>;
 

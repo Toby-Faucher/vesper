@@ -658,6 +658,18 @@ try {
   await newer.waitFor({ timeout: 5000 });
   console.log('search_roundtrip: ok');
 
+  // search_in_url: a word inside a posted link is highlighted in the snippet, not turned into %02 (issue #36).
+  await post(alice.page, room, 'docs at **https://example.com/zebradocs/start?x=1** today');
+  await searchFor(alice.page, 'zebradocs');
+  const urlHit = results(alice.page).first();
+  await urlHit.waitFor({ timeout: 5000 });
+  assert.equal(await urlHit.locator('mark').innerText(), 'zebradocs', 'the match inside the URL is not highlighted');
+  const snip = await urlHit.locator('.snip').innerText();
+  assert.ok(snip.includes('https://example.com/zebradocs/start?x=1') && !snip.includes('%0') && !snip.includes('**'), `bad snippet: ${snip}`);
+  await alice.page.keyboard.press('Escape');
+  await alice.page.getByRole('dialog', { name: 'Search' }).waitFor({ state: 'hidden', timeout: 2000 });
+  console.log('search_in_url: ok');
+
   // rejoin_after_jump: leaving and re-entering the room shows the newest page again, with live messages.
   const lobby = await call(alice.page, 'POST', '/api/rooms', { name: 'lobby' });
   await roomLink(bob.page, 'lobby').waitFor({ timeout: 5000 });

@@ -4,7 +4,7 @@ import type { RoomInfo } from '../gen/RoomInfo';
 import type { SearchPage } from '../gen/SearchPage';
 import type { SearchQuery } from '../gen/SearchQuery';
 import type { UserInfo } from '../gen/UserInfo';
-import { Searcher } from './search.svelte';
+import { Searcher, marks } from './search.svelte';
 import { MAX_QUERY, complete, keyAt, keyValue, nothingToSearch, parseSearch, setKey, shortLast } from './searchq';
 
 const user = (user_id: string, username: string, display_name: string): UserInfo =>
@@ -210,5 +210,43 @@ describe('Searcher', () => {
     expect(s.next).toBe(null);
     s.set(null);
     expect([s.status, s.hits.length]).toEqual(['idle', 0]);
+  });
+});
+
+describe('snippet marks', () => {
+  const H = '\u0002';
+  const E = '\u0003';
+  const shown = (s: string) => marks(s).map((p) => (p.mark ? `[${p.text}]` : p.text)).join('');
+
+  it('splits at the markers, as text', () => {
+    expect(marks(`...say ${H}hello${E} to <b>${H}hel${E}...`)).toEqual([
+      { text: '...say ', mark: false }, { text: 'hello', mark: true }, { text: ' to <b>', mark: false },
+      { text: 'hel', mark: true }, { text: '...', mark: false },
+    ]);
+    expect(marks(`a${E}b${H}c`)).toEqual([{ text: 'ab', mark: false }, { text: 'c', mark: true }]);
+  });
+
+  it('marks a word inside a URL, at its start, middle and end, without percent codes', () => {
+    expect(shown(`see https://${H}example${E}.com/a here`)).toBe('see https://[example].com/a here');
+    expect(shown(`see ${H}https${E}://example.com/a`)).toBe('see [https]://example.com/a');
+    expect(shown(`https://example.com/${H}guide${E}/x`)).toBe('https://example.com/[guide]/x');
+    expect(shown(`https://example.com/x/${H}guide${E}`)).toBe('https://example.com/x/[guide]');
+    expect(shown(`https://example.com/?q=${H}guide${E}&p=2.`)).toBe('https://example.com/?q=[guide]&p=2.');
+    expect(marks(`x https://a.io/${H}b${E}`).some((p) => /%0[23]/.test(p.text))).toBe(false);
+  });
+
+  it('drops the markdown markers around a hit and keeps code and mentions as typed', () => {
+    expect(shown(`**${H}bold${E}** and *it ${H}x${E}* \`${H}code${E}\``)).toBe('[bold] and it [x] [code]');
+    expect(shown(`> quoted ${H}word${E}\n- item **https://a.io/${H}w${E}**`)).toBe('quoted [word] item https://a.io/[w]');
+    expect(shown(`hi @${H}alice${E}`)).toBe('hi @[alice]');
+    expect(shown(`snake_${H}case${E}_name`)).toBe('snake_[case]_name');
+  });
+
+  it('keeps hostile text as text and survives odd markers', () => {
+    expect(shown(`<img src=x onerror=${H}alert${E}(1)>`)).toBe('<img src=x onerror=[alert](1)>');
+    expect(shown(`${H}${E}${E}${H}`)).toBe('');
+    expect(shown(`${H}open to the end`)).toBe('[open to the end]');
+    expect(shown(`javascript:${H}x${E} https://u:p@h.io/${H}y${E}`)).toBe('javascript:[x] https://u:p@h.io/[y]');
+    expect(shown(`a  \n\n  ${H}b${E}  `)).toBe('a [b]');
   });
 });
