@@ -3,6 +3,7 @@ import type { PipelineStats } from './denoise-core';
 import type { DenoiseMode } from './mode';
 import type { AudioSettings } from './settings';
 import { deviceGone } from '../devices';
+import { captureContext } from './context';
 import workletUrl from './denoise.worklet.ts?worker&url';
 
 export interface CaptureDeps {
@@ -19,13 +20,17 @@ export interface CaptureDeps {
   onMicFallback?(): void;
 }
 
-/** The unfiltered mic passes through while the model loads, and a slow first download can take longer than 5 s. */
+/** The mic passes through (with the browser's filter) while the model loads, and a slow first download can take longer than 5 s. */
 export const READY_TIMEOUT_MS = 20_000;
+/** The status while DeepFilterNet loads: the browser filter is on meanwhile, and goes off when the model takes over. */
+export const LOADING = 'loading, browser filter until then';
+/** The mic reopened without the browser filter (Chromium) must answer within this, or the call falls back to browser mode. */
+export const REOPEN_TIMEOUT_MS = 3000;
 
 const modules = new WeakMap<BaseAudioContext, Promise<void>>();
 const browserDeps: CaptureDeps = {
   getUserMedia: (c) => navigator.mediaDevices.getUserMedia(c),
-  createContext: () => new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' }),
+  createContext: captureContext,
   createWorkletNode: async (ctx) => {
     if (!modules.has(ctx)) modules.set(ctx, ctx.audioWorklet.addModule(workletUrl));
     await modules.get(ctx);
@@ -79,11 +84,12 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   let closed = false;
   let live = d.startLive; // applied to every new track, so mute/PTT survive swaps and rebuilds
 
-  const ask = (mode: DenoiseMode, id: string | null) =>
+  // deepfilter asks with the browser filter on (while the model loads); `deep` asks again without it once the model is ready.
+  const ask = (mode: DenoiseMode, id: string | null, ns = mode !== 'off') =>
     d.getUserMedia({
       audio: {
         echoCancellation: true,
-        noiseSuppression: mode === 'browser' || (mode === 'deepfilter' && s.noiseSuppression),
+        noiseSuppression: ns,
         autoGainControl: s.autoGain,
         channelCount: 1,
         sampleRate: 48000,
@@ -152,9 +158,9 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
 
   async function deep(): Promise<Pipe> {
     if (ctx.sampleRate !== 48000) throw new Error(`AudioContext runs at ${ctx.sampleRate} Hz, DeepFilterNet needs 48000`);
-    const m = await mic('deepfilter');
+    let m = await mic('deepfilter');
     let me: Pipe | undefined;
-    const unwatch = watch(m.getAudioTracks()[0], () => me);
+    let unwatch = watch(m.getAudioTracks()[0], () => me);
     let dead = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let node: AudioWorkletNode | undefined;
@@ -179,7 +185,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     };
     try {
       node = await d.createWorkletNode(ctx);
-      const src = ctx.createMediaStreamSource(m);
+      let src = ctx.createMediaStreamSource(m);
       const gain = ctx.createGain();
       gain.gain.value = 10 ** (s.inputBoostDb / 20);
       out = ctx.createMediaStreamDestination();
@@ -202,7 +208,37 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         n.port.postMessage({ type: 'port' }, [ch.port2]);
         set(); // settings may have changed while the model loaded
         me!.status = '';
+        // DeepFilterNet takes over now: the browser filter goes off, so the two never stack. A failure is named, not hidden.
+        if (!s.noiseSuppression) void unfiltered().catch((e) => fail(`the mic did not reopen without the browser filter: ${msg(e)}`));
         if (pipe === me) notify('deepfilter', '');
+      };
+      // applyConstraints turns the filter off where the browser can (Firefox). Chromium resolves it but keeps the filter
+      // (getSettings() stays true), and a second track from the same mic opened while the first runs shares it. There only,
+      // the first track ends and the graph's source moves to a new track asked for without the filter: a gap of one
+      // getUserMedia call as the model starts. The sent track stays. A request that does not answer (a hidden tab can hold
+      // it) would leave the call silent, so it gets REOPEN_TIMEOUT_MS.
+      const unfiltered = async () => {
+        const t = m.getAudioTracks()[0];
+        await t.applyConstraints({ ...t.getConstraints(), noiseSuppression: false }).catch(() => {});
+        if (dead || t.getSettings().noiseSuppression !== true) return;
+        const id = t.getSettings().deviceId ?? null;
+        unwatch();
+        stopAll(m);
+        const asked = ask('deepfilter', id, false);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<never>((_, no) => (timer = setTimeout(() => no(new Error(`no answer in ${REOPEN_TIMEOUT_MS / 1000} s`)), REOPEN_TIMEOUT_MS)));
+        const next = await Promise.race([asked, late]).catch((e) => {
+          void asked.then(stopAll, () => {}); // a late answer is not used
+          throw e;
+        }).finally(() => clearTimeout(timer));
+        if (dead) return stopAll(next);
+        const s2 = ctx.createMediaStreamSource(next);
+        s2.connect(gain);
+        src.disconnect();
+        nodes[0] = src = s2;
+        m = next;
+        unwatch = watch(next.getAudioTracks()[0], () => me);
+        me!.raw = next.getAudioTracks()[0];
       };
       w.onerror = (e) => fail(`denoiser worker failed: ${e.message ?? ''}`);
       n.port.onmessage = ({ data }: MessageEvent<{ type: 'error'; message: string } | ({ type: 'stats' } & PipelineStats)>) => {
@@ -216,7 +252,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       w.postMessage({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: s.attenDb, beta: s.postFilter });
       me = {
         mode: 'deepfilter',
-        status: 'loading, unfiltered',
+        status: s.noiseSuppression ? 'loading' : LOADING, // with the filter on top it stays on after loading too
         track: out.stream.getAudioTracks()[0],
         raw: m.getAudioTracks()[0],
         stop,
@@ -321,6 +357,15 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       if (rebuild) void switchTo(n.mode, '').catch(lost);
       else pipe?.set?.(n);
       if (!rebuild && boostChanged && last) notify(...last);
+    },
+    /**
+     * After the mic ended (or the system muted it): get the mic again and build the graph anew, in the same call (the
+     * sender's track is replaced). A saved mic that is gone falls back to the default one, as at the start. A failure is
+     * reported through onModeChange as `microphone lost: ...`. Resolves true when a mic runs again.
+     */
+    async retry(): Promise<boolean> {
+      await switchTo(s.mode, '').catch(lost);
+      return !!pipe;
     },
     /** The latest snapshot, or null when there is no pipeline. */
     getStats,

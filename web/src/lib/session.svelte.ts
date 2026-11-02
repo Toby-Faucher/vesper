@@ -1,11 +1,13 @@
 import { ApiFailure, api } from './api';
 import { applyChatMsg, chat, resync } from './chat.svelte';
 import { loginHref } from './route';
+import { badge, resetBadge } from './ui/badge';
 import { onServerMsg } from './ui/notify';
 import { recentKey } from './ui/recent';
 import { tray } from './ui/tray.svelte';
 import { Signaling } from './signaling';
 import { applyServerMsg, emptyState, type AppState } from './state';
+import type { Me } from './gen/Me';
 
 /** The current path, without the query and the fragment. App.svelte renders from it. */
 export const route = $state({ path: location.pathname });
@@ -52,6 +54,15 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let tries = 0;
 let gen = 0; // stop() bumps it, so a retry already asking /api/me does not open a socket afterwards
 
+// Work that needs the session still signed in, run at sign out before /api/logout (the call's summary). Capped at 1.5 s.
+const beforeLogout = new Set<() => Promise<unknown>>();
+export function onLogout(fn: () => Promise<unknown>): () => void {
+  beforeLogout.add(fn);
+  return () => void beforeLogout.delete(fn);
+}
+export const runBeforeLogout = () =>
+  Promise.race([Promise.all([...beforeLogout].map((f) => f().catch(() => {}))), new Promise((r) => setTimeout(r, 1500))]);
+
 export const session = $state({
   state: emptyState() as AppState,
   sig: null as Signaling | null,
@@ -61,10 +72,13 @@ export const session = $state({
   notice: '',
   /** When the next reconnect try starts (ms since epoch), while one waits. */
   retryAt: null as number | null,
+  /** The server now runs another build than the one this page started with: the socket is closed for good and the page
+   * asks for a reload. Never reloads by itself, so a mismatch can not loop. */
+  stale: false,
 
   /** Opens the one socket for this page. Reconnects after a drop, except on 4001 (go to sign in) and 4003. */
   connect(): void {
-    if (session.sig || timer) return;
+    if (session.sig || timer || session.stale) return;
     session.notice = '';
     tries = 0;
     open();
@@ -81,6 +95,7 @@ export const session = $state({
     const id = session.state.me?.user.user_id;
     if (id) try { storage?.removeItem(lastRoomKey(id)); storage?.removeItem(recentKey(id)); } catch { /* storage blocked */ }
     stop();
+    await runBeforeLogout(); // after stop(), so no reconnect can start meanwhile; HTTP still has the session
     await api('POST', '/api/logout').catch(() => {}); // signed out either way
     // The server drops this device's push subscription with the session; unregistering also ends it in the browser.
     await navigator.serviceWorker?.getRegistration().then((r) => r?.unregister()).catch(() => {});
@@ -93,6 +108,7 @@ function open(): void {
   session.sig = sig;
   let upAt = 0;
   sig.onMessage((m) => {
+    if (m.type === 'hello' && !sameBuild(m.me, true)) return; // its messages may be of a kind this code does not know
     if (m.type === 'hello') {
       upAt = Date.now();
       session.online = true;
@@ -101,6 +117,7 @@ function open(): void {
     session.state = applyServerMsg(prev, m);
     chat.state = applyChatMsg(chat.state, m);
     onServerMsg(m, prev); // mention notifications and the join and leave sounds
+    badge(session.state.unread);
     if (m.type === 'hello') void resync(); // events may have been missed while the socket was down
   });
   sig.onClose((byClient, code) => {
@@ -126,11 +143,11 @@ function retry(): void {
 function attempt(): void {
   const g = gen;
   session.retryAt = null;
-  api('GET', '/api/me').then(
-    () => {
+  api<Me>('GET', '/api/me').then(
+    (me) => {
       if (g !== gen) return;
       timer = undefined;
-      open();
+      if (sameBuild(me, false)) open();
     },
     (e) => {
       if (g !== gen) return;
@@ -139,6 +156,21 @@ function attempt(): void {
       else retry();
     },
   );
+}
+
+let build: string | null = null; // the server build of this page load's first hello
+
+/** False, and the socket stops, once the server is on another build than this page started with. Build ids, not versions,
+ * so a rebuild of one version counts too. An older server sends none: that is a change as well. Only a hello sets the
+ * baseline: an /api/me before the first hello (the first socket closed early) is compared with nothing and passes. */
+function sameBuild(me: Me | undefined, hello: boolean): boolean {
+  const b = me?.server?.build ?? '';
+  if (build === null && !hello) return true;
+  build ??= b;
+  if (b === build) return true;
+  stop();
+  session.stale = true;
+  return false;
 }
 
 function stop(): void {
@@ -155,6 +187,7 @@ function stop(): void {
 function toLogin(notice: string): void {
   stop();
   session.state = emptyState();
+  resetBadge(); // the next account starts with none
   Object.assign(chat, { state: { rooms: {}, typing: {} }, active: null, drafts: {} }); // the next account sees none of it
   tray.clear(); // and the uploads stop
   session.notice = notice;

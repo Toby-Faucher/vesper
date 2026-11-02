@@ -20,6 +20,9 @@ The "Not verified" list at the end says what was only read.
 ```
 
 - **vesper-server** is one binary. It serves the built web app, `/health` and `/ws` on one TCP port, and runs the SFU on one UDP port.
+  `/health` answers `{"status":"ok","version":"<release>","build":"<id>"}` (503 with `"status":"sfu down"`). The build id is the git commit compiled in by
+  `build.rs` (the Dockerfile's `VESPER_BUILD_ID` arg, else `build-id.txt` as `git archive` fills it in, else the version), or `VESPER_BUILD_ID` at run time.
+  At start, before the migrations run, it backs the database up into `<data>/backups` when migrations are pending, and does not start if that fails (`backup_before_migration`, `lib.rs`).
   It does no TLS; Caddy does. Media never goes through Caddy. (`crates/vesper-server/src/lib.rs`, `deploy/Caddyfile.example`)
 - **The SFU** runs on its own OS thread (`vesper-sfu` thread, `crates/vesper-sfu/src/lib.rs`). The server talks to it through a cloneable
   `SfuHandle`. If the thread dies, `/health` returns 503 and the process exits with code 1 so Docker or systemd restarts it
@@ -29,10 +32,10 @@ The "Not verified" list at the end says what was only read.
   same tab is read too), `/welcome` (after signup, and from Settings > Account: name and colour, a mic check, mention notifications; every step can be skipped; it renders inside the Shell, so a call keeps running)
   and the app shell (`web/src/routes/Shell.svelte`) for every other path, which needs a session (`GET /api/me`, else `/login`): `/r/<id>` (a room),
   `/settings/<section>`, `/admin/<section>`, and `/`, which opens the last room (`localStorage['vesper.lastRoom']`) or the first. Any other path
-  shows a plain not-found page. The shell starts the call store once, so a call stays up while you move between pages, and shows the call bar (`CallBar.svelte`) at the bottom of the main pane while you are in voice. A person in the sidebar or the call bar, and a name, avatar or mention in a message or in Admin > Members, opens their person card (`PersonCard.svelte`: bio, role, volume, connection quality, and the moderator voice actions; names use `PersonButton.svelte`). Connection quality per person comes from the call's one `getStats()` every 2 s: each remote track's `inbound-rtp` (loss over the window, jitter, concealed samples) and, for you, the round trip and loss. `web/src/lib/ui/link.ts` grades it and holds a grade until two windows in a row agree on a new one (the math is in `link-stats.ts`, loaded at the first join). Three windows in a row without a packet from someone who is not muted turn their icon back to measuring; your own row counts as all lost while ICE is disconnected. No server change. "Even out voices" (Settings > Voice, off by default, saved in `vesper.level`) adds a gain per remote person in `playback.ts`, under the manual volume: `web/src/lib/level.ts` averages the speech level over about 3 s from the speaking analyser (frames under -40 dBFS are skipped, so the gain holds in silence and room noise is never lifted) and moves the gain towards a common level, at most 10 dB either way, cutting in about 1 s and lifting in about 4 s. Each join starts at 0 dB. It is on the playback side only; the mic path is not touched. `web/src/lib/session.svelte.ts` keeps one socket per
+  shows a plain not-found page. The shell starts the call store once, so a call stays up while you move between pages, and shows the call bar (`CallBar.svelte`) at the bottom of the main pane while you are in voice. A person in the sidebar or the call bar, and a name, avatar or mention in a message or in Admin > Members, opens their person card (`PersonCard.svelte`: bio, role, volume, connection quality, and the moderator voice actions; names use `PersonButton.svelte`). Connection quality per person comes from the call's one `getStats()` every 2 s: each remote track's `inbound-rtp` (loss over the window, jitter, concealed samples) and, for you, the round trip and loss. `web/src/lib/ui/link.ts` grades it and holds a grade until two windows in a row agree on a new one (the math is in `link-stats.ts`, in the call chunk with the rest of the call code, see [dev.md](dev.md)). Three windows in a row without a packet from someone who is not muted turn their icon back to measuring; your own row counts as all lost while ICE is disconnected. No server change. "Even out voices" (Settings > Voice, off by default, saved in `vesper.level`) adds a gain per remote person in `playback.ts`, under the manual volume: `web/src/lib/level.ts` averages the speech level over about 3 s from the speaking analyser (frames under -40 dBFS are skipped, so the gain holds in silence and room noise is never lifted) and moves the gain towards a common level, at most 10 dB either way, cutting in about 1 s and lifting in about 4 s. Each join starts at 0 dB. It is on the playback side only; the mic path is not touched. `web/src/lib/session.svelte.ts` keeps one socket per
   page and the state it pushes (`state.ts`). After a close it reconnects after a random wait that doubles from 1 to 2 s up to 15 to 30 s, asking `/api/me` first; the wait
   starts over only after a socket stayed up for 10 s.
-  It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). A `peer_left` with your
+  It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). Nor after a server build change: the page keeps the build id (`Me.server.build`) of its first `hello`; when a later `hello` or a reconnect's `/api/me` names another, it closes the socket for good without applying that `hello`, so it never acts on messages of a newer protocol, the composer stays blocked like offline, and `ConnectionBanner.svelte` shows "Vesper was updated. Reload to continue." with a Reload button. It compares build ids, not versions, and never reloads by itself, so it can not loop. A `peer_left` with your
   own `user_id` ends the call in that tab; the socket stays open.
 - **The chat panel** (`web/src/routes/Chat.svelte`, store in `web/src/lib/chat.svelte.ts`) fills the open room's page (`RoomView.svelte`) under its
   header. History, sends, edits, deletes, reactions, pins, read markers, uploads and search go over REST; new and changed messages and
@@ -82,9 +85,9 @@ The "Not verified" list at the end says what was only read.
 | Crate | Job |
 |---|---|
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, the limit `MAX_MSG_BYTES` (64 KiB) and the close codes `CLOSE_SESSION_ENDED` (4001) and `CLOSE_DISCONNECTED` (4003). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`, `Unread`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
-| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. The UI accent from Settings > Appearance (`0006_ui_accent.sql`): `accounts.ui_accent`, a preset key or `#rrggbb`, NULL for amber. Password resets (`0007_password_resets.sql`, `resets.rs`): every reset row is kept as an audit (who made it, used when and from the LAN or the internet, shown to the person); at most one live code per account (a partial unique index), cancelled by a new one, a role change, a ban or unban and a password change; a role change or ban of the maker cancels the live links they made. Archived rooms (`0008_room_archive.sql`): `rooms.archived_at`, NULL while not archived. `Store::backup_into` writes a consistent copy with `VACUUM INTO` (for `vesper-server backup`). It stores only hashes of session tokens, invite codes and reset codes. |
+| `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. The UI accent from Settings > Appearance (`0006_ui_accent.sql`): `accounts.ui_accent`, a preset key or `#rrggbb`, NULL for amber. Password resets (`0007_password_resets.sql`, `resets.rs`): every reset row is kept as an audit (who made it, used when and from the LAN or the internet, shown to the person); at most one live code per account (a partial unique index), cancelled by a new one, a role change, a ban or unban and a password change; a role change or ban of the maker cancels the live links they made. Archived rooms (`0008_room_archive.sql`): `rooms.archived_at`, NULL while not archived. `Store::backup_into` writes a consistent copy with `VACUUM INTO` (for `vesper-server backup` and the automatic backups). `Store::schema_versions` reads the newest applied and the newest embedded migration without changing the file, so the server can back up before `Store::open` migrates. It stores only hashes of session tokens, invite codes and reset codes. |
 | `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, reset links, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`, `listed`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands, `backup`), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_admin.rs` (users, invites, reset links, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`, `listed`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands, `backup`, the automatic `pre-*` and `auto-*` backups and their keep rule), `build.rs` (the build id), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -94,7 +97,7 @@ All messages are JSON on one WebSocket per tab, tagged by `type` (`vesper-protoc
 
 Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `leave`, `check { offer }`,
 `typing { room_id }`.
-Server to client: `hello { me, users, rooms, voice, unread }`, `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
+Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is the server's `version` and `build` id), `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
 `peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `rooms_changed { rooms }`, `user_updated { user }`,
 `user_created { user }`,
 `force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
@@ -189,7 +192,7 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
   into a `MediaStreamDestination`, and that track is what WebRTC sends (`web/src/lib/audio/capture.ts`, `denoise.worklet.ts`,
   `dsp.worker.ts`, `dsp-handler.ts`).
 - Buffers in `denoise-core.ts`: up to 4 frames at the worker, a 4 frame input ring, and an output queue that starts playing at 3 frames
-  (30 ms) and holds at most 8 (80 ms); if it stays above 5 for 2 s it drops one frame a second down to 3. They absorb jitter in the worklet to worker messages. The delay they add is estimated, not measured.
+  (30 ms) and holds at most 8 (80 ms); if it stays above 5 for 2 s it drops one frame a second down to 3. When it runs dry (an underrun, or empty exactly at a block end) the samples it played in that block fade to 0 (at most 2.5 ms, 120 samples; as little as 32 when it runs dry early in a 128-sample block), and the next audio fades in over 2.5 ms, so a starved output dips instead of clicking (unit-tested with a max sample step check; not listened). A queue that is empty exactly at a block end and refilled in time dips the same way but is not counted in `underruns`. Every start of playback (the first, and each re-prime) fades in. They absorb jitter in the worklet to worker messages. The delay they add is estimated, not measured.
 - Two steps run inside the worklet (`dynamics.ts`), so the order stays mic, echo cancellation, gain, DeepFilterNet, Opus:
   - A limiter on the boosted input, before the denoiser, on only while the input boost is above 0 dB. A peak envelope (20 ms hold,
     80 ms release) feeds a soft curve: gain 1 below -6 dBFS, and the denoiser input never passes -1 dBFS. It needs no lookahead, so
@@ -203,7 +206,7 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
     ramps it open. The switch is disabled outside DeepFilterNet mode. The passthrough before the model is
     ready, and after a failure, is not gated.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
-  suppression is on only in `browser` mode, or in `deepfilter` mode if the user turned it on.
+  suppression is on in `browser` mode, in `deepfilter` mode while the model loads, and in `deepfilter` mode if the user turned it on.
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is
   also set on the sender (`web/src/lib/devices.ts`). Remote SDP is tuned too, then applied (`signaling.ts`).
 
@@ -220,10 +223,21 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 - Modes: `deepfilter`, `browser`, `off` (`web/src/lib/audio/mode.ts`).
 - `ModeController` trips from `deepfilter` to `browser` when 20 of the last 100 frames each took longer than 30 ms. The first 300 frames (about 3 s) are ignored. It stays tripped until `reset()`.
   The numbers are set in `denoise-core.ts`.
+- A mic that ends mid-call (or that the system mutes for over 3 s) leaves the call up with `off (microphone lost: ...)`, and the call bar offers
+  Retry microphone: `capture.retry()` asks for the mic again (a saved mic that is gone falls back to the default, as at the start) and builds
+  the graph anew, and the sender gets the new track with `replaceTrack`. A failed retry names the error and keeps the button.
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
-- The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). The raw mic passes through, and the status line says `loading, unfiltered`, until then.
-- The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. Skipped when the browser asks to save data. Not verified in a real browser.
+- The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). Until then the mic passes through with the browser's noise suppression on
+  (the mic is asked for with `noiseSuppression: true`), and the status line says `loading, browser filter until then`. At `ready` (unless "Browser noise suppression on top"
+  is on, when the line says only `loading`) the capture calls `applyConstraints({ noiseSuppression: false })` on the track. Where that works
+  (`getSettings()` then says false; Firefox is expected to, not verified) nothing else happens. Chromium resolves it but keeps the filter, and a
+  second track opened while the first runs gets the first one's filter (both seen in headless Chromium, 2026-11-02). There the capture ends the
+  track, asks for the same mic again without the filter and moves the graph's source to it, so the two filters never stack. The sent track does
+  not change; the input has a gap of one `getUserMedia` call as the model starts. If the mic does not answer within 3 s (`REOPEN_TIMEOUT_MS`; a
+  hidden tab can hold the request) or fails, the call falls back to `browser` with `the mic did not reopen without the browser filter: ...`. The e2e checks both tracks in
+  headless Chromium; whether the switch is heard is not verified.
+- The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. `scripts/build-dsp.sh` writes `vesper_dsp_bg.wasm.gz` next to the wasm and the server sends it to browsers that accept gzip (`ServeDir` `precompressed_gzip`): 2.2 MB instead of 10.9 MB. `npm run build` also writes a `.br` of it in `dist/dsp` (1.3 MB, measured 2026-11-02), sent to browsers that accept brotli. With the 8.0 MB model the first visit downloads about 9 to 10 MB. Skipped when the browser asks to save data. Not verified in a real browser.
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.
 
 ## HTTP API
@@ -239,7 +253,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/signup` (`SignupReq`) | Invite limit by address | 201 `Me` and the session cookie |
 | `POST /api/login` (`LoginReq`) | Login limits by address, then by address and username | `Me` and a new session cookie |
 | `POST /api/logout` | a session | 204, the session is deleted and the cookie cleared |
-| `GET /api/me` | a session | `Me` |
+| `GET /api/me` | a session | `Me`, with `server { version, build }` |
 | `PATCH /api/me` (`ProfilePatch`) | a session | the new `UserInfo`; `bio` follows the display name rule, 0 to 160 characters; `ui_accent` is an `AccentPreset` key or `#rrggbb` (the client checks a custom colour's contrast) |
 | `PUT /api/me/avatar` (the raw picture as the body) | a session, Upload limit by user | the new `UserInfo`; 400 unless png, jpeg or webp of at most 1024 px a side (see Profile pictures), 413 `too_large` past 512 KiB |
 | `DELETE /api/me/avatar` | a session, Change limit by user | the new `UserInfo` with `avatar: null` |
@@ -247,6 +261,8 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
 | `POST /api/reset` (`ResetReq`) | a reset code, Reset limit by address (10, then 1 every 6 minutes) | 204, the password is set, the code is marked used and every session of that account is deleted; 404 `reset_invalid` for an unknown, used, cancelled or expired code (all the same) |
 | `POST /api/me/reset-notices` | a session | `ResetNotice[]`: resets of your password not shown yet, now marked shown (the sign-in page shows them once) |
+| `POST /api/me/calls` (`CallSummary`) | a session, Calls limit by user (10, then 1 a minute) | 204; stored for your account only (an account field in the body is ignored, like any unknown field). 400 when `duration_s` is over 24 h, `fallback_reason` is over 120 characters or has a control character, a percentage is outside 0 to 100, `jitter_ms` outside 0 to 10000 or `rtt_ms` outside 0 to 60000. The newest 20 per account are kept |
+| `GET /api/me/calls` | a session | `CallRecord[]`: your own last 20 calls, newest first. Nobody else's, the owner included |
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
 | `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
 | `GET /api/push` | a session | `PushInfo`: the VAPID public key (null when push is off) and `PushDevice[]`, `current` marks this session's |
@@ -283,6 +299,13 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past 25 MiB, 507 `quota_full` |
 | `GET /api/uploads/{id}` | sees the room; an upload not attached yet needs the uploader | the file (Range works), else 404 |
 | `GET /api/admin/disk` | owner | `DiskUse` |
+| `GET /api/admin/server` | owner | `ServerStatus`: version and build, uptime, the `DiskUse` numbers, people in voice, failed pushes in the last 24 h (in memory, since start if shorter), the newest `*.db` in `<data>/backups` (name and time). No secrets and no one's address. The advertised public address is not in it: the server does not record when it changed |
+
+Your recent calls (`api_calls.rs`, store `calls.rs`, table `call_stats` from migration `0010_call_stats.sql`): when you leave a call your
+client posts one summary: how long it lasted, the noise suppression mode it ended in and its fallback reason, incoming loss, jitter,
+concealed share and round trip (averages over the call's 2 s stats polls), and whether the browser filter ran while DeepFilterNet
+loaded. No room and no other people are stored. Each person reads only their own (Settings > Account, "Your recent calls"); there is
+no owner view (a ruling for v1.4). Rows older than 30 days are deleted at start and every 24 h, and each account keeps its newest 20.
 
 Rooms (`api_rooms.rs`, store `rooms.rs`): every room has text and voice. A fresh database has `general` and `hangout`
 (migration `0002_rooms.sql`). Room names follow the display name rule (NFC, 1 to 32 characters, no control or hidden format
@@ -485,6 +508,7 @@ Notifications while Vesper is closed (issue #58): "alice mentioned you in Games"
   start with `/`. A second session may take over an endpoint already stored only when its keys match too (the same browser, signed in
   as someone else); otherwise 409, so knowing an endpoint is not enough to take another person's pushes. The `test-push` cargo feature (tests and the push e2e) also allows
   `http://127.0.0.1:<port>`; it is a compile error in a release build.
+- **App badge** (`web/src/lib/ui/badge.ts`): the page sets the installed app's badge to the sum of unread mentions (`Unread.mentions`) and clears it at 0, sending only changes; the worker sets a plain mark (no number) on a mention push. Only where `navigator.setAppBadge` exists (Chromium on Windows and macOS, Safari 17 installed apps); Firefox has none and nothing happens. Unit tests with a stub (`badge.test.ts`, `sw.test.ts`); not seen on a real installed app.
 - **The worker** shows the notification (tag `<kind>-<room id>`, so a voice push never replaces a mention), focuses an open Vesper tab and asks it to open the room (the app navigates
   in place, so a call goes on) or opens `/r/<id>`, and resubscribes on `pushsubscriptionchange` with the device's switches. It has
   no fetch handler and caches nothing.
@@ -518,6 +542,7 @@ layer, keep-alive turned off, the JSON deadline also on uploads, the file delete
 
 ## Static serving
 
+`web/scripts/precompress.mjs` (run by `npm run build`) writes a `.br` and a `.gz` next to every html, js, css, json, webmanifest, svg, txt and wasm file in `dist/` when that is smaller and no such copy is there yet (build-dsp.sh's wasm `.gz` is kept; the wasm also gets a `.br`); images, fonts and archives get none. ServeDir (`precompressed_br`, `precompressed_gzip`) sends one by `Accept-Encoding` with the original's `Content-Type`, `Content-Encoding` and `Vary: accept-encoding`.
 `guard` in `vesper-server/src/lib.rs`: dotfiles and `%2e` are 404; an extensionless 404 gets `index.html` (SPA routes); a missing file with
 an extension or under `/api/` stays 404; `/assets/*` is `immutable`, `/api/*` `no-store` (unless the handler set its own, as uploads do), everything else `no-cache`. Every response gets the security headers and the CSP of [decision 0008](decisions/0008-csp.md); a CSP the handler set (uploads' sandbox) is kept. Tests: `crates/vesper-server/tests/static_files.rs`, `tests/uploads.rs` `upload_keeps_sandbox_csp`.
 

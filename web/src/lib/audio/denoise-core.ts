@@ -13,6 +13,8 @@ const TRIM_ABOVE = 5;
 const TRIM_TO = 3;
 const TRIM_AFTER_S = 2;
 const PRIME = 3 * HOP; // start output with 30 ms queued, so one late reply does not cause a gap
+// A linear fade when the queue runs dry and when it plays again, so an underrun is a short dip, not a click (a step).
+const FADE_S = 0.0025;
 // Fallback rule. A frame is late past 30 ms, the depth the output queue primes to.
 const LATE_MS = 30;
 // Judge the last second (100 frames of 10 ms) so one GC pause or CPU burst cannot trip it.
@@ -78,6 +80,8 @@ export class DenoiseCore {
   private trimming = false;
   private cool = 0; // samples until the next trim drop
   private replyMs = new Float64Array(REPLY_WINDOW);
+  private fade: number; // FADE_S in samples
+  private ramp = 0; // fade-in samples left
   // Level meters: sums over the current half second; the last full half second is what stats() reports.
   private sq = { in: 0, out: 0, n: 0, peak: 0 };
   private rms = { in: 0, out: 0, peak: 0 };
@@ -91,6 +95,7 @@ export class DenoiseCore {
     this.onFail = onFail;
     this.rate = sampleRate;
     this.stallSamples = sampleRate / 2; // a killed worker sends no error; half a second of silence means stalled
+    this.fade = Math.round(FADE_S * sampleRate);
     this.limiter = new Limiter(sampleRate);
     this.gate = new Gate(sampleRate);
   }
@@ -206,6 +211,7 @@ export class DenoiseCore {
       this.playing = true;
       if (this.played) this.n.reprimes++;
       this.played = true;
+      this.ramp = this.fade; // the output was silent until now
     }
     const wasPlaying = this.playing;
     let i = 0;
@@ -217,6 +223,14 @@ export class DenoiseCore {
         this.count -= f.length;
         this.pos = 0;
       }
+    }
+    // Only the samples just played are shaped, so the normal path costs two checks per block.
+    for (let k = 0; this.ramp > 0 && k < i; k++) o[k] *= 1 - this.ramp-- / this.fade;
+    if (wasPlaying && i > 0 && !this.out.length) {
+      // Dry (mid-block, or exactly at its end): fade the tail to 0, and fade in whatever plays next.
+      const n = Math.min(i, this.fade);
+      for (let k = 0; k < n; k++) o[i - n + k] *= (n - 1 - k) / n;
+      this.ramp = this.fade;
     }
     if (i < o.length) {
       if (wasPlaying) this.n.underruns++;

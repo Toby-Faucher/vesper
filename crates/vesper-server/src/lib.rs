@@ -3,6 +3,7 @@
 
 pub mod api_accounts;
 pub mod api_admin;
+pub mod api_calls;
 pub mod api_messages;
 pub mod api_push;
 pub mod api_rooms;
@@ -54,6 +55,14 @@ use crate::limits::Limiter;
 use crate::push::Push;
 use crate::voice::Voice;
 
+/// The release number (the workspace version).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The build id compiled in (`build.rs`): the git commit, else the version.
+pub const BUILD: &str = env!("VESPER_BUILD");
+
+/// When [`serve`] started, for the uptime on Admin > Server.
+pub(crate) static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 /// Largest JSON body any `/api` route reads.
 pub const API_BODY_LIMIT: usize = 32 * 1024;
 
@@ -75,6 +84,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api_rooms::routes())
         .merge(api_messages::routes())
         .merge(api_push::routes())
+        .merge(api_calls::routes())
         .layer(RequestBodyTimeoutLayer::new(state.cfg.body_idle))
         .layer(RequestBodyDeadlineLayer::new(state.cfg.body_total));
     // Uploads apply the same limits in `uploads::read_body`; a picture is at most 512 KiB.
@@ -138,9 +148,13 @@ pub async fn start_with_sfu(
     sfu: SfuHandle,
 ) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
     let db = cfg.data_dir.join("vesper.db");
+    backup_before_migration(&cfg, &db).await?;
     let store = Store::open(&db)
         .await
         .map_err(|e| std::io::Error::other(format!("open {}: {e}", db.display())))?;
+    if cfg.backup_every_hours > 0 {
+        spawn_backups(cfg.clone());
+    }
     let hub = Hub::default();
     let voice = Voice::new(sfu.clone(), hub.clone(), cfg.max_room_size);
     let push = Push::new(store.clone(), hub.clone(), cfg.push_subject.clone())
@@ -160,6 +174,49 @@ pub async fn start_with_sfu(
     serve(state, sfu).await
 }
 
+/// When the database exists and this binary carries newer migrations, copy it into
+/// `<data>/backups` first ([`cli::auto_backup`]). A failed copy stops the start: the data is
+/// worth more than the uptime.
+pub async fn backup_before_migration(cfg: &Config, db: &std::path::Path) -> std::io::Result<()> {
+    cli::clean_backups_dir(cfg).await;
+    let versions = Store::schema_versions(db)
+        .await
+        .map_err(|e| std::io::Error::other(format!("read {}: {e}", db.display())))?;
+    // 0: a new or empty file, nothing to lose.
+    let Some((from, to)) = versions.filter(|&(from, to)| from > 0 && from < to) else {
+        return Ok(());
+    };
+    let kind = cli::Auto::PreMigration { from, to };
+    match cli::auto_backup(cfg, kind, vesper_store::now_ms()).await {
+        Ok(p) => {
+            info!(
+                "database schema {from} to {to}: backed up to {} first",
+                p.display()
+            );
+            Ok(())
+        }
+        Err(e) => Err(std::io::Error::other(format!(
+            "the backup before migrating the database (schema {from} to {to}) failed, so the server does not start: {e}"
+        ))),
+    }
+}
+
+/// A backup every `VESPER_BACKUP_EVERY` hours, the first one that long after start. A failure is
+/// logged; the server keeps running.
+fn spawn_backups(cfg: Config) {
+    let every = Duration::from_secs(cfg.backup_every_hours.saturating_mul(3600));
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+        loop {
+            tick.tick().await;
+            match cli::auto_backup(&cfg, cli::Auto::Scheduled, vesper_store::now_ms()).await {
+                Ok(p) => info!("scheduled backup written to {}", p.display()),
+                Err(e) => tracing::error!("scheduled backup failed: {e}"),
+            }
+        }
+    });
+}
+
 /// Serve the whole app for `state` on `state.cfg.http_bind`: `/api`, `/ws`, `/health` and the
 /// web app.
 pub async fn serve(
@@ -167,8 +224,10 @@ pub async fn serve(
     sfu: SfuHandle,
 ) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
     let cfg = state.cfg.clone();
+    STARTED.get_or_init(std::time::Instant::now);
     uploads::clean_tmp(&cfg.data_dir)?;
     uploads::spawn_sweep(state.clone());
+    api_calls::spawn_prune(state.clone());
     match cfg.public_host.clone() {
         Some(host) => {
             public_addr::spawn_refresh(sfu.clone(), host, cfg.udp_port_public, public_addr::REFRESH)
@@ -193,8 +252,14 @@ pub async fn serve(
     let app = Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws::upgrade))
-        // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`.
-        .fallback_service(ServeDir::new(&cfg.web_dir))
+        // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`. It sends
+        // the `.br` or `.gz` beside a file (web/scripts/precompress.mjs; build-dsp.sh's wasm `.gz`) when
+        // Accept-Encoding allows, with the original's Content-Type and `Vary: accept-encoding`.
+        .fallback_service(
+            ServeDir::new(&cfg.web_dir)
+                .precompressed_br()
+                .precompressed_gzip(),
+        )
         .with_state(ws::WsState {
             app: state,
             sockets: Arc::new(Semaphore::new(cfg.max_sockets)),
@@ -267,12 +332,16 @@ fn is_connection_error(e: &std::io::Error) -> bool {
 
 /// 503 once the SFU thread has died, for external monitors and load balancers. (Docker does not
 /// restart an unhealthy container; `start` also exits the process so restart policies recover.)
-async fn health(State(st): State<ws::WsState>) -> (StatusCode, &'static str) {
-    if st.app.voice.sfu_alive() {
+/// The body is `{"status":"ok","version":..,"build":..}` (`"sfu down"` with the 503).
+async fn health(State(st): State<ws::WsState>) -> (StatusCode, axum::Json<serde_json::Value>) {
+    let (code, status) = if st.app.voice.sfu_alive() {
         (StatusCode::OK, "ok")
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, "sfu down")
-    }
+    };
+    let b = st.app.cfg.server_build();
+    let body = serde_json::json!({ "status": status, "version": b.version, "build": b.build });
+    (code, axum::Json(body))
 }
 
 /// The page's Content-Security-Policy (docs/decisions/0008-csp.md), for the

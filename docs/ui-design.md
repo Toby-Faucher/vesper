@@ -13,7 +13,7 @@ Who it is for: a voice room for a few friends on desktop Chrome or Firefox. Dark
 5. **The call screen is cheap.** No animation or effect that costs CPU while audio runs. Motion only on state changes, and none under `prefers-reduced-motion`.
 6. **Keyboard works.** Every control is reachable with Tab and shows a visible focus ring (`:focus-visible` in `web/src/app.css`). Inputs without a visible label get an `aria-label`.
 7. **Copy is plain.** `scripts/check-wording.sh` checks the strings in `web/src`.
-8. **Size is watched.** `web/scripts/size-check.mjs` fails the build when, in gzip, the first load JS passes 70 kB, any lazy chunk 35 kB, all JS 150 kB, the first load CSS 12 kB or all CSS 20 kB. What loads before the first click is the number that counts, for JS and for CSS. The wasm and the model are not counted.
+8. **Size is watched.** `web/scripts/size-check.mjs` fails the build when, in gzip, the first load JS passes 70 kB, any lazy chunk 35 kB, all JS 170 kB (raised from 150 on 2026-11-02 by Toby: only lazily loaded code adds to it, and the first-load ratchet protects what people wait for), the first load CSS 12 kB or all CSS 20 kB. What loads before the first click is the number that counts, for JS and for CSS. The wasm and the model are not counted.
 
 ## Not goals
 
@@ -59,8 +59,8 @@ shows the ratio and offers the nearest allowed colour, and a stored one that fai
 accent role (`--accent`, `--accent-hover`, `--accent-fg`, `--accent-subtle`, `--accent-line`, `--focus`) from the one fill and
 sets them on `<html>`; `accent.test.ts` checks each preset. The logo and the tab icon follow the accent: `tint()` gives a colour
 matrix that moves amber to the fill and keeps every grey, applied to the logo by the `#logo-tint` SVG filter in `index.html`
-(set before the first paint, so the logo never shows amber first) and to the 32 px favicon on a canvas (`favicon.ts`, lazy,
-a `blob:` URL). Amber leaves both files untouched. The avatar colours, the notification icon and the speaking ring do not
+(set before the first paint, so the logo never shows amber first) and to the 32 px favicon on a canvas (`favicon.ts`, lazy:
+it fetches the PNG and makes a `blob:` URL). Amber leaves both files untouched. The avatar colours, the notification icon and the speaking ring do not
 change. There is no coral: it sat between the danger red and the warning orange.
 
 **The switch point.** The look is chosen in one place: `data-style` on `<html>`, set by `web/src/lib/ui/style.ts` before the app
@@ -81,6 +81,8 @@ To see every role, the type scale, the radii and the focus ring, run `npm --pref
 
 Every animation goes through [`web/src/lib/ui/motion.ts`](../web/src/lib/ui/motion.ts) as a named preset, played by anime.js's WAAPI
 build (`waapi.animate` only). Only `opacity` and `transform` move, except the jump flash, which fades a background colour.
+anime.js is not in the first load: it loads right after start, and until it arrives every preset is instant (the jump flash
+is the instant change it has under reduced motion).
 
 | Preset | Pose | Used by |
 | --- | --- | --- |

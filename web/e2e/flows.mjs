@@ -28,6 +28,15 @@ async function join(page, room) {
   await page.getByRole('button', { name: 'Join' }).click();
   await page.getByRole('button', { name: 'Leave' }).waitFor();
 }
+// Signs `name` in again (password test-password-1). Steps late in the run reuse an account made earlier: every signup
+// spends one of the 10 per-address signup tries (6 min refill), and the run would pass 10.
+async function signInAgain(page, name) {
+  await page.goto(`${ORIGIN}/login`);
+  await page.getByLabel('Username').fill(name);
+  await page.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await signedIn(page);
+}
 const focusedText = (page) => page.evaluate(() => document.activeElement?.textContent?.trim());
 const MUTED_NOTICE = 'A moderator muted you.';
 // The notice in the live call bar; the inert copy that fades out after Leave is aria-hidden, so the region query skips it.
@@ -873,6 +882,111 @@ try {
   }
   if (!hasFirefox()) console.log('saved mic gone, Firefox: skipped (npx playwright-core install firefox)');
 
+  // A mic that ends mid-call (unplugged, permission revoked): Retry microphone gets it back in the same call. The fake
+  // device is ended by hand: stop() alone fires no 'ended' event, so the test dispatches it, as the browser would.
+  {
+    const lost = await browser('ines', []);
+    const l = lost.page;
+    await l.addInitScript(() => {
+      window.__mics = [];
+      window.__gumFail = false;
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (q) => {
+        if (window.__gumFail) throw new DOMException('Permission denied', 'NotAllowedError');
+        const m = await gum(q);
+        window.__mics.push(m.getAudioTracks()[0]);
+        return m;
+      };
+    });
+    await signInAgain(l, 'rhea'); // rhea, the room-change reader, has never been in a call
+    await join(l, 'general');
+    const bar = l.getByRole('region', { name: 'Call' });
+    await bar.getByText('Noise suppression: browser').waitFor();
+    await l.evaluate(() => { const t = window.__mics.at(-1); t.stop(); t.dispatchEvent(new Event('ended')); });
+    await bar.getByText(/^The microphone stopped/).waitFor();
+    const retry = bar.getByRole('button', { name: 'Retry microphone' });
+    await bar.getByText('Noise suppression: off (microphone lost: ended)').waitFor();
+    await l.evaluate(() => (window.__gumFail = true));
+    await retry.click();
+    await bar.getByText(/^Microphone access was denied/).waitFor(); // a failed retry says why, the call stays
+    await retry.waitFor();
+    await l.evaluate(() => (window.__gumFail = false));
+    await retry.click();
+    await bar.getByText('Noise suppression: browser', { exact: true }).waitFor();
+    assert.equal(await retry.count(), 0, 'Retry microphone stayed after the mic came back');
+    const sent = await l.evaluate(() => {
+      const pc = window.__pcs.find((p) => p.connectionState !== 'closed');
+      const t = pc.getSenders().find((x) => x.track?.kind === 'audio')?.track;
+      return { same: t === window.__mics.at(-1), live: t?.readyState, mics: window.__mics.length };
+    });
+    assert.deepEqual(sent, { same: true, live: 'live', mics: 2 }, 'the call does not send the new mic');
+    await bar.getByRole('button', { name: 'Leave' }).click();
+    alice.errors.push(...lost.errors);
+    console.log('Retry microphone after the mic ended, same call: ok');
+    // Your recent calls: the call just left is listed, for rhea only (server tests cover the other accounts).
+    await l.waitForFunction(async () => (await (await fetch('/api/me/calls')).json()).length === 1, null, { timeout: 5000 });
+    await l.goto(`${ORIGIN}/settings/account`);
+    const list = l.getByRole('list', { name: 'Your recent calls' });
+    await list.waitFor();
+    assert.equal(await list.getByRole('listitem').count(), 1, 'rhea does not see her one call');
+    // It ended on the browser filter, with the last problem of the call (the refused retry) as its reason.
+    assert.match(await list.innerText(), /browser filter \(microphone lost: NotAllowedError/);
+    await l.getByText(/Only you can see this list/).waitFor();
+    console.log('your recent calls, your own only: ok');
+  }
+
+  // Join voice on a cold page (#88): the call code is a lazy chunk, preloaded at idle. Here it is held back until after
+  // the click, so join() takes its cold path. Each try is a fresh browser context with the account's cookie and a page
+  // that was never clicked: the first click joins, and so does Enter on the focused button. The mic is asked for once
+  // and both call contexts (playback, then capture: the first two made) run. Not checked: the autoplay policy itself. Headless Chromium and Playwright's Firefox
+  // run every AudioContext, with or without a gesture, whatever the flags and prefs say (tried 2026-11-01); voice.test.ts
+  // checks that join() makes both contexts before its first await.
+  for (const ff of hasFirefox() ? [false, true] : [false]) {
+    const who = ff ? 'flora' : 'rhea'; // from the room-change step
+    const cold = await browser(who, [], { firefox: ff });
+    await signInAgain(cold.page, who);
+    await openRoom(cold.page, 'general');
+    const state = await cold.page.context().storageState();
+    for (const how of ['click', 'Enter']) {
+      const ctx = await cold.page.context().browser().newContext({ storageState: state, ...(!ff && { permissions: ['microphone'] }) });
+      const c = await ctx.newPage();
+      c.on('pageerror', (e) => cold.errors.push(`${who}: ${e.stack || e}`));
+      await c.addInitScript(() => {
+        const AC = window.AudioContext;
+        window.__ctx = [];
+        window.AudioContext = class extends AC { constructor(...a) { super(...a); window.__ctx.push(this); } };
+        window.__gum = 0;
+        const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        navigator.mediaDevices.getUserMedia = (q) => (window.__gum++, gum(q));
+      });
+      let chunk = 0; // requests for the call chunk
+      let release;
+      const held = new Promise((r) => (release = r));
+      await c.route(/\/assets\/call-[^/]+\.js$/, async (r) => { chunk++; await held; await r.continue(); });
+      await c.goto(cold.page.url());
+      await signedIn(c);
+      const btn = c.getByRole('button', { name: 'Join voice' });
+      await btn.waitFor();
+      if (how === 'click') await btn.click();
+      else {
+        await btn.focus();
+        await c.keyboard.press('Enter');
+      }
+      release(); // after the gesture: join() is waiting for the chunk
+      await c.getByRole('button', { name: 'Leave' }).waitFor();
+      await c.waitForFunction(() => window.__ctx.length >= 2 && window.__ctx.slice(0, 2).every((x) => x.state === 'running'), null, { timeout: 5000 })
+        .catch(async () => assert.fail(`${who} ${how}: call audio did not start: ${await c.evaluate(() => window.__ctx.map((x) => x.state).join(', '))}`));
+      assert.equal(await c.evaluate(() => window.__gum), 1, `${who} ${how}: the mic was not asked for once`);
+      assert.ok(chunk > 0, `${who}: the call chunk was never loaded`);
+      await c.getByRole('button', { name: 'Leave' }).click();
+      await btn.waitFor();
+      await ctx.close();
+    }
+    alice.errors.push(...cold.errors);
+    console.log(`cold join voice (first click, Enter), ${ff ? 'Firefox' : 'Chromium'}: ok`);
+  }
+  if (!hasFirefox()) console.log('cold join voice, Firefox: skipped (npx playwright-core install firefox)');
+
   // The denoiser (worklet, worker, WASM, model) under the server's CSP. A CSP block in the worker is not a page console
   // message: it shows as the fallback reason in the status line. Runs only when dist/dsp/ was built (CI downloads it from
   // the dsp-wasm job). A new account from an invite: alice has used up her sign-in budget (5 a minute) by now.
@@ -882,6 +996,16 @@ try {
     const d = dsp.page;
     // With the noise gate on, so its worklet message runs in a real browser too.
     await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter', vad: { thresholdDb: -50, gate: true } })));
+    // The mics the app asks for: the browser filter must be on while the model loads and off once it runs.
+    await d.addInitScript(() => {
+      window.__mics = [];
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (q) => {
+        const m = await gum(q);
+        window.__mics.push({ asked: q.audio?.noiseSuppression, track: m.getAudioTracks()[0] });
+        return m;
+      };
+    });
     await signup(d, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, 'dana');
     await join(d, 'general');
     const line = d.getByText('Noise suppression:').first();
@@ -891,6 +1015,14 @@ try {
       status = await line.innerText();
     }
     assert.equal(status, 'Noise suppression: deepfilter', 'denoiser did not start under the CSP');
+    // Chromium cannot turn a track's filter off (applyConstraints leaves getSettings() at true, tried 2026-11-02), so at ready
+    // the app moves the graph to a second track of the same mic asked for without it, and ends the first.
+    await d.waitForFunction(() => window.__mics.length === 2 && window.__mics[0].track.readyState === 'ended', null, { timeout: 5000 })
+      .catch(() => assert.fail('the browser-filtered mic was not replaced at ready'));
+    const ns = await d.evaluate(() => window.__mics.map((x) => [x.asked, x.track.readyState]));
+    assert.deepEqual(ns, [[true, 'ended'], [false, 'live']], 'browser filter while loading, then off under DeepFilterNet');
+    assert.equal(await d.evaluate(() => window.__mics[1].track.getSettings().noiseSuppression), false, 'the track under DeepFilterNet reports the browser filter on');
+    console.log('browser filter while the denoiser loads, off once it runs: ok');
     await d.getByRole('link', { name: 'Call details' }).click();
     const diag = d.getByRole('group', { name: 'Call numbers' }).getByText('Noise suppression:');
     assert.equal(await diag.innerText(), 'Noise suppression: deepfilter', 'Diagnostics shows another mode');
@@ -901,6 +1033,31 @@ try {
   for (const p of pages) assert.deepEqual(await cspViolations(p), [], 'CSP violations');
   console.log('no CSP violations: ok');
   assert.deepEqual([...alice.errors, ...bob.errors], [], 'page errors');
+
+  // A release while a tab is open: the server comes back on another build. The tab says so, offers Reload, stops sending,
+  // and never reloads by itself; after Reload it works on the new build.
+  await a.goto(`${ORIGIN}/`);
+  await signedIn(a);
+  await a.waitForURL(/\/r\/\d+$/);
+  const here = roomId(a);
+  await stop.restart(async () => {}, { VESPER_BUILD_ID: 'e2e-next-build' });
+  const updated = a.getByRole('alert').filter({ hasText: 'Vesper was updated. Reload to continue.' });
+  await updated.waitFor({ timeout: 40000 });
+  await composer(a).fill('sent after the update');
+  await composer(a).press('Enter');
+  await sleep(2000);
+  assert.equal(await composer(a).inputValue(), 'sent after the update', 'the stale tab sent its text');
+  const hist = await call(a, 'GET', `/api/rooms/${here}/messages`);
+  assert.ok(!hist.messages.some((m) => m.body === 'sent after the update'), 'the stale tab posted a message');
+  assert.ok(await updated.isVisible(), 'the banner went away by itself');
+  const health = await (await fetch(`${ORIGIN}/health`)).json();
+  assert.equal(health.build, 'e2e-next-build', '/health build');
+  await updated.getByRole('button', { name: 'Reload' }).click();
+  await signedIn(a);
+  await a.waitForURL(/\/r\/\d+$/);
+  await sleep(1000);
+  assert.equal(await updated.count(), 0, 'the banner is back after Reload');
+  console.log('a new build asks open tabs to reload, blocks sends, no loop: ok');
   console.log('e2e flows: PASS');
 } finally {
   await stop();

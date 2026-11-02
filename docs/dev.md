@@ -21,7 +21,7 @@ scripts/build-dsp.sh
 ```
 
 This fetches the DeepFilterNet3 model if it is missing (`scripts/fetch-model.sh`, pinned revision, sha256 checked), builds `vesper-dsp` to WASM with
-`-C target-feature=+simd128`, runs `wasm-bindgen`, and writes `web/public/dsp/` (the `.wasm`, the JS glue and `model.tar.gz`).
+`-C target-feature=+simd128`, runs `wasm-bindgen` without the name section, and writes `web/public/dsp/` (the `.wasm`, its gzip copy `.wasm.gz` that the server sends to gzip clients, the JS glue and `model.tar.gz`).
 Neither the model nor `web/public/dsp/` is committed. Run it again after any change to `crates/vesper-dsp` or a `wasm-bindgen` bump.
 The Docker build does the same inside the image.
 
@@ -92,9 +92,19 @@ output matches the Rust types), `deny`, `secrets`, `wording`, `scripts` (every `
 `deny` needs network for the advisory database. `web` runs `npm ci`, then `npm run ci` in `web/`: svelte-check, vitest, the build and gzip size budgets
 (`web/scripts/size-check.mjs`, files in `dist/assets` only; the wasm and the model are not counted). It prints five numbers and
 fails above each budget: first load JS 70 kB (the entry chunk in `dist/index.html`, its modulepreloads and every chunk they import
-statically), the largest lazy JS chunk 35 kB (`import()` chunks and the workers), all JS 150 kB, first load CSS 12 kB (the stylesheets `dist/index.html`
+statically), the largest lazy JS chunk 35 kB (`import()` chunks and the workers), all JS 170 kB, first load CSS 12 kB (the stylesheets `dist/index.html`
 links; a lazy chunk's CSS loads with the chunk) and all CSS 20 kB. Sizes are
 KiB of Node's gzip, so they read a little lower than the kB figures Vite prints.
+First load JS also has a ratchet (`RATCHET_GZIP_KB` in `size-check.mjs`): the measured value after the 2026-11-02 trim plus
+1 kB. Lower it when first load shrinks.
+
+What is in the first load (measured 2026-11-02, gzip): the Svelte runtime chunk (21.2 kB) and `index` (the shell, the sidebar,
+the room view, the socket, the call store and sign in). Out of it, loaded on use: anime.js (`motion.ts` imports it right
+after start; until it arrives every preset is instant), the call chunk (`lib/call-stack.ts`: playback, capture, `join.ts`,
+the stats and the call bar, one chunk by a `codeSplitting` group in `vite.config.ts`; a hover, focus or press of Join voice
+loads it, `join()` at the latest, and the AudioContexts are still made inside the click), the search parser (with the
+search dialog) and the page texts (`messages.ts`; the first load uses `messages-first.ts`). To see what a chunk holds, build
+with `npx vite build --sourcemap` and add up the mapped bytes per source.
 
 Keyboard shortcuts (one table in `web/src/lib/ui/keys.ts`) and the browser: Ctrl+Shift+M (Chrome profile menu, Firefox
 responsive design mode) and Ctrl+Shift+D (bookmark all tabs) are the browser's own keys. The app takes them only while you are

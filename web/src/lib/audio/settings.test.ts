@@ -37,6 +37,8 @@ describe('clampSettings', () => {
   it('the noise gate is off for saved settings from before it existed, and keeps their marker', () => {
     expect(clampSettings({ vad: { thresholdDb: -35 } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -35, gate: false });
     expect(clampSettings({ vad: null } as unknown as Partial<AudioSettings>).vad).toEqual(DEFAULT_AUDIO_SETTINGS.vad);
-    expect(clampSettings({ vad: { thresholdDb: -35, gate: true } }).vad.gate).toBe(true);
+    expect(clampSettings({ vad: { thresholdDb: -35, gate: true } } as unknown as Partial<AudioSettings>).vad.gate).toBe(true);
+    // vad.auto was an automatic threshold tried in a branch (#104, not shipped): a stored key is dropped, not used.
+    expect(clampSettings({ vad: { thresholdDb: -35, gate: true, auto: true } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -35, gate: true });
   });
 });

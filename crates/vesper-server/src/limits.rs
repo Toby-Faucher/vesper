@@ -28,6 +28,8 @@ pub enum Kind {
     Change,
     /// Push subscribe, switches and test push, shared. Key: user id.
     Push,
+    /// A call summary at leave. Key: user id.
+    Calls,
 }
 
 impl Kind {
@@ -46,6 +48,7 @@ impl Kind {
             Kind::Search => (10.0, s(1)),
             Kind::Change => (20.0, s(1)),
             Kind::Push => (20.0, s(10)),
+            Kind::Calls => (10.0, s(60)),
         }
     }
 }

@@ -1,23 +1,26 @@
 // The voice call, moved from Room.svelte so it outlives the screen that shows it.
 import { tick, untrack } from 'svelte';
-import { joinRoom } from './signaling';
 import { callEvent, idleCall } from './call';
-import { session } from './session.svelte';
-import { Playback } from './playback';
+import { onLogout, session } from './session.svelte';
+import type { Playback } from './playback';
 import { restoreVolumes, saveVolumes } from './volume';
-import { createCapture, type Capture } from './audio/capture';
+import type { Capture } from './audio/capture';
+import { captureContext } from './audio/context';
 import { loadSettings, saveSettings, type AudioSettings } from './audio/settings';
 import { DEVICE_MESSAGES, MIC_FALLBACK, SPEAKER_FALLBACK, applyBitrate, classifyMediaError, deviceGone, micStartError, missingDevice, newInputs, trackLive, watchDevices } from './devices';
 import { pttKeyEvent } from './audio/ptt';
 import { isTyping } from './ui/keys';
 import { MIC_QUIET, micSilence, type MicWarning } from './audio/mic-silence';
 import type { DenoiseMode } from './audio/mode';
-import { summarize, type Diag } from './diag';
-import { quality, type Quality } from './ui/quality';
+import type { Diag } from './diag';
+import type { Quality } from './ui/quality';
 import type { Link } from './ui/link';
 import { callCue, type CallSnap } from './ui/cues';
 import { chime } from './ui/chime';
 import { loadLevelling, loadPrefs, saveLevelling } from './ui/prefs';
+import { lazy } from './ui/lazy';
+import { api } from './api';
+import type { CallTally } from './call-summary';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();
@@ -51,6 +54,8 @@ class Voice {
   diag = $state.raw<Diag | null>(null);
   /** Connection quality per person in the call (you too), keyed on user_id. Empty when not in a call. */
   links = $state.raw<Record<string, Link>>({});
+  /** True while Retry microphone runs. */
+  retrying = $state(false);
   /** "Even out voices" (Settings > Voice), saved in this browser. */
   levelling = $state(loadLevelling());
 }
@@ -64,8 +69,17 @@ let poll: ReturnType<typeof setInterval> | undefined;
 let statsPoll: ReturnType<typeof setInterval> | undefined;
 let releaseLock: (() => void) | undefined;
 let silence = MIC_QUIET;
+let tally: CallTally | undefined; // this call's summary for Your recent calls, sent when it ends
+let posted: Promise<unknown> = Promise.resolve(); // the last summary post, which sign out waits for
 const tracks = new Map<string, string>(); // remote track id to user_id, for the per-person stats
-let linkStats: typeof import('./ui/link-stats') | undefined; // the per-person stats math, loaded at the first join
+
+// The call code (call-stack.ts) is a chunk of its own: loaded at idle after start (startVoice), on a hover, focus or press
+// of Join voice, else at the join.
+let stack: typeof import('./call-stack') | undefined;
+// The chunk is preloaded at idle, so a failed load at the join is most likely a deploy that replaced its file.
+export const CALL_LOAD_FAILED = 'Vesper was updated. Reload the page to join.';
+export const loadCall = lazy(() => import('./call-stack').then((m) => (stack = m)));
+export const preloadCall = (): Promise<unknown> => loadCall().catch(() => {});
 
 // Push to talk is mute-gated: the track is live only when not muted and (PTT off or key held).
 function applyTrack() {
@@ -119,6 +133,17 @@ function showNotice(text: string) {
   voice.notice = text;
   noticeTimer = setTimeout(() => (voice.notice = ''), NOTICE_MS);
 }
+/** Retry microphone (the call bar, after the mic ended): a new mic and capture graph in the same call. */
+export async function retryMic(): Promise<void> {
+  const cap = voice.capture;
+  if (!cap || voice.retrying) return;
+  voice.retrying = true;
+  try {
+    await cap.retry(); // success or the reason why not both arrive through onModeChange
+  } finally {
+    voice.retrying = false;
+  }
+}
 export function useOfferedMic(): void {
   updateSettings({ ...voice.settings, micId: voice.offered!.deviceId });
   voice.offered = null;
@@ -143,6 +168,10 @@ function onKey(type: 'keydown' | 'keyup') {
 /** Starts the key, blur, visibility and device listeners and the socket subscription. Returns the cleanup, which also ends the call. */
 export function startVoice(): () => void {
   voice.settings = loadSettings(storage); // a fresh start, as a new Room mount had
+  // The call chunk loads once the app is idle: a join is then warm, and a tab left open over a deploy already has it
+  // (the old hashed file is gone after one).
+  const ric = 'requestIdleCallback' in window; // not in Safari before 26
+  const idle = ric ? window.requestIdleCallback(() => void preloadCall(), { timeout: 5000 }) : setTimeout(() => void preloadCall(), 2000);
   const [kd, ku] = [onKey('keydown'), onKey('keyup')];
   window.addEventListener('keydown', kd);
   window.addEventListener('keyup', ku);
@@ -159,6 +188,8 @@ export function startVoice(): () => void {
     if (list.some((d) => d.kind === 'audioinput' && d.deviceId && d.label)) known = list;
   });
   void navigator.mediaDevices.enumerateDevices().then((l) => { if (!known.length) known = l; }, () => {});
+  // Sign out: end the call first, so its summary goes out while the session still works.
+  const offLogout = onLogout(() => (voice.joined && leave(), posted));
   const offSocket = $effect.root(() => {
     // My own call sounds: one per change of the call's state, none for the state found at start.
     let was: CallSnap | null = null;
@@ -203,6 +234,8 @@ export function startVoice(): () => void {
     });
   });
   return () => {
+    if (ric) window.cancelIdleCallback(idle);
+    else clearTimeout(idle);
     teardown();
     // Nothing from this call may reach the next sign-in (the 4001 close handler can run just before this).
     voice.error = '';
@@ -214,6 +247,7 @@ export function startVoice(): () => void {
     known = [];
     stop();
     offSocket();
+    offLogout();
     window.removeEventListener('keydown', kd);
     window.removeEventListener('keyup', ku);
     window.removeEventListener('blur', release);
@@ -249,6 +283,9 @@ export function leave(): void {
   voice.error = '';
 }
 function teardown() {
+  // Whatever ended the call (Leave, a kick, a dropped socket): one summary, to your own list only. A failure loses it.
+  if (tally) posted = api('POST', '/api/me/calls', tally.summary(voice.mode, performance.now())).catch(() => {});
+  tally = undefined;
   callOff?.();
   callOff = undefined;
   voice.joinedRoom = null;
@@ -281,23 +318,21 @@ function teardown() {
 }
 
 // Connection quality for the call bar: one stats summary every 2 s while joined.
-function pollStats(conn: RTCPeerConnection) {
+function pollStats(conn: RTCPeerConnection, m: NonNullable<typeof stack>) {
   let prev: RTCStatsReport | null = null;
   let at = 0;
   statsPoll = setInterval(() => {
     conn.getStats().then((cur) => {
       if (voice.pc !== conn) return; // the call ended while getStats ran
       const now = performance.now();
-      voice.diag = summarize(prev, cur, (now - at) / 1000, conn.iceConnectionState);
-      voice.quality = quality(voice.diag);
-      const m = linkStats; // loaded at join; until then the rows show nothing
-      if (m) {
-        const samples = m.linkSamples(prev, cur, tracks);
-        samples.set(voice.userId, m.ownSample(voice.diag));
-        const muted = (id: string) => session.state.voice.some((p) => p.user_id === id && (p.muted || p.force_muted));
-        const live = new Set([...tracks.values(), voice.userId]);
-        voice.links = Object.fromEntries([...live].map((id) => [id, m.stepLink(voice.links[id], samples.get(id), muted(id))]));
-      }
+      voice.diag = m.summarize(prev, cur, (now - at) / 1000, conn.iceConnectionState);
+      tally?.poll(voice.diag, cur);
+      voice.quality = m.quality(voice.diag);
+      const samples = m.linkSamples(prev, cur, tracks);
+      samples.set(voice.userId, m.ownSample(voice.diag));
+      const muted = (id: string) => session.state.voice.some((p) => p.user_id === id && (p.muted || p.force_muted));
+      const live = new Set([...tracks.values(), voice.userId]);
+      voice.links = Object.fromEntries([...live].map((id) => [id, m.stepLink(voice.links[id], samples.get(id), muted(id))]));
       prev = cur;
       at = now;
     }, () => {});
@@ -305,10 +340,11 @@ function pollStats(conn: RTCPeerConnection) {
 }
 
 /**
- * Joins `roomId`. Call it from the click handler itself: it creates and resumes the AudioContext before its first await.
+ * Joins `roomId`. Call it from the click handler itself: it creates and resumes the AudioContexts before its first await.
  * Resolves true when the join failed after it started, so the caller moves focus to `voice.error`.
  */
 export async function join(roomId: number): Promise<boolean> {
+  if (voice.joining) return false; // a second Join (the switcher) while the first waits for the chunk or the mic
   voice.error = '';
   const sig = session.sig;
   if (!sig || !session.online) {
@@ -318,10 +354,25 @@ export async function join(roomId: number): Promise<boolean> {
   const room = roomId;
   voice.joining = true;
   ({ muted: voice.muted, deafened: voice.deafened, forceMuted: voice.forceMuted } = idleCall()); // before the join: the server re-sends force_muted after it
-  // Create and resume the AudioContext inside the click gesture, before any await.
-  playback = new Playback(restoreVolumes(localStorage));
+  // Create and resume the AudioContexts inside the click gesture, before any await (autoplay policy). Usually the call
+  // code is here already (loaded at idle, or by a hover, focus or press of Join voice). If not, make both contexts now and wait for it.
+  let code = stack;
+  let early: [AudioContext, AudioContext] | undefined;
+  if (!code) {
+    early = [new AudioContext(), captureContext()];
+    early.forEach((c) => void c.resume().catch(() => {}));
+    try {
+      code = await loadCall();
+    } catch {
+      early.forEach((c) => void c.close().catch(() => {}));
+      voice.error = CALL_LOAD_FAILED;
+      voice.joining = false;
+      await tick();
+      return true;
+    }
+  }
+  playback = new code.Playback(restoreVolumes(localStorage), early?.[0]);
   playback.setLevelling(voice.levelling); // a new Playback each join, so the levelling starts from 0 dB
-  void import('./ui/link-stats').then((m) => (linkStats = m), () => {});
   // Held for the call's lifetime so the browser does not freeze the tab's audio in the background.
   // The resolver exists up front so teardown releases it even if the lock callback has not run yet.
   const held = new Promise<void>((res) => (releaseLock = res));
@@ -332,8 +383,9 @@ export async function join(roomId: number): Promise<boolean> {
   void pb.setSink(voice.settings.speakerId).catch((e) => {
     if (voice.settings.speakerId && deviceGone(e)) speakerGone(pb);
   });
-  // Called before any await: it creates its AudioContext.
-  const capturing = createCapture(voice.settings, {
+  // Called before any await: it creates its AudioContext (or takes the early one, made inside the click).
+  const capturing = code.createCapture(voice.settings, {
+    ...(early && { createContext: () => early[1] }),
     startLive: trackLive(false, voice.settings.pushToTalk.enabled, false),
     onMicFallback: () => {
       forget({ micId: null });
@@ -350,7 +402,7 @@ export async function join(roomId: number): Promise<boolean> {
     void navigator.mediaDevices.enumerateDevices().then((l) => (known = l), () => {});
     voice.volumes = Object.fromEntries(restoreVolumes(localStorage));
     asked = true;
-    const r = await joinRoom(sig, {
+    const r = await code.joinRoom(sig, {
       roomId: room, stream, bitrateKbps: voice.settings.bitrateKbps, dtx: voice.settings.dtx,
       onError: (err) => (voice.error = err.message),
       onRemoteStream: (id, s) => {
@@ -373,7 +425,9 @@ export async function join(roomId: number): Promise<boolean> {
     sender = audioSender;
     if (audioSender) cap.setSender(audioSender);
     applyTrack();
+    tally = new code.CallTally(performance.now());
     cap.onModeChange((m, reason) => {
+      tally?.mode(reason, reason.startsWith('loading'), performance.now());
       voice.mode = m;
       voice.modeReason = reason;
       voice.deviceError = reason.startsWith('microphone lost') ? DEVICE_MESSAGES[classifyMediaError(reason) === 'unknown' ? 'unplugged' : classifyMediaError(reason)] : '';
@@ -390,7 +444,7 @@ export async function join(roomId: number): Promise<boolean> {
       silence = micSilence(silence, performance.now(), voice.capture?.getStats() ?? null, { gated, visible });
       voice.micWarning = silence.show;
     }, 100);
-    pollStats(r.pc);
+    pollStats(r.pc, code);
     voice.joinedRoom = room;
     voice.joined = true;
     return false;

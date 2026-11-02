@@ -10,7 +10,7 @@
 //!   checked address (no second lookup). No redirects, no cookies, a 10 s limit, and only the
 //!   status line of the answer is read.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -381,7 +381,13 @@ struct Inner {
     dropped_warned: Mutex<Option<Instant>>,
     timeout: Duration,
     voice: Mutex<VoiceDedupe>,
+    /// When each recent failed send ended, oldest first, for Admin > Server.
+    failures: Mutex<VecDeque<Instant>>,
 }
+
+const FAILURE_WINDOW: Duration = Duration::from_secs(24 * 3600);
+/// Bounds the memory; a count past it shows as this many.
+const MAX_FAILURES_KEPT: usize = 10_000;
 
 impl Push {
     pub async fn new(store: Store, hub: Hub, subject: Option<String>) -> Result<Push, String> {
@@ -425,7 +431,25 @@ impl Push {
             dropped_warned: Mutex::default(),
             timeout,
             voice: Mutex::default(),
+            failures: Mutex::default(),
         })))
+    }
+
+    /// Failed sends in the last 24 hours.
+    pub fn failures_24h(&self) -> usize {
+        let mut f = self.0.failures.lock().expect("push lock poisoned");
+        while f.front().is_some_and(|t| t.elapsed() >= FAILURE_WINDOW) {
+            f.pop_front();
+        }
+        f.len()
+    }
+
+    fn failed(&self) {
+        let mut f = self.0.failures.lock().expect("push lock poisoned");
+        if f.len() >= MAX_FAILURES_KEPT {
+            f.pop_front();
+        }
+        f.push_back(Instant::now());
     }
 
     /// The public key, or None when push is off.
@@ -625,7 +649,7 @@ impl Push {
             Ok(code) => Ok(Sent::Failed(format!("{host} answered {code}"))),
             Err(e) => Ok(Sent::Failed(format!("{host}: {e}"))),
         };
-        match r {
+        let sent = match r {
             Ok(Sent::Failed(why)) => {
                 warn!("push: {why}");
                 Sent::Failed(why)
@@ -636,7 +660,11 @@ impl Push {
                 Sent::Failed("store".into())
             }
             Err(e) => Sent::Failed(e.to_string()),
+        };
+        if matches!(sent, Sent::Failed(_)) {
+            self.failed();
         }
+        sent
     }
 
     async fn post(

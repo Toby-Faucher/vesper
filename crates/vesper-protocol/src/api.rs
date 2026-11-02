@@ -180,6 +180,17 @@ pub struct Me {
     pub user: UserInfo,
     #[ts(type = "number")]
     pub session_id: i64,
+    /// The server that answered. A tab compares `build` with the one it loaded under (v1.4).
+    pub server: ServerBuild,
+}
+
+/// The running server: `version` is the release number, `build` tells two builds of it apart
+/// (the git commit, else the version). In `Me` (so in `hello` too) and in `/health`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ServerBuild {
+    pub version: String,
+    pub build: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -422,6 +433,32 @@ pub struct DiskUse {
     pub warn: bool,
 }
 
+/// `GET /api/admin/server` (owner): how the server is doing. No secrets and no one's address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ServerStatus {
+    pub server: ServerBuild,
+    /// Seconds since this process started serving.
+    #[ts(type = "number")]
+    pub uptime_s: i64,
+    pub disk: DiskUse,
+    /// People in a voice room now (connection checks not counted).
+    pub voice: u32,
+    /// Pushes the push services did not take in the last 24 hours (since start, if shorter).
+    pub push_failures: u32,
+    /// The newest `*.db` in `<data dir>/backups`, made by hand or automatically.
+    pub last_backup: Option<BackupInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BackupInfo {
+    pub name: String,
+    /// When the file was last written, unix ms.
+    #[ts(type = "number")]
+    pub at: i64,
+}
+
 /// A slice of a room's history, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -614,6 +651,47 @@ pub struct PushPayload {
     pub room_id: i64,
     pub title: String,
     pub body: String,
+}
+
+/// The noise suppression a call ended in (the web client's `DenoiseMode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum CallMode {
+    Deepfilter,
+    Browser,
+    Off,
+}
+
+/// `POST /api/me/calls`: one summary of a call you just left, sent by your own client. Unknown
+/// fields are ignored; the server checks every range (see `api_calls.rs`). A figure the client
+/// never measured is null. `browser_ns_loading`: the browser filter ran while DeepFilterNet loaded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CallSummary {
+    pub duration_s: u32,
+    pub mode: CallMode,
+    pub fallback_reason: String,
+    pub loss_pct: Option<f64>,
+    pub jitter_ms: Option<f64>,
+    pub concealed_pct: Option<f64>,
+    pub rtt_ms: Option<f64>,
+    pub browser_ns_loading: bool,
+}
+
+/// `GET /api/me/calls`: one of your own recent calls. Times are Unix ms, set by the server
+/// (`ended_at` is when the summary arrived).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CallRecord {
+    #[ts(type = "number")]
+    pub id: i64,
+    #[ts(type = "number")]
+    pub started_at: i64,
+    #[ts(type = "number")]
+    pub ended_at: i64,
+    #[serde(flatten)]
+    pub summary: CallSummary,
 }
 
 #[cfg(test)]

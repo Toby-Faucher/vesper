@@ -4,7 +4,7 @@
   import { inRoom } from '../lib/peers';
   import { href } from '../lib/route';
   import { session } from '../lib/session.svelte';
-  import { dismissOffered, leave, toggleDeafen, toggleMute, useOfferedMic, voice } from '../lib/voice.svelte';
+  import { dismissOffered, leave, retryMic, toggleDeafen, toggleMute, useOfferedMic, voice } from '../lib/voice.svelte';
   import { enter, exit } from '../lib/ui/motion';
   import { togglePerson } from '../lib/ui/person.svelte';
   import { qualityText } from '../lib/ui/quality';
@@ -47,7 +47,8 @@
       : voice.micWarning === 'pipeline' ? 'The audio pipeline stopped. Leave and join again.' : '',
   );
   const noise = $derived(`Noise suppression: ${voice.mode}${voice.modeReason ? ` (${voice.modeReason})` : ''}`);
-  const notice = $derived(voice.deviceError || (voice.forceMuted ? 'A moderator muted you.' : '') || warning || voice.notice);
+  const notice = $derived((voice.retrying ? 'Getting the microphone again.' : voice.deviceError) || (voice.forceMuted ? 'A moderator muted you.' : '') || warning || voice.notice);
+  const micLost = $derived(voice.modeReason.startsWith('microphone lost'));
 </script>
 
 <div class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-4" bind:clientHeight={height} {@attach motion}>
@@ -105,6 +106,7 @@
         <p class="min-w-0 truncate text-danger" role="alert" title={voice.error}>{voice.error}</p>
       {:else if notice}
         <Status kind="warn"><span class="block truncate" title={notice}>{notice}</span></Status>
+        {#if micLost}<button type="button" class="link" disabled={voice.retrying} onclick={retryMic}>Retry microphone</button>{/if}
       {:else if voice.offered}
         <p class="min-w-0 truncate text-fg-2" role="status">New microphone: {voice.offered.label || voice.offered.deviceId}</p>
         <button type="button" class="link" onclick={useOfferedMic}>Use it</button>

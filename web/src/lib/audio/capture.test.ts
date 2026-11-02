@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCapture, READY_TIMEOUT_MS, type CaptureDeps } from './capture';
+import { createCapture, LOADING, READY_TIMEOUT_MS, REOPEN_TIMEOUT_MS, type CaptureDeps } from './capture';
 import { DEFAULT_AUDIO_SETTINGS, clampSettings } from './settings';
 
-const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
 class FakeStream {
   tracks: any[];
@@ -12,10 +12,18 @@ class FakeStream {
   getAudioTracks() { return this.tracks; }
   getTracks() { return this.tracks; }
 }
-const track = (label: string) => ({
-  kind: 'audio', label, enabled: true, muted: false, readyState: 'live', stop: vi.fn(),
-  onended: null as any, onmute: null as any, onunmute: null as any,
-});
+const track = (label: string, c: MediaTrackConstraints = {}) => {
+  const t = {
+    kind: 'audio', label, enabled: true, muted: false, readyState: 'live', stop: vi.fn(),
+    onended: null as any, onmute: null as any, onunmute: null as any,
+    getSettings: () => ({ deviceId: `${label}-device`, noiseSuppression: c.noiseSuppression }),
+    getConstraints: () => c,
+    /** Chromium by default: resolves and changes nothing. Set `honours` for a browser that applies it (Firefox). */
+    honours: false,
+    applyConstraints: vi.fn(async (n: MediaTrackConstraints) => { if (t.honours) c = n; }),
+  };
+  return t;
+};
 const node = () => ({ connect: vi.fn((n: unknown) => n), disconnect: vi.fn() });
 
 const clock = { t: 0 };
@@ -41,7 +49,7 @@ function setup(over: Partial<CaptureDeps> = {}) {
   const deps: CaptureDeps = {
     getUserMedia: async (c) => {
       if (micFail) throw micFail;
-      const t = track(`mic${mics.length}`);
+      const t = track(`mic${mics.length}`, { ...(c.audio as MediaTrackConstraints) });
       mics.push({ c: c.audio as MediaTrackConstraints, t });
       return new FakeStream([t]) as unknown as MediaStream;
     },
@@ -72,7 +80,8 @@ describe('createCapture', () => {
   it('deepfilter: browser NS/AGC off, EC on, sends the denoised track, init then port after ready', async () => {
     const t = setup();
     const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
-    expect(t.mics[0].c).toMatchObject({ echoCancellation: true, noiseSuppression: false, autoGainControl: false });
+    // The browser filter is on while the model loads, and off once DeepFilterNet takes over.
+    expect(t.mics[0].c).toMatchObject({ echoCancellation: true, noiseSuppression: true, autoGainControl: false });
     expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
     const w = t.workers[0];
     expect(w.postMessage).toHaveBeenCalledWith({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: 100, beta: 0.02 });
@@ -80,9 +89,22 @@ describe('createCapture', () => {
     expect(t.worklets[0].port.postMessage.mock.calls).toEqual([[{ type: 'dynamics', limit: false, gate: false, thresholdDb: -50 }]]);
     const cb = vi.fn();
     cap.onModeChange(cb);
-    expect(cb).toHaveBeenLastCalledWith('deepfilter', 'loading, unfiltered');
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', LOADING);
     w.onmessage({ data: { type: 'ready' } });
     expect(cb).toHaveBeenLastCalledWith('deepfilter', '');
+    // Ready: the graph moves to a second track of the same mic without the browser filter; the sent track stays.
+    await flush();
+    expect(t.mics).toHaveLength(2);
+    expect(t.mics[1].c).toMatchObject({ echoCancellation: true, noiseSuppression: false, autoGainControl: false, deviceId: { exact: 'mic0-device' } });
+    const [src0, src1] = t.ctx.createMediaStreamSource.mock.results.map((r) => r.value);
+    expect(src0.disconnect).toHaveBeenCalled();
+    expect(src1.connect).toHaveBeenCalled();
+    expect(t.mics[0].t.stop).toHaveBeenCalled(); // first: while it runs, Chromium would hand out its filter again
+    expect(t.mics[1].t.stop).not.toHaveBeenCalled();
+    expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
+    t.mics[0].t.onended?.(); // the old track's end is not a lost mic
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', '');
+    expect(cap.getStats()?.mic.readyState).toBe('live');
     const [msg, transfer] = w.postMessage.mock.calls[1];
     expect(msg).toEqual({ type: 'port' });
     const [wmsg, wtransfer] = t.worklets[0].port.postMessage.mock.calls[1];
@@ -113,21 +135,22 @@ describe('createCapture', () => {
     const seen: [string, string][] = [];
     cap.onModeChange((m, r) => seen.push([m, r]));
     t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush(); // mics[1]: the same mic without the browser filter, now under DeepFilterNet
     cap.setLive(false); // muted
     t.workers[0].onmessage({ data: { type: 'error', message: 'wasm panicked' } });
     await flush();
-    expect(t.mics[1].c).toMatchObject({ echoCancellation: true, noiseSuppression: true });
-    expect(t.sender.replaceTrack).toHaveBeenCalledWith(t.mics[1].t);
-    expect(cap.stream.getAudioTracks()).toEqual([t.mics[1].t]);
-    expect(t.mics[1].t.enabled).toBe(false);
+    expect(t.mics[2].c).toMatchObject({ echoCancellation: true, noiseSuppression: true });
+    expect(t.sender.replaceTrack).toHaveBeenCalledWith(t.mics[2].t);
+    expect(cap.stream.getAudioTracks()).toEqual([t.mics[2].t]);
+    expect(t.mics[2].t.enabled).toBe(false);
     expect(seen.at(-1)).toEqual(['browser', expect.stringContaining('wasm panicked')]);
     expect(t.worklets[0].port.postMessage).toHaveBeenCalledWith({ type: 'stop' });
     expect(t.workers[0].terminate).toHaveBeenCalled();
-    expect(t.mics[0].t.stop).toHaveBeenCalled();
+    expect(t.mics[1].t.stop).toHaveBeenCalled();
     expect(t.dests[0].stop).toHaveBeenCalled();
     t.workers[0].onmessage({ data: { type: 'error', message: 'again' } }); // stale pipeline ignored
     await flush();
-    expect(t.mics).toHaveLength(2);
+    expect(t.mics).toHaveLength(3);
     cap.close();
   });
 
@@ -155,7 +178,8 @@ describe('createCapture', () => {
     await flush();
     t.sender.track = t.dests[0];
     cap.setSender(t.asSender);
-    expect(t.sender.replaceTrack).toHaveBeenCalledWith(t.mics[1].t);
+    expect(t.sender.replaceTrack).toHaveBeenCalledWith(t.mics.at(-1)!.t);
+    expect(t.mics.at(-1)!.c.noiseSuppression).toBe(true); // the browser fallback
   });
 
   it('graph setup failure falls back at once; late subscribers still learn the mode', async () => {
@@ -166,6 +190,136 @@ describe('createCapture', () => {
     const cb = vi.fn();
     cap.onModeChange(cb);
     expect(cb).toHaveBeenCalledWith('browser', expect.stringContaining('no AudioWorklet'));
+  });
+
+  it('the browser filter stays on after ready when the user wants it on top; a failed reopen falls back, named', async () => {
+    const t = setup();
+    const cap = await createCapture(clampSettings({ noiseSuppression: true }), t.deps);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(t.mics).toHaveLength(1);
+    cap.close();
+    // The unfiltered mic will not open: the call goes on in browser mode, and the line says why.
+    const u = setup();
+    let n = 0;
+    const deps = { ...u.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (++n === 2) throw new Error('Could not start audio source'); return u.deps.getUserMedia(c); } };
+    const cap2 = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    const cb = vi.fn();
+    cap2.onModeChange(cb);
+    u.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(cb).toHaveBeenLastCalledWith('browser', 'the mic did not reopen without the browser filter: Could not start audio source');
+    expect(cap2.stream.getAudioTracks()).toEqual([u.mics[1].t]);
+    cap2.close();
+  });
+
+  it('a browser that applies the constraint (Firefox) keeps its track: no reopen, no gap', async () => {
+    const t = setup();
+    const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { const m = await t.deps.getUserMedia(c); t.mics.at(-1)!.t.honours = true; return m; } };
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(t.mics).toHaveLength(1);
+    expect(t.mics[0].t.getSettings().noiseSuppression).toBe(false);
+    expect(t.mics[0].t.stop).not.toHaveBeenCalled();
+    cap.close();
+  });
+
+  it('with the browser filter on top, loading says only "loading"', async () => {
+    const t = setup();
+    const cap = await createCapture(clampSettings({ noiseSuppression: true }), t.deps);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', 'loading');
+    cap.close();
+  });
+
+  it('a reopen that does not answer in 3 s falls back to browser mode, named; a late answer is stopped', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (t.mics.length === 1 && !(c.audio as MediaTrackConstraints).noiseSuppression) await held; return t.deps.getUserMedia(c); } };
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await vi.advanceTimersByTimeAsync(REOPEN_TIMEOUT_MS - 1);
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', '');
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(cb).toHaveBeenLastCalledWith('browser', 'the mic did not reopen without the browser filter: no answer in 3 s');
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    const late = t.mics.find((x) => x.c.noiseSuppression === false)!;
+    expect(late.t.stop).toHaveBeenCalled();
+    expect(cap.stream.getAudioTracks()[0]).not.toBe(late.t);
+    cap.close();
+  });
+
+  it('mute and push to talk survive the reopen: the sent track does not change', async () => {
+    const t = setup();
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    cap.setSender(t.asSender);
+    cap.setLive(false);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(t.mics).toHaveLength(2);
+    expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
+    expect(t.dests[0].enabled).toBe(false);
+    expect(t.sender.track).toBe(t.dests[0]);
+    cap.close();
+  });
+
+  it('a mode change while the reopen runs: the new mode wins, the reopened track is stopped', async () => {
+    const t = setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (t.mics.length === 1 && !(c.audio as MediaTrackConstraints).noiseSuppression) await held; return t.deps.getUserMedia(c); } };
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    cap.setSettings(clampSettings({ mode: 'browser' }));
+    await flush();
+    const browser = t.mics[1];
+    expect(browser.c.noiseSuppression).toBe(true);
+    expect(cap.stream.getAudioTracks()).toEqual([browser.t]);
+    release();
+    await flush();
+    const reopened = t.mics[2];
+    expect(reopened.c.noiseSuppression).toBe(false);
+    expect(reopened.t.stop).toHaveBeenCalled();
+    expect(cap.stream.getAudioTracks()).toEqual([browser.t]);
+    expect(cb).toHaveBeenLastCalledWith('browser', '');
+    cap.close();
+  });
+
+  it('the filtered track ends before the unfiltered one is asked for', async () => {
+    const t = setup();
+    const stoppedFirst: boolean[] = [];
+    const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (t.mics.length) stoppedFirst.push(t.mics[0].t.stop.mock.calls.length > 0); return t.deps.getUserMedia(c); } };
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(stoppedFirst).toEqual([true]);
+    cap.close();
+  });
+
+  it('a pipe stopped while the unfiltered track is asked for stops that track too', async () => {
+    const t = setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (t.mics.length) await held; return t.deps.getUserMedia(c); } };
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush(); // the reopen is now waiting for the mic
+    cap.close();
+    release();
+    await flush();
+    expect(t.mics).toHaveLength(2);
+    expect(t.mics[1].t.stop).toHaveBeenCalled();
   });
 
   it('browser and off modes use no worker; mic denial propagates and closes the context', async () => {
@@ -183,18 +337,19 @@ describe('createCapture', () => {
     const t = setup();
     const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
     t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush(); // mics[1]: the unfiltered track after ready
     cap.setSettings(clampSettings({ attenDb: 30, postFilter: 0.01 }));
     expect(t.workers[0].postMessage).toHaveBeenLastCalledWith({ type: 'set', atten: 30, beta: 0.01 });
     expect(t.worklets[0].port.postMessage).toHaveBeenLastCalledWith({ type: 'dynamics', limit: false, gate: false, thresholdDb: -50 });
     cap.setSettings(clampSettings({ vad: { thresholdDb: -42, gate: true }, inputBoostDb: 3 })); // live, no rebuild
     expect(t.worklets[0].port.postMessage).toHaveBeenLastCalledWith({ type: 'dynamics', limit: true, gate: true, thresholdDb: -42 });
-    expect(t.mics).toHaveLength(1);
+    expect(t.mics).toHaveLength(2);
     const cb = vi.fn();
     cap.onModeChange(cb);
     cap.setSettings(clampSettings({ mode: 'off' }));
     await flush();
-    expect(t.mics[1].c.noiseSuppression).toBe(false);
-    expect(cap.stream.getAudioTracks()).toEqual([t.mics[1].t]);
+    expect(t.mics[2].c.noiseSuppression).toBe(false);
+    expect(cap.stream.getAudioTracks()).toEqual([t.mics[2].t]);
     expect(cb).toHaveBeenLastCalledWith('off', '');
     expect(t.workers[0].terminate).toHaveBeenCalled();
   });
@@ -323,7 +478,7 @@ describe('createCapture', () => {
     expect(seen.at(-1)).toEqual(['browser', 'input boost applies only in deepfilter mode']);
     cap.setSettings({ ...browser, inputBoostDb: 6, mode: 'deepfilter' });
     await flush();
-    expect(seen.at(-1)).toEqual(['deepfilter', 'loading, unfiltered']);
+    expect(seen.at(-1)).toEqual(['deepfilter', LOADING]);
     cap.close();
   });
 
@@ -340,13 +495,13 @@ describe('createCapture', () => {
     clock.t = 1000;
     t.worklets[0].port.onmessage({ data: { type: 'stats', ...pipeline } });
     await flush();
-    expect(t.mics).toHaveLength(1); // a stats message is not a failure
+    expect(t.mics).toHaveLength(2); // the unfiltered track after ready; a stats message is not a failure
     expect(cap.getStats()).toEqual({ pipeline, ageMs: 0, mic, context });
     expect(seen).toHaveBeenCalledWith({ pipeline, ageMs: 0, mic, context });
     clock.t = 3500;
     expect(cap.getStats()!.ageMs).toBe(2500); // age since the snapshot arrived
     cap.setLive(false);
-    t.mics[0].t.muted = true;
+    t.mics[1].t.muted = true;
     expect(cap.getStats()!.mic).toEqual({ readyState: 'live', muted: true, enabled: false }); // enabled is the sent track's gate
     off();
     t.worklets[0].port.onmessage({ data: { type: 'stats', ...pipeline } });
@@ -483,5 +638,64 @@ describe('createCapture', () => {
       await expect(createCapture(clampSettings({ mode: 'browser' }), deps)).rejects.toMatchObject({ name: 'NotFoundError' });
       expect(asked).toHaveLength(1);
     });
+  });
+});
+
+describe('retry after the mic ended', () => {
+  const named = (name: string) => ({ name, message: 'gone' });
+  for (const mode of ['deepfilter', 'browser'] as const) {
+    it(`${mode}: gets the mic again in the same call and hands the sender the new track`, async () => {
+      const t = setup();
+      const cap = await createCapture(clampSettings({ mode }), t.deps);
+      cap.setSender(t.asSender);
+      await flush();
+      const seen: [string, string][] = [];
+      cap.onModeChange((m, r) => seen.push([m, r]));
+      t.mics[0].t.onended();
+      expect(seen.at(-1)).toEqual(['off', 'microphone lost: ended']);
+      expect(await cap.retry()).toBe(true);
+      expect(t.mics).toHaveLength(2);
+      expect(seen.at(-1)?.[0]).toBe(mode);
+      const sent = mode === 'deepfilter' ? t.dests[1] : t.mics[1].t;
+      expect(t.sender.track).toBe(sent);
+      expect(cap.stream.getAudioTracks()).toEqual([sent]);
+      cap.close();
+    });
+  }
+
+  it('a failed retry says why and keeps the call; the next one can work', async () => {
+    const t = setup();
+    const cap = await createCapture(clampSettings({ mode: 'browser' }), t.deps);
+    const seen: [string, string][] = [];
+    cap.onModeChange((m, r) => seen.push([m, r]));
+    t.mics[0].t.onended();
+    t.failMic(Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' }));
+    expect(await cap.retry()).toBe(false);
+    expect(seen.at(-1)).toEqual(['off', 'microphone lost: NotAllowedError: Permission denied']);
+    t.failMic(null as unknown as Error);
+    expect(await cap.retry()).toBe(true);
+    expect(seen.at(-1)).toEqual(['browser', '']);
+    cap.close();
+  });
+
+  it('a saved mic that went away falls back to the default one (the stale-id path)', async () => {
+    const t = setup();
+    const onMicFallback = vi.fn();
+    let gone = false;
+    const deps = {
+      ...t.deps,
+      onMicFallback,
+      getUserMedia: async (c: MediaStreamConstraints) => {
+        if (gone && (c.audio as MediaTrackConstraints).deviceId) throw named('NotFoundError');
+        return t.deps.getUserMedia(c);
+      },
+    };
+    const cap = await createCapture(clampSettings({ mode: 'browser', micId: 'usb' }), deps);
+    gone = true;
+    t.mics[0].t.onended();
+    expect(await cap.retry()).toBe(true);
+    expect(onMicFallback).toHaveBeenCalledTimes(1);
+    expect(t.mics[1].c.deviceId).toBeUndefined();
+    cap.close();
   });
 });

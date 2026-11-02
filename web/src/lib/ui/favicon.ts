@@ -1,6 +1,7 @@
-import png from './favicon-32.png?inline';
+import png from './favicon-32.png?no-inline';
 // The tab icon in the accent: the 32 px disc and V of public/favicon.ico, recoloured by the logo's matrix on a canvas, as a
-// blob: URL (the CSP allows blob: images, not data:). The PNG is inlined in this lazy chunk, so it costs no request.
+// blob: URL (the CSP allows blob: images, not data:). The PNG is a file, fetched on the first draw: inlined it was 3.6 kB
+// gzip of base64 in the JS (measured 2026-11-01).
 
 /** `m` (feColorMatrix values, 0 to 1) on RGBA pixels, in place, like the SVG filter does to the logo. */
 export function recolour(px: Uint8ClampedArray, m: number[]): void {
@@ -46,8 +47,9 @@ async function paint(m: number[] | null): Promise<void> {
 }
 
 async function draw(m: number[]): Promise<string> {
-  const bytes = Uint8Array.from(atob(png.slice(png.indexOf(',') + 1)), (c) => c.charCodeAt(0));
-  const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+  const r = await fetch(png);
+  if (!r.ok) throw new Error(`favicon: ${r.status}`);
+  const bmp = await createImageBitmap(await r.blob());
   try {
     const canvas = new OffscreenCanvas(32, 32);
     const ctx = canvas.getContext('2d')!;

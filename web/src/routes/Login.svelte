@@ -10,7 +10,7 @@
   import AuthCard from './AuthCard.svelte';
   import type { Me } from '../lib/gen/Me';
   import type { ResetNotice } from '../lib/gen/ResetNotice';
-  import { UI_MESSAGES as M } from '../lib/ui/messages';
+  import { UI_MESSAGES as M } from '../lib/ui/messages-first';
 
   let username = $state('');
   let password = $state('');

@@ -46,6 +46,10 @@ async fn start_at(web_dir: std::path::PathBuf, origin: &str) -> SocketAddr {
         secure_cookies: false,
         upload_quota_bytes: 0,
         push_subject: None,
+        build: "test-build".into(),
+        backup_keep: 5,
+        backup_every_hours: 0,
+        backup_uploads: false,
         header_timeout: vesper_server::config::HEADER_TIMEOUT,
         body_idle: vesper_server::config::BODY_IDLE,
         body_total: vesper_server::config::BODY_TOTAL,
@@ -90,7 +94,7 @@ async fn health_and_ws_take_precedence() {
     let addr = start(site()).await;
     let r = get(addr, "/health").await;
     assert!(
-        r.starts_with("HTTP/1.1 200") && r.ends_with("\r\n\r\nok"),
+        r.starts_with("HTTP/1.1 200") && r.contains(r#""status":"ok""#),
         "{r}"
     );
     // A plain GET /ws is not an upgrade: the ws route answers (4xx), the SPA index does not.
@@ -173,6 +177,44 @@ async fn cache_control_and_extension_paths_do_not_fall_back() {
     // API answers are per user: never stored by any cache.
     let r = get(addr, "/api/me").await;
     assert!(header_has(&r, "cache-control: no-store"), "{r}");
+}
+
+/// Raw GET with extra request header lines.
+async fn get_with(addr: SocketAddr, path: &str, headers: &str) -> Vec<u8> {
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(
+        format!("GET {path} HTTP/1.1\r\nHost: x\r\n{headers}Connection: close\r\n\r\n").as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut b = Vec::new();
+    s.read_to_end(&mut b).await.unwrap();
+    b
+}
+
+#[tokio::test]
+async fn sends_the_gzip_copy_of_the_denoiser_wasm_to_gzip_clients() {
+    let web = site();
+    std::fs::create_dir_all(web.join("dsp")).unwrap();
+    std::fs::write(web.join("dsp/d.wasm"), b"\0asm\x01\0\0\0RAW").unwrap();
+    std::fs::write(web.join("dsp/d.wasm.gz"), b"GZBYTES").unwrap();
+    let addr = start(web).await;
+    let r = get_with(addr, "/dsp/d.wasm", "Accept-Encoding: gzip, br\r\n").await;
+    let r = String::from_utf8_lossy(&r);
+    assert!(
+        r.starts_with("HTTP/1.1 200") && r.ends_with("GZBYTES"),
+        "{r}"
+    );
+    assert!(header_has(&r, "content-encoding: gzip"), "{r}");
+    assert!(header_has(&r, "content-type: application/wasm"), "{r}");
+    assert!(header_has(&r, "vary: accept-encoding"), "{r}");
+    assert!(header_has(&r, "cache-control: no-cache"), "{r}");
+    // No gzip in Accept-Encoding: the plain file.
+    let r = get(addr, "/dsp/d.wasm").await;
+    assert!(
+        r.ends_with("RAW") && !header_has(&r, "content-encoding"),
+        "{r}"
+    );
 }
 
 /// The value of header `name` (lowercase) in a raw response, or None. Panics if it appears twice.
@@ -269,4 +311,123 @@ async fn service_worker_and_manifest() {
         "{m}"
     );
     assert!(header_has(&m, "default-src 'self'"), "{m}");
+}
+
+/// Raw GET with an `Accept-Encoding` header.
+async fn get_enc(addr: SocketAddr, path: &str, enc: &str) -> String {
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: x\r\nAccept-Encoding: {enc}\r\nConnection: close\r\n\r\n"
+    );
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut b = Vec::new();
+    s.read_to_end(&mut b).await.unwrap();
+    String::from_utf8_lossy(&b).into_owned()
+}
+
+/// The `.br` or `.gz` next to a file goes out as that file with `Content-Encoding` and
+/// `Vary`, chosen by `Accept-Encoding`; without a variant or an accepted encoding, the file as is.
+#[tokio::test]
+async fn precompressed_variants_by_accept_encoding() {
+    let web = site();
+    std::fs::write(web.join("assets/w.js.br"), "BROTLI").unwrap();
+    std::fs::write(web.join("assets/w.js.gz"), "GZIP").unwrap();
+    std::fs::write(web.join("index.html.br"), "BRINDEX").unwrap();
+    let addr = start(web).await;
+    let cases = [
+        ("/assets/w.js", "br, gzip", Some("br"), "BROTLI"),
+        ("/assets/w.js", "gzip", Some("gzip"), "GZIP"),
+        ("/assets/w.js", "identity", None, "export {}"),
+        ("/", "gzip, br", Some("br"), "BRINDEX"),
+        ("/room/abc", "br", None, "<!doctype html>INDEX"), // the SPA fallback is read as it is
+        ("/assets/a.wasm", "br", None, "\0asm"),
+    ];
+    for (path, enc, want, body) in cases {
+        let r = get_enc(addr, path, enc).await;
+        assert!(r.starts_with("HTTP/1.1 200"), "{path} {enc}: {r}");
+        assert_eq!(
+            header_value(&r, "content-encoding").as_deref(),
+            want,
+            "{path} {enc}: {r}"
+        );
+        assert!(
+            r.split("\r\n\r\n").nth(1).unwrap().starts_with(body),
+            "{path} {enc}: {r}"
+        );
+    }
+    let r = get_enc(addr, "/assets/w.js", "br").await;
+    assert_eq!(
+        header_value(&r, "content-type").as_deref(),
+        Some("text/javascript"),
+        "{r}"
+    );
+    assert_eq!(
+        header_value(&r, "vary").as_deref(),
+        Some("accept-encoding"),
+        "{r}"
+    );
+    assert!(
+        header_has(&r, "cache-control: public, max-age=31536000, immutable"),
+        "{r}"
+    );
+    let r = get_enc(addr, "/", "br").await;
+    assert_eq!(
+        header_value(&r, "content-type").as_deref(),
+        Some("text/html"),
+        "{r}"
+    );
+}
+
+/// Range and HEAD on a precompressed file, as tower-http 0.7 does them: the range is cut from the
+/// encoded bytes (the `.br`), HEAD has the headers and no body, and the ETag (mtime and size of the
+/// file read) differs between the `.br` and the plain file, so a cache never mixes the two.
+#[tokio::test]
+async fn precompressed_range_and_head() {
+    let web = site();
+    std::fs::write(web.join("assets/w.js.br"), "BROTLI").unwrap();
+    let addr = start(web).await;
+    let r = get_with(
+        addr,
+        "/assets/w.js",
+        "Accept-Encoding: br\r\nRange: bytes=1-3\r\n",
+    )
+    .await;
+    let r = String::from_utf8_lossy(&r);
+    assert!(r.starts_with("HTTP/1.1 206"), "{r}");
+    assert_eq!(
+        header_value(&r, "content-encoding").as_deref(),
+        Some("br"),
+        "{r}"
+    );
+    assert_eq!(
+        header_value(&r, "content-range").as_deref(),
+        Some("bytes 1-3/6"),
+        "{r}"
+    );
+    assert!(r.ends_with("\r\n\r\nROT"), "{r}");
+    let br_tag = header_value(&r, "etag").expect("an ETag");
+    let plain = get_enc(addr, "/assets/w.js", "identity").await;
+    assert_ne!(header_value(&plain, "etag"), Some(br_tag), "{plain}");
+
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(b"HEAD /assets/w.js HTTP/1.1\r\nHost: x\r\nAccept-Encoding: br\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut b = Vec::new();
+    s.read_to_end(&mut b).await.unwrap();
+    let r = String::from_utf8_lossy(&b);
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    assert_eq!(
+        header_value(&r, "content-encoding").as_deref(),
+        Some("br"),
+        "{r}"
+    );
+    assert_eq!(
+        header_value(&r, "content-length").as_deref(),
+        Some("6"),
+        "{r}"
+    );
+    assert!(header_value(&r, "last-modified").is_some(), "{r}");
+    assert!(header_value(&r, "etag").is_some(), "{r}");
+    assert!(r.ends_with("\r\n\r\n"), "HEAD has no body: {r}");
 }

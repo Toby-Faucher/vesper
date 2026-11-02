@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { motion } from '../lib/ui/motion';
   import { session } from '../lib/session.svelte';
-  import { UI_MESSAGES } from '../lib/ui/messages';
+  import { UI_MESSAGES } from '../lib/ui/messages-first';
   import Button from '../lib/ui/c/Button.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   // The socket's state at the top of the main pane. It takes height only while shown and pushes the page down; it never
@@ -29,7 +29,7 @@
   });
   const secs = $derived(session.retryAt === null ? 0 : Math.max(1, Math.ceil((session.retryAt - now) / 1000)));
   const kind = $derived(
-    session.notice || session.online ? null : session.retryAt !== null ? 'retry' : wasOnline ? 'now' : slow ? 'connecting' : null,
+    session.stale || session.notice || session.online ? null : session.retryAt !== null ? 'retry' : wasOnline ? 'now' : slow ? 'connecting' : null,
   );
   $effect(() => {
     if (kind === 'retry' || kind === 'now') said = UI_MESSAGES.reconnectingSr;
@@ -47,7 +47,13 @@
     {#if kind === 'retry'}<Button size="sm" onclick={() => session.retryNow()}>{UI_MESSAGES.retryNow}</Button>{/if}
   </div>
 {/if}
-{#if session.notice}
+{#if session.stale}
+  <div role="alert" class="bar warn shrink-0">
+    <span class="mark"><Icon d={I.warn} /></span>
+    <span>{UI_MESSAGES.updated}</span>
+    <Button size="sm" onclick={() => location.reload()}>{UI_MESSAGES.reload}</Button>
+  </div>
+{:else if session.notice}
   <div role="alert" class="bar warn shrink-0">
     <span class="mark"><Icon d={I.warn} /></span>
     <span>{session.notice}</span>

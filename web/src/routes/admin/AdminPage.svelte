@@ -9,7 +9,8 @@
   import Invites from './Invites.svelte';
   import Members from './Members.svelte';
   import Rooms from './Rooms.svelte';
-  // A lazy chunk, framed like Settings: moderators get Invites and Members, the owner also Rooms and Disk use. The server
+  import Server from './Server.svelte';
+  // A lazy chunk, framed like Settings: moderators get Invites and Members, the owner also Rooms, Disk use and Server. The server
   // enforces the same rules; this only keeps a member or moderator from a page that would answer 403 everywhere.
   let { section }: { section: AdminSection } = $props();
   const role = $derived(session.state.me!.user.role);
@@ -42,6 +43,8 @@
           <Members />
         {:else if section === 'rooms'}
           <Rooms />
+        {:else if section === 'server'}
+          <Server />
         {:else}
           <Disk />
         {/if}

@@ -45,6 +45,7 @@ async fn signup_with_invite_sets_strict_cookie() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(v["user"]["username"], "alice_1");
+    assert_eq!(v["server"]["build"], "test-build");
 }
 
 #[tokio::test]

@@ -25,5 +25,5 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
 
 mount(App, { target: document.getElementById('app')! });
 
-// Start the 23 MB denoiser download while the sign in or join form is shown.
+// Start the denoiser download (about 10 MB) while the sign in or join form is shown.
 void preloadDenoiserAssets();

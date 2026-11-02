@@ -171,9 +171,34 @@ through libopus (the `opus` 0.4.0 crate, which builds its own libopus 1.5 with c
 library does not matter), 20 ms packets at 48 kHz mono, and scores the DECODED audio with every metric.
 Missing keys keep these defaults. More keys: `burst=3` (Gilbert-Elliott loss with a mean burst of 3
 packets at the same long-run rate; without it, losses are independent) and `app=audio` (the default is
-`voip`, which is what WebRTC uses for mono).
+`voip`, which is what WebRTC uses for mono). `frame=10` encodes 10 ms packets instead of 20 ms (the loss rate is per
+packet). `red=1` models RFC 2198 redundancy with distance 1: a lost packet whose next packet arrived
+decodes from its full copy, before FEC is tried; the redundant bytes are not counted in `bitrate`.
+
+`audiolab eval --processed DIR` scores output made by another tool instead of running the pipeline:
+`DIR/<item id>.wav`, 48 kHz mono, already aligned with the mixture and at least as long. It takes
+`--opus` like a config run. Used to score a rebuilt copy of another product's chain on the same items.
 
 - Loss is seeded per item (`seed` and the item index), so two runs match bit for bit.
+- **RED under burst loss (2026-11-02, exploratory, superseded).** These first runs used the holdout split, which is
+  for the final check only, so they count as exploratory and are being redone on dev. Shipped chain (empty config,
+  64 kbps, FEC and DTX on, 20 ms), `red=0` against `red=1` on the same seeded loss pattern. "Bursts of 1" here is
+  `burst=1` (Gilbert-Elliott with a mean burst of 1), not independent loss. Holdout, 160 items: 5 % `burst=1` OVRL
+  +0.012 [+0.006, +0.018], UTMOS +0.008; 5 % `burst=3` OVRL +0.000 [-0.005, +0.005], UTMOS +0.008, against a loss cost
+  of OVRL -0.021 and UTMOS -0.101. RED with distance 1, like FEC, can only rebuild the last packet of a burst, and it
+  costs about double the audio bitrate on the wire (not counted by the lab). The lab does not model RED distance 2 or
+  more, jitter, or NACK. Commands (`$C` is `--corpus research/corpus48/built --dnsmos research/models/sig_bak_ovr.onnx
+  --second-mos research/models/utmos22_strong.onnx --model crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz
+  --config empty.toml --jobs 4`, `empty.toml` an empty file):
+  `audiolab eval --split dev $C --opus bitrate=64000,complexity=10,fec=1,dtx=1,frame=20,loss=0.05,burst=3,red=0 --out
+  red0.json`, the same with `red=1 --out red1.json`, then `audiolab compare --a red0.json --b red1.json`.
+- **RED under burst loss, dev split (2026-11-02, 160 items, this replaces the holdout runs above).** Same chain and
+  commands. RED on minus off, mean [95 % interval]: 5 % independent loss (no `burst`): OVRL +0.003 [-0.002, +0.008],
+  SIG +0.003, BAK -0.001, UTMOS +0.008 [+0.005, +0.012], lsd_wb -0.007 dB. 5 % `burst=3`: OVRL -0.003 [-0.007, +0.001],
+  SIG -0.003, BAK -0.001, UTMOS +0.009 [+0.004, +0.014], lsd_wb -0.011 dB. Against no loss, 5 % `burst=3` costs OVRL
+  -0.018 and UTMOS -0.080 with RED off, OVRL -0.021 and UTMOS -0.072 with RED on. So RED does not help under bursts in
+  the lab: no OVRL change and about a tenth of the UTMOS loss back, for about double the audio bitrate. Not run on dev:
+  5 % `burst=5` and all 10 % cells.
 - A lost packet is decoded from the next packet's in-band FEC when FEC is on and that packet arrived (one
   packet of jitter buffer), else concealed (PLC). The encoder is told the loss rate
   (`OPUS_SET_PACKET_LOSS_PERC`), as WebRTC does; without it libopus sends no FEC.

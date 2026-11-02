@@ -6,6 +6,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      # Optional: a build id for the server (for example `git rev-parse --short HEAD`); see docs/env.md.
+      args:
+        VESPER_BUILD_ID: ${VESPER_BUILD_ID:-}
     # Tag builds (for example with the git sha) so a rollback has an image to point at:
     # VESPER_TAG=<tag> docker compose -f deploy/compose.yaml up -d
     image: vesper:${VESPER_TAG:-latest}

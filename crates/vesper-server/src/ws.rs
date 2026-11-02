@@ -113,6 +113,7 @@ async fn hello(st: &WsState, user: &UserInfo, session_id: i64) -> Result<ServerM
         me: Me {
             user: user.clone(),
             session_id,
+            server: st.app.cfg.server_build(),
         },
         users,
         rooms,

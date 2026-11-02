@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { InviteInfo } from '../../lib/gen/InviteInfo';
 import type { ResetInfo } from '../../lib/gen/ResetInfo';
-import { byRole, bytes, canReset, canRevoke, resetLine, resetStatus, inviteStatus, moveRoom, untilText } from './admin';
+import { byRole, bytes, canReset, canRevoke, resetLine, resetStatus, inviteStatus, moveRoom, untilText, uptimeText } from './admin';
 
 const NOW = 1_800_000_000_000;
 const inv = (o: Partial<InviteInfo> = {}): InviteInfo =>
@@ -102,5 +102,11 @@ describe('resetStatus and resetLine', () => {
     expect(resetLine(r({ created_at: NOW - 3 * day, used_at: NOW }), 'a', NOW)).toBe(resetLine(r({ created_at: NOW, used_at: NOW }), 'a', NOW));
     expect(resetLine(r({ created_at: NOW - 3 * day, used_at: NOW }), 'a', NOW)).not.toBe(resetLine(r({ created_at: NOW - 3 * day, used_at: NOW - 3 * day }), 'a', NOW));
     expect(resetLine(r(), null, NOW)).toMatch(/^Password reset from the command line on .+ \(unused\)$/);
+  });
+});
+
+describe('uptimeText', () => {
+  it('two units at most', () => {
+    expect([0, 59, 60, 3599, 3600 + 5 * 60, 86400 * 3 + 3600 * 4 + 59].map(uptimeText)).toEqual(['under a minute', 'under a minute', '1 min', '59 min', '1 h 5 min', '3 d 4 h']);
   });
 });

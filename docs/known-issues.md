@@ -50,10 +50,13 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **A socket keeps the role it had at the upgrade until the next user update.** A role change between the upgrade and the hub add reaches that socket's room filter only with the next change to that user.
 - **A display name change does not reach voice presence** until the user joins again (`peer_joined` carries the name from the join).
 - **An open socket outlives a session that expires.** A session unused for 90 days stops working for requests, but a socket opened on it stays until it closes. Logout, revoke, password change and ban do close it.
+- **Admin > Server does not show the advertised address or its age.** The server does not record when the address last changed.
+- **The Admin > Server push failure count lives in memory.** A restart starts it at 0.
+- **The app badge from the service worker is a plain mark, not a number.** The worker does not know the count; the page sets the number when it opens.
 - **A changed public IP needs a rejoin.** The name is re-resolved every 60 s, but only new sessions use the new address. A failed lookup at start advertises nothing until the next refresh, with a warning every 60 s.
 - **Without `VESPER_PUBLIC_HOST`, `VESPER_UDP_PORT_PUBLIC` is ignored**, and a `0.0.0.0` bind is advertised as is, with a warning.
 - **The ping interval (25 s) and the socket queue (256 messages) have no environment variable.**
-- **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are not pinned by digest, and assets are not precompressed.
+- **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are pinned by digest (v1.4), so they get no security updates until someone bumps the digests on purpose. Precompressed `.br` and `.gz` files (v1.4) are served only for files read from `web/dist`; the SPA fallback page (`index.html` for a path like `/r/1`) goes out as it is. Whether this gains anything behind the Cloudflare tunnel, which may compress too, is not measured.
 - **The SFU wakes every 10 ms when idle.** Cheap, but it is not zero.
 - **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof).
 
@@ -71,28 +74,35 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Image boxes change shape when the image loads.** `Attachment` has no width or height, so the timeline keeps a 360 x 280 box and resizes it on load; the reader's place is kept, but rows under an image in view can move.
 - **The keyboard, focus and motion checks run in headless Chromium only.** Safari does not focus a clicked button (the image viewer focuses it itself); other focus returns are not checked there.
 
-- **A very slow first visit can still fall back.** The denoiser files (about 23 MB) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
+- **A very slow first visit can still fall back.** The denoiser files (about 10 MB, see Denoiser) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
 - **Not tried in real Chrome or Firefox.** Firefox may refuse a mic and AudioContext rate mismatch, which forces the browser fallback every time.
 - **The noise gate and the limiter work in DeepFilterNet mode only.** In browser and off mode the raw mic track is sent; the gate switch is disabled there. After an automatic fallback to browser mode the setting stays on but does nothing. With the gate on, the Settings meter shows the gated sound, so the noise under the marker is not visible; turn the gate off to set the marker.
 - **Soft word starts under the marker are muted.** The gate opens on the first frame above the marker, so a quiet "s" or "h" before it can lose up to about 1.5 dB over the first 20 ms (measured on corpus speech).
+- **In Chromium the hand-over from the browser filter to DeepFilterNet reopens the mic.** The input has a gap of one `getUserMedia` call (tens of ms, not measured) just as the model starts, and the new track's echo canceller starts from scratch, so echo can leak for a moment if others talk then. A browser that asks for mic permission each time could ask again. Not heard in a real browser.
+- **The switch from the passthrough to DeepFilterNet is a cut.** When the worker connects, the worklet goes from the passed-through mic to silence until 30 ms are queued, then fades in; the step to silence is not faded. It predates the underrun fade.
+- **The gate has no automatic threshold.** Fluxer's rule (open above 3 times the 10th percentile of frame RMS over 2 s) was tried for #104 and not shipped: after DeepFilterNet the floor is near digital silence, so the threshold sat at its 3e-6 RMS clamp and the gate never closed. Gate lab check on dev-0016 and dev-0022: noise between words cut 0.0 dB (the marker: 5.9 dB and all of it), speech and onsets unchanged. The marker stays the only threshold.
 - **The gate and limiter are not blind-listened.** They were measured on synthetic signals and on denoised corpus speech (see [dev.md](dev.md#noise-gate-and-limiter-lab-check)), not heard by Toby.
 - **DTX applies at the next join.** The client cannot renegotiate it mid-call.
-- **A mic that ends mid-call has no "Retry microphone" button.** The status line says what happened, but you leave and rejoin to recover.
+- **Retry microphone is tested with a fake device only.** The e2e ends Chromium's fake mic by hand; a real unplug, a revoked permission and an OS reclaim were not tried.
 - **Stale mode reason on unmute.** The capture watcher can replay an old fallback reason after an unmute.
 - **After a failed join, the page's guard against messages from an old socket stays set for a short window.** It clears when the next join starts.
-- **No fade on underrun or drops.** A starved output can click.
+- **No fade on dropped output frames.** An underrun fades out and back in over 2.5 ms, but a frame dropped from a full queue (above 80 ms, or the trim) is cut, which can click.
 - **Boost is lost when the mode falls back to the browser**, and the status line says so.
 - **A track swap can leave the new track out of sync with mute or push to talk for one tick.** Room re-applies the state after the mode change.
 - **Firefox may fire a button click on Space key-up** after push to talk captured the key.
 - **Stored per-person volumes are never pruned.** `navigator.locks` missing only logs a warning.
 - **Unhandled edge cases:** a teardown that races a joining call can leave a poll timer running, and an `AudioContext` constructor that throws is not caught. Both are rare.
+- **Your recent calls misses a call that does not end in the app.** The summary is posted when the call ends in the page (Leave, a kick, a
+  dropped socket, sign out); closing the tab or a crash loses it, and so does a failed post (not retried). Loss, jitter and round trip are
+  averages of the 2 s polls; the concealed share counts only the people still in the call at the last poll. "Browser filter while it loaded"
+  means the load took at least 1 s. The reason is the last fallback or mic problem of the call, also when it recovered.
 - **The connection test reports only the local candidate type.**
 - **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
 
 ## Denoiser
 
-- **The wasm is about 15 MB** because the `wasm` feature of `deep_filter` embeds a second copy of the model. A build on `deep_filter/tract` plus `getrandom` with the `js` feature should halve it. Not tried.
-- **No panic hook in the wasm**, so a Rust panic shows as an opaque error.
+- **The first download is about 10 MB:** the wasm is 10.9 MB, sent as a 2.2 MB gzip copy (a 1.3 MB brotli copy where the browser accepts it, from `npm run build`), plus the 8.0 MB model, which is already gzip. It was 23.3 MB with the wasm sent as is. The model was never inside the wasm: the linker drops the unused copy, so leaving out `deep_filter`'s `wasm` feature saved only 4 kB. The 4.4 MB name section was the waste. The rest is tract's code. The gzip copy needs a browser that sends `Accept-Encoding: gzip`, and Caddy and Cloudflare must pass `Content-Encoding` through: not verified on the live host. The model is the larger part now and is not smaller.
+- **No panic hook in the wasm**, so a Rust panic shows as an opaque error. The build drops the name section, so a wasm stack trace shows function numbers, not names.
 - **Added delay is not measured.** The output queue starts at 30 ms and may grow to 80 ms, on top of the algorithm's lookahead. From the code we estimate about 30 ms more than before the larger buffers. The [checkpoint](testing/checkpoint.md) must measure it.
 - **`ndarray` and the `tract-core` pin in `vesper-dsp` are not optional**, although only the `tract` feature needs them. A featureless build pulls them in for nothing.
 - **The no-sound warnings work only in deepfilter mode.** In browser or off mode, also after a fallback, there are no pipeline numbers, so neither warning shows.
