@@ -17,6 +17,7 @@ export type Route =
   | { name: 'welcome' }
   | { name: 'login' }
   | { name: 'invite' }
+  | { name: 'reset' }
   | { name: 'home' }
   | { name: 'gallery' }
   | { name: 'notfound' };
@@ -38,7 +39,7 @@ export function parse(path: string): Route {
       return { name: 'admin', section: pick(ADMIN_SECTIONS, second) };
   }
   if (second !== undefined) return { name: 'notfound' };
-  if (first === 'welcome' || first === 'login' || first === 'invite') return { name: first };
+  if (first === 'welcome' || first === 'login' || first === 'invite' || first === 'reset') return { name: first };
   if (first === '_gallery') return { name: 'gallery' };
   return { name: 'notfound' };
 }
@@ -60,7 +61,7 @@ export function href(r: Route): string {
   }
 }
 
-const OUTSIDE = new Set<Route['name']>(['login', 'invite', 'gallery', 'notfound']);
+const OUTSIDE = new Set<Route['name']>(['login', 'invite', 'reset', 'gallery', 'notfound']);
 
 /** Where sign in returns to: `?next=` with the path, unless that is home. */
 export function loginHref(from: string): string {

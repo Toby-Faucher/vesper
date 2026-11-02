@@ -1297,6 +1297,56 @@ scene('admin-members', async (ctx) => {
   await page.keyboard.press('Escape');
   if (joined) await b.getByRole('button', { name: 'Leave' }).click();
 });
+// The reset link confirm for bob and the link panel. The real link never reaches a picture: the response is swapped.
+scene('admin-reset', async (ctx) => {
+  const page = ctx.alice.page;
+  await home(page);
+  await adminPage(page, 'Members');
+  await page.route('**/api/users/*/reset', async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), url: `${ORIGIN}/reset#example-not-a-real-code` } });
+  });
+  await page.getByRole('button', { name: 'Create reset link for bob' }).click();
+  await page.getByRole('dialog', { name: 'Create a reset link for bob?' }).waitFor();
+  await page.getByLabel('Your password', { exact: true }).fill('test-password-1');
+  await sleep(300);
+  await ctx.shot(page, 'admin-reset-confirm', { fullPage: false });
+  await page.getByRole('button', { name: 'Create link' }).click();
+  await page.getByText('This link is shown only now.', { exact: false }).waitFor();
+  await page.unroute('**/api/users/*/reset');
+  await rest(page);
+  await ctx.shot(page, 'admin-reset-created');
+  await narrow(page, ctx, 'admin-reset-created-narrow');
+  await page.getByRole('button', { name: 'Done' }).click();
+  // The notice on bob's next sign in (sign in and notices faked, so no real reset is used).
+  const me = await ctx.api(ctx.bob.page, 'GET', '/api/me');
+  const login = await ctx.open(`${ORIGIN}/login`);
+  await login.route('**/api/login', (r) => r.fulfill({ json: me }));
+  await login.route('**/api/me/reset-notices', (r) => r.fulfill({ json: [{ by: 'alice', at: Date.now() - 3_600_000 }] }));
+  await login.getByLabel('Username').fill('bob');
+  await login.getByLabel('Password', { exact: true }).fill('test-password-1');
+  await login.getByRole('button', { name: 'Sign in' }).click();
+  await login.getByRole('button', { name: 'Continue' }).waitFor();
+  await rest(login);
+  await ctx.shot(login, 'login-reset-notice');
+});
+// The reset page with a made-up code, its done state (the answer is faked) and a bad link.
+scene('reset', async ({ open, shot }) => {
+  const page = await open(`${ORIGIN}/reset#${'ab'.repeat(32)}`);
+  await page.getByRole('button', { name: 'Set password' }).waitFor();
+  await rest(page);
+  await shot(page, 'reset');
+  await page.route('**/api/reset', (r) => r.fulfill({ status: 204 }));
+  await page.getByLabel('New password', { exact: true }).fill('test-password-4');
+  await page.getByRole('button', { name: 'Set password' }).click();
+  await page.getByRole('heading', { name: 'Your password is set' }).waitFor();
+  await rest(page);
+  await shot(page, 'reset-done');
+  await page.goto(`${ORIGIN}/reset#not-a-code`);
+  await page.getByText('This reset link does not work.', { exact: false }).waitFor();
+  await rest(page);
+  await shot(page, 'reset-bad-link');
+});
 // bob as a moderator: no role or ban controls, the note that says why, and no Rooms or Disk use sections.
 scene('admin-members-moderator-view', async (ctx) => {
   const bobId = (await ctx.api(ctx.bob.page, 'GET', '/api/me')).user.user_id;

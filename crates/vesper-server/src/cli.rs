@@ -1,12 +1,12 @@
-//! Admin subcommands run before the server starts: `create-owner`, `invite`, `loadtest-accounts`,
-//! `backup`. Each prints its result on stdout; links and tokens are never logged.
+//! Admin subcommands run before the server starts: `create-owner`, `invite`, `reset-password`,
+//! `loadtest-accounts`, `backup`. Each prints its result on stdout; links and tokens are never logged.
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 
 use vesper_protocol::Role;
-use vesper_store::{NewAccount, NewSession, Store, now_ms, random_hex};
+use vesper_store::{NewAccount, NewSession, RESET_TTL_MS, Store, now_ms, random_hex};
 
 use crate::auth::new_token;
 use crate::config::Config;
@@ -16,6 +16,8 @@ pub const USAGE: &str = "usage: vesper-server [command]
   create-owner              print a one-use owner invite link, valid 24 h (only while no owner exists)
   invite [--role member|moderator] [--uses N] [--hours H]
                             print an invite link (default: member, 1 use, 168 h)
+  reset-password <username> print a one-use link that sets a new password, valid 24 h; any account,
+                            the owner too. It replaces an older link and ends every session on use.
   loadtest-accounts --count N [--force-nonempty yes]
                             create N member accounts with one session each and print one token per
                             line. Throwaway data dir only: these accounts log in with no password.
@@ -33,6 +35,13 @@ pub async fn run(args: &[String], cfg: &Config) -> Result<Option<String>, String
     let Some((cmd, rest)) = args.split_first() else {
         return Ok(None);
     };
+    // The one-positional-argument commands: everything else is `--flag value` pairs.
+    if cmd == "reset-password" {
+        let [name] = rest else {
+            return Err(format!("reset-password needs one username\n{USAGE}"));
+        };
+        return reset_link(&open(cfg).await?, cfg, name).await.map(Some);
+    }
     if cmd == "backup" {
         let [dir] = rest else {
             return Err(format!("backup needs one directory\n{USAGE}"));
@@ -289,6 +298,20 @@ async fn invite_link(
         .await
         .map_err(err)?;
     Ok(format!("{}/invite#{code}", cfg.origin))
+}
+
+async fn reset_link(store: &Store, cfg: &Config, name: &str) -> Result<String, String> {
+    let row = store
+        .login_row(&name.to_lowercase())
+        .await
+        .map_err(err)?
+        .ok_or(format!("no account named {name}"))?;
+    let (code, hash) = new_token();
+    store
+        .create_reset(&row.user_id, &hash, now_ms() + RESET_TTL_MS, None)
+        .await
+        .map_err(err)?;
+    Ok(format!("{}/reset#{code}", cfg.origin))
 }
 
 fn flags(args: &[String]) -> Result<HashMap<String, String>, String> {

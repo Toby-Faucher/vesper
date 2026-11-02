@@ -35,7 +35,7 @@ export function closePage(): void {
 export const lastRoomKey = (userId: string) => `vesper.lastRoom.${userId}`;
 const storage = (() => { try { return localStorage; } catch { return null; } })();
 
-/** Reads the invite code from the URL fragment and removes it from the address bar and history. */
+/** Reads the invite or reset code from the URL fragment and removes it from the address bar and history. */
 export function takeInvite(): string {
   const code = location.hash.slice(1);
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
