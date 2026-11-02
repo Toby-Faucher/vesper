@@ -207,27 +207,25 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         set(); // settings may have changed while the model loaded
         me!.status = '';
         // DeepFilterNet takes over now: the browser filter goes off, so the two never stack. A failure is named, not hidden.
-        if (!s.noiseSuppression)
-          void unfiltered().catch(() => {
-            if (pipe === me && !dead) notify('deepfilter', (me!.status = 'the browser filter could not be turned off'));
-          });
+        if (!s.noiseSuppression) void unfiltered().catch((e) => fail(`the mic did not reopen without the browser filter: ${msg(e)}`));
         if (pipe === me) notify('deepfilter', '');
       };
-      // Chromium keeps a track's noise suppression as it was asked for (applyConstraints leaves getSettings() at true), so the
-      // graph moves to a second track of the same mic asked for without it; the sent track stays the same.
+      // Chromium keeps a track's noise suppression as it was asked for (applyConstraints leaves getSettings() at true), and while
+      // that track runs a new one from the same mic shares its filter. So the first track ends, then the graph's source moves to
+      // a new track asked for without the filter: a gap of one getUserMedia call, as the model starts. The sent track stays.
       const unfiltered = async () => {
-        const next = await ask('deepfilter', m.getAudioTracks()[0].getSettings().deviceId ?? null, false);
+        const id = m.getAudioTracks()[0].getSettings().deviceId ?? null;
+        unwatch();
+        stopAll(m);
+        const next = await ask('deepfilter', id, false);
         if (dead) return stopAll(next);
-        const old = m;
         const s2 = ctx.createMediaStreamSource(next);
         s2.connect(gain);
         src.disconnect();
         nodes[0] = src = s2;
-        unwatch();
         m = next;
         unwatch = watch(next.getAudioTracks()[0], () => me);
         me!.raw = next.getAudioTracks()[0];
-        stopAll(old);
       };
       w.onerror = (e) => fail(`denoiser worker failed: ${e.message ?? ''}`);
       n.port.onmessage = ({ data }: MessageEvent<{ type: 'error'; message: string } | ({ type: 'stats' } & PipelineStats)>) => {

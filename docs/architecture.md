@@ -229,11 +229,12 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
 - The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). Until then the mic passes through with the browser's noise suppression on
-  (the mic is asked for with `noiseSuppression: true`), and the status line says `loading, browser filter until then`. At `ready` the capture asks for a
-  second track of the same mic without the browser filter (unless "Browser noise suppression on top" is on), moves the graph's source to it and ends the
-  first, so the two filters never stack. The sent track does not change. A second track is needed because Chromium does not turn a live track's
-  filter off: `applyConstraints({ noiseSuppression: false })` resolves but `getSettings()` stays true (seen in headless Chromium, 2026-11-02). If the
-  second track fails, the call keeps the filtered one and the line says `the browser filter could not be turned off`. The e2e checks both tracks in
+  (the mic is asked for with `noiseSuppression: true`), and the status line says `loading, browser filter until then`. At `ready` the capture ends that track,
+  asks for the same mic again without the browser filter (unless "Browser noise suppression on top" is on) and moves the graph's source to it, so the
+  two filters never stack. The sent track does not change; the input has a gap of one `getUserMedia` call as the model starts. Chromium needs this:
+  `applyConstraints({ noiseSuppression: false })` resolves but `getSettings()` stays true, and a second track opened while the first runs gets the
+  first one's filter (both seen in headless Chromium, 2026-11-02). If the mic does not reopen, the call falls back to `browser` with
+  `the mic did not reopen without the browser filter: ...`. The e2e checks both tracks in
   headless Chromium; whether the switch is heard is not verified.
 - The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. Skipped when the browser asks to save data. Not verified in a real browser.
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.

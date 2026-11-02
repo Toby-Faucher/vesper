@@ -95,7 +95,7 @@ describe('createCapture', () => {
     const [src0, src1] = t.ctx.createMediaStreamSource.mock.results.map((r) => r.value);
     expect(src0.disconnect).toHaveBeenCalled();
     expect(src1.connect).toHaveBeenCalled();
-    expect(t.mics[0].t.stop).toHaveBeenCalled();
+    expect(t.mics[0].t.stop).toHaveBeenCalled(); // first: while it runs, Chromium would hand out its filter again
     expect(t.mics[1].t.stop).not.toHaveBeenCalled();
     expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
     t.mics[0].t.onended?.(); // the old track's end is not a lost mic
@@ -188,23 +188,36 @@ describe('createCapture', () => {
     expect(cb).toHaveBeenCalledWith('browser', expect.stringContaining('no AudioWorklet'));
   });
 
-  it('the browser filter stays on after ready when the user wants it on top; a failed switch-off is named', async () => {
+  it('the browser filter stays on after ready when the user wants it on top; a failed reopen falls back, named', async () => {
     const t = setup();
     const cap = await createCapture(clampSettings({ noiseSuppression: true }), t.deps);
     t.workers[0].onmessage({ data: { type: 'ready' } });
     await flush();
     expect(t.mics).toHaveLength(1);
     cap.close();
+    // The unfiltered mic will not open: the call goes on in browser mode, and the line says why.
     const u = setup();
-    const cap2 = await createCapture(DEFAULT_AUDIO_SETTINGS, u.deps);
+    let n = 0;
+    const deps = { ...u.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (++n === 2) throw new Error('Could not start audio source'); return u.deps.getUserMedia(c); } };
+    const cap2 = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
     const cb = vi.fn();
     cap2.onModeChange(cb);
-    u.failMic(new Error('NotReadableError'));
     u.workers[0].onmessage({ data: { type: 'ready' } });
     await flush();
-    expect(cb).toHaveBeenLastCalledWith('deepfilter', 'the browser filter could not be turned off');
-    expect(u.mics[0].t.stop).not.toHaveBeenCalled(); // the filtered track keeps the call going
+    expect(cb).toHaveBeenLastCalledWith('browser', 'the mic did not reopen without the browser filter: Could not start audio source');
+    expect(cap2.stream.getAudioTracks()).toEqual([u.mics[1].t]);
     cap2.close();
+  });
+
+  it('the filtered track ends before the unfiltered one is asked for', async () => {
+    const t = setup();
+    const stoppedFirst: boolean[] = [];
+    const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (t.mics.length) stoppedFirst.push(t.mics[0].t.stop.mock.calls.length > 0); return t.deps.getUserMedia(c); } };
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(stoppedFirst).toEqual([true]);
+    cap.close();
   });
 
   it('a pipe stopped while the unfiltered track is asked for stops that track too', async () => {
