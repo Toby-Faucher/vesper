@@ -364,4 +364,69 @@ describe('createCapture', () => {
     });
     cap.close();
   });
+  describe('a saved mic that is gone', () => {
+    // Firefox rejects with a MediaStreamError, which is no Error or DOMException: only the name counts.
+    const named = (name: string) => ({ name, message: 'Constraints could not be satisfied.' });
+    // The first n requests reject with `first`; the rest reach the fake mic. Records every constraint asked for.
+    function failing(first: unknown, n = 1) {
+      const t = setup();
+      const asked: MediaTrackConstraints[] = [];
+      const onMicFallback = vi.fn();
+      const deps = {
+        ...t.deps,
+        onMicFallback,
+        getUserMedia: async (c: MediaStreamConstraints) => {
+          asked.push(c.audio as MediaTrackConstraints);
+          if (asked.length <= n) throw first;
+          return t.deps.getUserMedia(c);
+        },
+      };
+      return { t, asked, deps, onMicFallback };
+    }
+    const saved = clampSettings({ mode: 'browser', micId: 'gone' });
+
+    for (const name of ['OverconstrainedError', 'NotFoundError']) {
+      it(`${name}: asks once more without the device, then forgets the id`, async () => {
+        const { t, asked, deps, onMicFallback } = failing(named(name));
+        const cap = await createCapture(saved, deps);
+        expect(asked.map((c) => c.deviceId)).toEqual([{ exact: 'gone' }, undefined]);
+        expect(asked[1]).not.toHaveProperty('deviceId');
+        expect(onMicFallback).toHaveBeenCalledTimes(1);
+        expect(cap.stream.getAudioTracks()).toEqual([t.mics[0].t]);
+        // The capture uses the default now: settings with no mic id do not rebuild it, and the old id is not asked again.
+        cap.setSettings(clampSettings({ mode: 'browser' }));
+        await flush();
+        expect(asked).toHaveLength(2);
+        cap.close();
+      });
+    }
+
+    it('deepfilter mode falls back in the same way', async () => {
+      const { asked, deps, onMicFallback } = failing(named('OverconstrainedError'));
+      const cap = await createCapture(clampSettings({ micId: 'gone' }), deps);
+      expect(asked).toHaveLength(2);
+      expect(onMicFallback).toHaveBeenCalledTimes(1);
+      cap.close();
+    });
+
+    it('a denial is not retried', async () => {
+      const { asked, deps, onMicFallback } = failing(named('NotAllowedError'));
+      await expect(createCapture(saved, deps)).rejects.toMatchObject({ name: 'NotAllowedError' });
+      expect(asked).toHaveLength(1);
+      expect(onMicFallback).not.toHaveBeenCalled();
+    });
+
+    it('the default mic failing too: one retry only, its error surfaces', async () => {
+      const { asked, deps, onMicFallback } = failing(named('NotFoundError'), 99);
+      await expect(createCapture(saved, deps)).rejects.toMatchObject({ name: 'NotFoundError' });
+      expect(asked).toHaveLength(2);
+      expect(onMicFallback).not.toHaveBeenCalled();
+    });
+
+    it('no saved id: a missing mic is not retried', async () => {
+      const { asked, deps } = failing(named('NotFoundError'));
+      await expect(createCapture(clampSettings({ mode: 'browser' }), deps)).rejects.toMatchObject({ name: 'NotFoundError' });
+      expect(asked).toHaveLength(1);
+    });
+  });
 });

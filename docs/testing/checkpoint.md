@@ -229,6 +229,7 @@ Last updated 2026-10-30. Tick as you check. Use two tabs (or two machines) where
 - [ ] Fallback by missing model: devtools Network, block request URL `*/dsp/model.tar.gz`, join; expect `denoiser unavailable: ...` and working audio.
 - [ ] Denied mic permission mid-call: in the site permissions (lock icon) switch the mic to Block while joined; expect an error message, no crash, and ability to rejoin after allowing.
 - [ ] Unplug a USB mic mid-call (with that mic picked in Settings, not "System default"): expect the "unplugged" alert; replug and rejoin or switch.
+- [ ] Pick a USB mic in Settings, leave the call, unplug it, then join (also in Firefox): expect the call to start on the default mic with "Your saved microphone was not found", and Settings back on "System default".
 - [ ] Device switching mid-call: change Microphone and Speaker in Settings; audio follows (Firefox may not support Speaker choice: note the message).
 - [ ] Push to talk: enable, set a key, hold to talk, release to stop; switch window (alt-tab) while held and confirm the mic cuts off (does not stay open).
 - [ ] Connectivity check from a phone on cellular (Wi-Fi off): join, Diagnostics, Test connection, expect OK; note ICE path (relay or direct) and RTT.

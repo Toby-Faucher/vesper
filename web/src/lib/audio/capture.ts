@@ -14,6 +14,8 @@ export interface CaptureDeps {
   /** Initial track state: false when PTT/mute must start silent. */
   startLive: boolean;
   now(): number;
+  /** Called when the saved mic is gone and the default mic is used instead; the capture then forgets the saved id. */
+  onMicFallback?(): void;
 }
 
 /** The unfiltered mic passes through while the model loads, and a slow first download can take longer than 5 s. */
@@ -76,7 +78,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   let closed = false;
   let live = d.startLive; // applied to every new track, so mute/PTT survive swaps and rebuilds
 
-  const mic = (mode: DenoiseMode) =>
+  const ask = (mode: DenoiseMode, id: string | null) =>
     d.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -84,9 +86,23 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         autoGainControl: s.autoGain,
         channelCount: 1,
         sampleRate: 48000,
-        ...(s.micId ? { deviceId: { exact: s.micId } } : {}),
+        ...(id ? { deviceId: { exact: id } } : {}),
       },
     });
+  // A saved id can be gone (unplugged, another profile, Firefox new ids after a permission change): try the default mic
+  // once. Any other error, a denial above all, is not retried.
+  async function mic(mode: DenoiseMode) {
+    if (!s.micId) return ask(mode, null);
+    try {
+      return await ask(mode, s.micId);
+    } catch (e) {
+      if (!/^(OverconstrainedError|NotFoundError)$/.test(String((e as { name?: unknown } | null)?.name))) throw e;
+      const m = await ask(mode, null);
+      s = { ...s, micId: null };
+      d.onMicFallback?.();
+      return m;
+    }
+  }
 
   /**
    * The raw mic can end under us (permission revoked, default device unplugged, OS reclaim): drop the pipe and
