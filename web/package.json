@@ -1,7 +1,7 @@
 {
   "name": "vesper-web",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.2",
   "type": "module",
   "engines": {
     "node": ">=22.12"
@@ -13,7 +13,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "size": "node scripts/size-check.mjs",
     "ci": "npm run check && npm test && npm run build && npm run size",
-    "e2e": "node e2e/two-browser.mjs && node e2e/flows.mjs && node e2e/ui.mjs",
+    "e2e": "node e2e/cleanup.mjs && node e2e/two-browser.mjs && node e2e/flows.mjs && node e2e/ui.mjs",
     "shots": "node e2e/shots.mjs"
   },
   "devDependencies": {
