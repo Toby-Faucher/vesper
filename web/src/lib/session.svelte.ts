@@ -97,7 +97,7 @@ function open(): void {
   session.sig = sig;
   let upAt = 0;
   sig.onMessage((m) => {
-    if (m.type === 'hello' && !sameBuild(m.me)) return; // its messages may be of a kind this code does not know
+    if (m.type === 'hello' && !sameBuild(m.me, true)) return; // its messages may be of a kind this code does not know
     if (m.type === 'hello') {
       upAt = Date.now();
       session.online = true;
@@ -135,7 +135,7 @@ function attempt(): void {
     (me) => {
       if (g !== gen) return;
       timer = undefined;
-      if (sameBuild(me)) open();
+      if (sameBuild(me, false)) open();
     },
     (e) => {
       if (g !== gen) return;
@@ -146,12 +146,14 @@ function attempt(): void {
   );
 }
 
-let build: string | null = null; // the server build of this page's first hello (or /api/me)
+let build: string | null = null; // the server build of this page load's first hello
 
 /** False, and the socket stops, once the server is on another build than this page started with. Build ids, not versions,
- * so a rebuild of one version counts too. An older server sends none: that is a change as well. */
-function sameBuild(me: Me | undefined): boolean {
+ * so a rebuild of one version counts too. An older server sends none: that is a change as well. Only a hello sets the
+ * baseline: an /api/me before the first hello (the first socket closed early) is compared with nothing and passes. */
+function sameBuild(me: Me | undefined, hello: boolean): boolean {
   const b = me?.server?.build ?? '';
+  if (build === null && !hello) return true;
   build ??= b;
   if (b === build) return true;
   stop();

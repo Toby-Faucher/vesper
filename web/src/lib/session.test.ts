@@ -147,6 +147,22 @@ describe('session', () => {
     expect(session.stale).toBe(true);
     expect(FakeWS.all).toHaveLength(1);
   });
+  it('the baseline is the first hello of the page load, not an /api/me before it', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { session } = await load();
+    session.connect();
+    FakeWS.all[0].drop(1006); // closed before its hello
+    fetchMock.mockImplementationOnce(async () => Response.json({ server: { version: '1.4.1', build: 'b9' } }));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeWS.all).toHaveLength(2);
+    FakeWS.all[1].hello('b1');
+    expect(session.stale).toBe(false);
+    expect(session.online).toBe(true);
+    FakeWS.all[1].drop(1006);
+    fetchMock.mockImplementationOnce(async () => Response.json({ server: { version: '1.4.1', build: 'b9' } }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(session.stale).toBe(true);
+  });
   it('the same build on reconnect goes on as before', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     const { session } = await load();
