@@ -282,6 +282,25 @@ describe('in a call', () => {
     expect(voice).toMatchObject({ joined: false, joinedRoom: null, capture: undefined, pc: undefined, quality: 'unknown', error: '' });
   });
 
+  it('Retry microphone: one retry at a time, in the same call, the reason comes from the capture', async () => {
+    const { cap } = await joined();
+    let done!: (ok: boolean) => void;
+    const retry = vi.fn(() => new Promise<boolean>((r) => (done = r)));
+    Object.assign(cap, { retry });
+    const onMode = cap.onModeChange.mock.calls[0][0] as (m: string, r: string) => void;
+    onMode('off', 'microphone lost: ended');
+    expect(voice.deviceError).toMatch(/^The microphone stopped/);
+    const p = v.retryMic();
+    void v.retryMic(); // a second press while it runs does nothing
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(voice.retrying).toBe(true);
+    onMode('browser', '');
+    done(true);
+    await p;
+    expect(voice).toMatchObject({ retrying: false, deviceError: '', mode: 'browser', joined: true });
+    expect(sig.leaves).toBe(0);
+  });
+
   it('polls stats every 2 s into quality', async () => {
     const { pc } = await joined();
     await vi.advanceTimersByTimeAsync(2000);

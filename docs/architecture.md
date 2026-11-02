@@ -223,6 +223,9 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 - Modes: `deepfilter`, `browser`, `off` (`web/src/lib/audio/mode.ts`).
 - `ModeController` trips from `deepfilter` to `browser` when 20 of the last 100 frames each took longer than 30 ms. The first 300 frames (about 3 s) are ignored. It stays tripped until `reset()`.
   The numbers are set in `denoise-core.ts`.
+- A mic that ends mid-call (or that the system mutes for over 3 s) leaves the call up with `off (microphone lost: ...)`, and the call bar offers
+  Retry microphone: `capture.retry()` asks for the mic again (a saved mic that is gone falls back to the default, as at the start) and builds
+  the graph anew, and the sender gets the new track with `replaceTrack`. A failed retry names the error and keeps the button.
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
 - The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). Until then the mic passes through with the browser's noise suppression on

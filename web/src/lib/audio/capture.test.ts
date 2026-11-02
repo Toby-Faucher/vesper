@@ -510,3 +510,62 @@ describe('createCapture', () => {
     });
   });
 });
+
+describe('retry after the mic ended', () => {
+  const named = (name: string) => ({ name, message: 'gone' });
+  for (const mode of ['deepfilter', 'browser'] as const) {
+    it(`${mode}: gets the mic again in the same call and hands the sender the new track`, async () => {
+      const t = setup();
+      const cap = await createCapture(clampSettings({ mode }), t.deps);
+      cap.setSender(t.asSender);
+      await flush();
+      const seen: [string, string][] = [];
+      cap.onModeChange((m, r) => seen.push([m, r]));
+      t.mics[0].t.onended();
+      expect(seen.at(-1)).toEqual(['off', 'microphone lost: ended']);
+      expect(await cap.retry()).toBe(true);
+      expect(t.mics).toHaveLength(2);
+      expect(seen.at(-1)?.[0]).toBe(mode);
+      const sent = mode === 'deepfilter' ? t.dests[1] : t.mics[1].t;
+      expect(t.sender.track).toBe(sent);
+      expect(cap.stream.getAudioTracks()).toEqual([sent]);
+      cap.close();
+    });
+  }
+
+  it('a failed retry says why and keeps the call; the next one can work', async () => {
+    const t = setup();
+    const cap = await createCapture(clampSettings({ mode: 'browser' }), t.deps);
+    const seen: [string, string][] = [];
+    cap.onModeChange((m, r) => seen.push([m, r]));
+    t.mics[0].t.onended();
+    t.failMic(Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' }));
+    expect(await cap.retry()).toBe(false);
+    expect(seen.at(-1)).toEqual(['off', 'microphone lost: NotAllowedError: Permission denied']);
+    t.failMic(null as unknown as Error);
+    expect(await cap.retry()).toBe(true);
+    expect(seen.at(-1)).toEqual(['browser', '']);
+    cap.close();
+  });
+
+  it('a saved mic that went away falls back to the default one (the stale-id path)', async () => {
+    const t = setup();
+    const onMicFallback = vi.fn();
+    let gone = false;
+    const deps = {
+      ...t.deps,
+      onMicFallback,
+      getUserMedia: async (c: MediaStreamConstraints) => {
+        if (gone && (c.audio as MediaTrackConstraints).deviceId) throw named('NotFoundError');
+        return t.deps.getUserMedia(c);
+      },
+    };
+    const cap = await createCapture(clampSettings({ mode: 'browser', micId: 'usb' }), deps);
+    gone = true;
+    t.mics[0].t.onended();
+    expect(await cap.retry()).toBe(true);
+    expect(onMicFallback).toHaveBeenCalledTimes(1);
+    expect(t.mics[1].c.deviceId).toBeUndefined();
+    cap.close();
+  });
+});

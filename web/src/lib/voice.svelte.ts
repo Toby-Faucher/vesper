@@ -52,6 +52,8 @@ class Voice {
   diag = $state.raw<Diag | null>(null);
   /** Connection quality per person in the call (you too), keyed on user_id. Empty when not in a call. */
   links = $state.raw<Record<string, Link>>({});
+  /** True while Retry microphone runs. */
+  retrying = $state(false);
   /** "Even out voices" (Settings > Voice), saved in this browser. */
   levelling = $state(loadLevelling());
 }
@@ -123,6 +125,17 @@ function showNotice(text: string) {
   clearTimeout(noticeTimer);
   voice.notice = text;
   noticeTimer = setTimeout(() => (voice.notice = ''), NOTICE_MS);
+}
+/** Retry microphone (the call bar, after the mic ended): a new mic and capture graph in the same call. */
+export async function retryMic(): Promise<void> {
+  const cap = voice.capture;
+  if (!cap || voice.retrying) return;
+  voice.retrying = true;
+  try {
+    await cap.retry(); // success or the reason why not both arrive through onModeChange
+  } finally {
+    voice.retrying = false;
+  }
 }
 export function useOfferedMic(): void {
   updateSettings({ ...voice.settings, micId: voice.offered!.deviceId });

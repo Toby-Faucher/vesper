@@ -78,7 +78,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **The automatic gate threshold does almost nothing after DeepFilterNet.** The floor under the shipped denoiser is near digital silence, so the threshold sits at its 3e-6 RMS clamp. On dev-0016 and dev-0022 it cut no noise at all (the marker cut 5.9 dB and all of it); speech and onsets were unchanged. It is an option, off by default.
 - **The gate and limiter are not blind-listened.** They were measured on synthetic signals and on denoised corpus speech (see [dev.md](dev.md#noise-gate-and-limiter-lab-check)), not heard by Toby.
 - **DTX applies at the next join.** The client cannot renegotiate it mid-call.
-- **A mic that ends mid-call has no "Retry microphone" button.** The status line says what happened, but you leave and rejoin to recover.
+- **Retry microphone is tested with a fake device only.** The e2e ends Chromium's fake mic by hand; a real unplug, a revoked permission and an OS reclaim were not tried.
 - **Stale mode reason on unmute.** The capture watcher can replay an old fallback reason after an unmute.
 - **After a failed join, the page's guard against messages from an old socket stays set for a short window.** It clears when the next join starts.
 - **No fade on dropped output frames.** An underrun fades out and back in over 2.5 ms, but a frame dropped from a full queue (above 80 ms, or the trim) is cut, which can click.

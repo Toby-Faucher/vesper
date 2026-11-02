@@ -332,6 +332,15 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       else pipe?.set?.(n);
       if (!rebuild && boostChanged && last) notify(...last);
     },
+    /**
+     * After the mic ended (or the system muted it): get the mic again and build the graph anew, in the same call (the
+     * sender's track is replaced). A saved mic that is gone falls back to the default one, as at the start. A failure is
+     * reported through onModeChange as `microphone lost: ...`. Resolves true when a mic runs again.
+     */
+    async retry(): Promise<boolean> {
+      await switchTo(s.mode, '').catch(lost);
+      return !!pipe;
+    },
     /** The latest snapshot, or null when there is no pipeline. */
     getStats,
     /** Called with each new snapshot from the worklet (deepfilter mode only). Returns an unsubscribe function. */
