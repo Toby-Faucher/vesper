@@ -237,8 +237,7 @@ pub async fn serve(
         .route("/ws", get(ws::upgrade))
         // ServeDir refuses `..` and never lists directories; SPA fallback is done in `guard`. It sends
         // the `.br` or `.gz` beside a file (web/scripts/precompress.mjs; build-dsp.sh's wasm `.gz`) when
-        // Accept-Encoding allows,
-        // with the original's Content-Type and `Vary: accept-encoding`.
+        // Accept-Encoding allows, with the original's Content-Type and `Vary: accept-encoding`.
         .fallback_service(
             ServeDir::new(&cfg.web_dir)
                 .precompressed_br()

@@ -12,7 +12,7 @@ echo "$out" | grep -q 'match ip dport 40000 0xffff flowid 1:4' || fail "filter: 
 scripts/netem-call.sh wifi --dev veth0 --port 41000 2>/dev/null | grep -q 'dev veth0 .*delay 30ms 15ms loss gemodel' || fail "wifi on veth0"
 scripts/netem-call.sh wifi --port 41000 2>/dev/null | grep -q 'dport 41000 ' || fail "port"
 [ "$(scripts/netem-call.sh off 2>/dev/null)" = 'tc qdisc del dev lo root' ] || fail "off"
-for bad in "nosuch" "loss5 --port 4x" "loss5 --dev lo;id" ""; do
+for bad in "nosuch" "loss5 --port 4x" "loss5 --port 70000" "loss5 --dev lo;id" "loss5 --dev bond0" "loss5 --dev" ""; do
   # shellcheck disable=SC2086 # split on purpose
   if scripts/netem-call.sh $bad >/dev/null 2>&1; then fail "accepted: '$bad'"; fi
 done

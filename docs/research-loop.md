@@ -180,14 +180,19 @@ decodes from its full copy, before FEC is tried; the redundant bytes are not cou
 `--opus` like a config run. Used to score a rebuilt copy of another product's chain on the same items.
 
 - Loss is seeded per item (`seed` and the item index), so two runs match bit for bit.
-- **RED under burst loss (2026-11-02, holdout, 160 items, unfinished).** The shipped chain (empty config, 64 kbps, FEC
-  and DTX on, 20 ms), `red=0` against `red=1`, paired on the same loss pattern. 5 % loss, bursts of 1: OVRL +0.012
-  [+0.006, +0.018], UTMOS +0.008 [+0.004, +0.012]. 5 % loss, mean burst 3: OVRL +0.000 [-0.005, +0.005], UTMOS
-  +0.008 [+0.003, +0.013], while that loss costs OVRL -0.021 and UTMOS -0.101 against no loss. So RED with distance 1
-  wins back almost nothing in bursts: like FEC, it can only rebuild the last packet of a burst, from the packet after
-  it; it only gives a full-rate copy instead of FEC's lower-rate one. It costs about double the audio bitrate on the
-  wire (not counted by the lab). The 5 % burst 5 and all 10 % cells were not run. The lab does not model RED distance 2
-  or more, jitter, or NACK.
+- **RED under burst loss (2026-11-02, exploratory, superseded).** These first runs used the holdout split, which is
+  for the final check only, so they count as exploratory and are being redone on dev. Shipped chain (empty config,
+  64 kbps, FEC and DTX on, 20 ms), `red=0` against `red=1` on the same seeded loss pattern. "Bursts of 1" here is
+  `burst=1` (Gilbert-Elliott with a mean burst of 1), not independent loss. Holdout, 160 items: 5 % `burst=1` OVRL
+  +0.012 [+0.006, +0.018], UTMOS +0.008; 5 % `burst=3` OVRL +0.000 [-0.005, +0.005], UTMOS +0.008, against a loss cost
+  of OVRL -0.021 and UTMOS -0.101. RED with distance 1, like FEC, can only rebuild the last packet of a burst, and it
+  costs about double the audio bitrate on the wire (not counted by the lab). The lab does not model RED distance 2 or
+  more, jitter, or NACK. Commands (`$C` is `--corpus research/corpus48/built --dnsmos research/models/sig_bak_ovr.onnx
+  --second-mos research/models/utmos22_strong.onnx --model crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz
+  --config empty.toml --jobs 4`, `empty.toml` an empty file):
+  `audiolab eval --split dev $C --opus bitrate=64000,complexity=10,fec=1,dtx=1,frame=20,loss=0.05,burst=3,red=0 --out
+  red0.json`, the same with `red=1 --out red1.json`, then `audiolab compare --a red0.json --b red1.json`. Dev results:
+  not recorded yet.
 - A lost packet is decoded from the next packet's in-band FEC when FEC is on and that packet arrived (one
   packet of jitter buffer), else concealed (PLC). The encoder is told the loss rate
   (`OPUS_SET_PACKET_LOSS_PERC`), as WebRTC does; without it libopus sends no FEC.
