@@ -115,14 +115,17 @@ const hook = () => {
 export const hasFirefox = () => existsSync(firefox.executablePath());
 
 // A headless Chromium with a fake microphone; `args` are extra Chromium flags, `viewport` e.g. { width: 1440, height: 900 }.
-// `firefox: true` starts a headless Firefox with a fake microphone instead (`args` are ignored). Returns { page, errors }.
-export async function browser(name, args = [], { viewport, firefox: ff = false } = {}) {
+// `firefox: true` starts a headless Firefox with a fake microphone instead (`args` are ignored). `fullChromium: true` runs
+// full Chromium in its new headless mode instead of the headless shell, which refuses notification permission (push.mjs).
+// Returns { page, errors }.
+export async function browser(name, args = [], { viewport, firefox: ff = false, fullChromium = false } = {}) {
   const b = ff
     ? await firefox.launch({
       firefoxUserPrefs: { 'media.navigator.streams.fake': true, 'media.navigator.permission.disabled': true, 'media.autoplay.default': 0 },
     })
     : await chromium.launch({
       executablePath: process.env.E2E_CHROMIUM || undefined, // local only: a browser Playwright did not download
+      ...(fullChromium && !process.env.E2E_CHROMIUM && { channel: 'chromium' }),
       args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', ...args],
     });
   browsers.push(b);

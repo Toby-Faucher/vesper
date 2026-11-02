@@ -3,6 +3,7 @@
   import Field from '../../lib/ui/c/Field.svelte';
   import Range from '../../lib/ui/c/Range.svelte';
   import Switch from '../../lib/ui/c/Switch.svelte';
+  import PushSettings from './PushSettings.svelte';
   import { chime } from '../../lib/ui/chime';
   import type { Cue } from '../../lib/ui/cues';
   import { loadPrefs, permission, requestMentions, savePrefs, testNotification, type NotifyPrefs } from '../../lib/ui/notify';
@@ -61,6 +62,8 @@
     </div>
   </section>
 
+  <PushSettings />
+
   <section role="group" aria-labelledby="notify-sounds">
     <div class="flex h-8 items-center"><h3 id="notify-sounds" class="text-base font-medium text-fg">Sounds</h3></div>
     <Switch label="Call sounds" help="Short, quiet tones on your speaker. They are not sent into the call, but on open speakers your mic can pick them up. Echo cancellation removes most of that. With headphones nobody else hears them."
@@ -85,6 +88,6 @@
 <style>
   .sections { display: flex; flex-direction: column; gap: 32px; }
   section { display: flex; flex-direction: column; gap: 16px; }
-  section + section { padding-top: 24px; border-top: 1px solid var(--line-subtle); }
+  .sections > :global(section + section) { padding-top: 24px; border-top: 1px solid var(--line-subtle); }
   .groups { padding-left: 12px; border-left: 1px solid var(--line-subtle); }
 </style>
