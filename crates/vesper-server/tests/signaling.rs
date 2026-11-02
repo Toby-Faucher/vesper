@@ -1014,7 +1014,10 @@ async fn force_mute_stops_forwarding_in_the_sfu() {
     let deadline = Instant::now() + WAIT;
     let mut start = 0;
     while from_a_since(0) == 0 {
-        assert!(Instant::now() < deadline, "timed out waiting for the forward path");
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the forward path"
+        );
         if a.client.sent().len() == start {
             a.client.send_audio(1);
             start += 1;
@@ -1617,7 +1620,10 @@ async fn full_queue_closes_only_that_socket() {
     let deadline = Instant::now() + 6 * WAIT;
     let mut sent = 0;
     while server.state.hub.online(&reader.user.user_id) {
-        assert!(Instant::now() < deadline, "stalled socket still open after {sent} events");
+        assert!(
+            Instant::now() < deadline,
+            "stalled socket still open after {sent} events"
+        );
         let body = json!({ "name": format!("general{}", sent % 2) });
         let (status, _, _) = server
             .call(request(
@@ -1631,7 +1637,10 @@ async fn full_queue_closes_only_that_socket() {
         assert!(matches!(fast.next().await, ServerMsg::RoomsChanged { .. }));
         sent += 1;
     }
-    assert!(sent > QUEUE, "closed after {sent} events, before its queue could fill");
+    assert!(
+        sent > QUEUE,
+        "closed after {sent} events, before its queue could fill"
+    );
     slow.thaw();
     let mut got = 0;
     while tokio::time::timeout(WAIT, slow.msgs.recv())
