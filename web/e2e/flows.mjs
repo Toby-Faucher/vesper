@@ -328,12 +328,18 @@ try {
   assert.ok(await gate.isDisabled(), 'the noise gate switch is enabled in browser mode');
   assert.match(await b.getByText('Works only with DeepFilterNet noise suppression.').innerText(), /DeepFilterNet/);
   await b.getByLabel('Noise suppression', { exact: true }).selectOption('deepfilter');
+  // The automatic threshold (an option, off by default) only with the gate on.
+  const auto = b.getByRole('switch', { name: 'Automatic threshold' });
+  assert.ok(await auto.isDisabled() && !(await auto.isChecked()), 'Automatic threshold is on, or usable without the gate');
   await gate.check();
-  assert.deepEqual(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad), { thresholdDb: -50, gate: true });
+  await auto.check();
+  assert.deepEqual(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.audio')).vad), { thresholdDb: -50, gate: true, auto: true });
   const b3 = await b.context().newPage();
   await b3.goto(`${ORIGIN}/settings/voice`);
   assert.ok(await b3.getByRole('switch', { name: 'Noise gate' }).isChecked(), 'the noise gate did not persist');
+  assert.ok(await b3.getByRole('switch', { name: 'Automatic threshold' }).isChecked(), 'Automatic threshold did not persist');
   await b3.close();
+  await auto.uncheck();
   await gate.uncheck();
   await b.getByLabel('Noise suppression', { exact: true }).selectOption('browser');
   assert.ok(await gate.isDisabled());
