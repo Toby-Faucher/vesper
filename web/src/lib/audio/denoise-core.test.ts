@@ -110,10 +110,13 @@ describe('DenoiseCore', () => {
     t.core.reply(frame(3));
     expect(t.core.queued).toBe(1440);
     const outs = Array.from({ length: 12 }, () => render(t.core));
-    expect(outs[0][0]).toBe(1);
+    expect(outs[0][0]).toBe(0); // fades in from the silence before
+    expect(outs[0][120]).toBe(1); // after the 2.5 ms fade
     expect(outs[4][0]).toBe(2); // samples 512.. come from frame 2
     expect(outs[8][0]).toBe(3); // samples 1024.. come from frame 3
-    expect(outs[11][31]).toBe(3);
+    expect(outs[10][127]).toBe(3);
+    expect(outs[11][0]).toBeCloseTo((3 * 31) / 32, 6); // the last 32 samples fade out
+    expect(outs[11][31]).toBe(0);
     expect(outs[11][32]).toBe(0); // 1440 samples exhausted mid-quantum
     t.core.reply(frame(4));
     t.core.reply(frame(5));
@@ -125,8 +128,65 @@ describe('DenoiseCore', () => {
     t.connect();
     for (let v = 1; v <= 10; v++) t.core.reply(frame(v));
     expect(t.core.queued).toBe(3840);
-    expect(render(t.core)[0]).toBe(3);
+    expect(render(t.core)[127]).toBe(3);
     expect(t.core.queued).toBe(3840 - Q);
+  });
+});
+
+describe('DenoiseCore underrun fade', () => {
+  // A 440 Hz sine at 0.5: its own largest step is 2 pi 440 / 48000 * 0.5, about 0.029.
+  const sine = (k: number) => {
+    const f = new Float32Array(480);
+    for (let i = 0; i < 480; i++) f[i] = 0.5 * Math.sin((2 * Math.PI * 440 * (k * 480 + i)) / 48000);
+    return { type: 'frame' as const, data: f, ms: 1 };
+  };
+  const maxStep = (blocks: Float32Array[]) => {
+    let prev = 0;
+    let max = 0;
+    for (const b of blocks) for (const x of b) [max, prev] = [Math.max(max, Math.abs(x - prev)), x];
+    return max;
+  };
+  // Forced underruns: the worker stops replying, three times. 3 + extra frames run dry at sample 480 * (3 + extra) of the
+  // round, so 1, 2 and 4 extra frames cut at three different points in a 128-sample block (32, 96 and 96 + 64).
+  function run(extras: number[]) {
+    const t = make();
+    t.connect();
+    let k = 0;
+    const outs: Float32Array[] = [];
+    for (const extra of extras) {
+      for (let j = 0; j < 3; j++) t.core.reply(sine(k++));
+      for (let b = 0; b < 4 * (3 + extra) + 6; b++) {
+        outs.push(render(t.core));
+        if (b % 3 === 0 && b / 3 < extra) t.core.reply(sine(k++)); // keeps playing for a while, then starves
+      }
+    }
+    return { outs, stats: t.core.stats() };
+  }
+
+  it('an underrun is a fade, not a click (max sample step)', () => {
+    const { outs, stats } = run([1, 2, 4]);
+    expect(stats.underruns).toBe(3);
+    expect(maxStep(outs)).toBeLessThan(0.035); // without the fade the step at the cut is up to 0.5
+  });
+
+  it('a queue that runs dry exactly at a block end fades out too, and fades back in', () => {
+    const t = make();
+    t.connect();
+    for (let j = 0; j < 4; j++) t.core.reply(sine(j)); // 1920 samples = 15 blocks exactly
+    const outs = Array.from({ length: 15 }, () => render(t.core));
+    expect(Math.abs(outs[14][127])).toBe(0);
+    t.core.reply(sine(4)); // arrives in time: no underrun, it fades in
+    outs.push(render(t.core));
+    expect(t.core.stats().underruns).toBe(0);
+    expect(maxStep(outs)).toBeLessThan(0.035);
+  });
+
+  it('a steady queue is not touched after the first fade-in', () => {
+    const t = make();
+    t.connect();
+    for (let j = 0; j < 8; j++) t.core.reply(frame(0.25));
+    render(t.core);
+    expect(Array.from(render(t.core))).toEqual(Array.from(blk(0.25)));
   });
 });
 

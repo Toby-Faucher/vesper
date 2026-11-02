@@ -80,7 +80,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **A mic that ends mid-call has no "Retry microphone" button.** The status line says what happened, but you leave and rejoin to recover.
 - **Stale mode reason on unmute.** The capture watcher can replay an old fallback reason after an unmute.
 - **After a failed join, the page's guard against messages from an old socket stays set for a short window.** It clears when the next join starts.
-- **No fade on underrun or drops.** A starved output can click.
+- **No fade on dropped output frames.** An underrun fades out and back in over 2.5 ms, but a frame dropped from a full queue (above 80 ms, or the trim) is cut, which can click.
 - **Boost is lost when the mode falls back to the browser**, and the status line says so.
 - **A track swap can leave the new track out of sync with mute or push to talk for one tick.** Room re-applies the state after the mode change.
 - **Firefox may fire a button click on Space key-up** after push to talk captured the key.
