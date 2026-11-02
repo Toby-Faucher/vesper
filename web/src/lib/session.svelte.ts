@@ -82,6 +82,8 @@ export const session = $state({
     if (id) try { storage?.removeItem(lastRoomKey(id)); storage?.removeItem(recentKey(id)); } catch { /* storage blocked */ }
     stop();
     await api('POST', '/api/logout').catch(() => {}); // signed out either way
+    // The server drops this device's push subscription with the session; unregistering also ends it in the browser.
+    await navigator.serviceWorker?.getRegistration().then((r) => r?.unregister()).catch(() => {});
     toLogin('');
   },
 });

@@ -10,6 +10,8 @@
   import Button from '../lib/ui/c/Button.svelte';
   import Dialog from '../lib/ui/c/Dialog.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
+  import LinkIcon from '../lib/ui/c/LinkIcon.svelte';
+  import { linkDetail } from '../lib/ui/link';
   import Popover from '../lib/ui/c/Popover.svelte';
   import Range from '../lib/ui/c/Range.svelte';
   // One person: who they are, where they are in voice, their volume when they are in your call, and the moderator voice
@@ -40,6 +42,7 @@
   const roomId = $derived(self ? voice.joinedRoom : peer?.room_id ?? null);
   const where = $derived(roomId === null ? 'Not in voice' : `In voice in ${session.state.rooms.find((r) => r.id === roomId)?.name ?? 'a room'}`);
   const inCall = $derived(!self && voice.joined && roomId === voice.joinedRoom);
+  const link = $derived(voice.joined && (self || inCall) ? voice.links[userId] : undefined);
   const volume = $derived(voice.volumes[userId] ?? 100);
   const outranks = $derived(canModerate(me, user));
 
@@ -77,6 +80,12 @@
     </div>
     {#if user?.bio}<p class="bio text-fg">{user.bio}</p>{/if}
     <p class="flex items-center gap-2 text-fg-2"><Icon d={roomId === null ? I.headphonesOff : I.headphones} />{where}</p>
+    {#if link}
+      <div class="flex items-start gap-2 text-fg-2">
+        <span class="flex h-5 items-center"><LinkIcon {link} name={self ? null : name} /></span>
+        <p>{#if link.grade !== 'measuring'}<span class="text-fg">Connection {link.grade}.</span>{' '}{/if}<span class="tabular-nums">{linkDetail(link)}</span></p>
+      </div>
+    {/if}
 
     {#if inCall}
       <div class="flex flex-col gap-2 border-t border-subtle pt-3">

@@ -4,8 +4,8 @@ export type Quality = 'good' | 'fair' | 'poor' | 'unknown';
 type Sample = Pick<Diag, 'rttMs' | 'lossDownPct' | 'lossUpPct'>;
 
 // Guesses: good below 150 ms and 2 % loss, fair below 300 ms and 5 %, poor otherwise.
-const FAIR = { rttMs: 150, lossPct: 2 };
-const POOR = { rttMs: 300, lossPct: 5 };
+export const FAIR = { rttMs: 150, lossPct: 2 };
+export const POOR = { rttMs: 300, lossPct: 5 };
 
 const loss = (d: Sample) => Math.max(d.lossDownPct ?? 0, d.lossUpPct ?? 0);
 

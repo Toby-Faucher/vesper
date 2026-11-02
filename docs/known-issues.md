@@ -26,8 +26,6 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
   login limit per username still allows each address only 5 tries for one name, then 1 a minute. Unit-tested (`client_ip` in `auth.rs`); not verified on the deploy.
   If Caddy ever drops `CF-Connecting-IP`, every client looks like the tunnel's address and all share one per-IP limit; the per-username limit
   still holds. Keep Caddy's default headers ([deploy.md](deploy.md#network)).
-- **Force-mute is enforced by the client only.** The server marks the user muted and tells everyone, but the SFU still forwards their audio,
-  so a modified client can keep talking. A moderator then disconnects them, or the owner bans them. A server restart lifts every force-mute.
 - **Password reset is by hand.** There is no email. The owner (or a moderator, for a member) makes a one-use reset link
   in Admin > Members and sends it; the owner's own way back in is `vesper-server reset-password` on the host
   ([deploy.md](deploy.md#password-recovery)). Whoever holds the link can set the password, so it must reach the right
@@ -60,6 +58,14 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof).
 
 ## Web client
+
+- **Web Push is verified with a fake push service only.** Google, Mozilla, Apple and Microsoft were not reached; a notification on screen
+  and a click on it were not seen (headless Chromium). iOS needs Vesper on the Home Screen. Desktop Firefox gets push but cannot install
+  Vesper as an app (no manifest install in Firefox). There is no offline mode: the service worker caches nothing.
+- **Past 256 pending sends, pushes are dropped**, with a debug log line only. A storm of mentions loses some notifications rather than delaying them all.
+- **"Started voice" pushes are limited in memory.** A server restart forgets which people got one in the last 10 minutes.
+- **A push can arrive while a tab is open but asleep.** A push goes only to accounts with no socket open, but a tab whose socket dropped
+  (a laptop waking up) counts as closed until it reconnects.
 
 - **"Your current password is not right." relies on the server's message.** A wrong current password is a 403 with the generic `forbidden` code; the client tells it apart from other 403s by the message text "wrong password". A server wording change would show the plain forbidden text instead.
 - **Image boxes change shape when the image loads.** `Attachment` has no width or height, so the timeline keeps a 360 x 280 box and resizes it on load; the reader's place is kept, but rows under an image in view can move.

@@ -1,7 +1,7 @@
 //! The SFU loop: owns the UDP socket and every client, routes packets, and forwards media
 //! between clients of the same room. Adapted from str0m's `examples/chat.rs` `run`.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
@@ -26,6 +26,8 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
     let mut advertised = cfg.advertised;
     let mut clients: Vec<Client> = vec![];
     let mut to_propagate: VecDeque<Propagated> = VecDeque::new();
+    // Force-muted users: their audio is dropped at the forward point, whatever the client sends.
+    let mut muted: HashSet<String> = HashSet::new();
     let mut buf = vec![0; 2000];
 
     loop {
@@ -43,6 +45,7 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
                 Ok(cmd) => handle_command(
                     cmd,
                     &mut clients,
+                    &mut muted,
                     &mut advertised,
                     socket_addr,
                     cfg.answer_timeout,
@@ -63,7 +66,7 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
         }
 
         if let Some(p) = to_propagate.pop_front() {
-            propagate(&p, &mut clients);
+            propagate(&p, &mut clients, &muted);
             continue;
         }
 
@@ -136,6 +139,7 @@ fn route(data: &[u8], source: SocketAddr, socket_addr: SocketAddr, clients: &mut
 fn handle_command(
     cmd: Command,
     clients: &mut Vec<Client>,
+    muted: &mut HashSet<String>,
     advertised: &mut Vec<SocketAddr>,
     socket_addr: SocketAddr,
     answer_timeout: Duration,
@@ -194,6 +198,12 @@ fn handle_command(
             {
                 c.rtc.disconnect();
             }
+        }
+        Command::SetMuted { user, muted: true } => {
+            muted.insert(user);
+        }
+        Command::SetMuted { user, muted: false } => {
+            muted.remove(&user);
         }
         Command::SetAdvertised(addrs) => {
             check_advertised(socket_addr, &addrs);
@@ -273,18 +283,18 @@ fn poll_until_timeout(
 }
 
 /// Deliver one client's output to the other clients of its room.
-fn propagate(propagated: &Propagated, clients: &mut [Client]) {
+fn propagate(propagated: &Propagated, clients: &mut [Client], muted: &HashSet<String>) {
     let origin = match propagated {
         Propagated::TrackOpen(c, _) | Propagated::MediaData(c, _) => *c,
         Propagated::Noop | Propagated::Timeout(_) => return,
     };
-    let Some(room) = clients
-        .iter()
-        .find(|c| c.id == origin)
-        .map(|c| c.room.clone())
-    else {
+    let Some(sender) = clients.iter().find(|c| c.id == origin) else {
         return;
     };
+    if matches!(propagated, Propagated::MediaData(..)) && muted.contains(&sender.user) {
+        return;
+    }
+    let room = sender.room.clone();
     for client in clients
         .iter_mut()
         .filter(|c| c.id != origin && c.room == room)

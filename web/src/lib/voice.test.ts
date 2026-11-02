@@ -6,7 +6,7 @@ import type { ServerMsg } from './gen/ServerMsg';
 const calls: string[] = [];
 const h = vi.hoisted(() => ({
   capture: null as null | { resolve: (c: unknown) => void; reject: (e: unknown) => void },
-  playbacks: [] as { close: ReturnType<typeof vi.fn>; setSink: ReturnType<typeof vi.fn> }[],
+  playbacks: [] as { close: ReturnType<typeof vi.fn>; setSink: ReturnType<typeof vi.fn>; setLevelling: ReturnType<typeof vi.fn> }[],
   sinkFail: null as unknown,
 }));
 vi.mock('./playback', () => ({
@@ -22,6 +22,7 @@ vi.mock('./playback', () => ({
     remove = vi.fn();
     setVolume = vi.fn();
     setDeafened = vi.fn();
+    setLevelling = vi.fn();
     speaking = () => new Set<string>();
   },
 }));
@@ -112,6 +113,19 @@ async function joined() {
 }
 
 describe('join', () => {
+  it('even out voices: off by default, passed to each new call, saved, and applied to a running call', async () => {
+    expect(voice.levelling).toBe(false);
+    await joined();
+    expect(h.playbacks[0].setLevelling).toHaveBeenLastCalledWith(false);
+    v.setLevelling(true);
+    expect(h.playbacks[0].setLevelling).toHaveBeenLastCalledWith(true);
+    expect(writes).toContain('vesper.level=on');
+    v.leave();
+    await joined();
+    expect(h.playbacks[1].setLevelling).toHaveBeenLastCalledWith(true); // a fresh graph: starts from 0 dB, levelling on
+    v.setLevelling(false);
+  });
+
   it('creates the playback context and calls createCapture before its first await', () => {
     const p = v.join(1); // not awaited: only the synchronous part has run
     expect(calls).toEqual(['playback', 'capture']);

@@ -29,7 +29,7 @@ The "Not verified" list at the end says what was only read.
   same tab is read too), `/welcome` (after signup, and from Settings > Account: name and colour, a mic check, mention notifications; every step can be skipped; it renders inside the Shell, so a call keeps running)
   and the app shell (`web/src/routes/Shell.svelte`) for every other path, which needs a session (`GET /api/me`, else `/login`): `/r/<id>` (a room),
   `/settings/<section>`, `/admin/<section>`, and `/`, which opens the last room (`localStorage['vesper.lastRoom']`) or the first. Any other path
-  shows a plain not-found page. The shell starts the call store once, so a call stays up while you move between pages, and shows the call bar (`CallBar.svelte`) at the bottom of the main pane while you are in voice. A person in the sidebar or the call bar, and a name, avatar or mention in a message or in Admin > Members, opens their person card (`PersonCard.svelte`: bio, role, volume, and the moderator voice actions; names use `PersonButton.svelte`). `web/src/lib/session.svelte.ts` keeps one socket per
+  shows a plain not-found page. The shell starts the call store once, so a call stays up while you move between pages, and shows the call bar (`CallBar.svelte`) at the bottom of the main pane while you are in voice. A person in the sidebar or the call bar, and a name, avatar or mention in a message or in Admin > Members, opens their person card (`PersonCard.svelte`: bio, role, volume, connection quality, and the moderator voice actions; names use `PersonButton.svelte`). Connection quality per person comes from the call's one `getStats()` every 2 s: each remote track's `inbound-rtp` (loss over the window, jitter, concealed samples) and, for you, the round trip and loss. `web/src/lib/ui/link.ts` grades it and holds a grade until two windows in a row agree on a new one (the math is in `link-stats.ts`, loaded at the first join). Three windows in a row without a packet from someone who is not muted turn their icon back to measuring; your own row counts as all lost while ICE is disconnected. No server change. "Even out voices" (Settings > Voice, off by default, saved in `vesper.level`) adds a gain per remote person in `playback.ts`, under the manual volume: `web/src/lib/level.ts` averages the speech level over about 3 s from the speaking analyser (frames under -40 dBFS are skipped, so the gain holds in silence and room noise is never lifted) and moves the gain towards a common level, at most 10 dB either way, cutting in about 1 s and lifting in about 4 s. Each join starts at 0 dB. It is on the playback side only; the mic path is not touched. `web/src/lib/session.svelte.ts` keeps one socket per
   page and the state it pushes (`state.ts`). After a close it reconnects after a random wait that doubles from 1 to 2 s up to 15 to 30 s, asking `/api/me` first; the wait
   starts over only after a socket stayed up for 10 s.
   It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). A `peer_left` with your
@@ -137,8 +137,9 @@ the SFU keys sessions by that id, not the account. A new `check` ends the last o
 
 Force-mute (`Voice::force_mute`): sets `force_muted` on the account, sends `force_muted { muted }` to all of that user's sockets
 and `peer_state` to the room. While it holds, `set_voice_state` cannot clear `muted`. It holds across leave and rejoin until a
-moderator lifts it, and lifting does not unmute. It lives in memory, so a restart lifts it. Only the client stops sending audio
-([known-issues.md](known-issues.md#security-and-abuse)).
+moderator lifts it, and lifting does not unmute. It lives in memory, so a restart lifts it. The SFU enforces it too:
+`force_mute` calls `SfuHandle::set_muted`, and the SFU drops every audio packet from that user at the forward point, so a
+client that ignores the mute is not heard. The SFU keys it by user id, not by session, so it holds across a rejoin as well.
 
 Pushed from REST (`hub.rs`): a room change sends each socket `rooms_changed` with only the rooms in its user's list (`listed`: what it can see, plus archived rooms for the owner); a role
 change also does, since the role decides that. A role, ban, profile or picture change sends everyone `user_updated`; a signup sends everyone `user_created`
@@ -171,7 +172,7 @@ unit tests in `hub.rs` and `voice.rs`.
 ## SFU ownership
 
 - The SFU thread owns the UDP socket, every str0m `Rtc` client and all media state. Nothing else touches them. The server sends it commands
-  (`join`, `answer`, `leave`, `set_advertised`) over a channel and gets `SfuEvent::Offer` and `SfuEvent::Closed` back per session.
+  (`join`, `answer`, `leave`, `set_muted`, `set_advertised`) over a channel and gets `SfuEvent::Offer` and `SfuEvent::Closed` back per session.
 - `Voice` owns presence: who is in which room, muted, deafened or force-muted, and the socket for each session. It keeps the
   latest copy of each room for visibility checks. It does not touch media.
 - A session ends on ICE timeout, an error, an offer unanswered for `answer_timeout` (10 s), `leave`, or a new join by the same user
@@ -227,7 +228,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 ## HTTP API
 
-JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`, `uploads.rs`, `avatars.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
+JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, `api_messages.rs`, `api_push.rs`, `uploads.rs`, `avatars.rs`). Bodies are the `vesper-protocol` types in `api.rs`. A failed call returns
 `ApiError { code, message }`, and the status follows the code: `bad_request` 400, `unauthorized` 401, `forbidden` 403,
 `not_found`, `invite_invalid` and `reset_invalid` 404, `conflict` 409, `too_large` 413, `rate_limited` 429 (with `Retry-After` in seconds),
 `internal` 500, `quota_full` 507.
@@ -248,6 +249,11 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/me/reset-notices` | a session | `ResetNotice[]`: resets of your password not shown yet, now marked shown (the sign-in page shows them once) |
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
 | `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
+| `GET /api/push` | a session | `PushInfo`: the VAPID public key (null when push is off) and `PushDevice[]`, `current` marks this session's |
+| `PUT /api/push/subscription` (`PushSubscribe`) | a session, Push limit by user (20, then 1 per 10 s, shared with the switches and the test) | 204; replaces this session's subscription. 400 for an endpoint off the push service list or bad keys, 404 when push is off, 409 past 5 devices or for an endpoint another session holds with other keys |
+| `DELETE /api/push/subscription` | a session | 204, this session's subscription is gone |
+| `DELETE /api/push/devices/{id}` | a session | 204, or 404 if the id is not one of yours |
+| `POST /api/push/test` | a session, Push limit | 204 once the push service took it; 404 with no subscription or when the service says it is gone or refuses the key (then deleted), 500 for any other answer |
 | `GET /api/users` | a session | `UserInfo[]`, every account (role and banned included) to any signed-in member by design: the WebSocket hello sends the same list |
 | `GET /api/invites` | moderator or owner | `InviteInfo[]`, newest first |
 | `POST /api/invites` (`InviteCreate`) | moderator or owner; a moderator invite needs the owner | 201 `InviteCreated` with the link `<origin>/invite#<code>` |
@@ -445,6 +451,51 @@ speed is not in these numbers. The box was not idle, so the numbers move a few m
 
 The test fails if any of these is 50 ms or more. Not measured: the 1 GB VM (expect it slower), a database with years of real chat.
 A one-letter prefix (`a*`) was the slow case; the server now matches a last term ending in a one-letter or one-digit token (`a`, `a.`, `x-a`) as a whole word, and the web client waits for 2 characters.
+
+## Web Push
+
+Notifications while Vesper is closed (issue #58): "alice mentioned you in Games" and "alice started voice in Games". Server
+`push.rs` and `api_push.rs`, store `push.rs` (migration `0009_push.sql`), client `web/src/lib/push.ts`,
+`routes/settings/PushSettings.svelte` and `web/public/sw.js`.
+
+- **Opt-in per device.** Settings > Notifications > While Vesper is closed. The switch asks for permission (from the click), registers
+  `/sw.js` and subscribes with the server's VAPID public key. Each device has a mentions switch and a voice switch, both off
+  until the person turns them on. Turning it off, or logging out, unregisters the worker; the server deletes the subscription with the session.
+- **Who gets one.** A new message pushes to the accounts it mentions (already limited to people who can see the room and are not
+  banned). The first join of an empty voice room pushes to everyone who can see the room. Never to the sender, never to an account with a
+  WebSocket open at that moment (its tab shows the event), never to a device with that switch off or a session unused for 90 days,
+  and "started voice" at most once per room and person per 10 minutes (in memory, so a restart forgets it). Edits do not push.
+- **What the push service sees.** The payload `PushPayload { kind, room_id, title, body }` is encrypted for the browser (RFC 8291,
+  `aes128gcm`, tested against the RFC's Appendix A vector), so Google, Mozilla, Apple or Microsoft see only that a push went to that
+  browser, its size and time. The body names the sender and the room, never the message text. TTL 24 h for mentions, 10 minutes for
+  voice; `Topic` per room, so a waiting push is replaced by a newer one.
+- **VAPID.** An ES256 key made on first start and kept in the database (`server_secrets`), so a copy of `vesper.db` keeps it and
+  existing subscriptions keep working after a restore. If the key changes (a restore without that row), push services refuse the old
+  subscriptions with 401 or 403 and the server deletes them; Settings compares the browser's subscription with the current key and
+  asks to turn it on again. JWTs last 12 hours. The contact (`sub`) is `VESPER_PUSH_SUBJECT`, else an https
+  `VESPER_ORIGIN`; with neither, push is off ([env.md](env.md)).
+- **SSRF.** The server POSTs to a URL the browser gave it, so `parse_endpoint` allows only https on port 443 to `fcm.googleapis.com`,
+  `updates.push.services.mozilla.com`, `*.push.apple.com` and `*.notify.windows.com`, with no user part and at most 2048 bytes. The
+  name is resolved once; if any address is not public (loopback, private, link-local such as 169.254.169.254, CGNAT, documentation,
+  multicast, IPv6 unique-local, or IPv4 wrapped in IPv6) the push is refused, and the connection goes to the checked address. TLS with
+  the Mozilla root list (`webpki-roots`), HTTP/1.1, no redirects followed, no cookies, 10 s for the lookup and the exchange together,
+  only the status line of the answer read. 404 or 410 (gone) and 401 or 403 (made for another VAPID key) delete the subscription. At
+  most 8 sends run at once and 256 wait or run; past that a push is dropped (a debug log line), so a mention storm cannot grow a
+  backlog. A port other than 443 is refused from the raw text (`http::Uri` reads `:65979` as no port), and so is a path that does not
+  start with `/`. A second session may take over an endpoint already stored only when its keys match too (the same browser, signed in
+  as someone else); otherwise 409, so knowing an endpoint is not enough to take another person's pushes. The `test-push` cargo feature (tests and the push e2e) also allows
+  `http://127.0.0.1:<port>`; it is a compile error in a release build.
+- **The worker** shows the notification (tag `<kind>-<room id>`, so a voice push never replaces a mention), focuses an open Vesper tab and asks it to open the room (the app navigates
+  in place, so a call goes on) or opens `/r/<id>`, and resubscribes on `pushsubscriptionchange` with the device's switches. It has
+  no fetch handler and caches nothing.
+- **Install.** `web/public/manifest.webmanifest` (standalone, `#100e0c`, 192 and 512 px icons) is linked from `index.html`. Under the
+  CSP the manifest falls under `default-src 'self'` and the worker under `worker-src 'self'`; nothing changed in the policy.
+
+Verified: unit tests in `push.rs` (RFC 8291 vector, VAPID JWT signature, `aud`, `exp` at most 24 h, `sub`, the SSRF matrix, the
+recipients rule, the 10 minute rule), `crates/vesper-server/tests/push.rs` (a fake push service on 127.0.0.1: signature, decrypted
+payload, no text in the clear, 410 deletes, switches, open socket, hidden room, rate limit, cap), `crates/vesper-store/tests/push.rs`,
+`web/src/lib/push.test.ts` and `web/e2e/push.mjs` (headless Chromium, with a stand-in `PushManager`). Not verified: a real push
+service, a notification on screen, iOS, Firefox and Safari.
 
 ## Static serving
 

@@ -33,6 +33,8 @@ const REPLACE_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct JoinResult {
     pub user_id: String,
     pub session: u64,
+    /// The room was empty before this join ("started voice").
+    pub first: bool,
 }
 
 #[derive(Clone)]
@@ -175,6 +177,7 @@ impl Voice {
 
         let session = self.0.next_session.fetch_add(1, Ordering::Relaxed);
         let (closed_tx, closed_rx) = oneshot::channel();
+        let first;
         {
             let mut st = self.lock();
             // A change since `room` was read is already here (`refresh`): never put the old copy
@@ -214,6 +217,7 @@ impl Voice {
                 peer: member.peer(user_id),
             };
             st.tell(&self.0.hub, room.id, joined, &[&tx]);
+            first = !st.members.values().any(|m| m.room == room.id);
             st.members.insert(user_id.clone(), member);
         }
 
@@ -227,6 +231,7 @@ impl Voice {
         Ok(JoinResult {
             user_id: user_id.clone(),
             session,
+            first,
         })
     }
 
@@ -251,6 +256,7 @@ impl Voice {
         Ok(JoinResult {
             user_id: id,
             session: 0,
+            first: false,
         })
     }
 
@@ -329,8 +335,9 @@ impl Voice {
     }
 
     /// Set or lift a force-mute and tell the user's sockets with `ForceMuted`. It holds across
-    /// leave and rejoin until lifted. Lifting does not unmute: the user does that. Only the
-    /// client enforces it (docs/known-issues.md). True if the user is in voice now.
+    /// leave and rejoin until lifted. Lifting does not unmute: the user does that. The SFU drops
+    /// their audio while it holds, so a client that ignores it is not heard. True if the user is
+    /// in voice now.
     pub fn force_mute(&self, user_id: &str, muted: bool) -> bool {
         let mut st = self.lock();
         if muted {
@@ -338,6 +345,8 @@ impl Voice {
         } else {
             st.force_muted.remove(user_id);
         }
+        // Under the lock, so two force-mutes reach the SFU in the order they change `force_muted`.
+        self.0.sfu.set_muted(user_id, muted);
         self.0
             .hub
             .send_user(user_id, ServerMsg::ForceMuted { muted });

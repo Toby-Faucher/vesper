@@ -1,7 +1,8 @@
 // Two-browser voice and chat test. Starts the release server on a throwaway data dir, makes the owner invite with the CLI, signs
 // alice up, has her invite bob through the API, and joins both into `general` with fake microphones. Checks that audio
 // flows both ways (bob to alice only as rising packets), that bob hears alice, and that each sees the other in the people list.
-// Then bob leaves and rejoins three ways while alice stays, and each must hear the other again (#45).
+// Then bob leaves and rejoins three ways while alice stays, and each must hear the other again (#45). Then alice
+// force-mutes bob, whose page keeps sending anyway, and she must stop receiving his audio until she lifts it (#53).
 // Then chat: Markdown and raw HTML shown safely, a reply, an edit, a PNG upload shown inline, the upload tray, drop, image
 // boxes and the viewer, and the search dialog, which never returns a message from a room bob cannot see. Stops the server.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
@@ -171,6 +172,15 @@ try {
   await inVoice(bob.page, 'alice').waitFor({ timeout: 5000 });
   console.log('presence_seen_by_both: ok');
 
+  // connection_quality_per_person (#56): after a few stats polls each row shows a graded icon with an accessible name.
+  for (const [page, other] of [[alice.page, 'bob'], [bob.page, 'alice']]) {
+    const icon = inVoice(page, other).getByRole('img', { name: new RegExp(`^Connection to ${other}: (good|fair|poor)$`) });
+    await icon.waitFor({ timeout: 10000 });
+    console.log(`  ${other} on ${page === alice.page ? 'alice' : 'bob'}'s page: ${await icon.getAttribute('aria-label')}; ${await icon.getAttribute('title')}`);
+  }
+  await alice.page.getByRole('img', { name: /^Your connection: (good|fair|poor)$/ }).waitFor({ timeout: 5000 });
+  console.log('connection_quality_per_person: ok');
+
   // rejoin_audio (#45): bob leaves and joins again (after a pause, within a second, and after a reload) while alice stays.
   // Each time both directions must flow again: packets and bytes rise, and each page rings the other's row (it is heard).
   // "Heard" is the loudest sample of a remote stream in the app's own playback graph (the `meter` init script): the
@@ -189,6 +199,16 @@ try {
     await page.getByRole('button', { name: 'Leave' }).click();
     await page.getByRole('button', { name: 'Join' }).waitFor();
   };
+  // levelling_switch (#57): bob turns "Even out voices" on (off by default); the rejoins below run with it, and it is still
+  // on after the reload. The gain itself is checked by the unit tests (playback.test.ts, level.test.ts).
+  const even = async () => {
+    await bob.page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await bob.page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Voice' }).click();
+    return bob.page.getByRole('switch', { name: 'Even out voices' });
+  };
+  assert.equal(await (await even()).isChecked(), false, 'Even out voices is on by default');
+  await (await even()).check();
+  await openRoom(bob.page, 'general');
   await flowing(alice.page, 'before: alice hears bob');
   await flowing(bob.page, 'before: bob hears alice');
   for (const [how, pause] of [['leave, wait, join', 2000], ['leave and join within a second', 0], ['reload, join', null]]) {
@@ -205,6 +225,37 @@ try {
     await flowing(bob.page, 'bob hears alice');
   }
   console.log('rejoin_audio: ok');
+  assert.equal(await (await even()).isChecked(), true, 'Even out voices did not last a reload');
+  await (await even()).uncheck();
+  await openRoom(bob.page, 'general');
+  console.log('levelling_switch: ok');
+
+  // force_mute_enforced (#53): alice (owner) force-mutes bob, and bob's page turns his track back on every 50 ms, like a
+  // client that ignores the mute. The SFU drops his audio, so alice's inbound bytes stop growing; lifting it resumes them.
+  const bobId = (await call(alice.page, 'GET', '/api/users')).find((u) => u.display_name === 'bob').user_id;
+  const forceMute = (muted) => call(alice.page, 'POST', `/api/users/${bobId}/force-mute`, { muted });
+  await bob.page.evaluate(() => {
+    window.__ignoreMute = setInterval(() => {
+      for (const pc of window.__pcs) for (const s of pc.getSenders()) if (s.track) s.track.enabled = true;
+    }, 50);
+  });
+  await forceMute(true);
+  await bob.page.getByText('A moderator muted you.').waitFor({ timeout: 5000 });
+  await sleep(500);
+  const m1 = await inboundAll(alice.page);
+  await sleep(2000);
+  const m2 = await inboundAll(alice.page);
+  console.log('  while force-muted:', JSON.stringify(m1), '->', JSON.stringify(m2));
+  assert.equal(m2.bytes, m1.bytes, 'alice still receives bob\'s audio while he is force-muted');
+  await forceMute(false);
+  await sleep(500);
+  const u1 = await inboundAll(alice.page);
+  await sleep(1500);
+  const u2 = await inboundAll(alice.page);
+  console.log('  after lifting:', JSON.stringify(u1), '->', JSON.stringify(u2));
+  assert.ok(u2.bytes > u1.bytes, 'bob\'s audio did not resume after the force-mute was lifted');
+  await bob.page.evaluate(() => clearInterval(window.__ignoreMute));
+  console.log('force_mute_enforced: ok');
 
   // picture_shows_live (#21): alice picks a picture in Settings > Account (cropped and redrawn by a canvas); bob's sidebar
   // shows it on her voice row without a reload, loaded under the page CSP, and the speaking ring still draws around it.

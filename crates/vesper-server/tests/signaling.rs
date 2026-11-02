@@ -981,6 +981,50 @@ async fn force_mute_holds_until_lifted() {
     assert_eq!(b.next().await, state(false, false, false));
 }
 
+/// The SFU enforces a force-mute: audio from a client that keeps sending is not forwarded.
+#[tokio::test(flavor = "multi_thread")]
+async fn force_mute_stops_forwarding_in_the_sfu() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let moder = server.account("moder", Role::Moderator).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (b, _, _) = Conn::joined(&server, &bob, room).await;
+    wait_until("media up", || {
+        a.client.is_connected() && b.client.is_connected() && b.client.remote_tracks() >= 1
+    })
+    .await;
+    let from_a = || {
+        let sent = a.client.sent();
+        b.client
+            .received()
+            .iter()
+            .filter(|p| sent.contains(p))
+            .count()
+    };
+    a.client.send_audio(10);
+    wait_until("bob hears alice", || from_a() == 10).await;
+
+    let path = format!("/api/users/{a_id}/force-mute");
+    let (status, _, _) = server
+        .call(post(&path, json!({ "muted": true }), &moder))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    // Alice's client ignores the mute and keeps sending.
+    a.client.send_audio(20);
+    wait_until("alice sent 30", || a.client.sent().len() == 30).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(from_a(), 10, "bob heard force-muted alice");
+
+    let (status, _, _) = server
+        .call(post(&path, json!({ "muted": false }), &moder))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    a.client.send_audio(10);
+    wait_until("bob hears alice again", || from_a() >= 18).await;
+}
+
 #[tokio::test]
 async fn moderator_cannot_kick_owner() {
     let server = TestServer::new().await;

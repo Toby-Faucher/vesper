@@ -8,6 +8,7 @@
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   import Speaking from '../lib/ui/c/Speaking.svelte';
+  import LinkIcon from '../lib/ui/c/LinkIcon.svelte';
   // The people in voice under a room row. Folded, it is a stack of avatars on one line. Speaking is known only for the call
   // you are in; other rooms send no level, so they show no ring. Each person is a button that opens their card. A person who
   // joins or leaves slides in or out (the first and the last with the whole list); folding and speaking change at once.
@@ -16,6 +17,7 @@
   const STACK = 8; // avatars drawn when folded; the rest is "+n"
   const user = (p: Peer) => session.state.users[p.user_id] ?? { user_id: p.user_id, display_name: p.name, accent: '' };
   const speaking = (p: Peer) => voice.joinedRoom === roomId && voice.speaking.has(p.user_id);
+  const link = (p: Peer) => (voice.joinedRoom === roomId ? voice.links[p.user_id] : undefined); // only the call you are in has stats
   const state = (p: Peer) => (p.deafened ? 'deafened' : p.muted || p.force_muted ? 'muted' : null);
 </script>
 
@@ -49,6 +51,7 @@
               <Icon d={st === 'deafened' ? I.headphonesOff : I.micOff} /><span class="sr-only">{st}</span>
             </span>
           {/if}
+          {#if link(p)}<span class="ml-auto flex"><LinkIcon link={link(p)!} name={p.user_id === voice.userId ? null : p.name} /></span>{/if}
         </button>
       </li>
     {/each}
