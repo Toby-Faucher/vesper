@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { joinRoom, type Signaling } from './signaling';
+import { joinRoom } from './join';
+import type { Signaling } from './signaling';
 import type { ServerMsg } from './gen/ServerMsg';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));

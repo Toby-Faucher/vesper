@@ -8,11 +8,13 @@ const h = vi.hoisted(() => ({
   capture: null as null | { resolve: (c: unknown) => void; reject: (e: unknown) => void },
   playbacks: [] as { close: ReturnType<typeof vi.fn>; setSink: ReturnType<typeof vi.fn>; setLevelling: ReturnType<typeof vi.fn> }[],
   sinkFail: null as unknown,
+  ctx: undefined as unknown, // the AudioContext the last Playback was given (undefined: it made its own)
 }));
 vi.mock('./playback', () => ({
   Playback: class {
-    constructor() {
-      calls.push('playback'); // the real one creates and resumes its AudioContext here
+    constructor(_volumes: unknown, ctx?: unknown) {
+      calls.push('playback'); // the real one creates and resumes its AudioContext here, unless it is given one
+      h.ctx = ctx;
       h.playbacks.push(this as never);
     }
     close = vi.fn();
@@ -32,8 +34,9 @@ vi.mock('./audio/capture', () => ({
     return new Promise((resolve, reject) => (h.capture = { resolve, reject }));
   }),
 }));
+vi.mock('../routes/CallBar.svelte', () => ({ default: {} })); // in the call chunk; its styles need a real document
 const joinRoom = vi.fn();
-vi.mock('./signaling', () => ({ joinRoom: (...a: unknown[]) => joinRoom(...a) }));
+vi.mock('./join', () => ({ joinRoom: (...a: unknown[]) => joinRoom(...a) }));
 
 // Counts listeners on window, document and mediaDevices.
 class Target {
@@ -80,7 +83,9 @@ const me = 'a'.repeat(32);
 
 let sig: FakeSig;
 let stop: () => void;
-beforeEach(() => {
+let cold = true; // the first test runs before the call chunk has loaded; every later one after
+beforeEach(async () => {
+  if (!cold) await v.loadCall();
   vi.useFakeTimers();
   calls.length = 0;
   h.playbacks.length = 0;
@@ -112,6 +117,32 @@ async function joined() {
   return { cap, pc, off };
 }
 
+// Must stay the first test: it needs the call chunk not loaded yet.
+it('a cold page (no hover or focus first): both AudioContexts are made and resumed inside the click, then handed over', async () => {
+  const made: { opts?: unknown; resumed: boolean }[] = [];
+  const g = globalThis as { AudioContext?: unknown };
+  g.AudioContext = class {
+    resumed = false;
+    constructor(public opts?: unknown) { made.push(this); }
+    resume() { this.resumed = true; return Promise.resolve(); }
+    close() { return Promise.resolve(); }
+  };
+  try {
+    const p = v.join(1); // not awaited: only the synchronous part has run
+    expect(made.map((c) => [c.opts, c.resumed])).toEqual([[undefined, true], [{ sampleRate: 48000, latencyHint: 'interactive' }, true]]);
+    expect(calls).toEqual([]); // the call code is still loading
+    expect(voice.joining).toBe(true);
+    await vi.waitFor(() => expect(calls).toEqual(['playback', 'capture']));
+    expect(h.ctx).toBe(made[0]);
+    expect(vi.mocked(createCapture).mock.calls.at(-1)![1]!.createContext!()).toBe(made[1]);
+    h.capture!.reject(new Error('stop'));
+    expect(await p).toBe(true);
+  } finally {
+    delete g.AudioContext;
+    cold = false;
+  }
+});
+
 describe('join', () => {
   it('even out voices: off by default, passed to each new call, saved, and applied to a running call', async () => {
     expect(voice.levelling).toBe(false);
@@ -126,9 +157,10 @@ describe('join', () => {
     v.setLevelling(false);
   });
 
-  it('creates the playback context and calls createCapture before its first await', () => {
+  it('with the call chunk loaded (a hover or focus came first): creates the playback context and calls createCapture before its first await', () => {
     const p = v.join(1); // not awaited: only the synchronous part has run
     expect(calls).toEqual(['playback', 'capture']);
+    expect(h.ctx).toBeUndefined(); // Playback makes its own, inside the click
     expect(voice.joining).toBe(true);
     h.capture!.reject(new Error('stop'));
     return p;

@@ -3,7 +3,7 @@
   import { onMount, untrack } from 'svelte';
   import { href, parse } from '../lib/route';
   import { closePage, lastRoomKey, navigate, route, session } from '../lib/session.svelte';
-  import { startVoice, toggleDeafen, toggleMute, voice } from '../lib/voice.svelte';
+  import { loadCall, startVoice, toggleDeafen, toggleMute, voice } from '../lib/voice.svelte';
   import { closePerson, person } from '../lib/ui/person.svelte';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
   import { layers } from '../lib/ui/layers.svelte';
@@ -20,7 +20,6 @@
   import { lazy } from '../lib/ui/lazy';
   import SwitcherField from './SwitcherField.svelte';
   import { MAX_QUERY } from '../lib/ui/search-max';
-  import CallBar from './CallBar.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
   import RoomView from './RoomView.svelte';
   import Sidebar from './Sidebar.svelte';
@@ -183,7 +182,8 @@
         </EmptyState>
       </div>
     {/if}
-    {#if voice.joined}<CallBar bind:height={barH} />{/if}
+    <!-- The call bar is in the call chunk, loaded before a join can finish. -->
+    {#if voice.joined}{#await loadCall() then m}<m.CallBar bind:height={barH} />{/await}{/if}
   </main>
 </div>
 

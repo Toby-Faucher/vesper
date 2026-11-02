@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Signaling, joinRoom } from './signaling';
+import { Signaling } from './signaling';
+import { joinRoom } from './join';
 
 class FakeWS {
   static last: FakeWS;
