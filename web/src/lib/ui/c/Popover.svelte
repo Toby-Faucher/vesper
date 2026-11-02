@@ -36,7 +36,8 @@
   const shown = () => el.matches(':popover-open');
   function refocus() {
     const a = document.activeElement;
-    if (anchor && (!a || a === document.body || el.contains(a))) anchor.focus();
+    // el is null when the popover was removed while open: its toggle event comes after the unmount.
+    if (anchor && (!a || a === document.body || el?.contains(a))) anchor.focus();
   }
 
   $effect(() => {
