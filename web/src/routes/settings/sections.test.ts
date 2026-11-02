@@ -4,7 +4,7 @@ import { RESETS } from './sections';
 
 describe('Voice section resets', () => {
   it('keeps_the_chosen_mic_and_speaker', () => {
-    const mine: AudioSettings = { ...D, micId: 'mic-2', speakerId: 'spk-3', vad: { thresholdDb: -20, gate: true }, autoGain: !D.autoGain, bitrateKbps: 128 };
+    const mine: AudioSettings = { ...D, micId: 'mic-2', speakerId: 'spk-3', vad: { thresholdDb: -20, gate: true, auto: true }, autoGain: !D.autoGain, bitrateKbps: 128 };
     for (const [s, patch] of Object.entries(RESETS)) {
       const after = { ...mine, ...patch };
       expect([after.micId, after.speakerId], s).toEqual(['mic-2', 'spk-3']);

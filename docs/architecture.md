@@ -202,6 +202,9 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
     from frame arrival, so in played time the release starts 200 ms minus the queue depth after the sound drops. Turning it off
     ramps it open. The switch is disabled outside DeepFilterNet mode. The passthrough before the model is
     ready, and after a failure, is not gated.
+    An option, off by default (`vad.auto`, Settings > Voice, "Automatic threshold"): the gate ignores the marker and opens above
+    3 times the 10th percentile of the frame RMS over the last 2 s, clamped to 3e-6 .. 0.04 RMS, and closes 4 dB under that
+    (Fluxer's rule). It compares frame RMS, not peak, and stays open for the first 200 ms of frames. It learns nothing while the gate is off.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
   suppression is on only in `browser` mode, or in `deepfilter` mode if the user turned it on.
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is

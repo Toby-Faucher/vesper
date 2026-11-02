@@ -190,7 +190,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       const n = node;
       const set = () => w.postMessage({ type: 'set', atten: s.attenDb, beta: s.postFilter });
       // The limiter only with a boost: at 0 dB the default path stays bit-identical to the mic.
-      const dyn = () => n.port.postMessage({ type: 'dynamics', limit: s.inputBoostDb > 0, gate: s.vad.gate, thresholdDb: s.vad.thresholdDb });
+      const dyn = () => n.port.postMessage({ type: 'dynamics', limit: s.inputBoostDb > 0, gate: s.vad.gate, thresholdDb: s.vad.thresholdDb, auto: s.vad.auto });
       dyn(); // before the model is ready too: the passthrough is limited and the boost already applies
       timer = setTimeout(() => fail(`denoiser not ready after ${d.readyTimeoutMs / 1000} s`), d.readyTimeoutMs);
       w.onmessage = ({ data }: MessageEvent<DspOut>) => {

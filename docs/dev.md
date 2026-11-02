@@ -237,7 +237,8 @@ cd web && VESPER_LAB_DIR=/tmp/gate-lab VESPER_CORPUS_DIR=../research/corpus48/bu
 ```
 
 It replays each denoised item through `DenoiseCore` as the worker's replies, sets the marker 6 dB over the lead-in noise peak and prints,
-per item, the speech level change, word onsets, the lead-in noise cut and the largest sample step. The limiter part boosts the clean
+per item, the speech level change, word onsets, the lead-in noise cut, the noise between words and the largest sample step. Each item runs
+twice: with the marker, and with the automatic threshold (`auto`); the automatic rows are reported, not held to the onset limit. The limiter part boosts the clean
 speech 6 and 12 dB over full scale and compares it with a hard clip.
 
 ## CI
