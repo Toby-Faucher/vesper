@@ -3,14 +3,13 @@
   import { tick, untrack } from 'svelte';
   import { href } from '../lib/route';
   import { navigate, session } from '../lib/session.svelte';
-  import { chat, jumpTo, marks, search } from '../lib/chat.svelte';
+  import { chat, jumpTo, search } from '../lib/chat.svelte';
   import { errorText } from '../lib/api';
   import type { SearchHit } from '../lib/gen/SearchHit';
   import { loadUsers } from '../lib/ui/users';
-  import { dayLabel, plain } from '../lib/ui/timeline';
-  import { parse } from '../lib/markdown';
+  import { dayLabel } from '../lib/ui/timeline';
   import { MAX_QUERY, complete, keyAt, keyValue, nothingToSearch, parseSearch, setKey, shortLast, type Key } from '../lib/ui/searchq';
-  import { Searcher } from '../lib/ui/search.svelte';
+  import { Searcher, marks } from '../lib/ui/search.svelte';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
@@ -256,7 +255,7 @@
                   <time class="shrink-0 text-xs text-fg-3 tabular-nums">{clock.format(h.message.created_at)}</time>
                   <span class="go">Jump <Icon d={I.chevronRight} size={16} /></span>
                 </span>
-                <span class="snip">{#each marks(plain(parse(h.snippet))) as part}{#if part.mark}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
+                <span class="snip">{#each marks(h.snippet) as part}{#if part.mark}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
               </span>
             </button>
           {/each}

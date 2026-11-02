@@ -25,14 +25,20 @@ use std::time::Duration;
 use axum::Router;
 use std::path::PathBuf;
 
-use axum::extract::{Request, State};
+use axum::body::Body;
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use hyper::body::Incoming;
+use hyper_util::rt::{TokioIo, TokioTimer};
+use hyper_util::service::TowerToHyperService;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+use tower::ServiceExt;
 use tower_http::services::ServeDir;
+use tower_http::timeout::{RequestBodyDeadlineLayer, RequestBodyTimeoutLayer};
 use tracing::{info, warn};
 use vesper_sfu::{Sfu, SfuConfig, SfuHandle};
 
@@ -67,15 +73,22 @@ pub struct AppState {
     pub push: Push,
 }
 
-/// The `/api` routes, with the Origin check and the body cap.
+/// The `/api` routes, with the Origin check, the body cap and the body timeouts.
 pub fn router(state: AppState) -> Router {
-    let api = api_accounts::routes()
+    let json = api_accounts::routes()
         .merge(api_admin::routes())
         .merge(api_rooms::routes())
         .merge(api_messages::routes())
         .merge(api_push::routes())
+        .layer(RequestBodyTimeoutLayer::new(state.cfg.body_idle))
+        .layer(RequestBodyDeadlineLayer::new(state.cfg.body_total));
+    // Uploads apply the same limits in `uploads::read_body`; a picture is at most 512 KiB.
+    let pictures = avatars::routes()
+        .layer(RequestBodyTimeoutLayer::new(uploads::READ_IDLE))
+        .layer(RequestBodyDeadlineLayer::new(uploads::READ_TOTAL));
+    let api = json
         .merge(uploads::routes())
-        .merge(avatars::routes())
+        .merge(pictures)
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_origin,
@@ -252,14 +265,55 @@ pub async fn serve(
     info!("listening on {addr}");
     Ok((
         addr,
-        tokio::spawn(async move {
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .await
-        }),
+        tokio::spawn(accept_loop(listener, app, cfg.header_timeout)),
     ))
+}
+
+/// HTTP/1 only, like Caddy's upstream requests. `axum::serve` sets no hyper timer, so a client
+/// could hold a connection open by never finishing its request head; this sets
+/// `header_read_timeout`, which also closes a kept-alive connection idle that long. An upgraded
+/// WebSocket leaves hyper, so neither the timer nor the body timeouts reach it.
+async fn accept_loop(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    header_timeout: Duration,
+) -> std::io::Result<()> {
+    let mut http = hyper::server::conn::http1::Builder::new();
+    http.timer(TokioTimer::new())
+        .header_read_timeout(header_timeout);
+    loop {
+        let (tcp, peer) = match listener.accept().await {
+            Ok(c) => c,
+            // Like `axum::serve`: a client gone before accept is skipped; anything else (out of file
+            // descriptors) waits a second instead of spinning.
+            Err(e) if is_connection_error(&e) => continue,
+            Err(e) => {
+                warn!("accept: {e}");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+        let svc = app.clone().map_request(move |mut req: Request<Incoming>| {
+            req.extensions_mut().insert(ConnectInfo(peer));
+            req.map(Body::new)
+        });
+        let conn = http
+            .serve_connection(TokioIo::new(tcp), TowerToHyperService::new(svc))
+            .with_upgrades();
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::debug!("connection from {peer}: {e}");
+            }
+        });
+    }
+}
+
+fn is_connection_error(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{ConnectionAborted, ConnectionRefused, ConnectionReset};
+    matches!(
+        e.kind(),
+        ConnectionRefused | ConnectionAborted | ConnectionReset
+    )
 }
 
 /// 503 once the SFU thread has died, for external monitors and load balancers. (Docker does not

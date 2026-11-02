@@ -3,6 +3,7 @@ name = "vesper-store"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 # The only crate that imports sqlx (ADR 0005). Runtime queries only: no `query!`, so no .sqlx cache.
 [dependencies]

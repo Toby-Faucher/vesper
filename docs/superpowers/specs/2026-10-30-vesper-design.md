@@ -6,7 +6,7 @@ Status: draft for Toby's review. Items marked **[Toby]** were decided by Toby in
 
 ## Intent and why
 
-Toby was falsely banned from Discord and dislikes how intrusive it is and how much personal data it holds. The other self-hosted alternatives he tried sound bad, because Discord's strength is its background noise suppression. He wants a small, simple replacement for his friend group (all in Vernal, Utah) that does two things well: chat, and voice with excellent mic quality. Other alternatives try to do everything; Vesper deliberately does little.
+Toby dislikes how intrusive Discord is and how much personal data it holds. The other self-hosted alternatives he tried sound bad, because Discord's strength is its background noise suppression. He wants a small, simple replacement for his friend group that does two things well: chat, and voice with excellent mic quality. Other alternatives try to do everything; Vesper deliberately does little.
 
 Success **[Toby]**: his friends use it as their daily chat and it covers their needs. Quality bar **[call]**: in a blind listen with a noisy room, friends prefer Vesper's voice to Discord's.
 
@@ -25,7 +25,7 @@ Rust is the means, not a learning goal **[Toby]**. Latency and steady performanc
 
 - Screen share **[Toby: v2]**, monitoring and status page **[Toby: v2]**, phones and mobile layouts **[Toby]**, light theme **[Toby]**, accessibility work beyond keyboard basics **[Toby]**, games, watch-together, bots, plugins, federation, video, E2E encryption, call recording **[call]**.
 - Multiple unrelated groups on one server **[Toby: one friend group]**.
-- Open sourcing for now **[Toby]**.
+- Open sourcing was ruled out at the start **[Toby]**; superseded: the repository is public under the MIT license **[Toby, 2026-11-01]**.
 
 ## Anti-goals
 
@@ -36,10 +36,10 @@ Rust is the means, not a learning goal **[Toby]**. Latency and steady performanc
 ## Constraints
 
 - Desktop Chrome and Firefox only **[Toby]**.
-- One host: a Proxmox box at 10.0.0.100, in a container or in the Dockge VM, behind Caddy on a subdomain of tfaucher.com **[Toby]**. Proxmox already provides backups **[Toby]**. Starting size 1 vCPU, 1 GB RAM, 20 GB disk, scalable **[Toby]**.
+- One host: a Proxmox box, in a container or in the Dockge VM, behind Caddy on a subdomain of tfaucher.com **[Toby]**. Proxmox already provides backups **[Toby]**. Starting size 1 vCPU, 1 GB RAM, 20 GB disk, scalable **[Toby]**.
 - Toby's connection is 1 Gbps fiber and the friends are local, so bandwidth is not a constraint **[Toby]**.
-- Friends are not behind strict NAT (Toby works at the ISP) **[Toby]**, so no TURN server in v1 **[call]**. The design allows adding one later.
-- Code lives on GitHub, private **[Toby]**.
+- Friends are not behind strict NAT **[Toby]**, so no TURN server in v1 **[call]**. The design allows adding one later.
+- Code lives on GitHub, public under the MIT license **[Toby, 2026-11-01]** (it was private at first).
 
 ## Decisions
 

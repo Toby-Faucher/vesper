@@ -15,9 +15,7 @@ export function tipSpot(
   return { side: p.side, dx: p.x - left };
 }
 
-function fit(e: Event) {
-  const t = (e.target as Element | null)?.closest?.<HTMLElement>('[data-tip]');
-  if (!t) return;
+function fit(t: HTMLElement) {
   const s = getComputedStyle(t, '::after');
   const spot = tipSpot(t.getBoundingClientRect(), { w: parseFloat(s.width) || 0, h: parseFloat(s.height) || 0 },
     { w: innerWidth, h: innerHeight }, t.hasAttribute('data-tip-up'), t.hasAttribute('data-tip-end'));
@@ -25,8 +23,22 @@ function fit(e: Event) {
   t.style.setProperty('--tip-dx', `${spot.dx}px`);
 }
 
-// The tooltip shows on hover or keyboard focus: both events come first.
+// The tooltip shows on hover or keyboard focus: both events come first. A label that changes while it shows (Mute to
+// Unmute) has another width, so the element shown is watched and placed again when its data-tip changes. Leaving it
+// ends the watch; moving onto a child leaves and enters again in one go, so the watch comes straight back.
+// shortcut: a tip held open by focus stops being watched when the pointer leaves; watch both states if that shows.
 export function watchTips(): void {
-  document.addEventListener('pointerover', fit);
-  document.addEventListener('focusin', fit);
+  const relabel = new MutationObserver((m) => fit(m[0].target as HTMLElement));
+  const show = (e: Event) => {
+    const t = (e.target as Element | null)?.closest?.<HTMLElement>('[data-tip]');
+    if (!t) return;
+    relabel.disconnect();
+    relabel.observe(t, { attributeFilter: ['data-tip'] });
+    fit(t);
+  };
+  const hide = () => relabel.disconnect();
+  document.addEventListener('pointerover', show);
+  document.addEventListener('focusin', show);
+  document.addEventListener('pointerout', hide);
+  document.addEventListener('focusout', hide);
 }

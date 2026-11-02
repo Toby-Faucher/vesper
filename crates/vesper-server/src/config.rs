@@ -2,6 +2,12 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+// Constants, not variables: the proxy in front has its own, and nobody has needed to tune these.
+// Tests set the `Config` fields to short values.
+pub const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
+pub const BODY_IDLE: Duration = Duration::from_secs(15);
+pub const BODY_TOTAL: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub http_bind: SocketAddr,
@@ -35,6 +41,13 @@ pub struct Config {
     pub backup_every_hours: u64,
     /// Automatic backups copy `uploads/` too (`VESPER_BACKUP_UPLOADS=1`).
     pub backup_uploads: bool,
+    /// A request head must arrive within this. hyper runs the same timer while a kept-alive
+    /// HTTP/1 connection waits for its next request, so it is also the idle limit.
+    pub header_timeout: Duration,
+    /// A JSON `/api` request body that sends nothing for `body_idle`, or is not done after
+    /// `body_total`, is cut. Uploads and profile pictures have their own, longer limits.
+    pub body_idle: Duration,
+    pub body_total: Duration,
 }
 
 impl Config {
@@ -114,6 +127,9 @@ impl Config {
                 Some("1") => true,
                 Some(v) => return Err(format!("VESPER_BACKUP_UPLOADS={v}: must be 0 or 1")),
             },
+            header_timeout: HEADER_TIMEOUT,
+            body_idle: BODY_IDLE,
+            body_total: BODY_TOTAL,
         })
     }
 

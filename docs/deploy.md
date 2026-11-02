@@ -71,6 +71,29 @@ person and of who made it, never the link.
 - **Split DNS (HTTPS name only):** make your LAN resolver answer `vesper.tfaucher.com` with the Caddy host's LAN address so LAN browsers reach HTTPS directly. This does not affect media: LAN clients still send media to the advertised public IP, so they rely on the router's hairpin NAT (loopback of UDP 40000 to the Docker host). If the router has no hairpin NAT, LAN clients cannot get media through that path; test from outside instead (phone on cellular) and treat LAN-to-LAN calls as unsupported until that is solved.
 - Known limit: the name is re-resolved every 60 s, but only sessions started afterwards pick up a changed IP; people already in a call keep the old address and must rejoin after your public IP changes.
 - **Client address:** the chain is Cloudflare, `cloudflared` on the VM, Caddy, Vesper, so Vesper's TCP peer is a loopback or private address. From such a peer (loopback, 10/8, 172.16/12, 192.168/16, IPv6 unique-local) the server takes a valid `CF-Connecting-IP` first (Cloudflare overwrites it, so a client cannot fake it through Cloudflare), then the last `X-Forwarded-For` entry (the one Caddy adds), then the peer. From any other peer it ignores both headers. Caddy's default `reverse_proxy` sets `X-Forwarded-For` to its own peer and passes `CF-Connecting-IP` through unchanged, which is what the server expects; do not add `header_up` lines that drop or rewrite them (not verified with a real Caddy). **Keep the HTTP port reachable only from Caddy**: a LAN client that reaches it directly can set either header and pick its own address, and so dodge the login and invite rate limits. See [known-issues.md](known-issues.md#security-and-abuse).
+- **Timeouts:** Cloudflare and Caddy have their own, but the server does not depend on them. It closes a
+  connection that sends no full request head in 10 s (also an idle kept-alive one), cuts a JSON body after 15 s without bytes or 30 s in
+  all, and an upload or profile picture after 30 s without bytes or 10 minutes in all. The WebSocket has none of these, only its own ping.
+  Details in [architecture.md](architecture.md#connection-timeouts). Because the server closes idle connections after 10 s, the example
+  Caddyfile keeps Caddy's idle upstream connections for 5 s, so Caddy does not send a request on a connection the server is closing (not
+  verified with a real Caddy; the example was not run through `caddy validate`, since no Caddy is on the dev machine).
+- **Existing deployments (upgrading to v1.3.1 or later):** add the same block to the live Caddyfile before or together with the upgrade.
+  On the VM that is `/opt/stacks/caddy/Caddyfile`; in the Vesper site block, the bare `reverse_proxy vesper:8080` becomes:
+
+  ```
+  reverse_proxy vesper:8080 {
+  	transport http {
+  		keepalive 5s
+  	}
+  }
+  ```
+
+  The file is a
+  single-file bind mount, so edit it in place with an editor (not `mv` or `sed -i`, which replace the file and leave the container on
+  the old one), then reload: `docker exec caddy caddy reload --config /etc/caddy/Caddyfile`. Why: the server closes an idle connection
+  after 10 s, while Caddy keeps idle upstream connections for 2 minutes by default. A request Caddy sends on such a connection just as the
+  server closes it fails; Caddy retries a GET, but not a POST, PATCH or PUT with a body, so that request gets a 502. It is rare. To spot
+  it: a 502 in Caddy's access log for a request that came after the app sat idle for a while.
 - **`VESPER_UDP_PORT_PUBLIC`** only matters when the external UDP port differs from the one the container listens on.
 
 - **Data dir permissions:** the server creates a new `VESPER_DATA_DIR` with mode 0700 and `vesper.db` (and its WAL files) with 0600. An existing directory keeps its mode, so a bind-mounted `/data` keeps its host permissions: set it to 0700 for the container user yourself. The database holds password and session hashes. Verified by a test on a fresh directory only.

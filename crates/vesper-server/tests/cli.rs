@@ -27,6 +27,9 @@ fn config(data: &TempDir) -> Config {
         backup_keep: 5,
         backup_every_hours: 0,
         backup_uploads: false,
+        header_timeout: vesper_server::config::HEADER_TIMEOUT,
+        body_idle: vesper_server::config::BODY_IDLE,
+        body_total: vesper_server::config::BODY_TOTAL,
     }
 }
 

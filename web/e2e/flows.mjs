@@ -71,6 +71,16 @@ async function walkWelcome(page) {
   const focusedHeading = () => page.evaluate(() => document.activeElement?.tagName === 'H1' && document.activeElement.textContent);
   await page.getByText('Step 1 of 3').waitFor();
   assert.equal(await focusedHeading(), 'How others see you');
+  // One logo: the sidebar's, or with the sidebar hidden the card's, also while it slides away.
+  const logos = () => page.evaluate(() => [...document.querySelectorAll('img[alt="Vesper"]')].filter((e) => e.checkVisibility()).length);
+  assert.equal(await logos(), 1, 'the welcome pane shows the logo next to the sidebar one');
+  await page.keyboard.press('Control+Backslash');
+  assert.equal(await logos(), 1, 'two logos while the sidebar slides away');
+  await page.waitForFunction(() => document.getElementById('sidebar')?.hidden);
+  assert.equal(await logos(), 1, 'no logo on the welcome pane with the sidebar hidden');
+  await page.keyboard.press('Control+Backslash');
+  await page.waitForFunction(() => !document.getElementById('sidebar')?.hidden);
+  assert.equal(await logos(), 1, 'the card kept its logo with the sidebar back');
   await page.getByRole('radio', { name: 'Teal' }).check();
   await page.getByRole('button', { name: 'Next' }).click();
   await page.getByText('Step 2 of 3').waitFor();
@@ -797,6 +807,46 @@ try {
   assert.equal(await searchHits(b).count(), 0, 'a hit from a room bob lost stayed in his open search');
   await b.keyboard.press('Escape');
   console.log('open search drops a room that became private: ok');
+
+  // Rooms change under a reader while they switch rooms: archived and back, made private, renamed, and Settings opened, each
+  // while the room's load is still out. A room view gone before its load settled read the dropped room and threw
+  // (#82, "r.room is undefined"). Any page error fails here, with its stack. In Chromium, and in Firefox when it is there.
+  for (const ff of hasFirefox() ? [false, true] : [false]) {
+    const who = ff ? 'flora' : 'rhea';
+    const reader = await browser(who, [], { firefox: ff });
+    const g = reader.page;
+    await signup(g, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, who);
+    // Slow room loads, so each one settles after the reader's view of the room is gone.
+    await g.route(/\/api\/rooms\/\d+\/messages/, async (route) => { await sleep(500); await route.continue().catch(() => {}); });
+    for (let i = 0; i < 3; i++) {
+      const [one, two] = [`${who}-one-${i}`, `${who}-two-${i}`];
+      const r1 = await call(a, 'POST', '/api/rooms', { name: one });
+      const r2 = await call(a, 'POST', '/api/rooms', { name: two });
+      // Archived while it loads, then back.
+      await roomLink(g, one).click();
+      await g.getByRole('heading', { level: 1, name: one, exact: true }).waitFor();
+      await call(a, 'PATCH', `/api/rooms/${r1.id}`, { archived: true });
+      await roomLink(g, one).waitFor({ state: 'detached' });
+      await call(a, 'PATCH', `/api/rooms/${r1.id}`, { archived: false });
+      await roomLink(g, one).waitFor();
+      // Made private while it loads.
+      await roomLink(g, two).click();
+      await g.getByRole('heading', { level: 1, name: two, exact: true }).waitFor();
+      await call(a, 'PATCH', `/api/rooms/${r2.id}`, { restricted: true });
+      await roomLink(g, two).waitFor({ state: 'detached' });
+      // Switched away and to Settings while renames arrive.
+      await roomLink(g, one).click();
+      await call(a, 'PATCH', `/api/rooms/${r1.id}`, { name: `${one}-x` });
+      await roomLink(g, 'general').click();
+      await g.getByRole('button', { name: 'Settings' }).click();
+      await g.locator('#main').getByRole('heading', { level: 2, name: 'Voice' }).waitFor();
+      await sleep(700);
+      await g.keyboard.press('Escape');
+    }
+    await g.unroute(/\/api\/rooms\/\d+\/messages/);
+    assert.deepEqual(reader.errors, [], `page errors while rooms changed, ${ff ? 'Firefox' : 'Chromium'}`);
+    console.log(`rooms change while a reader switches rooms, ${ff ? 'Firefox' : 'Chromium'}: ok`);
+  }
 
   // A saved microphone that is gone (another machine, Firefox new ids): the join uses the default mic, says so once in the
   // call bar, and forgets the id. In Chromium, and in Firefox where the bug was reported, when Playwright's Firefox is there.
