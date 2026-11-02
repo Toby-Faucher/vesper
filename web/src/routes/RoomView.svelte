@@ -29,7 +29,9 @@
 {#await chat}
   <p class="flex-1 px-4 pt-3 text-sm text-fg-3">{UI_MESSAGES.chatLoading}</p>
 {:then m}
-  <m.default roomId={room.id} />
+  <!-- Shell drops `room` once it leaves the list (archived, made private) or the route changes, and a room load that
+       settles after that still reads this id: it gets 0 (no room) then, not a throw. -->
+  <m.default roomId={room?.id ?? 0} />
 {:catch}
   <p role="alert" class="flex-1 px-4 pt-3 text-sm text-danger">{UI_MESSAGES.chatFailed}</p>
 {/await}
