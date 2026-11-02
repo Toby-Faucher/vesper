@@ -19,6 +19,8 @@ import { callCue, type CallSnap } from './ui/cues';
 import { chime } from './ui/chime';
 import { loadLevelling, loadPrefs, saveLevelling } from './ui/prefs';
 import { lazy } from './ui/lazy';
+import { api } from './api';
+import type { CallTally } from './call-summary';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();
@@ -67,6 +69,7 @@ let poll: ReturnType<typeof setInterval> | undefined;
 let statsPoll: ReturnType<typeof setInterval> | undefined;
 let releaseLock: (() => void) | undefined;
 let silence = MIC_QUIET;
+let tally: CallTally | undefined; // this call's summary for Your recent calls, sent when it ends
 const tracks = new Map<string, string>(); // remote track id to user_id, for the per-person stats
 
 // The call code (call-stack.ts) is a chunk of its own: loaded on a hover, focus or press of Join voice, else at the join.
@@ -267,6 +270,9 @@ export function leave(): void {
   voice.error = '';
 }
 function teardown() {
+  // Whatever ended the call (Leave, a kick, a dropped socket): one summary, to your own list only. A failure loses it.
+  if (tally) void api('POST', '/api/me/calls', tally.summary(voice.mode, performance.now())).catch(() => {});
+  tally = undefined;
   callOff?.();
   callOff = undefined;
   voice.joinedRoom = null;
@@ -307,6 +313,7 @@ function pollStats(conn: RTCPeerConnection, m: NonNullable<typeof stack>) {
       if (voice.pc !== conn) return; // the call ended while getStats ran
       const now = performance.now();
       voice.diag = m.summarize(prev, cur, (now - at) / 1000, conn.iceConnectionState);
+      tally?.poll(voice.diag, cur);
       voice.quality = m.quality(voice.diag);
       const samples = m.linkSamples(prev, cur, tracks);
       samples.set(voice.userId, m.ownSample(voice.diag));
@@ -404,7 +411,9 @@ export async function join(roomId: number): Promise<boolean> {
     sender = audioSender;
     if (audioSender) cap.setSender(audioSender);
     applyTrack();
+    tally = new code.CallTally(performance.now());
     cap.onModeChange((m, reason) => {
+      tally?.mode(reason, reason.startsWith('loading'), performance.now());
       voice.mode = m;
       voice.modeReason = reason;
       voice.deviceError = reason.startsWith('microphone lost') ? DEVICE_MESSAGES[classifyMediaError(reason) === 'unknown' ? 'unplugged' : classifyMediaError(reason)] : '';

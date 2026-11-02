@@ -87,6 +87,10 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Firefox may fire a button click on Space key-up** after push to talk captured the key.
 - **Stored per-person volumes are never pruned.** `navigator.locks` missing only logs a warning.
 - **Unhandled edge cases:** a teardown that races a joining call can leave a poll timer running, and an `AudioContext` constructor that throws is not caught. Both are rare.
+- **Your recent calls misses a call that does not end in the app.** The summary is posted when the call ends in the page (Leave, a kick, a
+  dropped socket, sign out); closing the tab or a crash loses it, and so does a failed post (not retried). Loss, jitter and round trip are
+  averages of the 2 s polls; the concealed share counts only the people still in the call at the last poll. "Browser filter while it loaded"
+  means the load took at least 1 s. The reason is the last fallback or mic problem of the call, also when it recovered.
 - **The connection test reports only the local candidate type.**
 - **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
 

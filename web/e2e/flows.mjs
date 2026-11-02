@@ -870,6 +870,16 @@ try {
     await bar.getByRole('button', { name: 'Leave' }).click();
     alice.errors.push(...lost.errors);
     console.log('Retry microphone after the mic ended, same call: ok');
+    // Your recent calls: the call just left is listed, for ines only (server tests cover the other accounts).
+    await l.waitForFunction(async () => (await (await fetch('/api/me/calls')).json()).length === 1, null, { timeout: 5000 });
+    await l.goto(`${ORIGIN}/settings/account`);
+    const list = l.getByRole('list', { name: 'Your recent calls' });
+    await list.waitFor();
+    assert.equal(await list.getByRole('listitem').count(), 1, 'ines does not see her one call');
+    // It ended on the browser filter, with the last problem of the call (the refused retry) as its reason.
+    assert.match(await list.innerText(), /browser filter \(microphone lost: NotAllowedError/);
+    await l.getByText(/Only you can see this list/).waitFor();
+    console.log('your recent calls, your own only: ok');
   }
 
   // Join voice on a cold page (#88): the call code is a lazy chunk, loaded by the click itself here. Each try is a fresh

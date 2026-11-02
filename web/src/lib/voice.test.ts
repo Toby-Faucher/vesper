@@ -282,6 +282,28 @@ describe('in a call', () => {
     expect(voice).toMatchObject({ joined: false, joinedRoom: null, capture: undefined, pc: undefined, quality: 'unknown', error: '' });
   });
 
+  it('the end of a call sends one summary to your own list; a failed join sends none', async () => {
+    const fetch = vi.fn(async () => ({ ok: true, status: 204 }));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      joinRoom.mockRejectedValueOnce(new Error('refused'));
+      const p = v.join(1);
+      h.capture!.resolve(fakeCapture());
+      await p;
+      expect(fetch).not.toHaveBeenCalled();
+      await joined();
+      await vi.advanceTimersByTimeAsync(4000);
+      v.leave();
+      v.leave();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+      expect([url, init.method]).toEqual(['/api/me/calls', 'POST']);
+      expect(JSON.parse(init.body as string)).toMatchObject({ duration_s: 4, mode: 'deepfilter', browser_ns_loading: false });
+    } finally {
+      vi.stubGlobal('fetch', undefined);
+    }
+  });
+
   it('Retry microphone: one retry at a time, in the same call, the reason comes from the capture', async () => {
     const { cap } = await joined();
     let done!: (ok: boolean) => void;

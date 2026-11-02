@@ -11,6 +11,7 @@
   import PasswordInput from '../../lib/ui/c/PasswordInput.svelte';
   import TextInput from '../../lib/ui/c/TextInput.svelte';
   import Swatches from '../Swatches.svelte';
+  import RecentCalls from './RecentCalls.svelte';
   import type { Device } from '../../lib/gen/Device';
   import type { UserInfo } from '../../lib/gen/UserInfo';
   // Settings > Account: picture, name, colour and bio, the password, and the devices signed in to this account.
@@ -258,6 +259,8 @@
     {/if}
   </section>
 
+  <div class="calls-sep"><RecentCalls /></div>
+
   <section role="group" aria-labelledby="account-welcome">
     <div>
       <h3 id="account-welcome" class="text-base font-medium text-fg">Welcome steps</h3>
@@ -272,7 +275,7 @@
   .pic { background: var(--bg-raised); outline: 2px dashed transparent; outline-offset: -2px; }
   .pic.dragging { outline-color: var(--accent); }
   section { display: flex; flex-direction: column; gap: 16px; }
-  section + section { padding-top: 24px; border-top: 1px solid var(--line-subtle); }
+  section + section, .calls-sep, .calls-sep + section { padding-top: 24px; border-top: 1px solid var(--line-subtle); }
   .devices { border: 1px solid var(--line); border-radius: var(--radius); }
   .devices > li + li { border-top: 1px solid var(--line-subtle); }
 </style>

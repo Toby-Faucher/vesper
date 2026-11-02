@@ -21,3 +21,14 @@ it('only_a_wrong_password_maps_to_the_current_field', () => {
   expect(pwFailure(new ApiFailure(429, 'rate_limited'))).toEqual({ at: 'form', text: API_MESSAGES.rate_limited });
   expect(pwFailure(new TypeError('Failed to fetch')).at).toBe('form');
 });
+
+it('a recent call reads as plain words, with a dash for a figure never measured', async () => {
+  const { callLine } = await import('./account');
+  const base = { id: 1, started_at: 0, ended_at: 0, fallback_reason: '', loss_pct: 0.25, jitter_ms: 8.4, concealed_pct: null, rtt_ms: 41.6, browser_ns_loading: false } as const;
+  expect(callLine({ ...base, duration_s: 45, mode: 'deepfilter' })).toEqual({
+    head: '45 s, DeepFilterNet', figures: 'Loss 0.3 %, jitter 8 ms, round trip 42 ms, concealed –',
+  });
+  expect(callLine({ ...base, duration_s: 3900, mode: 'browser', fallback_reason: 'denoiser stalled', browser_ns_loading: true }).head)
+    .toBe('1 h 5 min, browser filter (denoiser stalled), browser filter while it loaded');
+  expect(callLine({ ...base, duration_s: 600, mode: 'off' }).head).toBe('10 min, no filter');
+});

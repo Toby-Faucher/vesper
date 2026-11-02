@@ -31,7 +31,7 @@ describe('clampSettings', () => {
       vad: { thresholdDb: 'x' }, pushToTalk: { enabled: 'true', key: 5 }, junk: 1,
     } as unknown as Partial<AudioSettings>);
     expect(s).toEqual({ ...DEFAULT_AUDIO_SETTINGS, speakerId: 'spk' });
-    expect(clampSettings({ vad: { thresholdDb: -500, gate: false } }).vad.thresholdDb).toBe(-100);
+    expect(clampSettings({ vad: { thresholdDb: -500, gate: false, auto: false } }).vad.thresholdDb).toBe(-100);
     expect(clampSettings({ vad: { thresholdDb: -30, gate: 'on' } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -30, gate: false, auto: false });
   });
   it('the noise gate is off for saved settings from before it existed, and keeps their marker', () => {
