@@ -39,6 +39,7 @@ jobs:
       # (git show fails) means the full pipeline.
       - id: gate
         run: |
+          exit 1 # throwaway: the gate job fails
           v=false
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && git show HEAD^1:scripts/version-only.py >"$RUNNER_TEMP/version-only.py" &&
             python3 -I "$RUNNER_TEMP/version-only.py" HEAD^1 HEAD; then v=true; fi
