@@ -3,6 +3,7 @@
   import { tick } from 'svelte';
   import { ApiFailure, api, errorText } from '../../lib/api';
   import { session } from '../../lib/session.svelte';
+  import { splitRooms } from '../../lib/state';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
   import { byRole, moveRoom } from './admin';
   import Button from '../../lib/ui/c/Button.svelte';
@@ -15,9 +16,10 @@
   import type { UserInfo } from '../../lib/gen/UserInfo';
   // Admin > Rooms, the owner's (the server checks it on every route). The list is the session's, which rooms_changed keeps
   // current; after a change succeeds it is updated here at once too, so the row (and focus in it) does not wait for the event.
-  // The server has no delete route: a room is hidden by restricting it.
-  const rooms = $derived([...session.state.rooms].sort((a, b) => a.position - b.position));
-  const put = (r: RoomInfo) => (session.state.rooms = session.state.rooms.some((x) => x.id === r.id) ? session.state.rooms.map((x) => (x.id === r.id ? r : x)) : [...session.state.rooms, r]);
+  // The server has no delete route: a room is hidden by archiving it. Archived rooms (the owner's list only) show here, dimmed.
+  const rooms = $derived([...session.state.rooms, ...session.state.archived].sort((a, b) => a.position - b.position));
+  const setAll = (list: RoomInfo[]) => Object.assign(session.state, splitRooms(list));
+  const put = (r: RoomInfo) => setAll(rooms.some((x) => x.id === r.id) ? rooms.map((x) => (x.id === r.id ? r : x)) : [...rooms, r]);
 
   // A 400 on a name is the name rule; a 409 is a taken name (the table says so).
   const nameError = (e: unknown) => (e instanceof ApiFailure && e.code === 'bad_request' ? M.roomNameBad : errorText(e));
@@ -104,13 +106,13 @@
         return true;
       } catch (e) {
         if (!(e instanceof ApiFailure && e.status === 409)) throw e;
-        session.state.rooms = await api<RoomInfo[]>('GET', '/api/rooms').catch(() => session.state.rooms);
+        setAll(await api<RoomInfo[]>('GET', '/api/rooms').catch(() => rooms));
         listError = M.roomOrderChanged;
         await focusAlert(list);
       }
     });
     if (!ok) return;
-    session.state.rooms = session.state.rooms.map((x) => ({ ...x, position: next.indexOf(x.id) }));
+    setAll(rooms.map((x) => ({ ...x, position: next.indexOf(x.id) })));
     await tick();
     // The row moved with its buttons; a move button now at an end is disabled, so focus goes to its partner.
     if (had?.isConnected) (had.matches(':disabled') ? had.parentElement?.querySelector<HTMLElement>('[data-move]:enabled') : had)?.focus();
@@ -128,6 +130,15 @@
     if (fresh) return put(fresh);
     box.checked = r.restricted;
     box.dispatchEvent(new Event('change')); // so Switch's own binding agrees with what is shown
+  }
+
+  // Archive asks first (it ends the room's call); unarchive loses nothing, so it does not. The last open room can not go.
+  let archiving = $state<RoomInfo | null>(null);
+  const lastOpen = $derived(session.state.rooms.length <= 1);
+  async function setArchived(r: RoomInfo, on: boolean) {
+    const fresh = await run(r.id, () => api<RoomInfo>('PATCH', `/api/rooms/${r.id}`, { archived: on }));
+    archiving = null;
+    if (fresh) put(fresh);
   }
 
   // Members: every account that is not banned, by role then name; a search field once the list is long.
@@ -183,12 +194,12 @@
     <h3 id="rooms-list" class="text-base font-medium text-fg">All rooms</h3>
     <table class="tbl table-fixed" aria-labelledby="rooms-list">
       <thead>
-        <tr><th scope="col">Name</th><th scope="col" class="w-44">Restricted</th><th class="w-40"><span class="sr-only">Actions</span></th></tr>
+        <tr><th scope="col">Name</th><th scope="col" class="w-44">Restricted</th><th class="w-56"><span class="sr-only">Actions</span></th></tr>
       </thead>
       <tbody>
         {#each rooms as r, i (r.id)}
-          <tr data-room={r.id} onkeydown={(e) => rowKey(r, e)}>
-            <td>
+          <tr data-room={r.id} data-archived={r.archived || undefined} onkeydown={(e) => rowKey(r, e)}>
+            <td class:dim={r.archived}>
               {#if editing?.id === r.id}
                 <input type="text" class="control h-8 w-full px-2.5" bind:value={editing.value} aria-label="Name for {r.name}"
                   aria-invalid={!!editing.error} aria-describedby={editing.error ? `rename-${r.id}` : undefined}
@@ -196,9 +207,10 @@
                 {#if editing.error}<p id="rename-{r.id}" role="alert" class="mt-1 text-xs text-danger">{editing.error}</p>{/if}
               {:else}
                 <span class="block truncate" title={r.name}>{r.name}</span>
+                {#if r.archived}<span class="block text-xs text-fg-2">Archived</span>{/if}
               {/if}
             </td>
-            <td>
+            <td class:dim={r.archived}>
               <div class="flex items-center gap-3">
                 <div class="-ml-4"><Switch label="" aria-label="Restricted: {r.name}" checked={r.restricted} onchange={(e) => restrict(r, e)} /></div>
                 {#if r.restricted}
@@ -214,6 +226,12 @@
                   <Button size="sm" variant="ghost" onclick={cancelRename}>Cancel</Button>
                   <Button size="sm" variant="primary" loading={busy === r.id} onclick={rename}>Save</Button>
                 {:else}
+                  {#if r.archived}
+                    <Button size="sm" aria-label="Unarchive {r.name}" loading={busy === r.id} onclick={() => setArchived(r, false)}>Unarchive</Button>
+                  {:else}
+                    <Button size="sm" variant="ghost" aria-label="Archive {r.name}" aria-haspopup="dialog" disabled={lastOpen}
+                      title={lastOpen ? M.roomLastOpen : undefined} onclick={() => (archiving = r)}>Archive</Button>
+                  {/if}
                   <Button size="sm" variant="ghost" data-rename aria-label="Rename {r.name}" onclick={() => startRename(r)}>Rename</Button>
                   <IconButton icon={I.chevronUp} label="Move {r.name} up" data-move disabled={i === 0} onclick={() => move(r, -1)} />
                   <IconButton icon={I.chevronDown} label="Move {r.name} down" data-move disabled={i === rooms.length - 1} onclick={() => move(r, 1)} />
@@ -227,7 +245,7 @@
     {#if listError}<p role="alert" tabindex="-1" class="text-sm text-danger">{listError}</p>{/if}
     <div class="flex flex-col gap-1 text-sm text-fg-2">
       <p>{M.roomRestricted}</p>
-      <p>{M.roomNoDelete} Alt+Up and Alt+Down move the focused row.</p>
+      <p>{M.roomNoDelete} {M.roomLastOpen} Alt+Up and Alt+Down move the focused row.</p>
     </div>
   </section>
 </div>
@@ -257,7 +275,20 @@
   {/snippet}
 </Dialog>
 
+<Dialog open={!!archiving} title={archiving ? `Archive ${archiving.name}?` : ''} onclose={() => (archiving = null)}>
+  {#if archiving}
+    <p>{M.roomArchiveHides}</p>
+    <p class="mt-2">{M.roomArchiveKeeps}</p>
+    <p class="mt-2">{M.roomArchiveCall}</p>
+  {/if}
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (archiving = null)}>Cancel</Button>
+    <Button variant="danger" loading={!!archiving && busy === archiving.id} onclick={() => archiving && setArchived(archiving, true)}>Archive</Button>
+  {/snippet}
+</Dialog>
+
 <style>
+  .dim { opacity: 0.55; }
   .sections { display: flex; flex-direction: column; gap: 32px; }
   section { display: flex; flex-direction: column; gap: 16px; }
   section + section { padding-top: 24px; border-top: 1px solid var(--line-subtle); }

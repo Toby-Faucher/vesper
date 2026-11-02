@@ -1812,3 +1812,57 @@ async fn signup_and_profile_changes_reach_every_socket() {
     )
     .await;
 }
+
+/// Archiving a room ends its calls, the owner's too, and pushes the room list to everyone.
+#[tokio::test]
+async fn archive_ends_voice_in_the_room() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let bob = server.account("bob", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let secret = open_room(&server, &owner).await;
+    let mut c = Conn::open(&server, &carol).await;
+    let (mut o, o_id, _) = Conn::joined(&server, &owner, secret).await;
+    let (mut b, b_id, _) = Conn::joined(&server, &bob, secret).await;
+    let (status, _, _) = server
+        .call(request(
+            Method::PATCH,
+            &format!("/api/rooms/{secret}"),
+            Some(&json!({ "archived": true })),
+            Some(&owner.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    for (conn, id) in [(&mut o, &o_id), (&mut b, &b_id)] {
+        conn.until(
+            "own PeerLeft",
+            |m| matches!(m, ServerMsg::PeerLeft { user_id } if user_id == id),
+        )
+        .await;
+    }
+    match c.until("RoomsChanged", is_rooms_changed).await {
+        ServerMsg::RoomsChanged { rooms } => assert!(rooms.iter().all(|r| r.id != secret)),
+        _ => unreachable!(),
+    }
+    match o.until("RoomsChanged", is_rooms_changed).await {
+        ServerMsg::RoomsChanged { rooms } => {
+            assert!(rooms.iter().any(|r| r.id == secret && r.archived));
+        }
+        _ => unreachable!(),
+    }
+    assert!(server.state.voice.peers(|_| true).is_empty());
+    b.join(secret);
+    let refused = b
+        .until("Error", |m| matches!(m, ServerMsg::Error { .. }))
+        .await;
+    assert!(
+        matches!(
+            refused,
+            ServerMsg::Error {
+                code: ErrorCode::Forbidden,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+}

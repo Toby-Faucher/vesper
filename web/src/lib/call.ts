@@ -23,7 +23,8 @@ export function callEvent(
     case 'force_muted':
       return { forceMuted: m.muted, muted: c.muted || m.muted }; // lifting a force-mute does not unmute
     case 'rooms_changed':
-      return c.room !== null && !m.rooms.some((r) => r.id === c.room) ? { end: ROOM_GONE, leave: true } : {};
+      // An archived room comes to the owner only, and ends the call like a room that is gone.
+      return c.room !== null && !m.rooms.some((r) => r.id === c.room && !r.archived) ? { end: ROOM_GONE, leave: true } : {};
     default:
       return {};
   }

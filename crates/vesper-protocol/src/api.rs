@@ -311,7 +311,8 @@ pub struct ForceMute {
     pub muted: bool,
 }
 
-/// A room has text and voice. `members` is filled only when `restricted`.
+/// A room has text and voice. `members` is filled only when `restricted`. An `archived` room is
+/// sent to the owner only (for Admin > Rooms); nobody can open, post to, search or join it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct RoomInfo {
@@ -322,6 +323,7 @@ pub struct RoomInfo {
     pub position: i64,
     pub restricted: bool,
     pub members: Vec<String>,
+    pub archived: bool,
 }
 
 /// Unread state of one room for the signed-in user, sent in `Hello`.
@@ -530,6 +532,10 @@ pub struct RoomPatch {
     #[serde(default)]
     #[ts(optional)]
     pub restricted: Option<bool>,
+    /// The last room that is not archived cannot be archived (409).
+    #[serde(default)]
+    #[ts(optional)]
+    pub archived: Option<bool>,
 }
 
 /// `PUT /api/rooms/order`: every room id once, in the new order.

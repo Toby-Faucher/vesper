@@ -11,6 +11,7 @@ struct RoomRow {
     name: String,
     position: i64,
     restricted: bool,
+    archived: bool,
 }
 
 impl RoomRow {
@@ -22,6 +23,7 @@ impl RoomRow {
             restricted: self.restricted,
             // An open room has no list (opening clears it), so this only guards a list set while open.
             members: if self.restricted { members } else { Vec::new() },
+            archived: self.archived,
         }
     }
 }
@@ -30,7 +32,8 @@ const DUPLICATE: &str = "a room with that name exists";
 
 async fn room_by_id(c: &mut SqliteConnection, id: i64) -> Result<RoomInfo> {
     let row = sqlx::query_as::<_, RoomRow>(
-        "SELECT id, name, position, restricted FROM rooms WHERE id = ?1",
+        "SELECT id, name, position, restricted, archived_at IS NOT NULL AS archived
+         FROM rooms WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(&mut *c)
@@ -50,7 +53,8 @@ impl Store {
     pub async fn rooms(&self) -> Result<Vec<RoomInfo>> {
         let mut c = self.pool.acquire().await?;
         let rows = sqlx::query_as::<_, RoomRow>(
-            "SELECT id, name, position, restricted FROM rooms ORDER BY position, id",
+            "SELECT id, name, position, restricted, archived_at IS NOT NULL AS archived
+             FROM rooms ORDER BY position, id",
         )
         .fetch_all(&mut *c)
         .await?;
@@ -88,21 +92,41 @@ impl Store {
         room_by_id(&mut c, id).await
     }
 
+    /// `archived: Some(true)` on the last room that is not archived is `Conflict`; archiving an
+    /// archived room keeps its first time.
     pub async fn patch_room(
         &self,
         id: i64,
         name: Option<&str>,
         restricted: Option<bool>,
+        archived: Option<bool>,
+        now: i64,
     ) -> Result<RoomInfo> {
-        // IMMEDIATE: the update and the list clear commit together.
+        // IMMEDIATE: the update and the list clear commit together, and two archives can not
+        // both pass the last-room check.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if archived == Some(true) {
+            let others: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM rooms WHERE id != ?1 AND archived_at IS NULL",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if others == 0 {
+                return Err(StoreError::Conflict("the last room cannot be archived"));
+            }
+        }
         let n = sqlx::query(
-            "UPDATE rooms SET name = coalesce(?2, name), restricted = coalesce(?3, restricted)
+            "UPDATE rooms SET name = coalesce(?2, name), restricted = coalesce(?3, restricted),
+                archived_at = CASE ?4 WHEN 1 THEN coalesce(archived_at, ?5) WHEN 0 THEN NULL
+                    ELSE archived_at END
              WHERE id = ?1",
         )
         .bind(id)
         .bind(name)
         .bind(restricted)
+        .bind(archived)
+        .bind(now)
         .execute(&mut *tx)
         .await
         .map_err(|e| constraint(e, DUPLICATE))?

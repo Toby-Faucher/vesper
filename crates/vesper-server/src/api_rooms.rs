@@ -15,10 +15,18 @@ use crate::auth::valid_display_name;
 use crate::{ApiError, AppState, Authed};
 
 /// Owner and moderators see every room; others see open rooms and restricted ones that list them.
+/// Nobody sees an archived room: it can not be read, posted to, searched, typed in or joined.
 pub fn can_see(user: &UserInfo, room: &RoomInfo) -> bool {
-    matches!(user.role, Role::Owner | Role::Moderator)
-        || !room.restricted
-        || room.members.contains(&user.user_id)
+    !room.archived
+        && (matches!(user.role, Role::Owner | Role::Moderator)
+            || !room.restricted
+            || room.members.contains(&user.user_id))
+}
+
+/// In the user's room list: what `can_see` allows, plus archived rooms for the owner, whose
+/// Admin > Rooms lists them to unarchive.
+pub fn listed(user: &UserInfo, room: &RoomInfo) -> bool {
+    can_see(user, room) || (room.archived && user.role == Role::Owner)
 }
 
 pub fn routes() -> Router<AppState> {
@@ -35,7 +43,7 @@ fn room_name(s: &str) -> Result<String, ApiError> {
 }
 
 /// Tells connected clients the room list changed, each with only the rooms they can see, and
-/// takes out of voice anyone who lost sight of their room (member list or role change).
+/// takes out of voice anyone who lost sight of their room (member list, role change or archive).
 pub(crate) async fn rooms_changed(st: &AppState) {
     match tokio::try_join!(st.store.rooms(), st.store.users()) {
         Ok((rooms, users)) => {
@@ -48,7 +56,7 @@ pub(crate) async fn rooms_changed(st: &AppState) {
 
 async fn list(State(st): State<AppState>, a: Authed) -> Result<Json<Vec<RoomInfo>>, ApiError> {
     let mut rooms = st.store.rooms().await?;
-    rooms.retain(|r| can_see(&a.user, r));
+    rooms.retain(|r| listed(&a.user, r));
     Ok(Json(rooms))
 }
 
@@ -76,7 +84,7 @@ async fn update(
     let name = req.name.as_deref().map(room_name).transpose()?;
     let room = st
         .store
-        .patch_room(id, name.as_deref(), req.restricted)
+        .patch_room(id, name.as_deref(), req.restricted, req.archived, now_ms())
         .await?;
     rooms_changed(&st).await;
     Ok(Json(room))
@@ -140,14 +148,24 @@ mod tests {
             position: 0,
             restricted,
             members: members.iter().map(|m| m.to_string()).collect(),
+            archived: false,
         };
-        let (open, closed, listed) = (room(false, &[]), room(true, &["b"]), room(true, &["a"]));
+        let (open, closed, named) = (room(false, &[]), room(true, &["b"]), room(true, &["a"]));
         for role in [Role::Owner, Role::Moderator, Role::Member] {
             let u = user(role, "a");
             let staff = role != Role::Member;
             assert!(can_see(&u, &open), "{role:?}");
             assert_eq!(can_see(&u, &closed), staff, "{role:?}");
-            assert!(can_see(&u, &listed), "{role:?}");
+            assert!(can_see(&u, &named), "{role:?}");
+            for r in [&open, &closed, &named] {
+                let gone = RoomInfo {
+                    archived: true,
+                    ..r.clone()
+                };
+                assert!(!can_see(&u, &gone), "{role:?}");
+                assert_eq!(listed(&u, &gone), role == Role::Owner, "{role:?}");
+                assert_eq!(listed(&u, r), can_see(&u, r), "{role:?}");
+            }
         }
     }
 }

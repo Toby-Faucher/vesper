@@ -9,13 +9,19 @@ import { applyPeerMsg } from './peers';
 export type AppState = {
   me: Me | null;
   users: Record<string, UserInfo>;
+  /** Rooms that are not archived: the sidebar, switcher, search and every other room list. */
   rooms: RoomInfo[];
+  /** Archived rooms. The server sends them to the owner only, for Admin > Rooms. */
+  archived: RoomInfo[];
   voice: Peer[];
   /** By room id. A room missing here has nothing unread. */
   unread: Record<number, Unread>;
 };
 
-export const emptyState = (): AppState => ({ me: null, users: {}, rooms: [], voice: [], unread: {} });
+export const emptyState = (): AppState => ({ me: null, users: {}, rooms: [], archived: [], voice: [], unread: {} });
+
+/** A room list from the server, split into the two lists of `AppState`. */
+export const splitRooms = (list: RoomInfo[]) => ({ rooms: list.filter((r) => !r.archived), archived: list.filter((r) => r.archived) });
 
 export function applyServerMsg(s: AppState, m: ServerMsg): AppState {
   switch (m.type) {
@@ -23,7 +29,7 @@ export function applyServerMsg(s: AppState, m: ServerMsg): AppState {
       return {
         me: m.me,
         users: Object.fromEntries(m.users.map((u) => [u.user_id, u])),
-        rooms: m.rooms,
+        ...splitRooms(m.rooms),
         voice: m.voice,
         unread: Object.fromEntries(m.unread.map((u) => [u.room_id, u])),
       };
@@ -40,8 +46,9 @@ export function applyServerMsg(s: AppState, m: ServerMsg): AppState {
       return { ...s, unread: { ...s.unread, [m.room_id]: { room_id: m.room_id, last_read_id: m.last_read_id, unread: 0, mentions: 0 } } };
     case 'rooms_changed': {
       // The server sends no peer_left for rooms we can no longer see, so drop their peers here.
-      const ids = new Set(m.rooms.map((r) => r.id));
-      return { ...s, rooms: m.rooms, voice: s.voice.filter((p) => ids.has(p.room_id)) };
+      const split = splitRooms(m.rooms);
+      const ids = new Set(split.rooms.map((r) => r.id));
+      return { ...s, ...split, voice: s.voice.filter((p) => ids.has(p.room_id)) };
     }
     case 'user_created': // a signup: without it they showed as 'Someone' until a reload
     case 'user_updated': {
