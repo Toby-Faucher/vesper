@@ -7,6 +7,10 @@
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
   </head>
   <body>
+    <!-- The logo in the accent: accent.ts sets the matrix and --logo-filter. Amber leaves the logo unfiltered. -->
+    <svg width="0" height="0" aria-hidden="true" style="position: absolute">
+      <filter id="logo-tint" color-interpolation-filters="sRGB"><feColorMatrix id="logo-matrix" type="matrix" /></filter>
+    </svg>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

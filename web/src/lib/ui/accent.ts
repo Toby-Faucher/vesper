@@ -16,6 +16,7 @@ export const SURFACE = { app: '#100e0c', sidebar: '#151311', raised: '#1a1816', 
 const WHITE = '#ffffff';
 export const EXAMPLE = '#a0c0ff'; // the custom field's placeholder
 export const ACCENT_KEY = 'vesper.accent';
+let tinted = false; // the favicon was drawn once, so amber has to put the file back
 const storage = (() => { try { return localStorage; } catch { return null; } })();
 
 const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -87,9 +88,30 @@ export function fillOf(v: string | null | undefined): string {
   return PRESETS.amber.hex;
 }
 
-/** Paints the accent roles on <html>, and keeps the choice for the sign in page of the next visit. */
+/** The logo's colour matrix (feColorMatrix values): moves amber to `fill` and keeps every grey (the white letters, the black
+ * outline, the glow) and the blends between them, so the logo's flat colours and edges stay as drawn. Identity for amber. */
+export function tint(fill: string): number[] {
+  const [a, t] = [rgb(PRESETS.amber.hex), rgb(fill)].map((c) => c.map((x) => x / 255));
+  const mean = (a[0] + a[1] + a[2]) / 3;
+  const c = a.map((x) => x - mean); // amber off the grey axis: greys give 0, amber gives 1
+  const n = c[0] ** 2 + c[1] ** 2 + c[2] ** 2;
+  return [0, 1, 2].flatMap((i) => [...c.map((cj, j) => +(i === j) + ((t[i] - a[i]) * cj) / n), 0, 0]).concat(0, 0, 0, 1, 0);
+}
+
+/** Paints the accent roles on <html>, and keeps the choice for the sign in page of the next visit. The logo follows through
+ * the #logo-tint filter in index.html (set here, before the first paint, so it never shows amber first), the tab icon
+ * through favicon.ts (lazy: only once a colour other than amber is in use). */
 export function applyAccent(v: string | null | undefined, root: HTMLElement = document.documentElement, store: Storage | null = storage): void {
-  for (const [k, val] of Object.entries(roles(fillOf(v)))) root.style.setProperty(k, val);
+  const fill = fillOf(v);
+  for (const [k, val] of Object.entries(roles(fill))) root.style.setProperty(k, val);
+  const amber = fill === PRESETS.amber.hex;
+  root.style.setProperty('--logo-filter', amber ? 'none' : 'url(#logo-tint)'); // amber: the shipped file, untouched
+  const doc = root.ownerDocument; // absent in the unit tests
+  doc?.getElementById('logo-matrix')?.setAttribute('values', tint(fill).join(' '));
+  if (doc && (!amber || tinted)) {
+    tinted = true;
+    void import('./favicon').then((f) => f.favicon(amber ? null : tint(fill)));
+  }
   try {
     if (v) store?.setItem(ACCENT_KEY, v);
     else store?.removeItem(ACCENT_KEY);
