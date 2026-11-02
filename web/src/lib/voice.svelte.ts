@@ -7,7 +7,7 @@ import { Playback } from './playback';
 import { restoreVolumes, saveVolumes } from './volume';
 import { createCapture, type Capture } from './audio/capture';
 import { loadSettings, saveSettings, type AudioSettings } from './audio/settings';
-import { DEVICE_MESSAGES, applyBitrate, classifyMediaError, missingDevice, newInputs, trackLive, watchDevices } from './devices';
+import { DEVICE_MESSAGES, MIC_FALLBACK, SPEAKER_FALLBACK, applyBitrate, classifyMediaError, deviceGone, micStartError, missingDevice, newInputs, trackLive, watchDevices } from './devices';
 import { pttKeyEvent } from './audio/ptt';
 import { isTyping } from './ui/keys';
 import { MIC_QUIET, micSilence, type MicWarning } from './audio/mic-silence';
@@ -38,6 +38,8 @@ class Voice {
   joinedBitrate = $state(64); // set at join
   pc = $state.raw<RTCPeerConnection>();
   deviceError = $state('');
+  /** A saved mic or speaker was gone, so the default one is used. */
+  notice = $state('');
   offered = $state<MediaDeviceInfo | null>(null);
   pttHeld = $state(false);
   mode = $state<DenoiseMode>('deepfilter');
@@ -78,13 +80,37 @@ export function updateSettings(next: AudioSettings): void {
   // Only a mic/capture-affecting change can fix a device error.
   if (next.micId !== prev.micId || next.mode !== prev.mode || next.noiseSuppression !== prev.noiseSuppression || next.autoGain !== prev.autoGain)
     voice.deviceError = '';
+  if (next.micId !== prev.micId || next.speakerId !== prev.speakerId) voice.notice = '';
   if (!next.pushToTalk.enabled || next.pushToTalk.key !== prev.pushToTalk.key) voice.pttHeld = false;
   voice.capture?.setSettings(next);
   applyTrack();
   if (sender && next.bitrateKbps !== prev.bitrateKbps)
     applyBitrate(sender, next.bitrateKbps).catch((e) => (voice.error = `bitrate change failed: ${e}`));
-  if (next.speakerId !== prev.speakerId)
-    playback?.setSink(next.speakerId).catch(() => (voice.error = 'could not switch speaker'));
+  if (next.speakerId !== prev.speakerId) {
+    const pb = playback;
+    pb?.setSink(next.speakerId).catch((e) => {
+      if (!next.speakerId || !deviceGone(e)) return void (voice.error = 'could not switch speaker');
+      void pb.setSink(null).catch(() => {}); // a failed switch keeps the old output; the notice says default
+      speakerGone(pb);
+    });
+  }
+}
+// Drops a saved device id that no longer exists, without rebuilding the capture (it already uses the default).
+function forget(patch: Partial<AudioSettings>) {
+  voice.settings = { ...voice.settings, ...patch };
+  saveSettings(storage, voice.settings);
+}
+function speakerGone(pb: Playback) {
+  forget({ speakerId: null });
+  if (playback === pb) showNotice(SPEAKER_FALLBACK);
+}
+// The fallback notice is the call bar's lowest line and goes after a while: it must not hide a live warning for long.
+export const NOTICE_MS = 12_000;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+function showNotice(text: string) {
+  clearTimeout(noticeTimer);
+  voice.notice = text;
+  noticeTimer = setTimeout(() => (voice.notice = ''), NOTICE_MS);
 }
 export function useOfferedMic(): void {
   updateSettings({ ...voice.settings, micId: voice.offered!.deviceId });
@@ -226,6 +252,8 @@ function teardown() {
   voice.pc?.close();
   voice.pc = undefined;
   voice.deviceError = '';
+  clearTimeout(noticeTimer);
+  voice.notice = '';
   voice.offered = null;
   voice.mic = undefined;
   voice.modeReason = '';
@@ -275,15 +303,27 @@ export async function join(roomId: number): Promise<boolean> {
   const held = new Promise<void>((res) => (releaseLock = res));
   if (navigator.locks) void navigator.locks.request('vesper-call', () => held);
   else console.warn('navigator.locks missing: audio may stop when the tab is backgrounded');
-  void playback.setSink(voice.settings.speakerId).catch(() => {});
+  const pb = playback;
+  // A saved speaker that is gone: the context keeps the default output, so forget the id and say so; the join goes on.
+  void pb.setSink(voice.settings.speakerId).catch((e) => {
+    if (voice.settings.speakerId && deviceGone(e)) speakerGone(pb);
+  });
   // Called before any await: it creates its AudioContext.
-  const capturing = createCapture(voice.settings, { startLive: trackLive(false, voice.settings.pushToTalk.enabled, false) });
+  const capturing = createCapture(voice.settings, {
+    startLive: trackLive(false, voice.settings.pushToTalk.enabled, false),
+    onMicFallback: () => {
+      forget({ micId: null });
+      showNotice(MIC_FALLBACK);
+    },
+  });
   voice.mode = voice.settings.mode;
   let asked = false; // a failure before joinRoom (no mic) never reached the server, so it needs no leave
   try {
     const cap = (voice.capture = await capturing);
     const stream = cap.stream;
     voice.mic = stream;
+    // Firefox lists devices without names until the mic is allowed: list them again now.
+    void navigator.mediaDevices.enumerateDevices().then((l) => (known = l), () => {});
     voice.volumes = Object.fromEntries(restoreVolumes(localStorage));
     asked = true;
     const r = await joinRoom(sig, {
@@ -325,7 +365,8 @@ export async function join(roomId: number): Promise<boolean> {
   } catch (err) {
     if (asked && session.sig === sig) sig.leave(); // the server may have let us in before the failure
     teardown();
-    voice.error = err instanceof DOMException ? DEVICE_MESSAGES[classifyMediaError(err)] : err instanceof Error ? err.message : String(err);
+    // Before joinRoom only the mic can have failed.
+    voice.error = !asked ? micStartError(err) : err instanceof DOMException ? DEVICE_MESSAGES[classifyMediaError(err)] : err instanceof Error ? err.message : String(err);
     await tick();
     return true;
   } finally {

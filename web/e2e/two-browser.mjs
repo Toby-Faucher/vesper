@@ -45,7 +45,11 @@ async function post(page, room, body) {
 }
 
 // The message whose Markdown has a bold "bob" (a reply's quoted excerpt is plain text).
-const boldBob = (page) => page.locator('article').filter({ has: page.locator('strong', { hasText: 'bob' }) });
+// In the page: `name`'s voice row is speaking and the ring is drawn on the avatar that holds the picture.
+const ringAroundPicture = (name) =>
+  [...document.querySelectorAll('li[data-speaking="true"]')].some((li) => li.textContent.includes(name) && li.querySelector('.av[data-speaking] img'));
+
+const boldBob =(page) => page.locator('article').filter({ has: page.locator('strong', { hasText: 'bob' }) });
 
 const inbound = (page) =>
   page.evaluate(async () => {
@@ -211,7 +215,8 @@ try {
   const pic = inVoice(bob.page, 'alice').locator('img[src*="/avatar?v="]');
   await pic.waitFor({ timeout: 5000 });
   await bob.page.waitForFunction((img) => img.complete && img.naturalWidth === 256, await pic.elementHandle(), { timeout: 5000 });
-  await bob.page.locator('li.speaking[data-speaking]', { hasText: 'alice' }).locator('img').first().waitFor({ timeout: 5000 });
+  // The ring flickers with the fake speech (about half of the samples): wait for any sample with it on around the picture.
+  await bob.page.waitForFunction(ringAroundPicture, 'alice', { timeout: 10000, polling: 100 });
   // A bio shows on her person card for bob.
   await alice.page.getByLabel('Bio').fill('Plays bass on Sundays');
   await alice.page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -388,6 +393,8 @@ try {
   await composer(bob.page).press('Enter');
   const quote = alice.page.locator('article', { hasText: 'noted' }).locator('button.quote');
   await quote.waitFor({ timeout: 5000 });
+  // A row just added may not be painted yet (content-visibility): its innerText is empty until it is, so poll.
+  await alice.page.waitForFunction((el) => el.innerText.trim() !== '', await quote.elementHandle(), { timeout: 5000 }).catch(() => {});
   const quoteText = await quote.innerText();
   assert.match(quoteText, /Reply to alice: Plan Details Some strong and soft/, `the reply quote: ${quoteText}`);
   assert.ok(!/[#*`~]/.test(quoteText), `the reply quote shows markdown: ${quoteText}`);
