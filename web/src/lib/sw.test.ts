@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import swSource from '../../public/sw.js?raw';
 import { describe, expect, it, vi } from 'vitest';
 
 // public/sw.js run against a stand-in `self`: its push handler, with and without the Badging API.
@@ -10,7 +10,7 @@ function worker(navigator: object) {
     navigator,
     location: { origin: 'http://x' },
   };
-  new Function('self', readFileSync('public/sw.js', 'utf8'))(self);
+  new Function('self', swSource)(self);
   const push = async (payload: object) => {
     const waits: Promise<unknown>[] = [];
     on.push({ data: { json: () => payload }, waitUntil: (p: Promise<unknown>) => waits.push(p) });
