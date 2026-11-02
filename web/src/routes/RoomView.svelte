@@ -2,7 +2,7 @@
   import type { RoomInfo } from '../lib/gen/RoomInfo';
   import { join, leave, voice } from '../lib/voice.svelte';
   import Status from '../lib/ui/c/Status.svelte';
-  import { UI_MESSAGES } from '../lib/ui/messages';
+  import { UI_MESSAGES } from '../lib/ui/messages-first';
   import RoomHeader from './RoomHeader.svelte';
   // The open room. The shell keeps one instance and changes `room`, so Chat's jump logic sees a room change.
   let { room }: { room: RoomInfo } = $props();

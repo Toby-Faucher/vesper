@@ -5,7 +5,7 @@
   import Button from '../lib/ui/c/Button.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
-  import { UI_MESSAGES } from '../lib/ui/messages';
+  import { UI_MESSAGES } from '../lib/ui/messages-first';
   import { layers } from '../lib/ui/layers.svelte';
   import { session } from '../lib/session.svelte';
   import { preloadCall, voice } from '../lib/voice.svelte';

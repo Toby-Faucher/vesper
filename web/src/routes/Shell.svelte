@@ -11,7 +11,7 @@
   import { chat } from '../lib/chat.svelte';
   import { isMac, isTyping, nextUnread, shortcut, stepRoom } from '../lib/ui/keys';
   import { loadRecent, pushRecent } from '../lib/ui/recent';
-  import { UI_MESSAGES } from '../lib/ui/messages';
+  import { UI_MESSAGES } from '../lib/ui/messages-first';
   import { mentionCount, titleFor } from '../lib/ui/notify';
   import Button from '../lib/ui/c/Button.svelte';
   import EmptyState from '../lib/ui/c/EmptyState.svelte';
