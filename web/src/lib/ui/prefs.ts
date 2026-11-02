@@ -27,3 +27,10 @@ export function loadPrefs(): NotifyPrefs {
 export function savePrefs(p: NotifyPrefs): void {
   try { storage?.setItem(NOTIFY_KEY, JSON.stringify(p)); } catch { /* storage blocked: the setting lasts this page */ }
 }
+
+/** "Even out voices" (Settings > Voice), off unless turned on. Its math is in level.ts. */
+export const LEVEL_KEY = 'vesper.level';
+export const loadLevelling = (): boolean => storage?.getItem(LEVEL_KEY) === 'on';
+export function saveLevelling(on: boolean): void {
+  try { storage?.setItem(LEVEL_KEY, on ? 'on' : 'off'); } catch { /* storage blocked: the setting lasts this page */ }
+}

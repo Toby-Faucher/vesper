@@ -2,7 +2,7 @@
   import { clampSettings, type AudioSettings } from '../../lib/audio/settings';
   import { NAMES, RESETS, type Section } from './sections';
   import { keyName, pttKeyProblem } from '../../lib/ui/keys';
-  import { updateSettings, voice } from '../../lib/voice.svelte';
+  import { setLevelling, updateSettings, voice } from '../../lib/voice.svelte';
   import Button from '../../lib/ui/c/Button.svelte';
   import Dialog from '../../lib/ui/c/Dialog.svelte';
   import Field from '../../lib/ui/c/Field.svelte';
@@ -114,6 +114,8 @@
         <p class="text-xs text-fg-3">Your browser cannot pick a speaker. Sound plays on the system output.</p>
       </div>
     {/if}
+    <Switch label="Even out voices" help="Slowly turns loud people down and quiet people up, by 10 dB at most, while they talk. Your volume for each person still applies on top."
+      checked={voice.levelling} onchange={(e) => setLevelling(e.currentTarget.checked)} />
   </section>
 
   <section role="group" aria-labelledby="voice-quality">

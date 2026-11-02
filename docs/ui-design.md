@@ -26,7 +26,9 @@ Written 2026-11-01, after the visual check of every screen.
 **The shell.** One left sidebar, the main pane, and nothing on the right. The sidebar is 248 px wide. Its header holds the
 logo and the switcher button (Ctrl+K). Under it is the Rooms list. Each row is 28 px and shows the room name,
 an unread count and an amber `@n` pill for mentions. People in voice are listed under their room, with avatar, name, a mute or
-deafen icon and the speaking cue. Your own row with Settings sits at the bottom. The sidebar hides fully with `Ctrl+\`. It never
+deafen icon and the speaking cue. In your own call each row also ends in a connection icon: three bars good, two fair, one in
+the warning colour poor, all faint while measuring. Its name says "Connection to alice: good"; the tooltip and the person card
+give the figures in words. Your own row with Settings sits at the bottom. The sidebar hides fully with `Ctrl+\`. It never
 shrinks to a row of icons. The main pane has a 48 px header with the room name, Pins, Search and Join voice. Join voice is the amber primary only when you are in no call. While you are in a
 call, a small call bar floats at the bottom centre of the main pane. The pane leaves room for it, so it covers nothing.
 Settings and Admin use the same shell: a list of sections on the left of the pane and one page of controls.
