@@ -18,9 +18,29 @@ env:
   VESPER_NO_CAP: 1
   CARGO_TERM_COLOR: always
 
-# No job waits for another (no `needs`), so the slow dsp-wasm job never holds up the rest. e2e takes dsp-wasm's
-# denoiser build as an artifact, polled once its own build is done (dsp-wasm usually finishes first).
+# Only e2e and dsp-wasm wait, for the few seconds of `changes`. e2e takes dsp-wasm's denoiser build as an artifact,
+# polled once its own build is done; dsp-wasm uploads it before its tests, so e2e does not usually wait.
+# Pull request runs restore main's Rust caches but do not save their own: the repo's caches sit near the 10 GB limit.
 jobs:
+  # A pull request that only bumps the release version (scripts/version-only.py) skips e2e and dsp-wasm.
+  # Anything else, any push to main and any error in the check runs everything. A job skipped by `if:` reports
+  # "skipped", which a required status check treats as passing.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.gate.outputs.full }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # The pull request merge commit and its first parent, the base branch tip.
+          fetch-depth: 2
+      - id: gate
+        run: |
+          full=true
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && python3 -I scripts/version-only.py HEAD^1 HEAD; then full=false; fi
+          echo "full=$full" | tee -a "$GITHUB_OUTPUT"
+
   lint-rust:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -29,6 +49,8 @@ jobs:
       # Installs the toolchain pinned in rust-toolchain.toml (rustfmt, clippy, wasm32 target).
       - run: rustup toolchain install --no-self-update
       - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The runner image ships shellcheck; install it anyway in case a new image drops it.
       - run: command -v shellcheck || (sudo apt-get update && sudo apt-get install -y shellcheck)
       - run: scripts/check.sh fmt clippy shell scripts secrets wording
@@ -40,6 +62,8 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install --no-self-update
       - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-nextest@0.9.148
@@ -78,6 +102,8 @@ jobs:
   # Two headless Chromium browsers join one room through the release server; web/e2e/two-browser.mjs, then flows.mjs and ui.mjs.
   # No wasm build here: flows.mjs runs its denoiser-under-CSP step with dsp-wasm's build; the other steps use browser suppression.
   e2e:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -87,6 +113,8 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install --no-self-update
       - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
@@ -121,18 +149,38 @@ jobs:
         working-directory: web
 
   dsp-wasm:
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7.0.1
+      # The built web/public/dsp, keyed on everything the wasm build reads: the wasm-bindgen version is in Cargo.lock, the
+      # model's sha256 in fetch-model.sh. Saved at the end of a green job only. Before fetch-model.sh, so the model is not hashed.
+      - id: dsp-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: web/public/dsp
+          key: dsp-wasm-v1-${{ runner.os }}-${{ hashFiles('crates/vesper-dsp/**', 'Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'rust-toolchain.toml', 'scripts/build-dsp.sh', 'scripts/fetch-model.sh') }}
+      # The e2e job serves it for flows.mjs's denoiser-under-CSP step. Uploaded before the tests, so e2e does not wait for them.
+      - if: steps.dsp-cache.outputs.cache-hit == 'true'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: dsp
+          path: web/public/dsp
+          if-no-files-found: error
+          retention-days: 1
       - run: rustup toolchain install --no-self-update
       # Also caches ~/.cargo/bin, so the wasm-bindgen CLI below is only compiled on a cold cache.
       - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-nextest@0.9.148
       # The CLI must equal the wasm-bindgen crate in Cargo.lock; read it the way scripts/build-dsp.sh does.
       - name: install wasm-bindgen CLI at the Cargo.lock version
+        if: steps.dsp-cache.outputs.cache-hit != 'true'
         run: |
           v=$(awk '/^name = "wasm-bindgen"$/ {getline; gsub(/[^0-9.]/, "", $3); print $3; exit}' Cargo.lock)
           test -n "$v"
@@ -140,11 +188,14 @@ jobs:
           wasm-bindgen --version
       # The model is gitignored and the denoiser tests need it; fetch-model.sh checks its sha256.
       - run: scripts/fetch-model.sh
-      - run: scripts/check.sh dsp
-      # The e2e job serves it for flows.mjs's denoiser-under-CSP step.
-      - uses: actions/upload-artifact@v7.0.2
+      - if: steps.dsp-cache.outputs.cache-hit != 'true'
+        run: scripts/check.sh wasm
+      - if: steps.dsp-cache.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: dsp
           path: web/public/dsp
           if-no-files-found: error
           retention-days: 1
+      # With the wasm build above this is `scripts/check.sh dsp`; the tests run whether or not the cache hit.
+      - run: scripts/check.sh denoiser audiolab
