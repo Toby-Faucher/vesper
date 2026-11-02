@@ -19,7 +19,7 @@ ignore = [
 
 [licenses]
 confidence-threshold = 0.93
-# Workspace crates carry no license field.
+# Workspace crates are MIT (LICENSE) and unpublished, so cargo-deny skips them.
 private = { ignore = true }
 # Only the licenses the current graph actually uses (checked with cargo deny).
 allow = [

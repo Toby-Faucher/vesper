@@ -95,3 +95,9 @@ Last updated 2026-10-30. This is a personal project and the voice foundation is 
 ## Credits
 
 [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) does the noise suppression. [str0m](https://github.com/algesten/str0m) does WebRTC on the server.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
+
+The DeepFilterNet3 model is not in this repository: `scripts/fetch-model.sh` downloads it from the DeepFilterNet repository, which licenses it under MIT or Apache-2.0. The research corpus (CSTR VCTK, CC BY 4.0) is downloaded by `research/scripts/` and is not in the repository either. Dependencies keep their own licenses; `cargo deny check licenses` lists the allowed ones in `deny.toml`.

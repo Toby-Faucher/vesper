@@ -3,6 +3,7 @@ name = "vesper-sfu"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [features]
 # Exposes `vesper_sfu::testing` (a fake WebRTC client) for this crate's and other crates' tests.

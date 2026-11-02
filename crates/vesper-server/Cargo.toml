@@ -3,6 +3,7 @@ name = "vesper-server"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [features]
 # Debug test builds only (integration tests and the push e2e): push may go to plain http on

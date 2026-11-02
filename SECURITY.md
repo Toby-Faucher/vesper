@@ -4,8 +4,10 @@ Vesper is a personal project run for one friend group. There is no bug bounty an
 
 ## Reporting a problem
 
-Report a vulnerability privately, to the repository owner directly. If the repository has GitHub private reporting turned on, use the "Report a vulnerability" button on the Security tab.
-Please do not open a public issue for something exploitable. You will get an answer when the owner can read it, usually within a week.
+Report a vulnerability privately with GitHub's private vulnerability reporting: on the repository's Security tab, choose
+"Report a vulnerability". Only the owner sees the report. If that button is missing, open an issue that says only that you have
+a security report, without any details, and the owner will contact you.
+Please do not put anything exploitable in a public issue, pull request or discussion. You will get an answer when the owner can read it, usually within a week.
 
 ## What to know
 
