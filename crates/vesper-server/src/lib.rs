@@ -3,6 +3,7 @@
 
 pub mod api_accounts;
 pub mod api_admin;
+pub mod api_calls;
 pub mod api_messages;
 pub mod api_push;
 pub mod api_rooms;
@@ -75,6 +76,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api_rooms::routes())
         .merge(api_messages::routes())
         .merge(api_push::routes())
+        .merge(api_calls::routes())
         .layer(RequestBodyTimeoutLayer::new(state.cfg.body_idle))
         .layer(RequestBodyDeadlineLayer::new(state.cfg.body_total));
     // Uploads apply the same limits in `uploads::read_body`; a picture is at most 512 KiB.
@@ -169,6 +171,7 @@ pub async fn serve(
     let cfg = state.cfg.clone();
     uploads::clean_tmp(&cfg.data_dir)?;
     uploads::spawn_sweep(state.clone());
+    api_calls::spawn_prune(state.clone());
     match cfg.public_host.clone() {
         Some(host) => {
             public_addr::spawn_refresh(sfu.clone(), host, cfg.udp_port_public, public_addr::REFRESH)

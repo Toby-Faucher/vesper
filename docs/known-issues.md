@@ -75,17 +75,24 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Not tried in real Chrome or Firefox.** Firefox may refuse a mic and AudioContext rate mismatch, which forces the browser fallback every time.
 - **The noise gate and the limiter work in DeepFilterNet mode only.** In browser and off mode the raw mic track is sent; the gate switch is disabled there. After an automatic fallback to browser mode the setting stays on but does nothing. With the gate on, the Settings meter shows the gated sound, so the noise under the marker is not visible; turn the gate off to set the marker.
 - **Soft word starts under the marker are muted.** The gate opens on the first frame above the marker, so a quiet "s" or "h" before it can lose up to about 1.5 dB over the first 20 ms (measured on corpus speech).
+- **In Chromium the hand-over from the browser filter to DeepFilterNet reopens the mic.** The input has a gap of one `getUserMedia` call (tens of ms, not measured) just as the model starts, and the new track's echo canceller starts from scratch, so echo can leak for a moment if others talk then. A browser that asks for mic permission each time could ask again. Not heard in a real browser.
+- **The switch from the passthrough to DeepFilterNet is a cut.** When the worker connects, the worklet goes from the passed-through mic to silence until 30 ms are queued, then fades in; the step to silence is not faded. It predates the underrun fade.
+- **The gate has no automatic threshold.** Fluxer's rule (open above 3 times the 10th percentile of frame RMS over 2 s) was tried for #104 and not shipped: after DeepFilterNet the floor is near digital silence, so the threshold sat at its 3e-6 RMS clamp and the gate never closed. Gate lab check on dev-0016 and dev-0022: noise between words cut 0.0 dB (the marker: 5.9 dB and all of it), speech and onsets unchanged. The marker stays the only threshold.
 - **The gate and limiter are not blind-listened.** They were measured on synthetic signals and on denoised corpus speech (see [dev.md](dev.md#noise-gate-and-limiter-lab-check)), not heard by Toby.
 - **DTX applies at the next join.** The client cannot renegotiate it mid-call.
-- **A mic that ends mid-call has no "Retry microphone" button.** The status line says what happened, but you leave and rejoin to recover.
+- **Retry microphone is tested with a fake device only.** The e2e ends Chromium's fake mic by hand; a real unplug, a revoked permission and an OS reclaim were not tried.
 - **Stale mode reason on unmute.** The capture watcher can replay an old fallback reason after an unmute.
 - **After a failed join, the page's guard against messages from an old socket stays set for a short window.** It clears when the next join starts.
-- **No fade on underrun or drops.** A starved output can click.
+- **No fade on dropped output frames.** An underrun fades out and back in over 2.5 ms, but a frame dropped from a full queue (above 80 ms, or the trim) is cut, which can click.
 - **Boost is lost when the mode falls back to the browser**, and the status line says so.
 - **A track swap can leave the new track out of sync with mute or push to talk for one tick.** Room re-applies the state after the mode change.
 - **Firefox may fire a button click on Space key-up** after push to talk captured the key.
 - **Stored per-person volumes are never pruned.** `navigator.locks` missing only logs a warning.
 - **Unhandled edge cases:** a teardown that races a joining call can leave a poll timer running, and an `AudioContext` constructor that throws is not caught. Both are rare.
+- **Your recent calls misses a call that does not end in the app.** The summary is posted when the call ends in the page (Leave, a kick, a
+  dropped socket, sign out); closing the tab or a crash loses it, and so does a failed post (not retried). Loss, jitter and round trip are
+  averages of the 2 s polls; the concealed share counts only the people still in the call at the last poll. "Browser filter while it loaded"
+  means the load took at least 1 s. The reason is the last fallback or mic problem of the call, also when it recovered.
 - **The connection test reports only the local candidate type.**
 - **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
 

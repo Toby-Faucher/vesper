@@ -20,7 +20,7 @@ export const DEVICE_MESSAGES: Record<DeviceError, string> = {
   'no-device': 'No microphone found. Plug one in or pick another; the call stays connected.',
   'in-use': 'The microphone is in use by another app. Close it or pick another device.',
   unplugged: 'The selected microphone was unplugged. Pick another device; the call stays connected.',
-  ended: 'The microphone stopped (unplugged, permission revoked or taken by the system). Pick a device; the call stays connected.',
+  ended: 'The microphone stopped (unplugged, permission revoked or taken by the system). Retry it or pick a device; the call stays connected.',
   muted: 'The microphone has been muted by the system or another app; the call stays connected.',
   unknown: 'The microphone failed. Try another device.',
 };

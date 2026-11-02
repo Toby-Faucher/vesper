@@ -616,6 +616,47 @@ pub struct PushPayload {
     pub body: String,
 }
 
+/// The noise suppression a call ended in (the web client's `DenoiseMode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum CallMode {
+    Deepfilter,
+    Browser,
+    Off,
+}
+
+/// `POST /api/me/calls`: one summary of a call you just left, sent by your own client. Unknown
+/// fields are ignored; the server checks every range (see `api_calls.rs`). A figure the client
+/// never measured is null. `browser_ns_loading`: the browser filter ran while DeepFilterNet loaded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CallSummary {
+    pub duration_s: u32,
+    pub mode: CallMode,
+    pub fallback_reason: String,
+    pub loss_pct: Option<f64>,
+    pub jitter_ms: Option<f64>,
+    pub concealed_pct: Option<f64>,
+    pub rtt_ms: Option<f64>,
+    pub browser_ns_loading: bool,
+}
+
+/// `GET /api/me/calls`: one of your own recent calls. Times are Unix ms, set by the server
+/// (`ended_at` is when the summary arrived).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CallRecord {
+    #[ts(type = "number")]
+    pub id: i64,
+    #[ts(type = "number")]
+    pub started_at: i64,
+    #[ts(type = "number")]
+    pub ended_at: i64,
+    #[serde(flatten)]
+    pub summary: CallSummary,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -873,6 +873,59 @@ try {
   }
   if (!hasFirefox()) console.log('saved mic gone, Firefox: skipped (npx playwright-core install firefox)');
 
+  // A mic that ends mid-call (unplugged, permission revoked): Retry microphone gets it back in the same call. The fake
+  // device is ended by hand: stop() alone fires no 'ended' event, so the test dispatches it, as the browser would.
+  {
+    const lost = await browser('ines', []);
+    const l = lost.page;
+    await l.addInitScript(() => {
+      window.__mics = [];
+      window.__gumFail = false;
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (q) => {
+        if (window.__gumFail) throw new DOMException('Permission denied', 'NotAllowedError');
+        const m = await gum(q);
+        window.__mics.push(m.getAudioTracks()[0]);
+        return m;
+      };
+    });
+    await signup(l, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, 'ines');
+    await join(l, 'general');
+    const bar = l.getByRole('region', { name: 'Call' });
+    await bar.getByText('Noise suppression: browser').waitFor();
+    await l.evaluate(() => { const t = window.__mics.at(-1); t.stop(); t.dispatchEvent(new Event('ended')); });
+    await bar.getByText(/^The microphone stopped/).waitFor();
+    const retry = bar.getByRole('button', { name: 'Retry microphone' });
+    await bar.getByText('Noise suppression: off (microphone lost: ended)').waitFor();
+    await l.evaluate(() => (window.__gumFail = true));
+    await retry.click();
+    await bar.getByText(/^Microphone access was denied/).waitFor(); // a failed retry says why, the call stays
+    await retry.waitFor();
+    await l.evaluate(() => (window.__gumFail = false));
+    await retry.click();
+    await bar.getByText('Noise suppression: browser', { exact: true }).waitFor();
+    assert.equal(await retry.count(), 0, 'Retry microphone stayed after the mic came back');
+    const sent = await l.evaluate(() => {
+      const pc = window.__pcs.find((p) => p.connectionState !== 'closed');
+      const t = pc.getSenders().find((x) => x.track?.kind === 'audio')?.track;
+      return { same: t === window.__mics.at(-1), live: t?.readyState, mics: window.__mics.length };
+    });
+    assert.deepEqual(sent, { same: true, live: 'live', mics: 2 }, 'the call does not send the new mic');
+    await bar.getByRole('button', { name: 'Leave' }).click();
+    alice.errors.push(...lost.errors);
+    console.log('Retry microphone after the mic ended, same call: ok');
+    // Your recent calls: the call just left is listed, for ines only (server tests cover the other accounts).
+    await l.waitForFunction(async () => (await (await fetch('/api/me/calls')).json()).length === 1, null, { timeout: 5000 });
+    await l.goto(`${ORIGIN}/settings/account`);
+    const list = l.getByRole('list', { name: 'Your recent calls' });
+    await list.waitFor();
+    assert.equal(await list.getByRole('listitem').count(), 1, 'ines does not see her one call');
+    // It ended on the browser filter, with the last problem of the call (the refused retry) as its reason.
+    assert.match(await list.innerText(), /browser filter \(microphone lost: NotAllowedError/);
+    await l.getByText(/Only you can see this list/).waitFor();
+    console.log('your recent calls, your own only: ok');
+  }
+
   // Join voice on a cold page (#88): the call code is a lazy chunk, preloaded at idle. Here it is held back until after
   // the click, so join() takes its cold path. Each try is a fresh browser context with the account's cookie and a page
   // that was never clicked: the first click joins, and so does Enter on the focused button. The mic is asked for once
@@ -934,6 +987,16 @@ try {
     const d = dsp.page;
     // With the noise gate on, so its worklet message runs in a real browser too.
     await d.addInitScript(() => localStorage.setItem('vesper.audio', JSON.stringify({ mode: 'deepfilter', vad: { thresholdDb: -50, gate: true } })));
+    // The mics the app asks for: the browser filter must be on while the model loads and off once it runs.
+    await d.addInitScript(() => {
+      window.__mics = [];
+      const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (q) => {
+        const m = await gum(q);
+        window.__mics.push({ asked: q.audio?.noiseSuppression, track: m.getAudioTracks()[0] });
+        return m;
+      };
+    });
     await signup(d, (await call(a, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url, 'dana');
     await join(d, 'general');
     const line = d.getByText('Noise suppression:').first();
@@ -943,6 +1006,14 @@ try {
       status = await line.innerText();
     }
     assert.equal(status, 'Noise suppression: deepfilter', 'denoiser did not start under the CSP');
+    // Chromium cannot turn a track's filter off (applyConstraints leaves getSettings() at true, tried 2026-11-02), so at ready
+    // the app moves the graph to a second track of the same mic asked for without it, and ends the first.
+    await d.waitForFunction(() => window.__mics.length === 2 && window.__mics[0].track.readyState === 'ended', null, { timeout: 5000 })
+      .catch(() => assert.fail('the browser-filtered mic was not replaced at ready'));
+    const ns = await d.evaluate(() => window.__mics.map((x) => [x.asked, x.track.readyState]));
+    assert.deepEqual(ns, [[true, 'ended'], [false, 'live']], 'browser filter while loading, then off under DeepFilterNet');
+    assert.equal(await d.evaluate(() => window.__mics[1].track.getSettings().noiseSuppression), false, 'the track under DeepFilterNet reports the browser filter on');
+    console.log('browser filter while the denoiser loads, off once it runs: ok');
     await d.getByRole('link', { name: 'Call details' }).click();
     const diag = d.getByRole('group', { name: 'Call numbers' }).getByText('Noise suppression:');
     assert.equal(await diag.innerText(), 'Noise suppression: deepfilter', 'Diagnostics shows another mode');

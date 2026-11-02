@@ -236,6 +236,7 @@ Last updated 2026-10-30. Tick as you check. Use two tabs (or two machines) where
 - [ ] Copy report button: paste into a text file, check it has user agent, mode, RTT, jitter, loss, codec, ICE state, the audio pipeline lines and nothing secret (no cookie, no invite code).
 - [ ] Bitrate change mid-call: lower to 32 kbps while joined (applies now; Send kbps in Diagnostics drops); raise above the joined value (shows the "applies on rejoin" note).
 - [ ] DTX: with DTX on, Send kbps drops during silence.
+- [ ] Browser filter while the denoiser loads (Chrome and Firefox, headed): devtools Network, throttle to Slow 4G, hard reload, join in deepfilter and talk with a fan or tap noise on. The line reads `deepfilter (loading, browser filter until then)`, then `deepfilter`. Listen on the second tab: the hand-over from the browser filter to DeepFilterNet must make no click or pop (a short drop in noise is expected). Repeat with "Browser noise suppression on top" on: no change in the noise at the hand-over. At the hand-over the app opens the mic a second time (without the filter): check that no second permission prompt shows (Firefox without "Remember this decision" above all) and the browser's mic indicator does not flicker.
 
 ## 10. Order of work
 

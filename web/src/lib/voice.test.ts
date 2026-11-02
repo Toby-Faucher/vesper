@@ -58,7 +58,7 @@ const writes: string[] = [];
 vi.stubGlobal('localStorage', { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, x: string) => void writes.push(`${k}=${x}`), removeItem: () => {} });
 vi.stubGlobal('location', { pathname: '/', search: '', hash: '', protocol: 'http:', host: 'x' });
 
-const { session } = await import('./session.svelte');
+const { session, runBeforeLogout } = await import('./session.svelte');
 const v = await import('./voice.svelte');
 const { voice } = v;
 const { CALL_ENDED, ROOM_GONE } = await import('./call');
@@ -303,6 +303,67 @@ describe('in a call', () => {
     expect(off).toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
     expect(voice).toMatchObject({ joined: false, joinedRoom: null, capture: undefined, pc: undefined, quality: 'unknown', error: '' });
+  });
+
+  it('the end of a call sends one summary to your own list; a failed join sends none', async () => {
+    const fetch = vi.fn(async () => ({ ok: true, status: 204 }));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      joinRoom.mockRejectedValueOnce(new Error('refused'));
+      const p = v.join(1);
+      h.capture!.resolve(fakeCapture());
+      await p;
+      expect(fetch).not.toHaveBeenCalled();
+      await joined();
+      await vi.advanceTimersByTimeAsync(4000);
+      v.leave();
+      v.leave();
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+      expect([url, init.method]).toEqual(['/api/me/calls', 'POST']);
+      expect(JSON.parse(init.body as string)).toMatchObject({ duration_s: 4, mode: 'deepfilter', browser_ns_loading: false });
+    } finally {
+      vi.stubGlobal('fetch', undefined);
+    }
+  });
+
+  it('sign out ends the call and waits for its summary before /api/logout', async () => {
+    let done!: () => void;
+    const fetch = vi.fn(() => new Promise((r) => (done = () => r({ ok: true, status: 204 }))));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      await joined();
+      let finished = false;
+      const p = runBeforeLogout().then(() => (finished = true));
+      expect(voice.joined).toBe(false);
+      expect(fetch).toHaveBeenCalledWith('/api/me/calls', expect.objectContaining({ method: 'POST' }));
+      await Promise.resolve();
+      expect(finished).toBe(false); // logout() waits for the post (up to 1.5 s)
+      done();
+      await p;
+      expect(finished).toBe(true);
+    } finally {
+      vi.stubGlobal('fetch', undefined);
+    }
+  });
+
+  it('Retry microphone: one retry at a time, in the same call, the reason comes from the capture', async () => {
+    const { cap } = await joined();
+    let done!: (ok: boolean) => void;
+    const retry = vi.fn(() => new Promise<boolean>((r) => (done = r)));
+    Object.assign(cap, { retry });
+    const onMode = cap.onModeChange.mock.calls[0][0] as (m: string, r: string) => void;
+    onMode('off', 'microphone lost: ended');
+    expect(voice.deviceError).toMatch(/^The microphone stopped/);
+    const p = v.retryMic();
+    void v.retryMic(); // a second press while it runs does nothing
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(voice.retrying).toBe(true);
+    onMode('browser', '');
+    done(true);
+    await p;
+    expect(voice).toMatchObject({ retrying: false, deviceError: '', mode: 'browser', joined: true });
+    expect(sig.leaves).toBe(0);
   });
 
   it('polls stats every 2 s into quality', async () => {

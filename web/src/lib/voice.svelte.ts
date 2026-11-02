@@ -1,7 +1,7 @@
 // The voice call, moved from Room.svelte so it outlives the screen that shows it.
 import { tick, untrack } from 'svelte';
 import { callEvent, idleCall } from './call';
-import { session } from './session.svelte';
+import { onLogout, session } from './session.svelte';
 import type { Playback } from './playback';
 import { restoreVolumes, saveVolumes } from './volume';
 import type { Capture } from './audio/capture';
@@ -19,6 +19,8 @@ import { callCue, type CallSnap } from './ui/cues';
 import { chime } from './ui/chime';
 import { loadLevelling, loadPrefs, saveLevelling } from './ui/prefs';
 import { lazy } from './ui/lazy';
+import { api } from './api';
+import type { CallTally } from './call-summary';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();
@@ -52,6 +54,8 @@ class Voice {
   diag = $state.raw<Diag | null>(null);
   /** Connection quality per person in the call (you too), keyed on user_id. Empty when not in a call. */
   links = $state.raw<Record<string, Link>>({});
+  /** True while Retry microphone runs. */
+  retrying = $state(false);
   /** "Even out voices" (Settings > Voice), saved in this browser. */
   levelling = $state(loadLevelling());
 }
@@ -65,6 +69,8 @@ let poll: ReturnType<typeof setInterval> | undefined;
 let statsPoll: ReturnType<typeof setInterval> | undefined;
 let releaseLock: (() => void) | undefined;
 let silence = MIC_QUIET;
+let tally: CallTally | undefined; // this call's summary for Your recent calls, sent when it ends
+let posted: Promise<unknown> = Promise.resolve(); // the last summary post, which sign out waits for
 const tracks = new Map<string, string>(); // remote track id to user_id, for the per-person stats
 
 // The call code (call-stack.ts) is a chunk of its own: loaded at idle after start (startVoice), on a hover, focus or press
@@ -127,6 +133,17 @@ function showNotice(text: string) {
   voice.notice = text;
   noticeTimer = setTimeout(() => (voice.notice = ''), NOTICE_MS);
 }
+/** Retry microphone (the call bar, after the mic ended): a new mic and capture graph in the same call. */
+export async function retryMic(): Promise<void> {
+  const cap = voice.capture;
+  if (!cap || voice.retrying) return;
+  voice.retrying = true;
+  try {
+    await cap.retry(); // success or the reason why not both arrive through onModeChange
+  } finally {
+    voice.retrying = false;
+  }
+}
 export function useOfferedMic(): void {
   updateSettings({ ...voice.settings, micId: voice.offered!.deviceId });
   voice.offered = null;
@@ -171,6 +188,8 @@ export function startVoice(): () => void {
     if (list.some((d) => d.kind === 'audioinput' && d.deviceId && d.label)) known = list;
   });
   void navigator.mediaDevices.enumerateDevices().then((l) => { if (!known.length) known = l; }, () => {});
+  // Sign out: end the call first, so its summary goes out while the session still works.
+  const offLogout = onLogout(() => (voice.joined && leave(), posted));
   const offSocket = $effect.root(() => {
     // My own call sounds: one per change of the call's state, none for the state found at start.
     let was: CallSnap | null = null;
@@ -228,6 +247,7 @@ export function startVoice(): () => void {
     known = [];
     stop();
     offSocket();
+    offLogout();
     window.removeEventListener('keydown', kd);
     window.removeEventListener('keyup', ku);
     window.removeEventListener('blur', release);
@@ -263,6 +283,9 @@ export function leave(): void {
   voice.error = '';
 }
 function teardown() {
+  // Whatever ended the call (Leave, a kick, a dropped socket): one summary, to your own list only. A failure loses it.
+  if (tally) posted = api('POST', '/api/me/calls', tally.summary(voice.mode, performance.now())).catch(() => {});
+  tally = undefined;
   callOff?.();
   callOff = undefined;
   voice.joinedRoom = null;
@@ -303,6 +326,7 @@ function pollStats(conn: RTCPeerConnection, m: NonNullable<typeof stack>) {
       if (voice.pc !== conn) return; // the call ended while getStats ran
       const now = performance.now();
       voice.diag = m.summarize(prev, cur, (now - at) / 1000, conn.iceConnectionState);
+      tally?.poll(voice.diag, cur);
       voice.quality = m.quality(voice.diag);
       const samples = m.linkSamples(prev, cur, tracks);
       samples.set(voice.userId, m.ownSample(voice.diag));
@@ -401,7 +425,9 @@ export async function join(roomId: number): Promise<boolean> {
     sender = audioSender;
     if (audioSender) cap.setSender(audioSender);
     applyTrack();
+    tally = new code.CallTally(performance.now());
     cap.onModeChange((m, reason) => {
+      tally?.mode(reason, reason.startsWith('loading'), performance.now());
       voice.mode = m;
       voice.modeReason = reason;
       voice.deviceError = reason.startsWith('microphone lost') ? DEVICE_MESSAGES[classifyMediaError(reason) === 'unknown' ? 'unplugged' : classifyMediaError(reason)] : '';

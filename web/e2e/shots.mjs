@@ -435,6 +435,38 @@ scene('call-weak', async (ctx) => {
   await rest(page);
   await ctx.shot(page, 'call-weak');
 });
+// The mic ended mid-call (browser mode: the sent track is the mic itself), then a refused retry.
+scene('call-mic-lost', async (ctx) => {
+  await fullHouse(ctx);
+  const page = ctx.alice.page;
+  await page.evaluate(() => {
+    const t = window.__pcs.at(-1).getSenders().find((x) => x.track?.kind === 'audio').track;
+    t.stop();
+    t.dispatchEvent(new Event('ended'));
+  });
+  await bar(page).getByRole('button', { name: 'Retry microphone' }).waitFor();
+  await rest(page);
+  await ctx.shot(page, 'call-mic-lost');
+  await bar(page).getByRole('button', { name: 'Retry microphone' }).click();
+  await bar(page).getByText('Noise suppression: browser', { exact: true }).waitFor();
+});
+// Your recent calls in Settings > Account, from summaries posted as the client does at leave.
+scene('recent-calls', async (ctx) => {
+  const page = ctx.alice.page;
+  await home(page);
+  const base = { fallback_reason: '', loss_pct: 0.4, jitter_ms: 9, concealed_pct: 0.3, rtt_ms: 38, browser_ns_loading: false };
+  for (const c of [
+    { ...base, duration_s: 2710, mode: 'deepfilter', browser_ns_loading: true },
+    { ...base, duration_s: 640, mode: 'browser', fallback_reason: 'denoiser too slow for real time', loss_pct: 3.2, jitter_ms: 41 },
+    { ...base, duration_s: 45, mode: 'deepfilter', concealed_pct: null },
+  ]) await ctx.api(page, 'POST', '/api/me/calls', c);
+  await settingsPage(page, 'Account');
+  const list = page.getByRole('list', { name: 'Your recent calls' });
+  await list.waitFor();
+  await list.scrollIntoViewIfNeeded();
+  await rest(page);
+  await ctx.shot(page, 'recent-calls', { fullPage: false });
+});
 // Person cards. A member (bob) opens alice from the call bar and turns her up past 100 %; a moderator (dave) opens carol
 // from the sidebar and sees the voice actions, then the Disconnect confirm. Dave on alice (the owner) gets no actions.
 scene('person-card', async (ctx) => {

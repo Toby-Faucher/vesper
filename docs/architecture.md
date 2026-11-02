@@ -189,7 +189,7 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
   into a `MediaStreamDestination`, and that track is what WebRTC sends (`web/src/lib/audio/capture.ts`, `denoise.worklet.ts`,
   `dsp.worker.ts`, `dsp-handler.ts`).
 - Buffers in `denoise-core.ts`: up to 4 frames at the worker, a 4 frame input ring, and an output queue that starts playing at 3 frames
-  (30 ms) and holds at most 8 (80 ms); if it stays above 5 for 2 s it drops one frame a second down to 3. They absorb jitter in the worklet to worker messages. The delay they add is estimated, not measured.
+  (30 ms) and holds at most 8 (80 ms); if it stays above 5 for 2 s it drops one frame a second down to 3. When it runs dry (an underrun, or empty exactly at a block end) the samples it played in that block fade to 0 (at most 2.5 ms, 120 samples; as little as 32 when it runs dry early in a 128-sample block), and the next audio fades in over 2.5 ms, so a starved output dips instead of clicking (unit-tested with a max sample step check; not listened). A queue that is empty exactly at a block end and refilled in time dips the same way but is not counted in `underruns`. Every start of playback (the first, and each re-prime) fades in. They absorb jitter in the worklet to worker messages. The delay they add is estimated, not measured.
 - Two steps run inside the worklet (`dynamics.ts`), so the order stays mic, echo cancellation, gain, DeepFilterNet, Opus:
   - A limiter on the boosted input, before the denoiser, on only while the input boost is above 0 dB. A peak envelope (20 ms hold,
     80 ms release) feeds a soft curve: gain 1 below -6 dBFS, and the denoiser input never passes -1 dBFS. It needs no lookahead, so
@@ -203,7 +203,7 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
     ramps it open. The switch is disabled outside DeepFilterNet mode. The passthrough before the model is
     ready, and after a failure, is not gated.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
-  suppression is on only in `browser` mode, or in `deepfilter` mode if the user turned it on.
+  suppression is on in `browser` mode, in `deepfilter` mode while the model loads, and in `deepfilter` mode if the user turned it on.
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is
   also set on the sender (`web/src/lib/devices.ts`). Remote SDP is tuned too, then applied (`signaling.ts`).
 
@@ -220,9 +220,20 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 - Modes: `deepfilter`, `browser`, `off` (`web/src/lib/audio/mode.ts`).
 - `ModeController` trips from `deepfilter` to `browser` when 20 of the last 100 frames each took longer than 30 ms. The first 300 frames (about 3 s) are ignored. It stays tripped until `reset()`.
   The numbers are set in `denoise-core.ts`.
+- A mic that ends mid-call (or that the system mutes for over 3 s) leaves the call up with `off (microphone lost: ...)`, and the call bar offers
+  Retry microphone: `capture.retry()` asks for the mic again (a saved mic that is gone falls back to the default, as at the start) and builds
+  the graph anew, and the sender gets the new track with `replaceTrack`. A failed retry names the error and keeps the button.
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
-- The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). The raw mic passes through, and the status line says `loading, unfiltered`, until then.
+- The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). Until then the mic passes through with the browser's noise suppression on
+  (the mic is asked for with `noiseSuppression: true`), and the status line says `loading, browser filter until then`. At `ready` (unless "Browser noise suppression on top"
+  is on, when the line says only `loading`) the capture calls `applyConstraints({ noiseSuppression: false })` on the track. Where that works
+  (`getSettings()` then says false; Firefox is expected to, not verified) nothing else happens. Chromium resolves it but keeps the filter, and a
+  second track opened while the first runs gets the first one's filter (both seen in headless Chromium, 2026-11-02). There the capture ends the
+  track, asks for the same mic again without the filter and moves the graph's source to it, so the two filters never stack. The sent track does
+  not change; the input has a gap of one `getUserMedia` call as the model starts. If the mic does not answer within 3 s (`REOPEN_TIMEOUT_MS`; a
+  hidden tab can hold the request) or fails, the call falls back to `browser` with `the mic did not reopen without the browser filter: ...`. The e2e checks both tracks in
+  headless Chromium; whether the switch is heard is not verified.
 - The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. Skipped when the browser asks to save data. Not verified in a real browser.
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.
 
@@ -247,6 +258,8 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/me/password` (`PasswordChange`) | a session, the old password, Login limit | 204, every other session is deleted |
 | `POST /api/reset` (`ResetReq`) | a reset code, Reset limit by address (10, then 1 every 6 minutes) | 204, the password is set, the code is marked used and every session of that account is deleted; 404 `reset_invalid` for an unknown, used, cancelled or expired code (all the same) |
 | `POST /api/me/reset-notices` | a session | `ResetNotice[]`: resets of your password not shown yet, now marked shown (the sign-in page shows them once) |
+| `POST /api/me/calls` (`CallSummary`) | a session, Calls limit by user (10, then 1 a minute) | 204; stored for your account only (an account field in the body is ignored, like any unknown field). 400 when `duration_s` is over 24 h, `fallback_reason` is over 120 characters or has a control character, a percentage is outside 0 to 100, `jitter_ms` outside 0 to 10000 or `rtt_ms` outside 0 to 60000. The newest 20 per account are kept |
+| `GET /api/me/calls` | a session | `CallRecord[]`: your own last 20 calls, newest first. Nobody else's, the owner included |
 | `GET /api/sessions` | a session | `Device[]`, `current` marks this one |
 | `DELETE /api/sessions/{id}` | a session | 204 (the cookie is cleared if it is this session), or 404 if the id is not one of yours |
 | `GET /api/push` | a session | `PushInfo`: the VAPID public key (null when push is off) and `PushDevice[]`, `current` marks this session's |
@@ -283,6 +296,12 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past 25 MiB, 507 `quota_full` |
 | `GET /api/uploads/{id}` | sees the room; an upload not attached yet needs the uploader | the file (Range works), else 404 |
 | `GET /api/admin/disk` | owner | `DiskUse` |
+
+Your recent calls (`api_calls.rs`, store `calls.rs`, table `call_stats` from migration `0010_call_stats.sql`): when you leave a call your
+client posts one summary: how long it lasted, the noise suppression mode it ended in and its fallback reason, incoming loss, jitter,
+concealed share and round trip (averages over the call's 2 s stats polls), and whether the browser filter ran while DeepFilterNet
+loaded. No room and no other people are stored. Each person reads only their own (Settings > Account, "Your recent calls"); there is
+no owner view (a ruling for v1.4). Rows older than 30 days are deleted at start and every 24 h, and each account keeps its newest 20.
 
 Rooms (`api_rooms.rs`, store `rooms.rs`): every room has text and voice. A fresh database has `general` and `hangout`
 (migration `0002_rooms.sql`). Room names follow the display name rule (NFC, 1 to 32 characters, no control or hidden format
