@@ -55,12 +55,17 @@
       // source: the anchor counts as the invoker, so a click on it toggles instead of light-dismiss and reopen.
       el.showPopover({ source: anchor });
       // shortcut: placed once on open; a scroll or resize while open does not move it. Fine for menus and cards.
+      // A card opened downwards still grows down when its content grows; nothing sits under one today.
       const r = el.getBoundingClientRect();
       const a = anchor.getBoundingClientRect();
       const box = above && side === 'top' ? { left: a.left, right: a.right, bottom: a.bottom, top: Math.min(a.top, above.getBoundingClientRect().top) } : a;
       const p = place(box, { w: r.width, h: r.height }, { w: innerWidth, h: innerHeight }, side);
       el.style.left = `${p.x}px`;
-      el.style.top = `${p.y}px`;
+      // Opened upwards it hangs from its bottom edge, so content that grows while open (the card's stats line wrapping on
+      // the first poll) pushes it up, not down over its anchor and the composer.
+      const up = p.side === 'top';
+      el.style.top = up ? '' : `${p.y}px`;
+      el.style.bottom = up ? `${innerHeight - p.y - r.height}px` : '';
       enter(el, 'pop');
       (onopen ?? ((e) => e.focus()))(el);
     } else if (!open && shown()) {

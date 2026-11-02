@@ -298,9 +298,12 @@ try {
     await b.getByRole('region', { name: 'Call' }).getByRole('button', { name: /^bob/ }).click();
     const card = b.getByRole('dialog', { name: 'bob' });
     await card.waitFor();
-    await sleep(300); // past the open motion, which scales the card
+    // Its content can grow while it is open: the stats line wraps to two lines on a poll (#86). A 40 px block stands in
+    // for that, so the check does not depend on when the poll lands. Measured once the open motion (a scale) is over.
+    await card.evaluate((e) => e.firstElementChild.append(Object.assign(document.createElement('div'), { style: 'height: 40px' })));
+    await b.waitForFunction(() => !document.getAnimations().length);
     const [c, m] = [await card.boundingBox(), await b.locator('[data-composer]').boundingBox()];
-    assert.ok(c.y + c.height <= m.y, `the person card covers the composer at ${size.width}x${size.height}`);
+    assert.ok(c.y + c.height <= m.y, `the person card covers the composer at ${size.width}x${size.height}: card ${JSON.stringify(c)}, composer ${JSON.stringify(m)}`);
     await b.keyboard.press('Escape');
     await card.waitFor({ state: 'hidden' });
   }
