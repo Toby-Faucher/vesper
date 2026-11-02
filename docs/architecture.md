@@ -505,15 +505,16 @@ service, a notification on screen, iOS, Firefox and Safari.
 - **Request head:** 10 s (`HEADER_TIMEOUT`). hyper runs the same timer while a kept-alive connection waits for its next request,
   so an idle connection is also closed after 10 s.
 - **JSON `/api` bodies:** cut after 15 s with no bytes (`BODY_IDLE`) or 30 s in all (`BODY_TOTAL`). The handler sees a body error
-  (400) and the connection closes, since the body was not read to the end. The bodies are at most 32 KiB.
+  (400, tested for the stalled login body) and the connection closes, since the body was not read to the end. The bodies are at most 32 KiB.
 - **Uploads and profile pictures:** 30 s idle and 10 minutes in all (`uploads::READ_IDLE`, `READ_TOTAL`): in `read_body` for
-  uploads, as layers for `/api/me/avatar`. The partial upload file is deleted when the body stops, errors or the client goes away.
+  uploads, as layers for `/api/me/avatar`. The partial upload file is deleted when the body stops, errors or the client goes away (one `Drop` guard; tested for the client going away).
 - **WebSocket:** once upgraded the socket leaves hyper, so none of these apply. It has its own ping (25 s, dropped after two silent periods).
 - **No response timeout.** A client that reads a download slowly keeps its connection ([known-issues.md](known-issues.md#security-and-abuse)).
 
-Tests: `crates/vesper-server/tests/timeouts.rs` over raw TCP (half a head, an idle kept-alive connection, a stalled and a trickled
-JSON body, a slow upload past the JSON total, an aborted upload's partial file, a WebSocket past every timer). Each was
-mutation-checked: removing its timeout or the cleanup makes its test fail.
+Tests: `crates/vesper-server/tests/timeouts.rs` over raw TCP (half a head, a kept-alive connection answered twice and then closed when
+idle, a stalled and a trickled JSON body, a slow upload past the JSON total, an aborted upload's partial file, a WebSocket past every
+timer). Checked once by hand when written: each test failed with its piece removed (`header_read_timeout`, the idle layer, the deadline
+layer, keep-alive turned off, the JSON deadline also on uploads, the file delete in `Cleanup`).
 
 ## Static serving
 

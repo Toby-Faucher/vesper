@@ -233,10 +233,12 @@ async fn accept_loop(
     loop {
         let (tcp, peer) = match listener.accept().await {
             Ok(c) => c,
+            // Like `axum::serve`: a client gone before accept is skipped; anything else (out of file
+            // descriptors) waits a second instead of spinning.
+            Err(e) if is_connection_error(&e) => continue,
             Err(e) => {
-                // Out of file descriptors and the like: wait instead of spinning.
                 warn!("accept: {e}");
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
         };
@@ -253,6 +255,14 @@ async fn accept_loop(
             }
         });
     }
+}
+
+fn is_connection_error(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{ConnectionAborted, ConnectionRefused, ConnectionReset};
+    matches!(
+        e.kind(),
+        ConnectionRefused | ConnectionAborted | ConnectionReset
+    )
 }
 
 /// 503 once the SFU thread has died, for external monitors and load balancers. (Docker does not

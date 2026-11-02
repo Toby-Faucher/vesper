@@ -59,11 +59,25 @@ async fn half_a_request_head_is_closed() {
 async fn idle_kept_alive_connection_is_closed() {
     let server = server().await;
     let mut t = TcpStream::connect(server.addr).await.unwrap();
-    t.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
-        .await
-        .unwrap();
-    let res = read_until_closed(&mut t, HEADER + SLACK).await;
-    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    // Kept alive: a second request on the same connection, inside the timeout, is answered.
+    for _ in 0..2 {
+        t.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        let mut b = vec![0; 1024];
+        let n = tokio::time::timeout(SLACK, t.read(&mut b))
+            .await
+            .unwrap()
+            .unwrap();
+        let res = String::from_utf8_lossy(&b[..n]);
+        assert!(
+            res.starts_with("HTTP/1.1 200") && res.ends_with("ok"),
+            "{res}"
+        );
+        tokio::time::sleep(HEADER / 2).await;
+    }
+    // Then idle: closed, with nothing more sent.
+    assert_eq!(read_until_closed(&mut t, HEADER + SLACK).await, "");
 }
 
 fn login_head(len: usize) -> String {
@@ -79,7 +93,8 @@ async fn stalled_json_body_is_closed() {
     let mut t = TcpStream::connect(server.addr).await.unwrap();
     t.write_all(login_head(100).as_bytes()).await.unwrap();
     t.write_all(b"{\"user").await.unwrap();
-    read_until_closed(&mut t, IDLE + SLACK).await;
+    let res = read_until_closed(&mut t, IDLE + SLACK).await;
+    assert!(res.starts_with("HTTP/1.1 400"), "{res}");
 }
 
 #[tokio::test]
