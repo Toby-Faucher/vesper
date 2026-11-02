@@ -331,11 +331,17 @@ async fn join(
     let Some(room) = rooms.iter().find(|r| r.id == room_id) else {
         return Err(voice_error(st, ErrorCode::Forbidden));
     };
-    st.app
+    let j = st
+        .app
         .voice
         .join(&user, room, offer, tx.clone())
         .await
-        .map_err(|code| voice_error(st, code))
+        .map_err(|code| voice_error(st, code))?;
+    if j.first {
+        let (push, room) = (st.app.push.clone(), room.clone());
+        tokio::spawn(async move { push.voice_started(&room, &user).await });
+    }
+    Ok(j)
 }
 
 /// `typing` to everyone else who can see the room. Never stored and never answered: over the
