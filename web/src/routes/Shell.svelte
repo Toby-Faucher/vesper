@@ -19,7 +19,7 @@
   import Dialog from '../lib/ui/c/Dialog.svelte';
   import { lazy } from '../lib/ui/lazy';
   import SwitcherField from './SwitcherField.svelte';
-  import { MAX_QUERY } from '../lib/ui/searchq';
+  import { MAX_QUERY } from '../lib/ui/search-max';
   import CallBar from './CallBar.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
   import RoomView from './RoomView.svelte';

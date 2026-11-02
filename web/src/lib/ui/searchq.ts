@@ -1,3 +1,4 @@
+import { MAX_QUERY } from './search-max';
 import type { RoomInfo } from '../gen/RoomInfo';
 import type { UserInfo } from '../gen/UserInfo';
 
@@ -18,8 +19,7 @@ export type Parsed = {
 };
 type Token = { start: number; end: number; key: Key | null; value: string; text: string };
 
-/** The longest box the dialog takes (its `maxlength`), and the most words sent: a long paste is cut, not sent whole. */
-export const MAX_QUERY = 200;
+export { MAX_QUERY };
 const MAX_TERMS = 12;
 const KEYS = new Set<string>(['from', 'in', 'after', 'before']);
 // A run of quoted text or of anything but spaces and quotes, glued together: `from:"Sam Smith"`, `"two words"`, `x"y`.
