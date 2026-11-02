@@ -9,7 +9,7 @@ const pipeline: PipelineStats = {
   inputRms: 0.1, outputRms: 0.01, inputPeak: 0.4,
 };
 const base: CaptureStats = {
-  pipeline, ageMs: 600, mic: { readyState: 'live', muted: false, enabled: true }, context: { state: 'running', sampleRate: 48000 },
+  pipeline, ageMs: 600, mic: { readyState: 'live', muted: false, enabled: true, settings: { sampleRate: 48000, channelCount: 1, echoCancellation: true, noiseSuppression: false, autoGainControl: true, latency: 0.01 }, reopens: 1 }, context: { state: 'running', sampleRate: 48000 },
 };
 
 describe('level helpers', () => {
@@ -40,6 +40,7 @@ describe('level helpers', () => {
       ['Input blocks', '900 received, 3 missing'],
       ['Last report', '0.6 s ago'],
       ['Mic track', 'live, not muted, enabled'],
+      ['Mic settings', 'sampleRate 48000, channelCount 1, echoCancellation true, noiseSuppression false, autoGainControl true, latency 0.01; reopened 1x'],
       ['Capture context', 'running, 48000 Hz'],
     ]);
   });
@@ -47,10 +48,11 @@ describe('level helpers', () => {
   it('audio rows: failure reason, no pipeline, and no capture', () => {
     const failed = audioRows({ ...base, pipeline: { ...pipeline, state: 'failed', failure: 'denoiser stalled' } });
     expect(failed[0]).toEqual(['State', 'failed: denoiser stalled']);
-    const none = audioRows({ ...base, pipeline: null, ageMs: null, mic: { readyState: 'ended', muted: true, enabled: false } });
+    const none = audioRows({ ...base, pipeline: null, ageMs: null, mic: { readyState: 'ended', muted: true, enabled: false, settings: {}, reopens: 0 } });
     expect(none).toEqual([
       ['State', 'no denoiser data (browser or off mode, or still starting)'],
       ['Mic track', 'ended, muted by the system, disabled'],
+      ['Mic settings', 'none reported; reopened 0x'],
       ['Capture context', 'running, 48000 Hz'],
     ]);
     expect(audioRows(null)).toEqual([['State', 'Not in a call']]);
