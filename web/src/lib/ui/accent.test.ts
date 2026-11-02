@@ -73,7 +73,8 @@ const through = (m: number[], hex: string) => {
   recolour(px, m);
   return '#' + [...px.slice(0, 3)].map((v) => v.toString(16).padStart(2, '0')).join('');
 };
-const LOGO = { disc: '#fdb91c', ring: '#b54601', white: '#f3f3f3', black: '#0d0d0d' }; // the logo's own colours (logo.webp)
+// The most common pixels of logo.webp and icon-192.png (decoded in Chromium for #69); update them with a new logo.
+const LOGO = { disc: '#fdb91c', ring: '#b54601', white: '#f3f3f3', black: '#0d0d0d' };
 
 it('the_logo_tint_is_the_identity_for_amber_and_keeps_greys', () => {
   expect(tint(PRESETS.amber.hex)).toEqual([1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0]);

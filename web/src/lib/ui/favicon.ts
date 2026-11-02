@@ -33,18 +33,30 @@ export async function favicon(m: number[] | null): Promise<void> {
 async function paint(m: number[] | null): Promise<void> {
   let href = '/favicon.ico';
   if (m) {
-    const bytes = Uint8Array.from(atob(png.slice(png.indexOf(',') + 1)), (c) => c.charCodeAt(0));
-    const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    try {
+      href = await draw(m);
+    } catch {
+      // no OffscreenCanvas or a failed decode: the static amber icon, never an unhandled rejection
+    }
+  }
+  const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (link) link.href = href;
+  if (shown) URL.revokeObjectURL(shown);
+  shown = href.startsWith('blob:') ? href : '';
+}
+
+async function draw(m: number[]): Promise<string> {
+  const bytes = Uint8Array.from(atob(png.slice(png.indexOf(',') + 1)), (c) => c.charCodeAt(0));
+  const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+  try {
     const canvas = new OffscreenCanvas(32, 32);
     const ctx = canvas.getContext('2d')!;
     ctx.drawImage(bmp, 0, 0);
     const img = ctx.getImageData(0, 0, 32, 32);
     recolour(img.data, m);
     ctx.putImageData(img, 0, 0);
-    href = URL.createObjectURL(await canvas.convertToBlob());
+    return URL.createObjectURL(await canvas.convertToBlob());
+  } finally {
+    bmp.close();
   }
-  const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
-  if (link) link.href = href;
-  if (shown) URL.revokeObjectURL(shown);
-  shown = m ? href : '';
 }

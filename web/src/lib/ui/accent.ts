@@ -110,7 +110,7 @@ export function applyAccent(v: string | null | undefined, root: HTMLElement = do
   doc?.getElementById('logo-matrix')?.setAttribute('values', tint(fill).join(' '));
   if (doc && (!amber || tinted)) {
     tinted = true;
-    void import('./favicon').then((f) => f.favicon(amber ? null : tint(fill)));
+    void import('./favicon').then((f) => f.favicon(amber ? null : tint(fill))).catch(() => {}); // a failed chunk load: the tab keeps its icon
   }
   try {
     if (v) store?.setItem(ACCENT_KEY, v);
