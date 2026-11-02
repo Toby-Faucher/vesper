@@ -25,6 +25,8 @@ pub struct Config {
     /// True when `origin` is https: cookies get `Secure` and the `__Host-` name.
     pub secure_cookies: bool,
     pub upload_quota_bytes: u64,
+    /// VAPID contact (`mailto:` or `https:`) sent to push services. None turns Web Push off.
+    pub push_subject: Option<String>,
 }
 
 impl Config {
@@ -32,7 +34,8 @@ impl Config {
     /// `VESPER_PUBLIC_HOST` (optional), `VESPER_UDP_PORT_PUBLIC` (default: the `VESPER_UDP_BIND`
     /// port), `VESPER_MAX_SOCKETS` (default 256), `VESPER_WEB_DIR` (default `web/dist`),
     /// `VESPER_DATA_DIR` (default `data`), `VESPER_ORIGIN` (default `http://localhost:8080`) and
-    /// `VESPER_UPLOAD_QUOTA_MB` (default 10240).
+    /// `VESPER_UPLOAD_QUOTA_MB` (default 10240) and `VESPER_PUSH_SUBJECT` (default: the origin
+    /// when it is https, else unset, which turns push off).
     pub fn from_env() -> Result<Config, String> {
         Config::from_lookup(|k| std::env::var(k).ok())
     }
@@ -53,6 +56,15 @@ impl Config {
         let origin =
             normalise_origin(&origin).map_err(|e| format!("VESPER_ORIGIN={origin}: {e}"))?;
         let quota_mb = num("VESPER_UPLOAD_QUOTA_MB", 10240)?;
+        let push_subject = match get("VESPER_PUSH_SUBJECT").filter(|s| !s.is_empty()) {
+            Some(s) if valid_push_subject(&s) => Some(s),
+            Some(s) => {
+                return Err(format!(
+                    "VESPER_PUSH_SUBJECT={s}: must be mailto:<address> or https://<host>"
+                ));
+            }
+            None => origin.starts_with("https://").then(|| origin.clone()),
+        };
         Ok(Config {
             http_bind: addr("VESPER_HTTP_BIND", "0.0.0.0:8080")?,
             udp_bind,
@@ -72,8 +84,17 @@ impl Config {
             upload_quota_bytes: quota_mb
                 .checked_mul(1024 * 1024)
                 .ok_or("VESPER_UPLOAD_QUOTA_MB is too large")?,
+            push_subject,
         })
     }
+}
+
+/// RFC 8292 contact: `mailto:` or `https://`, printable ASCII without spaces or quotes, short.
+fn valid_push_subject(s: &str) -> bool {
+    (s.starts_with("mailto:") || s.starts_with("https://"))
+        && s.len() <= 200
+        && s.bytes()
+            .all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\')
 }
 
 /// `http(s)://host[:port]` with no path, query or user part, in the form browsers send as
@@ -229,6 +250,26 @@ mod tests {
         }
         let q = lookup(&[("VESPER_UPLOAD_QUOTA_MB", "")]).unwrap();
         assert_eq!(q.upload_quota_bytes, 10240 * 1024 * 1024);
+    }
+
+    #[test]
+    fn push_subject_defaults_to_an_https_origin() {
+        assert_eq!(lookup(&[]).unwrap().push_subject, None);
+        let https = lookup(&[("VESPER_ORIGIN", "https://v.example")]).unwrap();
+        assert_eq!(https.push_subject.as_deref(), Some("https://v.example"));
+        let set = |v: &str| lookup(&[("VESPER_PUSH_SUBJECT", v)]);
+        assert_eq!(
+            set("mailto:ops@v.example").unwrap().push_subject.as_deref(),
+            Some("mailto:ops@v.example")
+        );
+        for bad in [
+            "http://v.example",
+            "ops@v.example",
+            "mailto:a b",
+            "mailto:\"x\"",
+        ] {
+            assert!(set(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -13,6 +13,7 @@ use vesper_protocol::Role;
 mod accounts;
 mod invites;
 mod messages;
+mod push;
 mod rooms;
 mod search;
 mod sessions;
@@ -20,6 +21,7 @@ mod uploads;
 
 pub use accounts::{LoginRow, NewAccount};
 pub use messages::{Cursor, MAX_PINS, MAX_REACTIONS, NewMessage};
+pub use push::{MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget};
 pub use search::{HITS as SEARCH_SQL, MAX_SEARCH, fts_query};
 pub use sessions::{NewSession, SESSION_TTL_MS};
 pub use uploads::UploadRow;

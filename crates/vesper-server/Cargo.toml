@@ -4,15 +4,26 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+# Debug test builds only (integration tests and the push e2e): push may go to plain http on
+# 127.0.0.1, the fake push service. `push.rs` refuses to compile it into a release build.
+test-push = []
+
 [dependencies]
 argon2 = "0.6.0"
+# Web Push crypto (VAPID ES256, RFC 8291 ECDH, HKDF, AES-GCM). Already in the tree via str0m.
+aws-lc-rs = { version = "1.19", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
 http-body-util = "0.1"
+# TLS to the push services, on the aws-lc-rs provider already in the tree.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustix = { version = "=1.1.6", features = ["fs"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
 tower-http = { version = "0.7", default-features = false, features = ["fs"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -20,6 +31,7 @@ unicode-normalization = "0.1.26"
 vesper-protocol.workspace = true
 vesper-sfu.workspace = true
 vesper-store.workspace = true
+webpki-roots = "1"
 
 [dev-dependencies]
 tempfile = "3"
@@ -27,6 +39,8 @@ futures-util = { workspace = true, features = ["sink"] }
 tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }
 vesper-sfu = { workspace = true, features = ["test-support"] }
+# Turns on `test-push` for the integration tests only (they are a separate crate).
+vesper-server = { path = ".", features = ["test-push"] }
 
 [lints]
 workspace = true

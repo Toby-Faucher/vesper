@@ -462,6 +462,69 @@ pub struct RoomMembers {
     pub user_ids: Vec<String>,
 }
 
+/// `GET /api/push`: the server's VAPID public key (base64url, 65-byte P-256 point), or null when
+/// push is off on this server, and the devices of this account that get push.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PushInfo {
+    pub public_key: Option<String>,
+    pub devices: Vec<PushDevice>,
+}
+
+/// A browser that gets push for this account. `current` is the one the request came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PushDevice {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub label: String,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number | null")]
+    pub last_ok_at: Option<i64>,
+    pub current: bool,
+    pub mentions: bool,
+    pub voice: bool,
+}
+
+/// `PUT /api/push/subscription`: this browser's push subscription (from
+/// `PushSubscription.toJSON()`) and its two switches. Replaces this session's earlier one.
+// `Debug` is written by hand: the endpoint is a capability URL and `auth` a secret.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PushSubscribe {
+    pub endpoint: String,
+    /// base64url of the 65-byte P-256 public key.
+    pub p256dh: String,
+    /// base64url of the 16-byte auth secret.
+    pub auth: String,
+    pub mentions: bool,
+    pub voice: bool,
+}
+
+impl std::fmt::Debug for PushSubscribe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushSubscribe")
+            .field("endpoint", &"***")
+            .field("auth", &"***")
+            .field("mentions", &self.mentions)
+            .field("voice", &self.voice)
+            .finish()
+    }
+}
+
+/// What the service worker gets, encrypted (RFC 8291): never a message body. `kind` is
+/// `mention`, `voice` or `test`; `room_id` is 0 for `test`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PushPayload {
+    pub kind: String,
+    #[ts(type = "number")]
+    pub room_id: i64,
+    pub title: String,
+    pub body: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,6 +569,16 @@ mod tests {
                         revoked: false,
                     },
                     url: format!("http://x/invite#{secret}"),
+                }
+            ),
+            format!(
+                "{:?}",
+                PushSubscribe {
+                    endpoint: format!("https://fcm.googleapis.com/fcm/send/{secret}"),
+                    p256dh: "p".into(),
+                    auth: secret.into(),
+                    mentions: true,
+                    voice: false,
                 }
             ),
         ];

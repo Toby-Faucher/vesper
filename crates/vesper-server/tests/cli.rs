@@ -22,6 +22,7 @@ fn config(data: &TempDir) -> Config {
         origin: "http://localhost:8080".into(),
         secure_cookies: false,
         upload_quota_bytes: 0,
+        push_subject: None,
     }
 }
 

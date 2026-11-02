@@ -121,6 +121,14 @@ impl Hub {
         self.lock().conns.remove(&id);
     }
 
+    /// True while `user_id` has a socket open (a Vesper tab), so a push would only repeat it.
+    pub fn online(&self, user_id: &str) -> bool {
+        self.lock()
+            .conns
+            .values()
+            .any(|c| c.user.user_id == user_id)
+    }
+
     pub fn send_user(&self, user_id: &str, msg: ServerMsg) {
         for c in self.lock().conns.values() {
             if c.user.user_id == user_id {
