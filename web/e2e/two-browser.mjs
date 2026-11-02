@@ -194,6 +194,16 @@ try {
     await page.getByRole('button', { name: 'Leave' }).click();
     await page.getByRole('button', { name: 'Join' }).waitFor();
   };
+  // levelling_switch (#57): bob turns "Even out voices" on (off by default); the rejoins below run with it, and it is still
+  // on after the reload. The gain itself is checked by the unit tests (playback.test.ts, level.test.ts).
+  const even = async () => {
+    await bob.page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await bob.page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Voice' }).click();
+    return bob.page.getByRole('switch', { name: 'Even out voices' });
+  };
+  assert.equal(await (await even()).isChecked(), false, 'Even out voices is on by default');
+  await (await even()).check();
+  await openRoom(bob.page, 'general');
   await flowing(alice.page, 'before: alice hears bob');
   await flowing(bob.page, 'before: bob hears alice');
   for (const [how, pause] of [['leave, wait, join', 2000], ['leave and join within a second', 0], ['reload, join', null]]) {
@@ -210,6 +220,10 @@ try {
     await flowing(bob.page, 'bob hears alice');
   }
   console.log('rejoin_audio: ok');
+  assert.equal(await (await even()).isChecked(), true, 'Even out voices did not last a reload');
+  await (await even()).uncheck();
+  await openRoom(bob.page, 'general');
+  console.log('levelling_switch: ok');
 
   // picture_shows_live (#21): alice picks a picture in Settings > Account (cropped and redrawn by a canvas); bob's sidebar
   // shows it on her voice row without a reload, loaded under the page CSP, and the speaking ring still draws around it.

@@ -14,6 +14,7 @@ import { MIC_QUIET, micSilence, type MicWarning } from './audio/mic-silence';
 import type { DenoiseMode } from './audio/mode';
 import { summarize, type Diag } from './diag';
 import { quality, type Quality } from './ui/quality';
+import { loadLevelling, saveLevelling } from './level';
 import { linkSamples, stepLink, type Link } from './ui/link';
 import { callCue, type CallSnap } from './ui/cues';
 import { chime } from './ui/chime';
@@ -49,6 +50,8 @@ class Voice {
   diag = $state.raw<Diag | null>(null);
   /** Connection quality per person in the call (you too), keyed on user_id. Empty when not in a call. */
   links = $state.raw<Record<string, Link>>({});
+  /** "Even out voices" (Settings > Voice), saved in this browser. */
+  levelling = $state(loadLevelling());
 }
 export const voice = new Voice();
 
@@ -191,6 +194,11 @@ export function startVoice(): () => void {
     document.removeEventListener('visibilitychange', release);
   };
 }
+export function setLevelling(on: boolean): void {
+  voice.levelling = on;
+  saveLevelling(on);
+  playback?.setLevelling(on);
+}
 export function toggleDeafen(): void {
   voice.deafened = !voice.deafened;
   playback?.setDeafened(voice.deafened);
@@ -282,6 +290,7 @@ export async function join(roomId: number): Promise<boolean> {
   ({ muted: voice.muted, deafened: voice.deafened, forceMuted: voice.forceMuted } = idleCall()); // before the join: the server re-sends force_muted after it
   // Create and resume the AudioContext inside the click gesture, before any await.
   playback = new Playback(restoreVolumes(localStorage));
+  playback.setLevelling(voice.levelling); // a new Playback each join, so the levelling starts from 0 dB
   // Held for the call's lifetime so the browser does not freeze the tab's audio in the background.
   // The resolver exists up front so teardown releases it even if the lock callback has not run yet.
   const held = new Promise<void>((res) => (releaseLock = res));

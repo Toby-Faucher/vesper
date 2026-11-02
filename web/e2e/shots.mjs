@@ -1132,7 +1132,9 @@ scene('settings-voice-in-call', async (ctx) => {
   await joinVoice(page);
   await settingsPage(page, 'Voice');
   await page.waitForFunction(() => Number(document.querySelector('[role=meter]')?.getAttribute('aria-valuenow')) > -100);
+  await page.getByRole('switch', { name: 'Even out voices' }).check();
   await tall(page, ctx, 'settings-voice-in-call');
+  await page.getByRole('switch', { name: 'Even out voices' }).uncheck();
   await settingsPage(page, 'Diagnostics');
   await sleep(2500); // the stats refresh
   await rest(page);
@@ -1302,7 +1304,9 @@ scene('admin-disk-warn', async (ctx) => {
 
 // Main-thread CPU on bob's page in a two-person call: CDP TaskDuration over 10 s, printed, no picture. Run it three times
 // and take the median (docs/dev.md has the baseline).
-scene('cpu-baseline', async ({ alice, bob }) => {
+// cpu-level is the same with "Even out voices" on for bob (one remote track levelled).
+const cpu = (name, levelling) => scene(name, async ({ alice, bob }) => {
+  await bob.page.evaluate((on) => localStorage.setItem('vesper.level', on ? 'on' : 'off'), levelling);
   for (const p of [alice.page, bob.page]) {
     await home(p);
     await openRoom(p, 'general'); // `/` opens the last room, which an earlier scene may have changed
@@ -1315,8 +1319,11 @@ scene('cpu-baseline', async ({ alice, bob }) => {
   const task = async () => (await cdp.send('Performance.getMetrics')).metrics.find((m) => m.name === 'TaskDuration').value;
   const t0 = await task();
   await sleep(10000);
-  console.log(`cpu-baseline: ${Math.round((await task() - t0) * 1000)} ms per 10 s`);
+  console.log(`${name}: ${Math.round((await task() - t0) * 1000)} ms per 10 s`);
+  await bob.page.evaluate(() => localStorage.removeItem('vesper.level'));
 });
+cpu('cpu-baseline', false);
+cpu('cpu-level', true);
 
 // Offline: the composer keeps the draft and says Send waits for the connection. Restarts the server like reconnecting.
 scene('composer-offline', async ({ alice, server, shot }) => {
