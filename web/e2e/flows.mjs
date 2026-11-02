@@ -423,6 +423,33 @@ try {
     a.getByRole('radio', { name: 'Teal' }).check(),
   ]);
   assert.equal(await accentOf(a), '#2fc4b2', 'the preview did not apply at once');
+  // The logo and the tab icon follow (#69): the logo's filter maps amber to the accent, the favicon is a blob: drawn in it.
+  const logo = await a.evaluate(() => {
+    const img = document.querySelector('img[alt="Vesper"]');
+    const m = document.getElementById('logo-matrix').getAttribute('values').split(' ').map(Number);
+    const [r, g, b] = [0xf0, 0xb0, 0x10].map((_, i, x) => Math.round(m[i * 5] * x[0] + m[i * 5 + 1] * x[1] + m[i * 5 + 2] * x[2]));
+    return { filter: getComputedStyle(img).filter, amberTo: '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('') };
+  });
+  assert.match(logo.filter, /url\("?#logo-tint"?\)/, 'the logo is not filtered');
+  assert.equal(logo.amberTo, '#2fc4b2', 'the logo filter does not paint amber in the accent');
+  const icon = async (p) => {
+    await p.waitForFunction(() => document.querySelector('link[rel="icon"]').href.startsWith('blob:'));
+    return p.evaluate(async () => {
+      const bmp = new Image(); // an <img>, not fetch: the CSP allows blob: images, not blob: connections
+      bmp.src = document.querySelector('link[rel="icon"]').href;
+      await bmp.decode();
+      const ctx = new OffscreenCanvas(32, 32).getContext('2d');
+      ctx.drawImage(bmp, 0, 0);
+      const d = ctx.getImageData(0, 0, 32, 32).data, n = {};
+      for (let i = 0; i < d.length; i += 4) if (d[i + 3] === 255 && Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) {
+        const k = [d[i], d[i + 1], d[i + 2]].join();
+        n[k] = (n[k] ?? 0) + 1;
+      }
+      return Object.entries(n).sort((x, y) => y[1] - x[1])[0][0].split(',').map(Number); // the most common colourful pixel
+    });
+  };
+  const disc = await icon(a);
+  assert.ok([0x2f, 0xc4, 0xb2].every((v, i) => Math.abs(v - disc[i]) <= 24), `the favicon disc is ${disc}, not near teal`);
   assert.equal(saved.status(), 200);
   await accentIs(a2, '#2fc4b2');
   await a2.reload();
@@ -444,6 +471,8 @@ try {
   await a.getByRole('button', { name: 'Reset to amber' }).click();
   await accentIs(a2, '#f0b010');
   assert.equal((await call(a, 'GET', '/api/me')).user.ui_accent, 'amber');
+  await a.waitForFunction(() => document.querySelector('link[rel="icon"]').getAttribute('href') === '/favicon.ico');
+  assert.equal(await a.evaluate(() => getComputedStyle(document.querySelector('img[alt="Vesper"]')).filter), 'none', 'amber filters the logo');
   await assert.rejects(call(a, 'PATCH', '/api/me', { ui_accent: 'red' }), /400/);
   console.log('accent follows the account, custom checked: ok');
 

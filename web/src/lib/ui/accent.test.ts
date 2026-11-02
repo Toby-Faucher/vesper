@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import tokens from '../../styles/tokens.css?raw';
-import { ACCENT_KEY, applyAccent, check, contrast, fillOf, loadAccent, nearest, PRESETS, roles, SURFACE } from './accent';
+import { ACCENT_KEY, applyAccent, check, contrast, fillOf, loadAccent, nearest, PRESETS, roles, SURFACE, tint } from './accent';
+import { recolour } from './favicon';
 
 const token = (name: string) => tokens.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`))![1];
 
@@ -56,11 +57,41 @@ it('apply_sets_the_roles_and_caches_the_choice', () => {
   const kept = new Map<string, string>();
   const store = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => kept.set(k, v), removeItem: (k: string) => kept.delete(k) } as unknown as Storage;
   applyAccent('sky', root, store);
-  expect(props).toEqual(roles(PRESETS.sky.hex));
+  expect(props).toEqual({ ...roles(PRESETS.sky.hex), '--logo-filter': 'url(#logo-tint)' });
   expect(loadAccent(store)).toBe('sky');
   expect(kept.get(ACCENT_KEY)).toBe('sky');
   applyAccent(null, root, store);
   expect(props['--accent']).toBe(PRESETS.amber.hex);
+  expect(props['--logo-filter']).toBe('none'); // the shipped logo, unfiltered
   expect(loadAccent(store)).toBeNull();
   expect(loadAccent({ getItem: () => { throw new Error('blocked'); } } as unknown as Storage)).toBeNull();
+});
+
+// `m` on one `#rrggbb`, through the same code as the favicon.
+const through = (m: number[], hex: string) => {
+  const px = new Uint8ClampedArray([...[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)), 255]);
+  recolour(px, m);
+  return '#' + [...px.slice(0, 3)].map((v) => v.toString(16).padStart(2, '0')).join('');
+};
+// The most common pixels of logo.webp and icon-192.png (decoded in Chromium for #69); update them with a new logo.
+const LOGO = { disc: '#fdb91c', ring: '#b54601', white: '#f3f3f3', black: '#0d0d0d' };
+
+it('the_logo_tint_is_the_identity_for_amber_and_keeps_greys', () => {
+  expect(tint(PRESETS.amber.hex)).toEqual([1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0]);
+  for (const p of Object.values(PRESETS)) {
+    const m = tint(p.hex);
+    expect(through(m, PRESETS.amber.hex), p.name).toBe(p.hex); // amber lands on the accent exactly
+    for (const g of [LOGO.white, LOGO.black, '#808080', '#ffffff', '#000000']) expect(through(m, g), `${p.name} ${g}`).toBe(g);
+  }
+});
+
+it('the_tinted_logo_disc_keeps_3_to_1_on_every_surface', () => {
+  // Every preset and a grid of the custom colours Settings allows.
+  const steps = [...Array(8).keys()].map((i) => (0x40 + i * 0x1b).toString(16).padStart(2, '0'));
+  const fills = [...Object.values(PRESETS).map((p) => p.hex), ...steps.flatMap((r) => steps.flatMap((g) => steps.map((b) => `#${r}${g}${b}`)))].filter((f) => check(f).ok);
+  expect(fills.length).toBeGreaterThan(100);
+  for (const f of fills) {
+    const disc = through(tint(f), LOGO.disc);
+    for (const s of [SURFACE.app, SURFACE.sidebar, SURFACE.raised]) expect(contrast(disc, s), f).toBeGreaterThanOrEqual(3);
+  }
 });

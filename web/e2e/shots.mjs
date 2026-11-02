@@ -1184,6 +1184,13 @@ scene('accent', async (ctx) => {
     await page.mouse.move(1439, 899);
     await sleep(300);
     await ctx.shot(page, `accent-${key}`, { fullPage: false });
+    // The sign in page of the next visit: no account yet, the logo in the cached accent from the first paint.
+    const out = await ctx.open(`${ORIGIN}/login`);
+    await out.evaluate((k) => localStorage.setItem('vesper.accent', k), key);
+    await out.reload();
+    await out.getByRole('button', { name: 'Sign in' }).waitFor();
+    await rest(out);
+    await ctx.shot(out, `accent-login-${key}`, { fullPage: false });
   }
   await ctx.api(page, 'PATCH', '/api/me', { ui_accent: 'amber' });
 });
