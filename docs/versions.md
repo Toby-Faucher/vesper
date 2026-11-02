@@ -15,6 +15,7 @@ Vesper uses `vMAJOR.MINOR.PATCH`. One number covers the whole app: the server, t
 - **v1.1.1**: fixes silence after someone leaves and rejoins a call in Firefox (issue #45, PR #46). No migration.
 - **v1.2**: click a name to open a profile popup, a choice of accent colour per account, smoother motion (message highlight, popups, the sliding sidebar). It adds one database migration (0006, additive).
 - **v1.2.1**: join no longer fails when the saved microphone is gone (issue #68); the logo and tab icon follow the accent colour (issue #69). No migration.
+- **v1.2.2**: reliability and CI: a person card removed while open no longer throws, flaky end-to-end steps fixed, the end-to-end harness cleans up its servers, and a lighter CI pipeline for version-bump pull requests. No migration.
 
 ## How a release is cut
 
