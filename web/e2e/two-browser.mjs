@@ -412,7 +412,7 @@ try {
   await alice.page.evaluate(() => document.querySelector('.mirror').remove());
   await mdBox.pressSequentially('z');
   assert.ok(await typedShown(), 'typed text is invisible with the layer gone');
-  const md = ['# Plan', '## Details', 'Some **strong** and *soft* and ~~gone~~ with `tick`.', '> quoted line', '- one', '- two',
+  const md = ['# Plan', '## Details', 'Some **strong** and *soft* and ~~gone~~ with `tick`.', '> quoted line', '- one', '- two', '  - inner',
     '1. first', '2. second', '---', '```rust', 'fn main() { let x = 1; }', '```'].join('\n');
   await mdBox.fill(md);
   await mdBox.press('Enter');
@@ -420,9 +420,10 @@ try {
   await full.waitFor({ timeout: 5000 });
   assert.equal(await full.getByRole('heading', { name: 'Details' }).getAttribute('aria-level'), '5');
   for (const [sel, text] of [['strong', 'strong'], ['em', 'soft'], ['s', 'gone'], ['code', 'tick'], ['blockquote', 'quoted line'],
-    ['ul li', 'one'], ['ol li', 'second']])
+    ['ul li', 'one'], ['ol li', 'second'], ['ul li > ul > li', 'inner']])
     assert.equal(await full.locator(sel, { hasText: text }).count(), 1, `${sel} "${text}" did not render`);
   assert.equal(await full.locator('hr').count(), 1, 'the rule did not render');
+  assert.equal(await full.locator('li > ul').evaluate((el) => getComputedStyle(el).listStyleType), 'circle', 'a nested list is not circles');
   assert.equal(await full.locator('ol').getAttribute('start'), '1');
   assert.ok(!(await full.innerText()).includes('**'), 'raw markers are shown');
   await full.locator('pre span.kw', { hasText: 'fn' }).waitFor({ timeout: 5000 }).catch(() => assert.fail('the code block was not highlighted'));
