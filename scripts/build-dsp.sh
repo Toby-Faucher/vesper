@@ -19,3 +19,4 @@ mkdir -p "$OUT"
 wasm-bindgen --target web --out-dir "$OUT" target/wasm32-unknown-unknown/release/vesper_dsp.wasm
 install -m 644 "$MODEL" "$OUT/model.tar.gz"
 ls -la "$OUT"
+# throwaway
