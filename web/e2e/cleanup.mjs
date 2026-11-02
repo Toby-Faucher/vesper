@@ -30,7 +30,24 @@ function descendants(pid) {
   }
   return out;
 }
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// `pid` with its state and command line while it runs, else null. A zombie (state Z) has exited and waits to be reaped;
+// ps exits 1 when no such pid is left, which is the gone case, not an error.
+function running(pid) {
+  try {
+    const row = execFileSync('ps', ['-o', 'pid=,stat=,args=', '-p', String(pid)], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    return row && row.split(/\s+/)[1][0] !== 'Z' ? row : null;
+  } catch (e) {
+    if (e.status === 1) return null;
+    throw e;
+  }
+}
+// The processes of `pids` still running after up to 5 s: a child killed by its group can take a moment to go.
+async function leftRunning(pids) {
+  for (const end = Date.now() + 5000; ; await new Promise((r) => setTimeout(r, 100))) {
+    const left = pids.map(running).filter(Boolean);
+    if (!left.length || Date.now() > end) return left;
+  }
+}
 const binds = (port) => new Promise((r) => { const s = createServer().once('error', () => r(false)).listen(port, '127.0.0.1', () => s.close(() => r(true))); });
 
 for (const [name, crash] of Object.entries(cases)) {
@@ -50,8 +67,8 @@ for (const [name, crash] of Object.entries(cases)) {
   const code = await exited;
   assert.notEqual(code, 0, `${name}: the child exited 0`);
   if (name !== 'SIGTERM' && name !== 'SIGINT') assert.match(err, /Error: boom\n\s+at /, `${name}: no stack printed`);
-  const left = spawned.filter(alive);
-  assert.deepEqual(left, [], `${name}: processes left running: ${left.map((pid) => execFileSync('ps', ['-o', 'pid=,args=', '-p', String(pid)]).toString().trim()).join('; ')}`);
+  const left = await leftRunning(spawned);
+  assert.deepEqual(left, [], `${name}: processes left running: ${left.join('; ')}`);
   assert.ok(await binds(Number(new URL(origin).port)), `${name}: port ${new URL(origin).port} still in use`);
   console.log(`cleanup after ${name}: ok (exit ${code}, ${spawned.length} processes stopped)`);
 }
