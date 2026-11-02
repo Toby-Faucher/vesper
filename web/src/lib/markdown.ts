@@ -27,7 +27,7 @@ const nameChar = (ch: string | undefined) => ch !== undefined && /[A-Za-z0-9_]/.
 
 const HEADING = /^(#{1,6}) +(?=\S)/;
 const HR = /^ {0,3}([-*_])(?: *\1){2,} *$/;
-const ITEM = /^([-*+]|(\d{1,9})[.)]) +(?=\S)/;
+const ITEM = /^( *)([-*+]|(\d{1,9})[.)]) +(?=\S)/; // leading spaces nest the item
 const LANG = /^[A-Za-z0-9+#._-]{1,20}$/; // one word after ``` is the language, shown as a label
 // The languages the lazy highlighter knows, by every name people type after ```.
 const LANGS: Record<string, string> = {
@@ -202,14 +202,30 @@ export function parse(src: string): Md[] {
     }
     const m = ITEM.exec(line);
     if (m) {
-      // One list per run of items of one kind (bullets or numbers). shortcut: flat lists only, nest when people ask.
-      const ordered = m[2] !== undefined;
-      const c: Md[] = [];
-      let n: RegExpExecArray | null = m;
-      for (; k < lines.length && (n = ITEM.exec(lines[k])) && (n[2] !== undefined) === ordered && !HR.test(lines[k]); k++)
-        c.push({ t: 'li', c: inline(lines[k].slice(n[0].length)) });
+      // A run of items is one or more lists. An item indented deeper than the one above opens a list inside it (up to
+      // MAX_DEPTH levels); a change of kind (bullets or numbers) at one level starts a sibling list there.
+      type Open = { l: Md[]; ind: number; ordered: boolean; into: Md[] };
+      const open: Open[] = [];
+      let n: RegExpExecArray | null;
+      for (; k < lines.length && (n = ITEM.exec(lines[k])) && !HR.test(lines[k]); k++) {
+        const ind = n[1].length;
+        const ordered = n[3] !== undefined;
+        while (open.length && ind < open[open.length - 1].ind) open.pop();
+        let top: Open | undefined = open[open.length - 1];
+        if (top && top.ordered !== ordered && !(ind > top.ind && open.length < MAX_DEPTH)) {
+          open.pop();
+          top = { l: [], ind: top.ind, ordered, into: top.into };
+        } else if (!top || (ind > top.ind && open.length < MAX_DEPTH)) {
+          const into = top ? (top.l[top.l.length - 1] as { c: Md[] }).c : out;
+          top = { l: [], ind, ordered, into };
+        } else top = undefined; // same list
+        if (top) {
+          top.into.push(ordered ? { t: 'ol', start: Number(n[3]), c: top.l } : { t: 'ul', c: top.l });
+          open.push(top);
+        }
+        open[open.length - 1].l.push({ t: 'li', c: inline(lines[k].slice(n[0].length)) });
+      }
       k--;
-      out.push(ordered ? { t: 'ol', start: Number(m[2]), c } : { t: 'ul', c });
       prevInline = false;
       continue;
     }

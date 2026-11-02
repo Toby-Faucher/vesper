@@ -26,4 +26,5 @@
   .md :global(ul), .md :global(ol) { margin: 2px 0; padding-left: 20px; white-space: normal; }
   .md :global(li) { white-space: pre-wrap; }
   .md :global(li::marker) { color: var(--fg-3); }
+  .md :global(li > ul) { list-style-type: circle; }
 </style>
