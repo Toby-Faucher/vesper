@@ -176,15 +176,37 @@ impl Store {
     /// for tests of the backup before a migration.
     #[doc(hidden)]
     pub async fn create_at_schema(path: &Path, n: usize) -> Result<()> {
+        Store::migrate_first(path, n, false).await
+    }
+
+    /// The first `n` migrations, but number `n` is replaced by one that fails: an upgrade that
+    /// stops part way (sqlx commits each migration on its own), for tests.
+    #[doc(hidden)]
+    pub async fn migrate_failing_at(path: &Path, n: usize) -> Result<()> {
+        Store::migrate_first(path, n, true).await
+    }
+
+    async fn migrate_first(path: &Path, n: usize, fail_last: bool) -> Result<()> {
+        use sqlx::SqlSafeStr;
         let opts = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         let mut m = sqlx::migrate!();
-        m.migrations = m.migrations[..n].to_vec().into();
-        m.run(&pool).await.map_err(|e| StoreError::Db(e.into()))?;
+        let mut list = m.migrations[..n].to_vec();
+        if fail_last && let Some(last) = list.last_mut() {
+            *last = sqlx::migrate::Migration::new(
+                last.version,
+                last.description.clone(),
+                last.migration_type,
+                "SELECT no_such_column FROM no_such_table".into_sql_str(),
+                false,
+            );
+        }
+        m.migrations = list.into();
+        let r = m.run(&pool).await.map_err(|e| StoreError::Db(e.into()));
         pool.close().await;
-        Ok(())
+        r
     }
 
     /// Raw pool, for this crate's tests only. Hidden so the server does not reach sqlx (ADR 0005).

@@ -142,10 +142,11 @@ pub struct Written {
 }
 
 /// `<stem>.db`, then `<stem>-uploads/` when `uploads`, then `<stem>.json` when `manifest` is set,
-/// into `dir` (made 0700). The database copy comes first, then the uploads: a file uploaded
-/// meanwhile is an extra file the restored server's sweep removes, and a file deleted meanwhile
-/// is counted as skipped. On any error after the first file is made, every output is removed:
-/// what is left on disk is complete.
+/// into `dir` (made 0700). Each is written under its name plus `.partial` and renamed into place
+/// only when all are written and synced, the database last: a `<stem>.db` on disk is complete,
+/// even after a kill or a power cut, and a `.partial` never is. The database copy comes first,
+/// then the uploads: a file uploaded meanwhile is an extra file the restored server's sweep
+/// removes, and a file deleted meanwhile is counted as skipped. On an error every output is removed.
 async fn write_backup(
     cfg: &Config,
     dir: &Path,
@@ -179,30 +180,57 @@ async fn write_backup(
     let db = dir.join(format!("{stem}.db"));
     let up = dir.join(format!("{stem}-uploads"));
     let man = dir.join(format!("{stem}.json"));
-    for p in [&db, &up, &man] {
+    let part = |p: &Path| PathBuf::from(format!("{}{PARTIAL}", p.display()));
+    let (dbp, upp, manp) = (part(&db), part(&up), part(&man));
+    let all = [&db, &up, &man, &dbp, &upp, &manp];
+    for p in all {
         if p.symlink_metadata().is_ok() {
             return Err(format!("{} exists; not overwriting", p.display()));
         }
     }
     // Created empty with mode 600 first: VACUUM INTO writes into an empty file and keeps its mode.
-    private_file(&db).map_err(io(&db))?;
+    private_file(&dbp).map_err(io(&dbp))?;
     let written = async {
         store
-            .backup_into(&db)
+            .backup_into(&dbp)
             .await
-            .map_err(|e| format!("{}: {e}", db.display()))?;
+            .map_err(|e| format!("{}: {e}", dbp.display()))?;
         let mut copied = None;
         if uploads {
-            let mut n = Copied::default();
-            private_dir(&up, false).map_err(io(&up))?;
-            copy_uploads(&src, &up, &mut n).map_err(io(&up))?;
+            private_dir(&upp, false).map_err(io(&upp))?;
+            let (s, d) = (src.clone(), upp.clone());
+            // Up to the upload quota of plain file I/O: off the async workers.
+            let n = tokio::task::spawn_blocking(move || {
+                let mut n = Copied::default();
+                copy_uploads(&s, &d, &mut n).map(|()| n)
+            })
+            .await
+            .map_err(|e| format!("{}: {e}", upp.display()))?
+            .map_err(io(&upp))?;
             copied = Some((up.clone(), n));
         }
         if let Some(text) = &manifest {
-            private_file(&man)
-                .and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()))
-                .map_err(io(&man))?;
+            private_file(&manp)
+                .and_then(|mut f| {
+                    std::io::Write::write_all(&mut f, text.as_bytes())?;
+                    f.sync_all()
+                })
+                .map_err(io(&manp))?;
         }
+        std::fs::File::open(&dbp)
+            .and_then(|f| f.sync_all())
+            .map_err(io(&dbp))?;
+        if uploads {
+            std::fs::rename(&upp, &up).map_err(io(&up))?;
+        }
+        if manifest.is_some() {
+            std::fs::rename(&manp, &man).map_err(io(&man))?;
+        }
+        std::fs::rename(&dbp, &db).map_err(io(&db))?;
+        // The renames themselves, so the names survive a power cut.
+        std::fs::File::open(dir)
+            .and_then(|f| f.sync_all())
+            .map_err(io(dir))?;
         let db_bytes = std::fs::metadata(&db).map(|m| m.len()).map_err(io(&db))?;
         Ok::<_, String>(Written {
             db: db.clone(),
@@ -213,12 +241,15 @@ async fn write_backup(
     .await;
     drop(store);
     written.map_err(|e| {
-        let _ = std::fs::remove_file(&db);
-        let _ = std::fs::remove_dir_all(&up);
-        let _ = std::fs::remove_file(&man);
+        for p in all {
+            let _ = std::fs::remove_file(p).or_else(|_| std::fs::remove_dir_all(p));
+        }
         format!("{e}; the partial backup was removed")
     })
 }
+
+/// The suffix of a backup file still being written. Never a complete backup.
+const PARTIAL: &str = ".partial";
 
 /// The two kinds of automatic backup in `<data>/backups`. Each keeps its own newest
 /// `backup_keep`, so hourly ones never push out the copy taken before a migration.
@@ -233,32 +264,43 @@ pub enum Auto {
 impl Auto {
     fn prefix(self) -> &'static str {
         match self {
-            Auto::PreMigration { .. } => "pre-",
+            Auto::PreMigration { .. } => "pre-schema-",
             Auto::Scheduled => "auto-",
         }
     }
 }
 
-/// An automatic backup into `<data>/backups`: `pre-<from>-to-<to>-<UTC time>` or
+/// An automatic backup into `<data>/backups`: `pre-schema-<schema>-<UTC time>` (the schema
+/// number is the one the copy holds, so an older image that knows it opens the copy) or
 /// `auto-<UTC time>`, the database and a small JSON manifest, plus the uploads only with
-/// `VESPER_BACKUP_UPLOADS=1` (they can be large). Then the oldest of that kind past
-/// `backup_keep` are deleted. Returns the database copy's path.
+/// `VESPER_BACKUP_UPLOADS=1` (they can be large). First, `.partial` leftovers of an automatic
+/// backup that was killed are deleted; after, [`prune`]. Returns the database copy's path.
 pub async fn auto_backup(cfg: &Config, kind: Auto, now: i64) -> Result<PathBuf, String> {
     let dir = cfg.data_dir.join("backups");
-    let stamp = utc_stamp(now);
-    let (stem, from, to) = match kind {
-        Auto::PreMigration { from, to } => (format!("pre-{from:04}-to-{to:04}-{stamp}"), from, to),
-        Auto::Scheduled => (format!("auto-{stamp}"), 0, 0),
+    let stamp = utc_stamp_ms(now);
+    let stem = format!(
+        "{}{}",
+        kind.prefix(),
+        match kind {
+            Auto::PreMigration { from, .. } => format!("{from:04}-{stamp}"),
+            Auto::Scheduled => stamp.clone(),
+        }
+    );
+    let (schema, to) = match kind {
+        Auto::PreMigration { from, to } => (Some(from), Some(to)),
+        Auto::Scheduled => (None, None),
     };
     let manifest = serde_json::json!({
         "kind": match kind { Auto::PreMigration { .. } => "pre-migration", Auto::Scheduled => "scheduled" },
         "time": stamp,
         "server_version": crate::VERSION,
         "server_build": cfg.build,
-        "schema_from": from,
+        "schema": schema,
         "schema_to": to,
         "uploads": cfg.backup_uploads,
     });
+    let d = dir.clone();
+    blocking(move || remove_partials(&d)).await;
     let w = write_backup(
         cfg,
         &dir,
@@ -267,21 +309,93 @@ pub async fn auto_backup(cfg: &Config, kind: Auto, now: i64) -> Result<PathBuf, 
         Some(format!("{manifest:#}\n")),
     )
     .await?;
-    prune(&dir, kind.prefix(), cfg.backup_keep).map_err(io(&dir))?;
+    let (d, keep) = (dir.clone(), cfg.backup_keep);
+    // The backup is written: a failed prune must not stop the start.
+    blocking(move || prune(&d, kind.prefix(), keep)).await;
     Ok(w.db)
 }
 
-/// Deletes all but the newest `keep` backups whose name starts with `prefix`: their `.db`,
-/// `.json` and `-uploads/`. Newest by the UTC time that ends every name.
+/// `f` on a blocking thread; an error is logged, not returned.
+async fn blocking(f: impl FnOnce() -> std::io::Result<()> + Send + 'static) {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("backups dir: {e}"),
+        Err(e) => tracing::warn!("backups dir: {e}"),
+    }
+}
+
+/// Deletes the `pre-*` and `auto-*` names ending in `.partial`: a backup killed while it was
+/// written. Only automatic backups run here, one at a time, so none is still being written.
+fn remove_partials(dir: &Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(d) => d,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for e in entries {
+        let e = e?;
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(PARTIAL) && (name.starts_with("pre-") || name.starts_with("auto-")) {
+            let p = e.path();
+            if e.file_type()?.is_dir() {
+                std::fs::remove_dir_all(&p)?;
+            } else {
+                std::fs::remove_file(&p)?;
+            }
+            tracing::warn!(
+                "removed {}, left by a backup that did not finish",
+                p.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `(schema, UTC time)` of an automatic backup's database file named `<prefix>`, then for
+/// `pre-schema-` four digits and `-`, then a time like `20261101T203000.123Z`, then `.db`.
+/// Anything else, a `.partial` too, is not one and is never deleted.
+fn parse_auto<'a>(name: &'a str, prefix: &str) -> Option<(i64, &'a str)> {
+    let rest = name.strip_suffix(".db")?.strip_prefix(prefix)?;
+    let (schema, stamp) = if prefix == "pre-schema-" {
+        let (s, t) = rest.split_once('-')?;
+        (s.len() == 4 && s.bytes().all(|b| b.is_ascii_digit())).then_some(())?;
+        (s.parse().ok()?, t)
+    } else {
+        (0, rest)
+    };
+    let shape = stamp.len() == 20
+        && stamp.bytes().enumerate().all(|(i, b)| match i {
+            8 => b == b'T',
+            15 => b == b'.',
+            19 => b == b'Z',
+            _ => b.is_ascii_digit(),
+        });
+    shape.then_some((schema, stamp))
+}
+
+/// Deletes the backups of one kind (`prefix`) except the newest `keep` and, for each schema
+/// number, the newest one of it: their `.db`, `.json` and `-uploads/`. The per-schema rule keeps
+/// the copy an older image can open through a crash loop after an upgrade that failed part way
+/// (each restart backs up the half-migrated schema; those never push out the older one).
 fn prune(dir: &Path, prefix: &str, keep: usize) -> std::io::Result<()> {
-    let mut stems: Vec<String> = std::fs::read_dir(dir)?
+    let names: Vec<String> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter_map(|n| Some(n.strip_suffix(".db")?.to_owned()))
-        .filter(|n| n.starts_with(prefix) && n.len() >= 16)
         .collect();
-    stems.sort_by(|a, b| a[a.len() - 16..].cmp(&b[b.len() - 16..]));
-    let old = stems.len().saturating_sub(keep);
-    for stem in &stems[..old] {
+    let mut found: Vec<(i64, &str, &str)> = names
+        .iter()
+        .filter_map(|n| {
+            let (schema, stamp) = parse_auto(n, prefix)?;
+            Some((schema, stamp, n.strip_suffix(".db")?))
+        })
+        .collect();
+    found.sort_by(|a, b| b.1.cmp(a.1)); // newest first
+    let mut seen = std::collections::HashSet::new();
+    for (i, &(schema, _, stem)) in found.iter().enumerate() {
+        let newest_of_schema = seen.insert(schema);
+        if i < keep || newest_of_schema {
+            continue;
+        }
         std::fs::remove_file(dir.join(format!("{stem}.db")))?;
         let _ = std::fs::remove_file(dir.join(format!("{stem}.json")));
         let _ = std::fs::remove_dir_all(dir.join(format!("{stem}-uploads")));
@@ -377,8 +491,31 @@ pub fn utc_stamp(ms: i64) -> String {
     format!("{y:04}{m:02}{d:02}T{h:02}{mi:02}{s:02}Z")
 }
 
+/// `20261101T203000.123Z`: with milliseconds, so two starts in one second do not collide.
+pub fn utc_stamp_ms(ms: i64) -> String {
+    format!("{}.{:03}Z", &utc_stamp(ms)[..15], ms.rem_euclid(1000))
+}
+
+/// The database for the account commands. They never migrate an existing database: that
+/// would skip the backup the server takes before it migrates. A new or empty one has nothing to
+/// lose, so it is created and migrated as before.
 async fn open(cfg: &Config) -> Result<Store, String> {
     let path = cfg.data_dir.join("vesper.db");
+    let versions = Store::schema_versions(&path)
+        .await
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    if let Some((applied, to)) = versions
+        && applied > 0
+        && applied < to
+    {
+        return Err(format!(
+            "{} is at schema {applied} and this binary needs {to}; this command does not migrate. \
+             Start the server once first (it backs the database up into {}/backups, then migrates), \
+             then run this again",
+            path.display(),
+            cfg.data_dir.display()
+        ));
+    }
     Store::open(&path)
         .await
         .map_err(|e| format!("open {}: {e}", path.display()))
