@@ -226,7 +226,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
 - The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). The raw mic passes through, and the status line says `loading, unfiltered`, until then.
-- The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. Skipped when the browser asks to save data. Not verified in a real browser.
+- The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. `scripts/build-dsp.sh` writes `vesper_dsp_bg.wasm.gz` next to the wasm and the server sends it to browsers that accept gzip (`ServeDir` `precompressed_gzip`): 2.2 MB instead of 10.9 MB. With the 8.0 MB model the first visit downloads about 10 MB. Skipped when the browser asks to save data. Not verified in a real browser.
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.
 
 ## HTTP API
@@ -504,7 +504,7 @@ service, a notification on screen, iOS, Firefox and Safari.
 
 ## Static serving
 
-`web/scripts/precompress.mjs` (run by `npm run build`) writes a `.br` and a `.gz` next to every html, js, css, json, webmanifest, svg, txt and wasm file in `dist/` when that is smaller; images, fonts and archives get none. ServeDir (`precompressed_br`, `precompressed_gzip`) sends one by `Accept-Encoding` with the original's `Content-Type`, `Content-Encoding` and `Vary: accept-encoding`.
+`web/scripts/precompress.mjs` (run by `npm run build`) writes a `.br` and a `.gz` next to every html, js, css, json, webmanifest, svg, txt and wasm file in `dist/` when that is smaller and no such copy is there yet (build-dsp.sh's wasm `.gz` is kept; the wasm also gets a `.br`); images, fonts and archives get none. ServeDir (`precompressed_br`, `precompressed_gzip`) sends one by `Accept-Encoding` with the original's `Content-Type`, `Content-Encoding` and `Vary: accept-encoding`.
 `guard` in `vesper-server/src/lib.rs`: dotfiles and `%2e` are 404; an extensionless 404 gets `index.html` (SPA routes); a missing file with
 an extension or under `/api/` stays 404; `/assets/*` is `immutable`, `/api/*` `no-store` (unless the handler set its own, as uploads do), everything else `no-cache`. Every response gets the security headers and the CSP of [decision 0008](decisions/0008-csp.md); a CSP the handler set (uploads' sandbox) is kept. Tests: `crates/vesper-server/tests/static_files.rs`, `tests/uploads.rs` `upload_keeps_sandbox_csp`.
 

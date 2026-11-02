@@ -28,13 +28,16 @@ enum Cmd {
         /// Repeat it to stack configs: they merge, and a key set to two values is an error.
         #[arg(
             long,
-            required_unless_present = "unprocessed",
-            conflicts_with = "unprocessed"
+            required_unless_present_any = ["unprocessed", "processed"],
+            conflicts_with_all = ["unprocessed", "processed"]
         )]
         config: Vec<PathBuf>,
         /// Score the mixtures as they are: the no-denoising control.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "processed")]
         unprocessed: bool,
+        /// Score output made by another tool: `<dir>/<item id>.wav`, 48 kHz, aligned with the mixture.
+        #[arg(long)]
+        processed: Option<PathBuf>,
         #[arg(long, value_parser = ["dev", "gate", "holdout"])]
         split: String,
         #[arg(long)]
@@ -149,6 +152,7 @@ fn main() -> Result<()> {
         Cmd::Eval {
             config,
             unprocessed,
+            processed,
             split,
             out,
             limit,
@@ -159,6 +163,8 @@ fn main() -> Result<()> {
         } => {
             let proc = if unprocessed {
                 eval::Proc::Unprocessed
+            } else if let Some(dir) = processed {
+                eval::Proc::External(dir)
             } else {
                 pipeline(&config, &paths.model)?
             };

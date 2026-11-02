@@ -14,7 +14,11 @@ describe('precompress', () => {
     writeFileSync(join(d, 'index.html'), '<!doctype html>' + '<p>x</p>'.repeat(50));
     writeFileSync(join(d, 'icon.png'), Buffer.alloc(500, 1));
     writeFileSync(join(d, 'tiny.css'), 'a{}'); // would grow: left alone
+    writeFileSync(join(d, 'assets', 'w.wasm'), Buffer.alloc(4000, 7));
+    writeFileSync(join(d, 'assets', 'w.wasm.gz'), 'FROM BUILD-DSP'); // made earlier: kept, the .br is added
     precompress(d);
+    expect(readFileSync(join(d, 'assets', 'w.wasm.gz'), 'utf8')).toBe('FROM BUILD-DSP');
+    expect(readdirSync(join(d, 'assets'))).toContain('w.wasm.br');
     expect(readdirSync(d).sort()).toEqual(['assets', 'icon.png', 'index.html', 'index.html.br', 'index.html.gz', 'tiny.css']);
     expect(brotliDecompressSync(readFileSync(join(d, 'assets', 'x.js.br'))).toString()).toBe(js);
     expect(gunzipSync(readFileSync(join(d, 'assets', 'x.js.gz'))).toString()).toBe(js);

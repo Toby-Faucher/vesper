@@ -1,7 +1,7 @@
 // Writes `<file>.br` and `<file>.gz` next to every text-like file in a built dist/, so the server can send them as they
 // are (ServeDir's precompressed variants, picked by Accept-Encoding). Formats that are already compressed (images,
-// fonts, archives) get none, and neither does a file the compression would not shrink. Run: node scripts/precompress.mjs dist
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+// fonts, archives) get none, and neither does a file the compression would not shrink. A variant already there is kept. Run: node scripts/precompress.mjs dist
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
@@ -22,7 +22,8 @@ export function precompress(dir) {
         ['.gz', gzipSync(raw, { level: 9 })],
       ];
       for (const [ext, z] of variants) {
-        if (z.length >= raw.length) continue;
+        // A copy made earlier stays (build-dsp.sh writes the wasm's .gz): one source per variant.
+        if (z.length >= raw.length || existsSync(p + ext)) continue;
         writeFileSync(p + ext, z);
         out.push(p + ext);
       }
