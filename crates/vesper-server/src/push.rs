@@ -335,6 +335,25 @@ impl VoiceDedupe {
     }
 }
 
+/// One place in the send queue; dropping it (the task ended, panicked or was cancelled) gives
+/// the place back.
+pub struct Reserved(Arc<AtomicUsize>);
+
+impl Drop for Reserved {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A place in the queue `count`, or None when `max` are taken.
+pub fn reserve(count: &Arc<AtomicUsize>, max: usize) -> Option<Reserved> {
+    if count.fetch_add(1, Ordering::SeqCst) >= max {
+        count.fetch_sub(1, Ordering::SeqCst);
+        return None;
+    }
+    Some(Reserved(count.clone()))
+}
+
 /// What a send came to.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Sent {
@@ -356,8 +375,10 @@ struct Inner {
     allow_loopback: bool,
     tls: tokio_rustls::TlsConnector,
     slots: Arc<Semaphore>,
-    pending: AtomicUsize,
+    pending: Arc<AtomicUsize>,
     max_pending: usize,
+    /// When a dropped push was last logged at warn level.
+    dropped_warned: Mutex<Option<Instant>>,
     timeout: Duration,
     voice: Mutex<VoiceDedupe>,
 }
@@ -399,8 +420,9 @@ impl Push {
             allow_loopback,
             tls: tokio_rustls::TlsConnector::from(Arc::new(tls)),
             slots: Arc::new(Semaphore::new(PARALLEL)),
-            pending: AtomicUsize::new(0),
+            pending: Arc::default(),
             max_pending,
+            dropped_warned: Mutex::default(),
             timeout,
             voice: Mutex::default(),
         })))
@@ -505,20 +527,35 @@ impl Push {
             let body = serde_json::to_vec(&payload).expect("payload serialises");
             for t in targets {
                 // Counted before waiting for a slot, so a backlog cannot grow without bound.
-                if push.0.pending.fetch_add(1, Ordering::SeqCst) >= push.0.max_pending {
-                    push.0.pending.fetch_sub(1, Ordering::SeqCst);
-                    debug!("push: {} sends pending, dropped one", push.0.max_pending);
+                let Some(reserved) = reserve(&push.0.pending, push.0.max_pending) else {
+                    push.dropped();
                     continue;
-                }
+                };
                 let (push, body, topic) = (push.clone(), body.clone(), topic.clone());
                 tokio::spawn(async move {
+                    // Held for the whole task: a panic or a cancel still gives the place back.
+                    let _reserved = reserved;
                     if let Ok(_slot) = push.0.slots.clone().acquire_owned().await {
                         push.send(&t, &body, ttl, urgency, &topic).await;
                     }
-                    push.0.pending.fetch_sub(1, Ordering::SeqCst);
                 });
             }
         });
+    }
+
+    /// A push was dropped at the queue cap: warn at most once a minute, debug otherwise.
+    fn dropped(&self) {
+        let mut last = self.0.dropped_warned.lock().expect("push lock poisoned");
+        let now = Instant::now();
+        if last.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(60)) {
+            *last = Some(now);
+            warn!(
+                "push: {} sends pending, dropping new ones",
+                self.0.max_pending
+            );
+        } else {
+            debug!("push: {} sends pending, dropped one", self.0.max_pending);
+        }
     }
 
     /// One push to one subscription: deletes it on 404 or 410 (gone) and on 401 or 403 (it was
@@ -912,6 +949,29 @@ mod tests {
             ..room
         };
         assert_eq!(recipients(&users, &open, &a.user_id, |_| false).len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_panicking_or_cancelled_send_gives_its_place_back() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let a = reserve(&count, 2).unwrap();
+        let b = reserve(&count, 2).unwrap();
+        assert!(reserve(&count, 2).is_none(), "full");
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        let panics = tokio::spawn(async move {
+            let _a = a;
+            panic!("send failed hard");
+        });
+        assert!(panics.await.is_err());
+        let stuck = tokio::spawn(async move {
+            let _b = b;
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        stuck.abort();
+        let _ = stuck.await;
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        assert!(reserve(&count, 2).is_some());
     }
 
     #[test]

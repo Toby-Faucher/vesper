@@ -76,6 +76,8 @@ the origin is the VAPID contact; set `VESPER_PUSH_SUBJECT=mailto:<you>` to give 
   Cloudflare tunnel is not involved: it carries only inbound requests, and the browser's subscription call is a normal `/api` request.
 - **What the push services see:** that a notification went to a browser, when, and its size. Not who sent it, which room, or any text:
   the payload is encrypted for the browser.
+- **Keep the clock right (NTP on).** Each VAPID token is valid for 12 hours from the server's clock. A clock off by more than that makes
+  push services refuse it (401 or 403), and the server then deletes those subscriptions: people have to turn notifications on again.
 - **iPhone and iPad:** only from Vesper added to the Home Screen (Share, Add to Home Screen), iOS 16.4 or later. Not verified.
 
 ## Upgrade from the shared key
