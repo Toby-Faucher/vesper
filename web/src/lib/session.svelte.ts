@@ -52,6 +52,15 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let tries = 0;
 let gen = 0; // stop() bumps it, so a retry already asking /api/me does not open a socket afterwards
 
+// Work that needs the session still signed in, run at sign out before /api/logout (the call's summary). Capped at 1.5 s.
+const beforeLogout = new Set<() => Promise<unknown>>();
+export function onLogout(fn: () => Promise<unknown>): () => void {
+  beforeLogout.add(fn);
+  return () => void beforeLogout.delete(fn);
+}
+export const runBeforeLogout = () =>
+  Promise.race([Promise.all([...beforeLogout].map((f) => f().catch(() => {}))), new Promise((r) => setTimeout(r, 1500))]);
+
 export const session = $state({
   state: emptyState() as AppState,
   sig: null as Signaling | null,
@@ -80,6 +89,7 @@ export const session = $state({
   async logout(): Promise<void> {
     const id = session.state.me?.user.user_id;
     if (id) try { storage?.removeItem(lastRoomKey(id)); storage?.removeItem(recentKey(id)); } catch { /* storage blocked */ }
+    await runBeforeLogout();
     stop();
     await api('POST', '/api/logout').catch(() => {}); // signed out either way
     // The server drops this device's push subscription with the session; unregistering also ends it in the browser.

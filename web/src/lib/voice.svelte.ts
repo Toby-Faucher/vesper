@@ -1,7 +1,7 @@
 // The voice call, moved from Room.svelte so it outlives the screen that shows it.
 import { tick, untrack } from 'svelte';
 import { callEvent, idleCall } from './call';
-import { session } from './session.svelte';
+import { onLogout, session } from './session.svelte';
 import type { Playback } from './playback';
 import { restoreVolumes, saveVolumes } from './volume';
 import type { Capture } from './audio/capture';
@@ -70,6 +70,7 @@ let statsPoll: ReturnType<typeof setInterval> | undefined;
 let releaseLock: (() => void) | undefined;
 let silence = MIC_QUIET;
 let tally: CallTally | undefined; // this call's summary for Your recent calls, sent when it ends
+let posted: Promise<unknown> = Promise.resolve(); // the last summary post, which sign out waits for
 const tracks = new Map<string, string>(); // remote track id to user_id, for the per-person stats
 
 // The call code (call-stack.ts) is a chunk of its own: loaded at idle after start (startVoice), on a hover, focus or press
@@ -187,6 +188,8 @@ export function startVoice(): () => void {
     if (list.some((d) => d.kind === 'audioinput' && d.deviceId && d.label)) known = list;
   });
   void navigator.mediaDevices.enumerateDevices().then((l) => { if (!known.length) known = l; }, () => {});
+  // Sign out: end the call first, so its summary goes out while the session still works.
+  const offLogout = onLogout(() => (voice.joined && leave(), posted));
   const offSocket = $effect.root(() => {
     // My own call sounds: one per change of the call's state, none for the state found at start.
     let was: CallSnap | null = null;
@@ -244,6 +247,7 @@ export function startVoice(): () => void {
     known = [];
     stop();
     offSocket();
+    offLogout();
     window.removeEventListener('keydown', kd);
     window.removeEventListener('keyup', ku);
     window.removeEventListener('blur', release);
@@ -280,7 +284,7 @@ export function leave(): void {
 }
 function teardown() {
   // Whatever ended the call (Leave, a kick, a dropped socket): one summary, to your own list only. A failure loses it.
-  if (tally) void api('POST', '/api/me/calls', tally.summary(voice.mode, performance.now())).catch(() => {});
+  if (tally) posted = api('POST', '/api/me/calls', tally.summary(voice.mode, performance.now())).catch(() => {});
   tally = undefined;
   callOff?.();
   callOff = undefined;

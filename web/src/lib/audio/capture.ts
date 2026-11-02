@@ -24,6 +24,8 @@ export interface CaptureDeps {
 export const READY_TIMEOUT_MS = 20_000;
 /** The status while DeepFilterNet loads: the browser filter is on meanwhile, and goes off when the model takes over. */
 export const LOADING = 'loading, browser filter until then';
+/** The mic reopened without the browser filter (Chromium) must answer within this, or the call falls back to browser mode. */
+export const REOPEN_TIMEOUT_MS = 3000;
 
 const modules = new WeakMap<BaseAudioContext, Promise<void>>();
 const browserDeps: CaptureDeps = {
@@ -210,14 +212,25 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         if (!s.noiseSuppression) void unfiltered().catch((e) => fail(`the mic did not reopen without the browser filter: ${msg(e)}`));
         if (pipe === me) notify('deepfilter', '');
       };
-      // Chromium keeps a track's noise suppression as it was asked for (applyConstraints leaves getSettings() at true), and while
-      // that track runs a new one from the same mic shares its filter. So the first track ends, then the graph's source moves to
-      // a new track asked for without the filter: a gap of one getUserMedia call, as the model starts. The sent track stays.
+      // applyConstraints turns the filter off where the browser can (Firefox). Chromium resolves it but keeps the filter
+      // (getSettings() stays true), and a second track from the same mic opened while the first runs shares it. There only,
+      // the first track ends and the graph's source moves to a new track asked for without the filter: a gap of one
+      // getUserMedia call as the model starts. The sent track stays. A request that does not answer (a hidden tab can hold
+      // it) would leave the call silent, so it gets REOPEN_TIMEOUT_MS.
       const unfiltered = async () => {
-        const id = m.getAudioTracks()[0].getSettings().deviceId ?? null;
+        const t = m.getAudioTracks()[0];
+        await t.applyConstraints({ ...t.getConstraints(), noiseSuppression: false }).catch(() => {});
+        if (dead || t.getSettings().noiseSuppression !== true) return;
+        const id = t.getSettings().deviceId ?? null;
         unwatch();
         stopAll(m);
-        const next = await ask('deepfilter', id, false);
+        const asked = ask('deepfilter', id, false);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<never>((_, no) => (timer = setTimeout(() => no(new Error(`no answer in ${REOPEN_TIMEOUT_MS / 1000} s`)), REOPEN_TIMEOUT_MS)));
+        const next = await Promise.race([asked, late]).catch((e) => {
+          void asked.then(stopAll, () => {}); // a late answer is not used
+          throw e;
+        }).finally(() => clearTimeout(timer));
         if (dead) return stopAll(next);
         const s2 = ctx.createMediaStreamSource(next);
         s2.connect(gain);
@@ -239,7 +252,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       w.postMessage({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: s.attenDb, beta: s.postFilter });
       me = {
         mode: 'deepfilter',
-        status: LOADING,
+        status: s.noiseSuppression ? 'loading' : LOADING, // with the filter on top it stays on after loading too
         track: out.stream.getAudioTracks()[0],
         raw: m.getAudioTracks()[0],
         stop,

@@ -58,7 +58,7 @@ const writes: string[] = [];
 vi.stubGlobal('localStorage', { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, x: string) => void writes.push(`${k}=${x}`), removeItem: () => {} });
 vi.stubGlobal('location', { pathname: '/', search: '', hash: '', protocol: 'http:', host: 'x' });
 
-const { session } = await import('./session.svelte');
+const { session, runBeforeLogout } = await import('./session.svelte');
 const v = await import('./voice.svelte');
 const { voice } = v;
 const { CALL_ENDED, ROOM_GONE } = await import('./call');
@@ -322,6 +322,26 @@ describe('in a call', () => {
       const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
       expect([url, init.method]).toEqual(['/api/me/calls', 'POST']);
       expect(JSON.parse(init.body as string)).toMatchObject({ duration_s: 4, mode: 'deepfilter', browser_ns_loading: false });
+    } finally {
+      vi.stubGlobal('fetch', undefined);
+    }
+  });
+
+  it('sign out ends the call and waits for its summary before /api/logout', async () => {
+    let done!: () => void;
+    const fetch = vi.fn(() => new Promise((r) => (done = () => r({ ok: true, status: 204 }))));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      await joined();
+      let finished = false;
+      const p = runBeforeLogout().then(() => (finished = true));
+      expect(voice.joined).toBe(false);
+      expect(fetch).toHaveBeenCalledWith('/api/me/calls', expect.objectContaining({ method: 'POST' }));
+      await Promise.resolve();
+      expect(finished).toBe(false); // logout() waits for the post (up to 1.5 s)
+      done();
+      await p;
+      expect(finished).toBe(true);
     } finally {
       vi.stubGlobal('fetch', undefined);
     }

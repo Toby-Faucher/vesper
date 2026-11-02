@@ -44,3 +44,11 @@ it('caps what the server refuses: the reason to 120 code points without control 
   expect(s.fallback_reason).not.toMatch(/\p{Cc}/u);
   expect(s.duration_s).toBe(86_400);
 });
+
+it('the input boost note is a settings note, not a fallback reason', () => {
+  const t = new CallTally(0);
+  t.mode('input boost applies only in deepfilter mode', false, 0);
+  expect(t.summary('browser', 1000).fallback_reason).toBe('');
+  t.mode('denoiser stalled; input boost applies only in deepfilter mode', false, 0);
+  expect(t.summary('browser', 1000).fallback_reason).toBe('denoiser stalled');
+});

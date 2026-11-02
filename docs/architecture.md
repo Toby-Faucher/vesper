@@ -189,7 +189,7 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
   into a `MediaStreamDestination`, and that track is what WebRTC sends (`web/src/lib/audio/capture.ts`, `denoise.worklet.ts`,
   `dsp.worker.ts`, `dsp-handler.ts`).
 - Buffers in `denoise-core.ts`: up to 4 frames at the worker, a 4 frame input ring, and an output queue that starts playing at 3 frames
-  (30 ms) and holds at most 8 (80 ms); if it stays above 5 for 2 s it drops one frame a second down to 3. When it runs dry (an underrun, or empty exactly at a block end) the last 2.5 ms played fade to 0, and the next audio fades in over 2.5 ms, so a starved output dips instead of clicking (unit-tested with a max sample step check; not listened). They absorb jitter in the worklet to worker messages. The delay they add is estimated, not measured.
+  (30 ms) and holds at most 8 (80 ms); if it stays above 5 for 2 s it drops one frame a second down to 3. When it runs dry (an underrun, or empty exactly at a block end) the samples it played in that block fade to 0 (at most 2.5 ms, 120 samples; as little as 32 when it runs dry early in a 128-sample block), and the next audio fades in over 2.5 ms, so a starved output dips instead of clicking (unit-tested with a max sample step check; not listened). A queue that is empty exactly at a block end and refilled in time dips the same way but is not counted in `underruns`. Every start of playback (the first, and each re-prime) fades in. They absorb jitter in the worklet to worker messages. The delay they add is estimated, not measured.
 - Two steps run inside the worklet (`dynamics.ts`), so the order stays mic, echo cancellation, gain, DeepFilterNet, Opus:
   - A limiter on the boosted input, before the denoiser, on only while the input boost is above 0 dB. A peak envelope (20 ms hold,
     80 ms release) feeds a soft curve: gain 1 below -6 dBFS, and the denoiser input never passes -1 dBFS. It needs no lookahead, so
@@ -226,12 +226,13 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 - A load failure, a missing model or a worker that stalls also switches to `browser`, with a reason string the UI shows
   (`capture.ts` `fail` and `switchTo`). The call keeps going. The track is swapped in place and `replaceTrack` is used on the sender.
 - The worker gets 20 s to report `ready` (`READY_TIMEOUT_MS` in `capture.ts`). Until then the mic passes through with the browser's noise suppression on
-  (the mic is asked for with `noiseSuppression: true`), and the status line says `loading, browser filter until then`. At `ready` the capture ends that track,
-  asks for the same mic again without the browser filter (unless "Browser noise suppression on top" is on) and moves the graph's source to it, so the
-  two filters never stack. The sent track does not change; the input has a gap of one `getUserMedia` call as the model starts. Chromium needs this:
-  `applyConstraints({ noiseSuppression: false })` resolves but `getSettings()` stays true, and a second track opened while the first runs gets the
-  first one's filter (both seen in headless Chromium, 2026-11-02). If the mic does not reopen, the call falls back to `browser` with
-  `the mic did not reopen without the browser filter: ...`. The e2e checks both tracks in
+  (the mic is asked for with `noiseSuppression: true`), and the status line says `loading, browser filter until then`. At `ready` (unless "Browser noise suppression on top"
+  is on, when the line says only `loading`) the capture calls `applyConstraints({ noiseSuppression: false })` on the track. Where that works
+  (`getSettings()` then says false; Firefox is expected to, not verified) nothing else happens. Chromium resolves it but keeps the filter, and a
+  second track opened while the first runs gets the first one's filter (both seen in headless Chromium, 2026-11-02). There the capture ends the
+  track, asks for the same mic again without the filter and moves the graph's source to it, so the two filters never stack. The sent track does
+  not change; the input has a gap of one `getUserMedia` call as the model starts. If the mic does not answer within 3 s (`REOPEN_TIMEOUT_MS`; a
+  hidden tab can hold the request) or fails, the call falls back to `browser` with `the mic did not reopen without the browser filter: ...`. The e2e checks both tracks in
   headless Chromium; whether the switch is heard is not verified.
 - The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. Skipped when the browser asks to save data. Not verified in a real browser.
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCapture, LOADING, READY_TIMEOUT_MS, type CaptureDeps } from './capture';
+import { createCapture, LOADING, READY_TIMEOUT_MS, REOPEN_TIMEOUT_MS, type CaptureDeps } from './capture';
 import { DEFAULT_AUDIO_SETTINGS, clampSettings } from './settings';
 
-const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
 class FakeStream {
   tracks: any[];
@@ -17,6 +17,10 @@ const track = (label: string, c: MediaTrackConstraints = {}) => {
     kind: 'audio', label, enabled: true, muted: false, readyState: 'live', stop: vi.fn(),
     onended: null as any, onmute: null as any, onunmute: null as any,
     getSettings: () => ({ deviceId: `${label}-device`, noiseSuppression: c.noiseSuppression }),
+    getConstraints: () => c,
+    /** Chromium by default: resolves and changes nothing. Set `honours` for a browser that applies it (Firefox). */
+    honours: false,
+    applyConstraints: vi.fn(async (n: MediaTrackConstraints) => { if (t.honours) c = n; }),
   };
   return t;
 };
@@ -209,6 +213,89 @@ describe('createCapture', () => {
     cap2.close();
   });
 
+  it('a browser that applies the constraint (Firefox) keeps its track: no reopen, no gap', async () => {
+    const t = setup();
+    const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { const m = await t.deps.getUserMedia(c); t.mics.at(-1)!.t.honours = true; return m; } };
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(t.mics).toHaveLength(1);
+    expect(t.mics[0].t.getSettings().noiseSuppression).toBe(false);
+    expect(t.mics[0].t.stop).not.toHaveBeenCalled();
+    cap.close();
+  });
+
+  it('with the browser filter on top, loading says only "loading"', async () => {
+    const t = setup();
+    const cap = await createCapture(clampSettings({ noiseSuppression: true }), t.deps);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', 'loading');
+    cap.close();
+  });
+
+  it('a reopen that does not answer in 3 s falls back to browser mode, named; a late answer is stopped', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (t.mics.length === 1 && !(c.audio as MediaTrackConstraints).noiseSuppression) await held; return t.deps.getUserMedia(c); } };
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await vi.advanceTimersByTimeAsync(REOPEN_TIMEOUT_MS - 1);
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', '');
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(cb).toHaveBeenLastCalledWith('browser', 'the mic did not reopen without the browser filter: no answer in 3 s');
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    const late = t.mics.find((x) => x.c.noiseSuppression === false)!;
+    expect(late.t.stop).toHaveBeenCalled();
+    expect(cap.stream.getAudioTracks()[0]).not.toBe(late.t);
+    cap.close();
+  });
+
+  it('mute and push to talk survive the reopen: the sent track does not change', async () => {
+    const t = setup();
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    cap.setSender(t.asSender);
+    cap.setLive(false);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(t.mics).toHaveLength(2);
+    expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
+    expect(t.dests[0].enabled).toBe(false);
+    expect(t.sender.track).toBe(t.dests[0]);
+    cap.close();
+  });
+
+  it('a mode change while the reopen runs: the new mode wins, the reopened track is stopped', async () => {
+    const t = setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (t.mics.length === 1 && !(c.audio as MediaTrackConstraints).noiseSuppression) await held; return t.deps.getUserMedia(c); } };
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    cap.setSettings(clampSettings({ mode: 'browser' }));
+    await flush();
+    const browser = t.mics[1];
+    expect(browser.c.noiseSuppression).toBe(true);
+    expect(cap.stream.getAudioTracks()).toEqual([browser.t]);
+    release();
+    await flush();
+    const reopened = t.mics[2];
+    expect(reopened.c.noiseSuppression).toBe(false);
+    expect(reopened.t.stop).toHaveBeenCalled();
+    expect(cap.stream.getAudioTracks()).toEqual([browser.t]);
+    expect(cb).toHaveBeenLastCalledWith('browser', '');
+    cap.close();
+  });
+
   it('the filtered track ends before the unfiltered one is asked for', async () => {
     const t = setup();
     const stoppedFirst: boolean[] = [];
@@ -227,6 +314,7 @@ describe('createCapture', () => {
     const deps = { ...t.deps, getUserMedia: async (c: MediaStreamConstraints) => { if (t.mics.length) await held; return t.deps.getUserMedia(c); } };
     const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, deps);
     t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush(); // the reopen is now waiting for the mic
     cap.close();
     release();
     await flush();

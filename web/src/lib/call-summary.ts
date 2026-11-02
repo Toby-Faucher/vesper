@@ -43,6 +43,7 @@ export class CallTally {
   mode(reason: string, loading: boolean, now: number) {
     if (loading) this.loadingSince ??= now;
     else this.endLoading(now);
+    reason = reason.replace(/(^|; )input boost applies only in deepfilter mode$/, ''); // a settings note, not a fallback
     if (reason && !loading) this.reason = reason;
   }
 
