@@ -46,6 +46,9 @@ async fn start_at(web_dir: std::path::PathBuf, origin: &str) -> SocketAddr {
         secure_cookies: false,
         upload_quota_bytes: 0,
         push_subject: None,
+        header_timeout: vesper_server::config::HEADER_TIMEOUT,
+        body_idle: vesper_server::config::BODY_IDLE,
+        body_total: vesper_server::config::BODY_TOTAL,
     })
     .await
     .unwrap();
