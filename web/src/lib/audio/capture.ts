@@ -45,7 +45,7 @@ const browserDeps: CaptureDeps = {
 };
 
 type Pipe = {
-  mode: DenoiseMode; track: MediaStreamTrack; raw: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string;
+  mode: DenoiseMode; track: MediaStreamTrack; raw: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string; reopens?: number;
   stats?: PipelineStats;
   statsAt?: number;
 };
@@ -55,9 +55,11 @@ export interface CaptureStats {
   /** ms since that snapshot arrived; a growing age means the worklet stopped running. null with no pipeline. */
   ageMs: number | null;
   /** readyState and muted of the raw mic track; enabled is the sent track's mute gate. */
-  mic: { readyState: MediaStreamTrackState; muted: boolean; enabled: boolean };
+  mic: { readyState: MediaStreamTrackState; muted: boolean; enabled: boolean; settings: MicSettings; reopens: number };
   context: { state: AudioContextState; sampleRate: number };
 }
+/** The raw track's getSettings() without deviceId (it identifies the hardware). */
+export type MicSettings = Pick<MediaTrackSettings, 'sampleRate' | 'channelCount' | 'echoCancellation' | 'noiseSuppression' | 'autoGainControl'> & { latency?: number };
 const MUTE_GRACE_MS = 3000;
 const stopAll = (m: MediaStream) => m.getTracks().forEach((t) => t.stop());
 
@@ -239,6 +241,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         m = next;
         unwatch = watch(next.getAudioTracks()[0], () => me);
         me!.raw = next.getAudioTracks()[0];
+        me!.reopens = (me!.reopens ?? 0) + 1;
       };
       w.onerror = (e) => fail(`denoiser worker failed: ${e.message ?? ''}`);
       n.port.onmessage = ({ data }: MessageEvent<{ type: 'error'; message: string } | ({ type: 'stats' } & PipelineStats)>) => {
@@ -275,7 +278,12 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     return {
       pipeline: pipe.stats ?? null,
       ageMs: pipe.statsAt === undefined ? null : d.now() - pipe.statsAt,
-      mic: { readyState: raw.readyState, muted: raw.muted, enabled: track.enabled },
+      mic: {
+        readyState: raw.readyState, muted: raw.muted, enabled: track.enabled, reopens: pipe.reopens ?? 0,
+        settings: (({ sampleRate, channelCount, echoCancellation, noiseSuppression, autoGainControl, latency }) => ({
+          sampleRate, channelCount, echoCancellation, noiseSuppression, autoGainControl, latency,
+        }))(raw.getSettings() as MediaTrackSettings & { latency?: number }),
+      },
       context: { state: ctx.state, sampleRate: ctx.sampleRate },
     };
   }

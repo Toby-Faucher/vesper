@@ -96,6 +96,9 @@ describe('createCapture', () => {
     await flush();
     expect(t.mics).toHaveLength(2);
     expect(t.mics[1].c).toMatchObject({ echoCancellation: true, noiseSuppression: false, autoGainControl: false, deviceId: { exact: 'mic0-device' } });
+    const mic = cap.getStats()!.mic;
+    expect(mic.reopens).toBe(1);
+    expect(mic.settings).not.toHaveProperty('deviceId');
     const [src0, src1] = t.ctx.createMediaStreamSource.mock.results.map((r) => r.value);
     expect(src0.disconnect).toHaveBeenCalled();
     expect(src1.connect).toHaveBeenCalled();
@@ -221,6 +224,7 @@ describe('createCapture', () => {
     await flush();
     expect(t.mics).toHaveLength(1);
     expect(t.mics[0].t.getSettings().noiseSuppression).toBe(false);
+    expect(cap.getStats()!.mic.reopens).toBe(0);
     expect(t.mics[0].t.stop).not.toHaveBeenCalled();
     cap.close();
   });
@@ -485,7 +489,7 @@ describe('createCapture', () => {
   it('stats: the latest worklet snapshot plus the mic track and context state', async () => {
     const t = setup();
     const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
-    const mic = { readyState: 'live', muted: false, enabled: true };
+    const mic = { readyState: 'live', muted: false, enabled: true, reopens: 0, settings: { noiseSuppression: true } };
     const context = { state: 'running', sampleRate: 48000 };
     expect(cap.getStats()).toEqual({ pipeline: null, ageMs: null, mic, context });
     const seen = vi.fn();
@@ -496,13 +500,13 @@ describe('createCapture', () => {
     t.worklets[0].port.onmessage({ data: { type: 'stats', ...pipeline } });
     await flush();
     expect(t.mics).toHaveLength(2); // the unfiltered track after ready; a stats message is not a failure
-    expect(cap.getStats()).toEqual({ pipeline, ageMs: 0, mic, context });
+    expect(cap.getStats()).toEqual({ pipeline, ageMs: 0, mic: { ...mic, reopens: 1, settings: { noiseSuppression: false } }, context }); // the reopened track
     expect(seen).toHaveBeenCalledWith({ pipeline, ageMs: 0, mic, context });
     clock.t = 3500;
     expect(cap.getStats()!.ageMs).toBe(2500); // age since the snapshot arrived
     cap.setLive(false);
     t.mics[1].t.muted = true;
-    expect(cap.getStats()!.mic).toEqual({ readyState: 'live', muted: true, enabled: false }); // enabled is the sent track's gate
+    expect(cap.getStats()!.mic).toMatchObject({ readyState: 'live', muted: true, enabled: false }); // enabled is the sent track's gate
     off();
     t.worklets[0].port.onmessage({ data: { type: 'stats', ...pipeline } });
     expect(seen).toHaveBeenCalledTimes(1);
@@ -515,7 +519,7 @@ describe('createCapture', () => {
     const cap = await createCapture(clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'browser' }), t.deps);
     t.mics[0].t.readyState = 'ended';
     expect(cap.getStats()).toEqual({
-      pipeline: null, ageMs: null, mic: { readyState: 'ended', muted: false, enabled: true }, context: { state: 'running', sampleRate: 48000 },
+      pipeline: null, ageMs: null, mic: { readyState: 'ended', muted: false, enabled: true, settings: { noiseSuppression: true }, reopens: 0 }, context: { state: 'running', sampleRate: 48000 },
     });
     cap.close();
   });
