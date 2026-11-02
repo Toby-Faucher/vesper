@@ -4,6 +4,7 @@ import type { DenoiseMode } from './mode';
 import type { AudioSettings } from './settings';
 import { deviceGone } from '../devices';
 import { captureContext } from './context';
+import { SILENT_RMS } from './mic-silence';
 import workletUrl from './denoise.worklet.ts?worker&url';
 
 export interface CaptureDeps {
@@ -26,6 +27,13 @@ export const READY_TIMEOUT_MS = 20_000;
 export const LOADING = 'loading, browser filter until then';
 /** The mic reopened without the browser filter (Chromium) must answer within this, or the call falls back to browser mode. */
 export const REOPEN_TIMEOUT_MS = 3000;
+/** Worklet reports (500 ms each) of digital silence from the reopened mic before the filtered track comes back. */
+export const SILENT_REPORTS = 4;
+export const SWAP_SKIPPED = 'swap skipped: reopened mic was silent';
+// Kept for the page session, so the swap is not tried again (and cannot ping-pong) once a reopened mic was silent.
+let swapSkipped = false;
+/** For tests. */
+export const forgetSwapSkip = () => void (swapSkipped = false);
 
 const modules = new WeakMap<BaseAudioContext, Promise<void>>();
 const browserDeps: CaptureDeps = {
@@ -74,6 +82,10 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   const d = { ...browserDeps, ...deps };
   const ctx = d.createContext();
   void ctx.resume().catch(() => {}); // Firefox rejects it if close() comes first
+  // The browser can suspend the context (device change, OS audio session): the graph would stop, so ask it to run again.
+  ctx.onstatechange = () => {
+    if (!closed && ctx.state !== 'running' && ctx.state !== 'closed') void ctx.resume().catch(() => {});
+  };
   const stream = new MediaStream();
   const cbs: ((m: DenoiseMode, reason: string) => void)[] = [];
   const statCbs = new Set<(s: CaptureStats) => void>();
@@ -166,6 +178,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     let node: AudioWorkletNode | undefined;
     let worker: Worker | undefined;
     let ready = false;
+    let silent = -1; // silent reports since the reopen; -1 when not watching
     const nodes: AudioNode[] = [];
     let out: MediaStreamAudioDestinationNode | undefined;
     const stop = () => {
@@ -207,10 +220,10 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         w.postMessage({ type: 'port' }, [ch.port1]);
         n.port.postMessage({ type: 'port' }, [ch.port2]);
         set(); // settings may have changed while the model loaded
-        me!.status = '';
+        me!.status = !s.noiseSuppression && swapSkipped ? SWAP_SKIPPED : '';
         // DeepFilterNet takes over now: the browser filter goes off, so the two never stack. A failure is named, not hidden.
-        if (!s.noiseSuppression) void unfiltered().catch((e) => fail(`the mic did not reopen without the browser filter: ${msg(e)}`));
-        if (pipe === me) notify('deepfilter', '');
+        if (!s.noiseSuppression && !swapSkipped) void unfiltered().catch((e) => fail(`the mic did not reopen without the browser filter: ${msg(e)}`));
+        if (pipe === me) notify('deepfilter', me!.status);
       };
       // applyConstraints turns the filter off where the browser can (Firefox). Chromium resolves it but keeps the filter
       // (getSettings() stays true), and a second track from the same mic opened while the first runs shares it. There only,
@@ -221,10 +234,27 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         const t = m.getAudioTracks()[0];
         await t.applyConstraints({ ...t.getConstraints(), noiseSuppression: false }).catch(() => {});
         if (dead || t.getSettings().noiseSuppression !== true) return;
-        const id = t.getSettings().deviceId ?? null;
+        const heard = (me!.stats?.inputRms ?? 1) >= SILENT_RMS; // no report yet counts as sound
+        await reopen(false);
+        if (heard && !dead) silent = 0;
+      };
+      // Edge was seen to hand back a live, unmuted reopened track that delivers only zeros: then the filtered track comes back.
+      const silentCheck = (rms: number) => {
+        if (silent < 0) return;
+        if (rms >= SILENT_RMS) return void (silent = -1);
+        if (++silent < SILENT_REPORTS) return;
+        silent = -1;
+        swapSkipped = true;
+        void reopen(true).then(() => {
+          me!.status = SWAP_SKIPPED;
+          if (pipe === me) notify('deepfilter', SWAP_SKIPPED);
+        }, (e) => fail(`the mic did not reopen with the browser filter: ${msg(e)}`));
+      };
+      const reopen = async (ns: boolean) => {
+        const id = m.getAudioTracks()[0].getSettings().deviceId ?? null;
         unwatch();
         stopAll(m);
-        const asked = ask('deepfilter', id, false);
+        const asked = ask('deepfilter', id, ns);
         let timer: ReturnType<typeof setTimeout> | undefined;
         const late = new Promise<never>((_, no) => (timer = setTimeout(() => no(new Error(`no answer in ${REOPEN_TIMEOUT_MS / 1000} s`)), REOPEN_TIMEOUT_MS)));
         const next = await Promise.race([asked, late]).catch((e) => {
@@ -245,6 +275,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         if (data.type !== 'stats') return fail(data.message);
         const { type: _, ...stats } = data;
         me!.stats = stats;
+        silentCheck(stats.inputRms);
         me!.statsAt = d.now();
         const snap = pipe === me ? getStats() : null;
         if (snap) statCbs.forEach((cb) => cb(snap));
@@ -361,9 +392,11 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     /**
      * After the mic ended (or the system muted it): get the mic again and build the graph anew, in the same call (the
      * sender's track is replaced). A saved mic that is gone falls back to the default one, as at the start. A failure is
-     * reported through onModeChange as `microphone lost: ...`. Resolves true when a mic runs again.
+     * reported through onModeChange as `microphone lost: ...`. Resolves true when a mic runs again. skipSwap keeps the
+     * browser filter on after the model loads, for the rest of the session.
      */
-    async retry(): Promise<boolean> {
+    async retry(skipSwap = false): Promise<boolean> {
+      if (skipSwap) swapSkipped = true; // "no sound" in a call: the swap is the one known suspect
       await switchTo(s.mode, '').catch(lost);
       return !!pipe;
     },

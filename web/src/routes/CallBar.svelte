@@ -106,7 +106,7 @@
         <p class="min-w-0 truncate text-danger" role="alert" title={voice.error}>{voice.error}</p>
       {:else if notice}
         <Status kind="warn"><span class="block truncate" title={notice}>{notice}</span></Status>
-        {#if micLost}<button type="button" class="link" disabled={voice.retrying} onclick={retryMic}>Retry microphone</button>{/if}
+        {#if micLost || voice.micWarning === 'mic'}<button type="button" class="link" disabled={voice.retrying} onclick={retryMic}>Retry microphone</button>{/if}
       {:else if voice.offered}
         <p class="min-w-0 truncate text-fg-2" role="status">New microphone: {voice.offered.label || voice.offered.deviceId}</p>
         <button type="button" class="link" onclick={useOfferedMic}>Use it</button>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCapture, LOADING, READY_TIMEOUT_MS, REOPEN_TIMEOUT_MS, type CaptureDeps } from './capture';
+import { createCapture, forgetSwapSkip, LOADING, READY_TIMEOUT_MS, REOPEN_TIMEOUT_MS, SILENT_REPORTS, SWAP_SKIPPED, type CaptureDeps } from './capture';
 import { DEFAULT_AUDIO_SETTINGS, clampSettings } from './settings';
 
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
@@ -696,6 +696,99 @@ describe('retry after the mic ended', () => {
     expect(await cap.retry()).toBe(true);
     expect(onMicFallback).toHaveBeenCalledTimes(1);
     expect(t.mics[1].c.deviceId).toBeUndefined();
+    cap.close();
+  });
+});
+
+describe('fail-safe: the reopened mic is live but silent (seen on Edge)', () => {
+  beforeEach(() => forgetSwapSkip());
+  const stats = (t: ReturnType<typeof setup>, inputRms: number) =>
+    t.worklets.at(-1).port.onmessage({ data: { type: 'stats', state: 'playing', inputRms } });
+  async function swapped(t: ReturnType<typeof setup>) {
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    stats(t, 0.01); // the filtered track had sound
+    t.workers.at(-1).onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(t.mics.at(-1)!.c.noiseSuppression).toBe(false);
+    return { cap, cb };
+  }
+
+  it('goes back to the filtered track, says why, and never swaps again this session', async () => {
+    const t = setup();
+    const { cap, cb } = await swapped(t);
+    for (let i = 1; i < SILENT_REPORTS; i++) stats(t, 0);
+    await flush();
+    expect(t.mics).toHaveLength(2); // not yet
+    stats(t, 0);
+    await flush();
+    expect(t.mics).toHaveLength(3);
+    expect(t.mics[2].c).toMatchObject({ noiseSuppression: true, deviceId: { exact: 'mic1-device' } });
+    expect(t.mics[1].t.stop).toHaveBeenCalled();
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', SWAP_SKIPPED);
+    expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]); // the sent track stays
+    stats(t, 0); // still silent: no ping-pong, the normal "no sound" banner takes it from here
+    await flush();
+    expect(t.mics).toHaveLength(3);
+    cap.close();
+    // The next capture (a rejoin, the Settings test) keeps the browser filter from the start.
+    const u = setup();
+    const cap2 = await createCapture(DEFAULT_AUDIO_SETTINGS, u.deps);
+    const cb2 = vi.fn();
+    cap2.onModeChange(cb2);
+    u.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(u.mics).toHaveLength(1);
+    expect(cb2).toHaveBeenLastCalledWith('deepfilter', SWAP_SKIPPED);
+    cap2.close();
+  });
+
+  it('one report with sound ends the watch: later silence is the user, not the swap', async () => {
+    const t = setup();
+    const { cap } = await swapped(t);
+    stats(t, 0);
+    stats(t, 0.01);
+    for (let i = 0; i < SILENT_REPORTS + 2; i++) stats(t, 0);
+    await flush();
+    expect(t.mics).toHaveLength(2);
+    cap.close();
+  });
+
+  it('a mic that was already silent before the swap is not blamed on it', async () => {
+    const t = setup();
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    stats(t, 0);
+    t.workers[0].onmessage({ data: { type: 'ready' } });
+    await flush();
+    for (let i = 0; i < SILENT_REPORTS + 2; i++) stats(t, 0);
+    await flush();
+    expect(t.mics).toHaveLength(2);
+    cap.close();
+  });
+
+  it('retry(true), from the "no sound" banner, rebuilds without the swap', async () => {
+    const t = setup();
+    const { cap, cb } = await swapped(t);
+    expect(await cap.retry(true)).toBe(true);
+    t.workers.at(-1).onmessage({ data: { type: 'ready' } });
+    await flush();
+    expect(t.mics).toHaveLength(3);
+    expect(t.mics[2].c.noiseSuppression).toBe(true);
+    expect(cb).toHaveBeenLastCalledWith('deepfilter', SWAP_SKIPPED);
+    cap.close();
+  });
+
+  it('a suspended AudioContext is resumed', async () => {
+    const t = setup();
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    t.ctx.resume.mockClear();
+    t.ctx.state = 'suspended';
+    (t.ctx as any).onstatechange();
+    expect(t.ctx.resume).toHaveBeenCalledTimes(1);
+    t.ctx.state = 'running';
+    (t.ctx as any).onstatechange();
+    expect(t.ctx.resume).toHaveBeenCalledTimes(1);
     cap.close();
   });
 });

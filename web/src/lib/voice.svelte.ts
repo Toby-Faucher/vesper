@@ -133,13 +133,16 @@ function showNotice(text: string) {
   voice.notice = text;
   noticeTimer = setTimeout(() => (voice.notice = ''), NOTICE_MS);
 }
-/** Retry microphone (the call bar, after the mic ended): a new mic and capture graph in the same call. */
+/**
+ * Retry microphone (the call bar, after the mic ended or with "no sound"): a new mic and capture graph in the same call.
+ * With "no sound" the new graph also keeps the browser filter, so no second mic track is opened (see capture.ts).
+ */
 export async function retryMic(): Promise<void> {
   const cap = voice.capture;
   if (!cap || voice.retrying) return;
   voice.retrying = true;
   try {
-    await cap.retry(); // success or the reason why not both arrive through onModeChange
+    await cap.retry(voice.micWarning === 'mic'); // success or the reason why not both arrive through onModeChange
   } finally {
     voice.retrying = false;
   }
