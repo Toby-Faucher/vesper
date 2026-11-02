@@ -9,7 +9,12 @@ vesper.tfaucher.com {
 	# (cloudflared) and passes Cloudflare's CF-Connecting-IP through unchanged; a global `trusted_proxies`
 	# option changes the X-Forwarded-For handling; Vesper reads CF-Connecting-IP first (docs/deploy.md, Client address). Do not
 	# strip or rewrite either header here.
-	reverse_proxy 127.0.0.1:8080   # or vesper:8080 on a shared docker network
+	reverse_proxy 127.0.0.1:8080 {   # or vesper:8080 on a shared docker network
+		# Vesper closes a connection idle for 10 s; drop idle ones first so a request never races that close.
+		transport http {
+			keepalive 5s
+		}
+	}
 
 	# HSTS makes browsers refuse plain HTTP for this name for a year: keep it only once HTTPS works.
 	# Vesper sends the same HSTS and its own CSP, Referrer-Policy, Permissions-Policy, COOP and nosniff

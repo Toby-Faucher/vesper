@@ -5,11 +5,11 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 
 ## Security and abuse
 
-- **Plain HTTP connections before the upgrade are not limited.** A slow client can hold a connection on `/ws` or `/health`. The cap of 256 sockets counts upgraded sockets only.
+- **Plain HTTP connections are not capped in number.** Each one is closed after 10 s without a full request head, but there is no limit per
+  address; the cap of 256 sockets counts upgraded sockets only.
+- **There is no response timeout.** A client that reads a download (up to 25 MiB) very slowly keeps its connection until it is done.
 - **An upload must average about 44 KB/s (350 kbit/s).** The 10 minute total limit means a 25 MiB file on a slower uplink fails near
   the end with `upload too slow`.
-- **Only upload bodies have a read timeout** (30 s idle, 10 minutes in all). A slow client can still hold a JSON request open, but its body is
-  at most 32 KiB.
 - **Uploads in flight can pass the quota on disk for a while.** The quota is checked again under a lock before a file is kept, so it is never
   passed for good, but each upload streams to `uploads/tmp` first: up to 25 MiB per upload in flight, so about 250 MiB for one user's burst
   of 10. A `Content-Length` that cannot fit is refused before any byte is read.

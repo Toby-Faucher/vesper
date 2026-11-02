@@ -497,6 +497,24 @@ payload, no text in the clear, 410 deletes, switches, open socket, hidden room, 
 `web/src/lib/push.test.ts` and `web/e2e/push.mjs` (headless Chromium, with a stand-in `PushManager`). Not verified: a real push
 service, a notification on screen, iOS, Firefox and Safari.
 
+## Connection timeouts
+
+`accept_loop` in `lib.rs` serves HTTP/1 only, with hyper's `header_read_timeout`; the body timeouts are tower-http layers in
+`router`. Values are constants in `config.rs` (no variables); tests set the `Config` fields to short timers.
+
+- **Request head:** 10 s (`HEADER_TIMEOUT`). hyper runs the same timer while a kept-alive connection waits for its next request,
+  so an idle connection is also closed after 10 s.
+- **JSON `/api` bodies:** cut after 15 s with no bytes (`BODY_IDLE`) or 30 s in all (`BODY_TOTAL`). The handler sees a body error
+  (400) and the connection closes, since the body was not read to the end. The bodies are at most 32 KiB.
+- **Uploads and profile pictures:** 30 s idle and 10 minutes in all (`uploads::READ_IDLE`, `READ_TOTAL`): in `read_body` for
+  uploads, as layers for `/api/me/avatar`. The partial upload file is deleted when the body stops, errors or the client goes away.
+- **WebSocket:** once upgraded the socket leaves hyper, so none of these apply. It has its own ping (25 s, dropped after two silent periods).
+- **No response timeout.** A client that reads a download slowly keeps its connection ([known-issues.md](known-issues.md#security-and-abuse)).
+
+Tests: `crates/vesper-server/tests/timeouts.rs` over raw TCP (half a head, an idle kept-alive connection, a stalled and a trickled
+JSON body, a slow upload past the JSON total, an aborted upload's partial file, a WebSocket past every timer). Each was
+mutation-checked: removing its timeout or the cleanup makes its test fail.
+
 ## Static serving
 
 `guard` in `vesper-server/src/lib.rs`: dotfiles and `%2e` are 404; an extensionless 404 gets `index.html` (SPA routes); a missing file with
@@ -515,4 +533,5 @@ else here was read from the code, not run:
 - Sign up and sign in run in headless Chromium over http only. The `Secure` `__Host-` cookie and HSTS on https are tested in process only.
 - The CSP ([decision 0008](decisions/0008-csp.md)): no violation in headless Chromium through the e2e. The denoiser under the CSP runs
   only when `web/dist/dsp/` is built (CI copies it from the dsp-wasm job). Not checked through Caddy and Cloudflare, which may add or change headers.
-- Upload read timeouts are unit-tested with short timers (`read_body_times_out_idle_and_total`), not with a real slow client.
+- Timeouts are tested over loopback TCP with short timers (`tests/timeouts.rs`, `read_body_times_out_idle_and_total`), not over a real slow
+  network or through Caddy and the Cloudflare tunnel.

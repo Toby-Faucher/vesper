@@ -2,6 +2,12 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+// Constants, not variables: the proxy in front has its own, and nobody has needed to tune these.
+// Tests set the `Config` fields to short values.
+pub const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
+pub const BODY_IDLE: Duration = Duration::from_secs(15);
+pub const BODY_TOTAL: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub http_bind: SocketAddr,
@@ -27,6 +33,13 @@ pub struct Config {
     pub upload_quota_bytes: u64,
     /// VAPID contact (`mailto:` or `https:`) sent to push services. None turns Web Push off.
     pub push_subject: Option<String>,
+    /// A request head must arrive within this. hyper runs the same timer while a kept-alive
+    /// HTTP/1 connection waits for its next request, so it is also the idle limit.
+    pub header_timeout: Duration,
+    /// A JSON `/api` request body that sends nothing for `body_idle`, or is not done after
+    /// `body_total`, is cut. Uploads and profile pictures have their own, longer limits.
+    pub body_idle: Duration,
+    pub body_total: Duration,
 }
 
 impl Config {
@@ -85,6 +98,9 @@ impl Config {
                 .checked_mul(1024 * 1024)
                 .ok_or("VESPER_UPLOAD_QUOTA_MB is too large")?,
             push_subject,
+            header_timeout: HEADER_TIMEOUT,
+            body_idle: BODY_IDLE,
+            body_total: BODY_TOTAL,
         })
     }
 }
