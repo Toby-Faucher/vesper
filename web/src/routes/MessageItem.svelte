@@ -63,6 +63,8 @@
   const mentioned = $derived(!m.deleted && m.mentions.includes(myId));
   const nodes = $derived(parse(m.body));
   const long = $derived(isLong(m.body));
+  // A message sent with files and no text is stored with the file names as its body (the server needs one): do not show it twice.
+  const filler = $derived(m.attachments.length > 0 && m.body === m.attachments.map((a) => a.name).join(', '));
   const hm = (ms: number) => clock.format(ms);
   const full = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'full', timeStyle: 'short' });
   // The gutter has room for "7:26", not "07:26 AM": the hour and minute only (the title has the full date).
@@ -200,7 +202,7 @@
       </p>
     {:else}
       <div class="body" class:clamp={long && !expanded}>
-        <Markdown {nodes} me={myName} />
+        {#if !filler}<Markdown {nodes} me={myName} />{/if}
         {#if m.edited_at || (!head && m.pinned)}
           <span class="note quiet">{m.edited_at ? '(edited)' : ''}{!head && m.pinned ? `${m.edited_at ? ' ' : ''}Pinned` : ''}</span>
         {/if}
