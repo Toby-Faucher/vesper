@@ -35,6 +35,8 @@ pub enum ErrorCode {
     BadMessage,
     Forbidden,
     RateLimited,
+    /// The server failed (a store error). The cause is in the server log.
+    Internal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

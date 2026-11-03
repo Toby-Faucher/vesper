@@ -324,7 +324,7 @@ async fn join(
 ) -> Result<JoinResult, (ErrorCode, String)> {
     let internal = |e: vesper_store::StoreError| {
         tracing::error!("store: {e}");
-        (ErrorCode::BadMessage, "server error".to_string())
+        (ErrorCode::Internal, "server error".to_string())
     };
     let user = st.app.store.user(user_id).await.map_err(internal)?;
     // An unknown room gets the same refusal as a hidden one, so a join cannot probe room ids.
@@ -399,6 +399,7 @@ fn describe(code: ErrorCode) -> &'static str {
         ErrorCode::BadMessage => "invalid offer",
         ErrorCode::Forbidden => "not allowed",
         ErrorCode::RateLimited => "too many requests",
+        ErrorCode::Internal => "server error",
     }
 }
 

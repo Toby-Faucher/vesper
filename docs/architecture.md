@@ -120,7 +120,7 @@ Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is th
 `user_created { user }`,
 `force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
 `read { room_id, last_read_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
-Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`.
+Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `internal`.
 
 1. The client opens `/ws` with its session cookie. The upgrade gets 403 unless `Origin` equals `VESPER_ORIGIN`, 401 unless the
    cookie names a live session, and 503 past `VESPER_MAX_SOCKETS` (`ws.rs` `upgrade`).
@@ -129,7 +129,7 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`.
    Right after it joins the hub, the server checks the session again: a logout, ban or expiry that landed after the upgrade
    closes the socket with 4001 before `hello`. If `hello` cannot be built (a store error), it is logged and the socket closes with 1011.
 3. The client builds an SDP offer, then sends `join` with a room id. The server reads the user and the room again, so a role,
-   ban or member list change counts (`bad_message` if the room is unknown). `Voice::join` (`voice.rs`) refuses a banned user or
+   ban or member list change counts (an unknown or hidden room is `forbidden`; a store error is `internal`, logged). `Voice::join` (`voice.rs`) refuses a banned user or
    one who cannot see the room (`forbidden`).
 4. It takes the join lock and checks the room cap (12, the same for everyone; the user's own place does not count), that the
    SFU runs and that the offer is well formed. Only then does it end any earlier voice session of the same account, so a
