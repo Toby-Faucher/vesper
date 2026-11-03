@@ -13,6 +13,7 @@
   import type { Message } from '../lib/gen/Message';
   import { decorate, parse } from '../lib/markdown';
   import { session } from '../lib/session.svelte';
+  import { findRoom } from '../lib/state';
   import * as I from '../lib/ui/icons';
   import { isSendKey } from '../lib/ui/keys';
   import { UI_MESSAGES } from '../lib/ui/messages';
@@ -47,7 +48,7 @@
   let seenRefocus = chat.refocus;
 
   const myId = $derived(session.state.me?.user.user_id ?? '');
-  const room = $derived(session.state.rooms.find((r) => r.id === roomId));
+  const room = $derived(findRoom(session.state, roomId));
   const draft = $derived(chat.drafts[roomId] ?? '');
   const name = (id: string) => session.state.users[id]?.display_name ?? 'Someone';
   // A parse that throws leaves the layer empty, and the check below then keeps the textarea's own text visible.
@@ -71,7 +72,7 @@
   const busy = $derived(tray.busy(roomId));
   const done = $derived(tray.done(roomId));
   // Uploads still running in rooms you left, so a room change never hides them.
-  const away = $derived(tray.elsewhere(roomId).map((id) => session.state.rooms.find((r) => r.id === id)?.name ?? 'another room'));
+  const away = $derived(tray.elsewhere(roomId).map((id) => findRoom(session.state, id)?.name ?? 'another room'));
   // Polite, and only when the count changes: not per progress step. A failure has its own alert in the row.
   const trayLine = $derived(busy ? UI_MESSAGES.uploading(files.filter((i) => i.state === 'queued' || i.state === 'uploading').length) : done.length ? UI_MESSAGES.filesReady(done.length) : '');
   const canSend = $derived(online && over <= 0 && !busy && !sending && (!!draft.trim() || done.length > 0));

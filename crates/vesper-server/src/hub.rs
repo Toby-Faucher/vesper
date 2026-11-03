@@ -257,7 +257,7 @@ mod tests {
             position: 0,
             restricted: true,
             members: vec![],
-            archived: false,
+            ..RoomInfo::default()
         };
         hub.broadcast_room(&room, ServerMsg::ForceMuted { muted: true });
         assert!(rx.queue.try_recv().is_err());

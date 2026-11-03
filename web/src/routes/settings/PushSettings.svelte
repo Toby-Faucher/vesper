@@ -77,7 +77,7 @@
   <div>
     <div class="flex h-8 items-center"><h3 id="notify-push" class="text-base font-medium text-fg">While Vesper is closed</h3></div>
     <p class="text-sm text-fg-2">
-      Mentions, and someone starting voice in an empty room, when no Vesper tab is open. The notification goes through your
+      Mentions, direct messages, and someone starting voice in an empty room, when no Vesper tab is open. The notification goes through your
       browser's push service (Google, Mozilla, Apple or Microsoft), encrypted: it never holds what was written. On iPhone and iPad it works only from the Home Screen.
     </p>
   </div>
@@ -88,7 +88,7 @@
   </div>
   {#if on && view?.mine}
     <ul class="kinds flex flex-col gap-3">
-      <li><Switch label="Mentions" checked={view.mine.mentions} onchange={(e) => kinds({ mentions: e.currentTarget.checked })} /></li>
+      <li><Switch label="Mentions and direct messages" checked={view.mine.mentions} onchange={(e) => kinds({ mentions: e.currentTarget.checked })} /></li>
       <li><Switch label="Someone starts voice" help="At most once every 10 minutes per room." checked={view.mine.voice}
         onchange={(e) => kinds({ voice: e.currentTarget.checked })} /></li>
     </ul>

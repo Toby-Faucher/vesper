@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyServerMsg, emptyState, type AppState } from './state';
+import { applyServerMsg, emptyState, findRoom, type AppState } from './state';
 import type { Peer } from './gen/Peer';
 import type { RoomInfo } from './gen/RoomInfo';
 import type { UserInfo } from './gen/UserInfo';
@@ -8,7 +8,8 @@ import type { Message } from './gen/Message';
 const user = (user_id: string, display_name = user_id): UserInfo => ({
   user_id, username: user_id, display_name, accent: '#888888', role: 'member', banned: false, bio: '', avatar: null, ui_accent: null,
 });
-const room = (id: number): RoomInfo => ({ id, name: `room${id}`, position: id, restricted: false, members: [], archived: false });
+const room = (id: number): RoomInfo => ({ id, kind: 'room', name: `room${id}`, position: id, restricted: false, members: [], archived: false });
+const dm = (id: number, a: string, b: string): RoomInfo => ({ id, kind: 'dm', name: `dm-${a}-${b}`, position: 0, restricted: true, members: [a, b], archived: false });
 const peer = (user_id: string, room_id: number): Peer => ({
   user_id, name: user_id, room_id, muted: false, deafened: false, force_muted: false,
 });
@@ -18,11 +19,11 @@ const unread1 = { room_id: 1, last_read_id: 5, unread: 2, mentions: 0 };
 
 describe('applyServerMsg', () => {
   it('hello_replaces_state', () => {
-    const old: AppState = { me: null, users: { x: user('x') }, rooms: [room(9)], archived: [], voice: [peer('x', 9)], unread: {} };
+    const old: AppState = { me: null, users: { x: user('x') }, rooms: [room(9)], archived: [], dms: [], voice: [peer('x', 9)], unread: {} };
     const s = applyServerMsg(old, {
       type: 'hello', me, users: [user('a'), user('b')], rooms: [room(1)], voice: [peer('b', 1)], unread: [unread1],
     });
-    expect(s).toEqual({ me, users: { a: user('a'), b: user('b') }, rooms: [room(1)], archived: [], voice: [peer('b', 1)], unread: { 1: unread1 } });
+    expect(s).toEqual({ me, users: { a: user('a'), b: user('b') }, rooms: [room(1)], archived: [], dms: [], voice: [peer('b', 1)], unread: { 1: unread1 } });
   });
   it('rooms_changed_keeps_voice', () => {
     const s: AppState = { ...emptyState(), rooms: [room(1), room(2)], voice: [peer('a', 1), peer('b', 2)] };
@@ -79,5 +80,21 @@ describe('applyServerMsg', () => {
     expect(s.unread[2]).toEqual({ room_id: 2, last_read_id: 0, unread: 1, mentions: 0 });
     s = applyServerMsg(s, { type: 'read', room_id: 1, last_read_id: 8 });
     expect(s.unread[1]).toEqual({ room_id: 1, last_read_id: 8, unread: 0, mentions: 0 });
+  });
+  it('dms_are_kept_apart_and_named_after_the_other_person', () => {
+    const s = applyServerMsg(emptyState(), {
+      type: 'hello', me, users: [user('a'), user('b', 'Bea')], rooms: [room(1), dm(7, 'a', 'b')], voice: [], unread: [],
+    });
+    expect(s.rooms.map((r) => r.id)).toEqual([1]);
+    expect(s.dms.map((r) => [r.id, r.name])).toEqual([[7, 'Bea']]);
+    expect(findRoom(s, 7)?.name).toBe('Bea');
+    expect(findRoom(s, 1)?.name).toBe('room1');
+    // A rename shows at once, and a new DM from rooms_changed keeps the voice of both kinds.
+    const renamed = applyServerMsg(s, { type: 'user_updated', user: user('b', 'Bee') });
+    expect(renamed.dms[0].name).toBe('Bee');
+    const withVoice = { ...s, voice: [peer('b', 7), peer('b', 1)] };
+    const changed = applyServerMsg(withVoice, { type: 'rooms_changed', rooms: [room(1), dm(7, 'a', 'b'), dm(8, 'a', 'c')] });
+    expect(changed.voice.map((p) => p.room_id)).toEqual([7, 1]);
+    expect(changed.dms.map((r) => r.name)).toEqual(['Bea', 'Someone']);
   });
 });

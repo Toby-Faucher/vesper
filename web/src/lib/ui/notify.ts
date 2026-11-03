@@ -1,6 +1,6 @@
 import type { Message } from '../gen/Message';
 import type { ServerMsg } from '../gen/ServerMsg';
-import type { AppState } from '../state';
+import { findRoom, type AppState } from '../state';
 import { href } from '../route';
 import { chat, jumpTo } from '../chat.svelte';
 import { navigate, session } from '../session.svelte';
@@ -16,13 +16,13 @@ export { DEFAULTS, NOTIFY_KEY, loadPrefs, savePrefs, type NotifyPrefs } from './
 export const supported = () => typeof Notification !== 'undefined';
 export const permission = (): NotificationPermission | 'unsupported' => (supported() ? Notification.permission : 'unsupported');
 
-/** A mention of me by someone else, not deleted, mentions on and allowed, and I am not looking at that room. */
+/** A mention of me, or any message in a DM, by someone else, not deleted, mentions on and allowed, and I am not looking at that room. */
 export function shouldNotify(
   m: Message,
-  ctx: { myId: string; activeRoom: number | null; hidden: boolean; prefs: NotifyPrefs; permission: NotificationPermission },
+  ctx: { myId: string; activeRoom: number | null; hidden: boolean; prefs: NotifyPrefs; permission: NotificationPermission; dm?: boolean },
 ): boolean {
   return (
-    m.mentions.includes(ctx.myId) && m.author_id !== ctx.myId && !m.deleted && ctx.prefs.mentions &&
+    (ctx.dm || m.mentions.includes(ctx.myId)) && m.author_id !== ctx.myId && !m.deleted && ctx.prefs.mentions &&
     ctx.permission === 'granted' && (ctx.hidden || ctx.activeRoom !== m.room_id)
   );
 }
@@ -64,7 +64,7 @@ export function onServerMsg(m: ServerMsg, prev: AppState): void {
   const myId = session.state.me?.user.user_id ?? '';
   if (m.type === 'message_new') {
     const ctx = { myId, activeRoom: chat.active, hidden: document.hidden || !document.hasFocus(), prefs: loadPrefs() };
-    if (supported() && shouldNotify(m.message, { ...ctx, permission: Notification.permission })) void show(m.message).catch(() => {});
+    if (supported() && shouldNotify(m.message, { ...ctx, permission: Notification.permission, dm: findRoom(session.state, m.message.room_id)?.kind === 'dm' })) void show(m.message).catch(() => {});
     return;
   }
   const leftRoom = m.type === 'peer_left' ? prev.voice.find((p) => p.user_id === m.user_id)?.room_id ?? null : null;
@@ -80,9 +80,10 @@ async function show(m: Message): Promise<void> {
   const [{ parse }, { plain }] = await Promise.all([import('../markdown'), import('./timeline')]);
   const s = session.state;
   const name = s.users[m.author_id]?.display_name ?? 'Someone';
-  const room = s.rooms.find((r) => r.id === m.room_id)?.name ?? 'a room';
+  const dm = findRoom(s, m.room_id)?.kind === 'dm';
+  const room = findRoom(s, m.room_id)?.name ?? 'a room';
   try {
-    const n = new Notification(`${name} mentioned you in ${room}`, {
+    const n = new Notification(dm ? `${name} sent you a message` : `${name} mentioned you in ${room}`, {
       body: plain(parse(m.body)).trim().slice(0, 120),
       tag: String(m.room_id),
       icon: '/icon-192.png',

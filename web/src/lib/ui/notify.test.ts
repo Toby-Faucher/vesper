@@ -21,6 +21,13 @@ const nctx = { myId: 'a', activeRoom: 1, hidden: false, prefs: on, permission: '
 describe('shouldNotify', () => {
   it('fires for a mention of me in another room', () => expect(shouldNotify(msg(), nctx)).toBe(true));
   it('fires in the open room when the tab is hidden', () => expect(shouldNotify(msg(), { ...nctx, activeRoom: 2, hidden: true })).toBe(true));
+  it('any message in a DM fires, without a mention, but not my own or in the room I am looking at', () => {
+    const dm = { ...nctx, dm: true };
+    expect(shouldNotify(msg({ mentions: [] }), dm)).toBe(true);
+    expect(shouldNotify(msg({ mentions: [], author_id: 'a' }), dm)).toBe(false);
+    expect(shouldNotify(msg({ mentions: [] }), { ...dm, activeRoom: 2 })).toBe(false);
+    expect(shouldNotify(msg({ mentions: [] }), nctx)).toBe(false);
+  });
   it('each condition alone turns it off', () => {
     expect(shouldNotify(msg({ mentions: [] }), nctx)).toBe(false);
     expect(shouldNotify(msg({ mentions: ['c'] }), nctx)).toBe(false);

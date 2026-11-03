@@ -4,6 +4,7 @@
   import { inRoom } from '../lib/peers';
   import { href } from '../lib/route';
   import { session } from '../lib/session.svelte';
+  import { findRoom } from '../lib/state';
   import { dismissOffered, leave, retryMic, toggleDeafen, toggleMute, useOfferedMic, voice } from '../lib/voice.svelte';
   import { enter, exit } from '../lib/ui/motion';
   import { togglePerson } from '../lib/ui/person.svelte';
@@ -31,7 +32,7 @@
   }
 
   const AVATARS = 5; // drawn; the rest is "+n"
-  const room = $derived(session.state.rooms.find((r) => r.id === voice.joinedRoom));
+  const room = $derived(findRoom(session.state, voice.joinedRoom));
   const me = $derived(session.state.me?.user);
   const people = $derived.by<Peer[]>(() => {
     const others = voice.joinedRoom === null ? [] : inRoom(session.state.voice, voice.joinedRoom).filter((p) => p.user_id !== me?.user_id);

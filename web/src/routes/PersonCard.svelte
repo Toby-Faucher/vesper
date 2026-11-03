@@ -2,7 +2,10 @@
   import * as I from '../lib/ui/icons';
   import type { ForceMute } from '../lib/gen/ForceMute';
   import { api, errorText } from '../lib/api';
-  import { session } from '../lib/session.svelte';
+  import { navigate, session } from '../lib/session.svelte';
+  import { href } from '../lib/route';
+  import type { RoomInfo } from '../lib/gen/RoomInfo';
+  import { findRoom } from '../lib/state';
   import { canModerate } from '../lib/ui/person.svelte';
   import { loadUsers } from '../lib/ui/users';
   import { setVolume, voice } from '../lib/voice.svelte';
@@ -40,7 +43,7 @@
   const peer = $derived(session.state.voice.find((p) => p.user_id === userId));
   const name = $derived(user?.display_name ?? peer?.name ?? 'Someone');
   const roomId = $derived(self ? voice.joinedRoom : peer?.room_id ?? null);
-  const where = $derived(roomId === null ? 'Not in voice' : `In voice in ${session.state.rooms.find((r) => r.id === roomId)?.name ?? 'a room'}`);
+  const where = $derived(roomId === null ? 'Not in voice' : `In voice in ${findRoom(session.state, roomId)?.name ?? 'a room'}`);
   const inCall = $derived(!self && voice.joined && roomId === voice.joinedRoom);
   // In a call the row is always there (measuring until the first stats poll): the card is placed once, on open, at its height.
   const link = $derived(voice.joined && (self || inCall) ? voice.links[userId] ?? MEASURING : undefined);
@@ -48,6 +51,20 @@
   const outranks = $derived(canModerate(me, user));
 
   let confirming = $state(false);
+  // Opens the DM (made on the first time) and goes to it.
+  async function message() {
+    busy = 'dm';
+    error = '';
+    try {
+      const room = await api<RoomInfo>('POST', '/api/dms', { user_id: userId });
+      onclose();
+      navigate(href({ name: 'room', id: room.id }));
+    } catch (e) {
+      error = errorText(e);
+    } finally {
+      busy = '';
+    }
+  }
   async function act(what: 'force-mute' | 'kick' | 'disconnect', body?: ForceMute) {
     busy = what;
     error = '';
@@ -86,6 +103,12 @@
         <span class="flex h-5 items-center"><LinkIcon {link} name={self ? null : name} /></span>
         <p>{#if link.grade !== 'measuring'}<span class="text-fg">Connection {link.grade}.</span>{' '}{/if}<span class="tabular-nums">{linkDetail(link)}</span></p>
       </div>
+    {/if}
+
+    {#if !self && user && !user.banned}
+      <button type="button" class="act" aria-busy={busy === 'dm' || undefined} aria-disabled={!!busy || undefined} onclick={() => busy || message()}>
+        <Icon d={I.send} /><span class="truncate">Message</span>
+      </button>
     {/if}
 
     {#if inCall}

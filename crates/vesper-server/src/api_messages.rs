@@ -14,7 +14,7 @@ use serde::Deserialize;
 use unicode_normalization::UnicodeNormalization;
 use vesper_protocol::{
     ApiErrorCode, EditMessage, Message, MessagePage, PinReq, ReactionReq, ReadReq, Role, RoomInfo,
-    SearchPage, SearchQuery, SendMessage, ServerMsg, UserInfo,
+    RoomKind, SearchPage, SearchQuery, SendMessage, ServerMsg, UserInfo,
 };
 use vesper_store::{Cursor, NewMessage, StoreError, now_ms};
 
@@ -204,8 +204,11 @@ async fn send(
         },
     );
     // Edits do not push: a fixed typo should not ping anyone again.
-    if !mentions.is_empty() {
-        let push = st.push.clone();
+    let push = st.push.clone();
+    if room.kind == RoomKind::Dm {
+        // Every DM message is addressed to the other person, so an @mention adds nothing.
+        tokio::spawn(async move { push.direct_message(&room, &a.user).await });
+    } else if !mentions.is_empty() {
         tokio::spawn(async move { push.mentioned(&room, &a.user, &mentions).await });
     }
     Ok((StatusCode::CREATED, Json(msg)))

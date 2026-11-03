@@ -3,6 +3,7 @@
   import { onMount, untrack } from 'svelte';
   import { href, parse } from '../lib/route';
   import { closePage, lastRoomKey, navigate, route, session } from '../lib/session.svelte';
+  import { findRoom } from '../lib/state';
   import { loadCall, startVoice, toggleDeafen, toggleMute, voice } from '../lib/voice.svelte';
   import { closePerson, person } from '../lib/ui/person.svelte';
   import { setCollapsed, sidebar } from '../lib/ui/sidebar.svelte';
@@ -38,7 +39,7 @@
   const r = $derived(parse(route.path));
   const rooms = $derived([...session.state.rooms].sort((a, b) => a.position - b.position));
   const loaded = $derived(session.online || rooms.length > 0); // the room list came with hello
-  const room = $derived(r.name === 'room' ? rooms.find((x) => x.id === r.id) : undefined);
+  const room = $derived(r.name === 'room' ? findRoom(session.state, r.id) : undefined);
 
   // `/` opens the last room, else the first.
   $effect(() => {
@@ -118,7 +119,7 @@
       return;
     }
     if (e.repeat && s !== 'prev-room' && s !== 'next-room') return e.preventDefault(); // a held key toggles once
-    const ids = rooms.map((x) => x.id);
+    const ids = [...rooms, ...session.state.dms].map((x) => x.id);
     const to = (id: number | null) => id !== null && navigate(href({ name: 'room', id }));
     if (s === 'search') openSearch();
     else if (s === 'switcher') {

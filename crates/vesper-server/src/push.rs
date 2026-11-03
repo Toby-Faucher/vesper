@@ -26,7 +26,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
-use vesper_protocol::{PushPayload, RoomInfo, UserInfo};
+use vesper_protocol::{PushPayload, PushPayloadKind, RoomInfo, RoomKind, UserInfo};
 use vesper_store::{PushKind, PushTarget, Store, StoreError, now_ms};
 
 use crate::api_rooms::can_see;
@@ -51,6 +51,8 @@ const PARALLEL: usize = 8;
 pub const MAX_PENDING: usize = 256;
 /// One "started voice" push per room and person in this long.
 pub const VOICE_EVERY: Duration = Duration::from_secs(10 * 60);
+/// One "sent you a message" push per DM and person in this long, so a burst is one push.
+pub const DM_EVERY: Duration = Duration::from_secs(30);
 const VAPID_SECRET: &str = "vapid_es256_pkcs8";
 /// Record size in the `aes128gcm` header: the whole payload is one record.
 const RECORD_SIZE: u32 = 4096;
@@ -320,19 +322,42 @@ pub struct VoiceDedupe(HashMap<(i64, String), Instant>);
 impl VoiceDedupe {
     /// True (and remembered) when `who` has had no voice push for `room` lately.
     pub fn take(&mut self, room: i64, who: &str, now: Instant) -> bool {
+        self.take_within(room, who, now, VOICE_EVERY)
+    }
+
+    /// Like [`VoiceDedupe::take`] with your own window.
+    pub fn take_within(&mut self, room: i64, who: &str, now: Instant, every: Duration) -> bool {
         if self.0.len() > 10_000 {
             self.0
-                .retain(|_, t| now.saturating_duration_since(*t) < VOICE_EVERY);
+                .retain(|_, t| now.saturating_duration_since(*t) < every);
         }
         let key = (room, who.to_string());
         match self.0.get(&key) {
-            Some(t) if now.saturating_duration_since(*t) < VOICE_EVERY => false,
+            Some(t) if now.saturating_duration_since(*t) < every => false,
             _ => {
                 self.0.insert(key, now);
                 true
             }
         }
     }
+}
+
+/// The Web Push `Topic`: a newer push with the same topic replaces one still waiting, so there is
+/// one per room and kind (a "started voice" never hides a mention).
+fn topic(kind: PushPayloadKind, room_id: i64) -> String {
+    let tag = match kind {
+        PushPayloadKind::Mention => 'm',
+        PushPayloadKind::Dm => 'd',
+        PushPayloadKind::Voice => 'v',
+        PushPayloadKind::Test => 't',
+    };
+    format!("{tag}{room_id}")
+}
+
+/// The path the service worker fetches for a person's picture; none while they have the letter avatar.
+fn avatar_icon(u: &UserInfo) -> Option<String> {
+    let v = u.avatar.as_ref()?;
+    Some(format!("/api/users/{}/avatar?v={v}", u.user_id))
 }
 
 /// One place in the send queue; dropping it (the task ended, panicked or was cancelled) gives
@@ -381,6 +406,7 @@ struct Inner {
     dropped_warned: Mutex<Option<Instant>>,
     timeout: Duration,
     voice: Mutex<VoiceDedupe>,
+    dm: Mutex<VoiceDedupe>,
     /// When each recent failed send ended, oldest first, for Admin > Server.
     failures: Mutex<VecDeque<Instant>>,
 }
@@ -431,6 +457,7 @@ impl Push {
             dropped_warned: Mutex::default(),
             timeout,
             voice: Mutex::default(),
+            dm: Mutex::default(),
             failures: Mutex::default(),
         })))
     }
@@ -483,10 +510,11 @@ impl Push {
             |id| self.0.hub.online(id),
         );
         let payload = PushPayload {
-            kind: "mention".into(),
+            kind: PushPayloadKind::Mention,
             room_id: room.id,
             title: "Vesper".into(),
             body: format!("{} mentioned you in {}", sender.display_name, room.name),
+            icon: None,
         };
         self.fan_out(
             who,
@@ -494,7 +522,40 @@ impl Push {
             payload,
             24 * 3600,
             "high",
-            format!("m{}", room.id),
+            topic(PushPayloadKind::Mention, room.id),
+        );
+    }
+
+    /// `sender` wrote in the DM `room`. The other member gets one push per [`DM_EVERY`], and only
+    /// with no socket open. It uses the device's mentions switch, and carries no message text.
+    pub async fn direct_message(&self, room: &RoomInfo, sender: &UserInfo) {
+        if self.public_key().is_none() {
+            return;
+        }
+        let users = match self.0.store.users().await {
+            Ok(u) => u,
+            Err(e) => return warn!("push: store: {e}"),
+        };
+        let mut who = recipients(&users, room, &sender.user_id, |id| self.0.hub.online(id));
+        {
+            let mut d = self.0.dm.lock().expect("push lock poisoned");
+            let now = Instant::now();
+            who.retain(|id| d.take_within(room.id, id, now, DM_EVERY));
+        }
+        let payload = PushPayload {
+            kind: PushPayloadKind::Dm,
+            room_id: room.id,
+            title: "Vesper".into(),
+            body: format!("{} sent you a message", sender.display_name),
+            icon: avatar_icon(sender),
+        };
+        self.fan_out(
+            who,
+            PushKind::Mentions,
+            payload,
+            24 * 3600,
+            "high",
+            topic(PushPayloadKind::Dm, room.id),
         );
     }
 
@@ -513,11 +574,19 @@ impl Push {
             let now = Instant::now();
             who.retain(|id| d.take(room.id, id, now));
         }
+        let body = if room.kind == RoomKind::Dm {
+            format!("{} is in voice with you", starter.display_name)
+        } else {
+            format!("{} started voice in {}", starter.display_name, room.name)
+        };
         let payload = PushPayload {
-            kind: "voice".into(),
+            kind: PushPayloadKind::Voice,
             room_id: room.id,
             title: "Vesper".into(),
-            body: format!("{} started voice in {}", starter.display_name, room.name),
+            body,
+            icon: (room.kind == RoomKind::Dm)
+                .then(|| avatar_icon(starter))
+                .flatten(),
         };
         // A stale "started voice" is no use: the push service drops it after 10 minutes.
         self.fan_out(
@@ -526,7 +595,7 @@ impl Push {
             payload,
             600,
             "normal",
-            format!("v{}", room.id),
+            topic(PushPayloadKind::Voice, room.id),
         );
     }
 
@@ -1000,6 +1069,58 @@ mod tests {
         let _ = stuck.await;
         assert_eq!(count.load(Ordering::SeqCst), 0);
         assert!(reserve(&count, 2).is_some());
+    }
+
+    #[test]
+    fn dm_push_goes_to_the_other_member_only_and_once_per_burst() {
+        let (a, b) = (user('a', Role::Member), user('b', Role::Member));
+        let (owner, md) = (user('o', Role::Owner), user('m', Role::Moderator));
+        let dm = RoomInfo {
+            kind: RoomKind::Dm,
+            restricted: true,
+            members: vec![a.user_id.clone(), b.user_id.clone()],
+            ..RoomInfo::default()
+        };
+        let users = [a.clone(), b.clone(), owner, md];
+        let got = recipients(&users, &dm, &a.user_id, |_| false);
+        assert_eq!(got, vec![b.user_id.clone()]);
+        // The same person with a socket open gets none.
+        assert!(recipients(&users, &dm, &a.user_id, |id| id == b.user_id).is_empty());
+
+        let mut d = VoiceDedupe::default();
+        let t = Instant::now();
+        assert!(d.take_within(1, "b", t, DM_EVERY));
+        assert!(!d.take_within(1, "b", t + DM_EVERY - Duration::from_secs(1), DM_EVERY));
+        assert!(d.take_within(1, "b", t + DM_EVERY, DM_EVERY));
+    }
+
+    #[test]
+    fn topics_differ_by_kind_and_room() {
+        let kinds = [
+            PushPayloadKind::Mention,
+            PushPayloadKind::Dm,
+            PushPayloadKind::Voice,
+            PushPayloadKind::Test,
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for k in kinds {
+            for room in [1, 2] {
+                assert!(seen.insert(topic(k, room)), "{k:?} {room}");
+            }
+        }
+        // The Web Push Topic is at most 32 URL-safe base64 characters.
+        assert!(topic(PushPayloadKind::Dm, i64::MAX).len() <= 32);
+    }
+
+    #[test]
+    fn avatar_icon_is_a_same_origin_path_only_with_a_picture() {
+        let mut u = user('a', Role::Member);
+        assert_eq!(avatar_icon(&u), None);
+        u.avatar = Some("3".into());
+        assert_eq!(
+            avatar_icon(&u).unwrap(),
+            format!("/api/users/{}/avatar?v=3", u.user_id)
+        );
     }
 
     #[test]

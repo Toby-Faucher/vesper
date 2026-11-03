@@ -51,9 +51,9 @@
 
 <div class="sections">
   <section role="group" aria-labelledby="notify-mentions">
-    <div class="flex h-8 items-center"><h3 id="notify-mentions" class="text-base font-medium text-fg">Mentions</h3></div>
+    <div class="flex h-8 items-center"><h3 id="notify-mentions" class="text-base font-medium text-fg">Mentions and direct messages</h3></div>
     <div>
-      <Switch label="Notify me when someone mentions me" checked={on} disabled={perm === 'unsupported'}
+      <Switch label="Notify me when someone mentions me or sends me a direct message" checked={on} disabled={perm === 'unsupported'}
         aria-describedby="mention-state" onchange={setMentions} />
       <p id="mention-state" role="status" class="-mt-1 pr-11 text-xs text-fg-2">{STATE[perm]}</p>
       {#if perm === 'granted'}

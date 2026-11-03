@@ -322,11 +322,30 @@ pub struct ForceMute {
     pub muted: bool,
 }
 
+/// A `dm` is a locked room of exactly two people. Its `name` is generated; show the other member.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum RoomKind {
+    #[default]
+    Room,
+    Dm,
+}
+
+/// `POST /api/dms`: the DM with this person, made if it does not exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DmCreate {
+    pub user_id: String,
+}
+
 /// A room has text and voice. `members` is filled only when `restricted`. An `archived` room is
 /// sent to the owner only (for Admin > Rooms); nobody can open, post to, search or join it.
+/// A `dm` is seen by its two members only, whatever their role.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct RoomInfo {
+    pub kind: RoomKind,
     #[ts(type = "number")]
     pub id: i64,
     pub name: String,
@@ -641,16 +660,29 @@ impl std::fmt::Debug for PushSubscribe {
     }
 }
 
-/// What the service worker gets, encrypted (RFC 8291): never a message body. `kind` is
-/// `mention`, `voice` or `test`; `room_id` is 0 for `test`.
+/// What a push is about. The service worker reads the snake_case name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PushPayloadKind {
+    Mention,
+    Dm,
+    Voice,
+    Test,
+}
+
+/// What the service worker gets, encrypted (RFC 8291): never a message body. `room_id` is 0
+/// for `test`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PushPayload {
-    pub kind: String,
+    pub kind: PushPayloadKind,
     #[ts(type = "number")]
     pub room_id: i64,
     pub title: String,
     pub body: String,
+    /// A same-origin path to the sender's profile picture, for DM pushes. Null for the default icon.
+    pub icon: Option<String>,
 }
 
 /// The noise suppression a call ended in (the web client's `DenoiseMode`).

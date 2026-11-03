@@ -9,7 +9,7 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
-use vesper_protocol::{ApiErrorCode, PushInfo, PushPayload, PushSubscribe};
+use vesper_protocol::{ApiErrorCode, PushInfo, PushPayload, PushPayloadKind, PushSubscribe};
 use vesper_store::{NewPushSub, StoreError, TOO_MANY_DEVICES, now_ms};
 
 use crate::api_accounts::{body, limit};
@@ -116,10 +116,11 @@ async fn test(State(st): State<AppState>, a: Authed) -> Result<StatusCode, ApiEr
             )
         })?;
     let payload = PushPayload {
-        kind: "test".into(),
+        kind: PushPayloadKind::Test,
         room_id: 0,
         title: "Vesper".into(),
         body: "Notifications reach this device.".into(),
+        icon: None,
     };
     let body = serde_json::to_vec(&payload).expect("payload serialises");
     match st.push.send(&t, &body, 60, "high", "test").await {

@@ -119,7 +119,7 @@ try {
   await toggle.check();
   await b.getByText(/^On for this device/).waitFor();
   // Both kinds start off; bob turns them on.
-  for (const name of ['Mentions', 'Someone starts voice']) {
+  for (const name of ['Mentions and direct messages', 'Someone starts voice']) {
     const s = b.getByRole('switch', { name, exact: true });
     assert.equal(await s.isChecked(), false, `${name} starts off`);
     await s.check();
@@ -172,13 +172,13 @@ try {
   push = await nextPush('the mention');
   checkVapid(push.headers, info.public_key);
   for (const clear of ['secret', 'alice', 'general']) assert.ok(!push.body.includes(clear), `${clear} in the clear`);
-  assert.deepEqual(decrypt(push.body), { kind: 'mention', room_id: general, title: 'Vesper', body: 'alice mentioned you in general' });
+  assert.deepEqual(decrypt(push.body), { kind: 'mention', room_id: general, title: 'Vesper', body: 'alice mentioned you in general', icon: null });
   console.log('mention push: no message text: ok');
 
   await a.getByRole('button', { name: 'Join' }).click();
   await a.getByRole('button', { name: 'Leave' }).waitFor();
   push = await nextPush('voice');
-  assert.deepEqual(decrypt(push.body), { kind: 'voice', room_id: general, title: 'Vesper', body: 'alice started voice in general' });
+  assert.deepEqual(decrypt(push.body), { kind: 'voice', room_id: general, title: 'Vesper', body: 'alice started voice in general', icon: null });
   assert.equal(push.headers.ttl, '600');
   console.log('voice started push: ok');
 

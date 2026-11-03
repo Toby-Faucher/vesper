@@ -201,3 +201,21 @@ async fn racing_archives_leave_one_room_open() {
         );
     }
 }
+
+#[tokio::test]
+async fn dm_with_says_whether_it_made_the_room() {
+    let (_tmp, s) = open().await;
+    let (a, b) = (user(&s, "alice").await, user(&s, "bob").await);
+    let (first, made) = s.dm_with(&a, &b, 5).await.unwrap();
+    assert!(made);
+    // Either way round finds the same room and makes nothing.
+    for (x, y) in [(&a, &b), (&b, &a)] {
+        let (again, made) = s.dm_with(x, y, 6).await.unwrap();
+        assert!(!made);
+        assert_eq!(again.id, first.id);
+    }
+    assert!(matches!(
+        s.dm_with(&a, &a, 7).await,
+        Err(StoreError::Conflict(_))
+    ));
+}
