@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import tokens from '../../styles/tokens.css?raw';
 import app from '../../app.css?raw';
 import { contrast as ratio } from './accent';
+import aurora from '../../styles/aurora.css?raw';
+import bbs from '../../styles/bbs.css?raw';
+import cozy from '../../styles/cozy.css?raw';
 import persona from '../../styles/persona.css?raw';
 import { block } from './cssvars';
 
@@ -11,7 +14,11 @@ const LOOKS: Record<string, Map<string, string>> = {
   'vesper dark': base,
   'vesper light': new Map([...base, ...block(tokens, "html[data-scheme='light']")]),
   persona: new Map([...base, ...block(persona, "html[data-style='persona']")]),
+  bbs: new Map([...base, ...block(bbs, "html[data-style='bbs']")]),
+  aurora: new Map([...base, ...block(aurora, "html[data-style='aurora']")]),
 };
+// Cozy is light only: it sits on the light block, which index.html and scheme.ts always set for it.
+LOOKS.cozy = new Map([...LOOKS['vesper light'], ...block(cozy, "html[data-style='cozy']")]);
 
 function resolve(vars: Map<string, string>, name: string, seen = 0): string {
   const v = vars.get(name);

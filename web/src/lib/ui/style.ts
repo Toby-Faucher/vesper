@@ -6,6 +6,9 @@ export type StyleDef = { id: string; name: string; blurb: string; scheme: 'both'
 export const STYLES = [
   { id: 'vesper', name: 'Vesper', blurb: 'The default look, dark or light.', scheme: 'both' },
   { id: 'persona', name: 'Persona', blurb: 'Red, black and white, with sharp cuts. Dark only.', scheme: 'dark', own: true, load: () => import('../../styles/persona.css') },
+  { id: 'cozy', name: 'Cozy', blurb: 'Warm cream paper and round shapes. Light only.', scheme: 'light', own: true, load: () => import('../../styles/cozy.css') },
+  { id: 'bbs', name: 'BBS', blurb: 'A dial-up board: monospace on black. Dark only.', scheme: 'dark', own: true, load: () => import('../../styles/bbs.css') },
+  { id: 'aurora', name: 'Aurora', blurb: 'A deep blue night sky with a mint accent. Dark only.', scheme: 'dark', own: true, load: () => import('../../styles/aurora.css') },
 ] as const satisfies readonly StyleDef[];
 export type StyleId = (typeof STYLES)[number]['id'];
 export const STYLE_KEY = 'vesper.style';

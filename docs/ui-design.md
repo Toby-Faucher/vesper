@@ -94,6 +94,16 @@ waits for the file (at most 2 s) before it mounts, so the page never shows a sty
 | --- | --- | --- | --- |
 | Vesper | both | no (amber) | The default look. |
 | Persona | dark | red | Red, black and white. Slanted buttons and chips, a red slash for the current room, Anton headings, a star cursor, tilted dialogs. |
+| Cozy | light | leaf green | Warm cream paper, wood-brown text, round shapes, the system rounded face. |
+| BBS | dark | yellow | A dial-up board: black, monospace, square corners, a blue selection bar. |
+| Aurora | dark | mint | A deep blue night sky, soft corners, a faint static glow behind the page. |
+
+**Why these three.** Brisk has about 48 styles, most of them novelty or built on its game-streaming layout. These were picked for
+reading long text and for variety: Cozy is the warm light one (dark brown on cream, 7 to 11:1), BBS is the monospace one (light grey
+on black, 12:1 and up, the one a person who lives in a terminal may want), Aurora is a dark with another mood (cool blue instead of
+warm grey, mint instead of amber). Each is a few lines of tokens and one or two shape rules (0.5 kB gzip each; Persona is 1.8), with no font
+file: Cozy and BBS use the system rounded and monospace faces, so their type changes with the OS. Brisk's frosted glass, moving
+light, scanlines and page transitions are not ported. Not picked: Blueprint and Aqua (low contrast text on a pattern or a gradient), Bonfire (too close to Vesper dark).
 
 **Style and scheme.** Each style says in `STYLES` (`style.ts`) what it does with the Color scheme choice: `both` (Vesper: the
 choice applies), `dark` or `light` (the style is that by nature). For a fixed style the choice is ignored: Settings greys the
@@ -122,7 +132,7 @@ Fonts are self-hosted in `web/src/styles/fonts/`, latin subset only, loaded with
    `light`, add the id to the map in `index.html`.
 3. Add the file to `LOOKS` in `tokens.test.ts`: every text pair needs 4.5:1 and every UI pair 3:1 in the style's own colours.
 4. Put motion inside `@media (prefers-reduced-motion: no-preference)`. Fonts are self-hosted (check the licence) or a system stack; never a CDN.
-5. Run `npm run size` and say what it did to the CSS budget. Update this section.
+5. Run `npm run size` and say what it did to the CSS budget. All CSS was 16.3 kB gzip of 20 before the styles and is 19.5 with the four, so the next style needs a justified, dated raise of that budget in `size-check.mjs`. Update this section.
 
 ## Tokens
 

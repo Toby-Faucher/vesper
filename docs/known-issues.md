@@ -107,6 +107,8 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **The connection test reports only the local candidate type.**
 - **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
 - **The light scheme was checked on screen on the component gallery only** (headless Chromium, `/_gallery?primitives`), not on the shell, a call, the call bar, toasts, images or markdown. Contrast is checked by numbers in `tokens.test.ts` and `accent.test.ts`. The scheme choice and the first-paint script were not tried in Firefox or Safari.
+- **Persona's slanted buttons lose the slant while focused**, so the focus ring is not cut by the clip. Its fonts are the latin subset: names with other scripts fall back to the system face. Cozy and BBS use system faces, so they look different per OS.
+- **The styles (Persona, Cozy, BBS, Aurora) were looked at on the component gallery and a mock sidebar with a dialog only** (headless Chromium, dev server, fake rooms), not on the real shell, messages, the call bar, search, settings pages or an image. Contrast is checked by numbers for each style (`tokens.test.ts`). Not verified: the Persona spring, tilt and hover motion (seen as still frames), Firefox and Safari (`clip-path`, `@starting-style`, `linear()`), how the lazy CSS and fonts load on a slow link (the page waits at most 2 s, then shows Vesper dark), and the accent colours other than the default under each style.
 
 ## Direct messages
 
