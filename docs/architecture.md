@@ -107,6 +107,14 @@ transaction. Messages, reactions, reads, uploads, search, typing and voice use t
   voice with you". Both carry `icon`, the sender's picture path; the service worker fetches it with the session cookie and falls back to the default icon.
 - **Web.** `AppState.dms` holds them apart from `rooms`, each renamed to the other person's display name (`titled` in `state.ts`), so every
   room name on screen shows the person. The sidebar has a "Direct messages" section; the person card has a "Message" button.
+- **Ring.** When someone joins voice in a DM and the other member is not in that call, `Voice::ring` sends `ring_start { room_id, user_id }`
+  (the caller) to the other member's open sockets only; a room never rings. One ring per call, kept in `Voice` by room. It ends with
+  `ring_stop { room_id }` when the caller leaves (or is removed), the other member joins from any tab, the other member sends
+  `decline_ring { room_id }` (only the called member's decline counts; the caller stays in the call), or after `ring_timeout`
+  (30 s, `Config::ring_timeout`, not an environment variable). It is not repeated: the caller leaving and joining again is a new call.
+  A person with no socket open gets only the push. The web app shows `RingPrompt.svelte` (picture and name, Accept joins the DM's
+  voice, Decline, Esc declines) and repeats a ring tone while it shows; the tone has its own switch in Settings > Notifications. A new
+  `hello` clears rings held by the client. Tests: the `ring_*` tests in `crates/vesper-server/tests/signaling.rs`, `web/src/lib/ring.test.ts`.
 - **Not private from the server's owner.** Plain storage. Whoever can read `vesper.db` or a backup can read DMs.
 
 ## Message flow
@@ -114,12 +122,12 @@ transaction. Messages, reactions, reads, uploads, search, typing and voice use t
 All messages are JSON on one WebSocket per tab, tagged by `type` (`vesper-protocol/src/lib.rs`).
 
 Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `leave`, `check { offer }`,
-`typing { room_id }`.
+`typing { room_id }`, `decline_ring { room_id }`.
 Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is the server's `version` and `build` id), `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
 `peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `rooms_changed { rooms }`, `user_updated { user }`,
 `user_created { user }`,
 `force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
-`read { room_id, last_read_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
+`read { room_id, last_read_id }`, `ring_start { room_id, user_id }`, `ring_stop { room_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
 Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `internal`.
 
 1. The client opens `/ws` with its session cookie. The upgrade gets 403 unless `Origin` equals `VESPER_ORIGIN`, 401 unless the

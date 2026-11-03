@@ -1,3 +1,4 @@
+import { RING_EVERY_MS } from '../ring.svelte';
 import { describe, expect, it } from 'vitest';
 import { callCue, type CallSnap, type Cue } from './cues';
 import { TONES, MAX_GAIN, toneMs } from './chime';
@@ -66,9 +67,14 @@ describe('callCue', () => {
 });
 
 describe('the tones', () => {
-  it.each(Object.entries(TONES))('%s is 60 to 250 ms', (_, t) => {
+  it.each(Object.entries(TONES).filter(([k]) => k !== 'ring'))('%s is 60 to 250 ms', (_, t) => {
     expect(toneMs(t)).toBeGreaterThanOrEqual(60);
     expect(toneMs(t)).toBeLessThanOrEqual(250);
+  });
+  // The ring repeats every 2.5 s while a prompt shows, so it is a short phrase of its own: under a second, with a gap left to repeat.
+  it('the ring is under 1 s and shorter than its repeat', () => {
+    expect(toneMs(TONES.ring)).toBeLessThanOrEqual(1000);
+    expect(toneMs(TONES.ring)).toBeLessThan(RING_EVERY_MS);
   });
   it('the default volume peaks below -18 dBFS', () => expect(20 * Math.log10(MAX_GAIN / 2)).toBeLessThan(-18));
 });

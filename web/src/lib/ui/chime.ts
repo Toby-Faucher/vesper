@@ -19,6 +19,7 @@ export const TONES: Record<Cue, Tone> = {
   undeafen: { hz: [659.25, 659.25], step: 0.06, wave: 'sine', gap: 0.03 }, // E5 twice
   connect: { hz: [587.33, 880], step: 0.11, wave: 'triangle' }, // D5 A5
   disconnect: { hz: [880, 587.33], step: 0.11, wave: 'triangle' },
+  ring: { hz: [659.25, 523.25, 659.25, 523.25], step: 0.16, wave: 'triangle', gap: 0.04 }, // E5 C5 twice, an incoming DM call
   lost: { hz: [220, 164.81], step: 0.12, wave: 'triangle' }, // A3 E3
 };
 /** Peak gain at volume 100; the default 50 gives 0.08 (about -22 dBFS). */

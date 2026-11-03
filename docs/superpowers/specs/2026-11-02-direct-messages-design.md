@@ -30,8 +30,7 @@ PC, and it had been sent to their phone. Posting it in a room would show it to e
 ## Non-goals (v1.5)
 
 - Private groups of 3 or more.
-- Ringing. Nobody gets a ring or an accept and decline prompt. The other person sees who is in the DM's voice
-  and gets a push (see Voice).
+- ~~Ringing.~~ Built in v1.6.0 (issue #149); see "Ring" under "Built, and where it differs".
 - Video and screen share.
 - End-to-end encryption. See "What 'private' means" below.
 - Message requests, blocking, or per-person mute.
@@ -113,7 +112,7 @@ with `cargo test -p vesper-protocol`.
 - The existing "started voice" push already goes to people who can see the room, so in a DM it goes to the
   other person. In a DM the text reads "alice is in voice with you" and it uses the existing `voice` switch.
   The 10 minute dedupe applies.
-- No ring. The other person finds out by push, or by the speaking indicator in the sidebar if the app is open.
+- Ring: see "Ring" under "Built, and where it differs". The push and the sidebar indicator stay.
 - If a call is up and the other person is banned, `Voice::refresh` removes them, as for any room.
 
 ### What "private" means
@@ -144,8 +143,8 @@ About two and a half days in total. Step 1 can ship alone behind no UI.
 
 ## Open questions for Toby
 
-1. Is a push and a sidebar indicator enough for voice, or do you want a ring (a sound and an accept prompt) in v1.5?
-   This design says no ring, because a ring is its own piece of work.
+1. ~~Is a push and a sidebar indicator enough for voice, or do you want a ring?~~ Answered by Toby on 2026-11-03: yes, ring
+   (issue #149). Built in v1.6.0.
 
 ## Not verified
 
@@ -171,4 +170,9 @@ Built in `6e03f31` and the commits after it on this branch. The differences, all
 - **The privacy line** is the tooltip of the "Direct message" label in the DM header, not an empty-state text.
 - **DMs are sorted by name** in the sidebar. The state has no activity time to sort on.
 - **Pins are hidden in the DM header.** The server does not refuse a pin; a moderator who is a member could still pin through the API.
-- **No ring**, as the design said. The question is still open.
+- **Ring** (v1.6.0, issue #149, Toby's request of 2026-11-03). The first join of a DM's voice sends `ring_start` to the other
+  member's open sockets; `ring_stop` follows when the caller leaves, the other member joins in any tab or sends `decline_ring`, or
+  after 30 s. A decline silences only the person who declined. One ring per call, not repeated. A room never rings. The web app
+  shows a prompt with Accept and Decline and a repeating tone, with its own switch in Settings > Notifications. All my calls:
+  the 30 s timeout, the tone, the prompt at the bottom right and not modal, Esc declines, and rings are not kept across a
+  reconnect. How it works is in `docs/architecture.md` (Direct messages). Server logic is tested; the prompt and the tone were not seen in a browser.

@@ -78,8 +78,12 @@
         </li>
       {/each}
     </ul>
+    <Switch label="Ring for direct message calls" help="A repeating tone while someone is calling you in a direct message. It has its own switch: it plays even with call sounds off. The prompt shows either way."
+      checked={prefs.ring} onchange={(e) => set({ ring: e.currentTarget.checked })} />
+    <span class="-ml-2 -mt-3"><Button variant="ghost" size="sm" aria-label="Play a sample: ring" disabled={!prefs.ring || !prefs.volume}
+      onclick={() => play(['ring'])}>Play a sample</Button></span>
     <Field label="Volume" value={String(prefs.volume)}>
-      <Range min={0} max={100} value={prefs.volume} disabled={!prefs.call} aria-valuetext="{prefs.volume} percent"
+      <Range min={0} max={100} value={prefs.volume} disabled={!prefs.call && !prefs.ring} aria-valuetext="{prefs.volume} percent"
         oninput={(e) => set({ volume: +e.currentTarget.value })} />
     </Field>
   </section>
