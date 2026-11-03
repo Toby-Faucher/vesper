@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 //! SQLite storage (ADR 0005). The only crate that imports sqlx. It sees token and code hashes,
 //! never the tokens or codes themselves.
 
@@ -26,37 +27,63 @@ pub use calls::{CALLS_KEPT, CALLS_TTL_MS};
 pub use messages::{Cursor, MAX_PINS, MAX_REACTIONS, NewMessage};
 pub use push::{MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget};
 pub use resets::RESET_TTL_MS;
-pub use search::{HITS as SEARCH_SQL, MAX_SEARCH, fts_query};
+#[doc(hidden)] // test seam: the search tests EXPLAIN this query
+pub use search::HITS as SEARCH_SQL;
+pub use search::{MAX_SEARCH, fts_query};
 pub use sessions::{NewSession, SESSION_TTL_MS};
 pub use uploads::UploadRow;
 
+/// Result of a store call.
 pub type Result<T> = std::result::Result<T, StoreError>;
 
 /// Which rule a change broke. `Display` is the text the user sees; callers match on the variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Conflict {
+    /// The last live room cannot be archived.
     LastRoom,
+    /// A room reorder must list every live room exactly once.
     OrderIncomplete,
+    /// A direct message needs two different people.
     DmSelf,
+    /// A reply must point at a message in the same room.
     ReplyOutsideRoom,
+    /// An attachment is missing, not the author's, in another room or already used.
     AttachmentUnavailable,
+    /// A message already has `MAX_REACTIONS` different reactions.
     TooManyReactions,
+    /// A room already has `MAX_PINS` pins.
     PinCap,
+    /// A room with that name exists.
     NameTaken,
+    /// The account already has `MAX_PUSH_DEVICES` push devices.
     TooManyDevices,
+    /// The push endpoint belongs to another session.
     EndpointTaken,
+    /// An invite with that code hash exists.
     InviteExists,
+    /// A reset link with that code hash exists.
     ResetCodeExists,
+    /// The account is already a member of the room.
     DuplicateMember,
+    /// The account does not exist.
     NoSuchAccount,
+    /// The same account is mentioned twice in one message.
     DuplicateMention,
+    /// A message with that id exists.
     MessageExists,
+    /// The message was deleted and cannot be changed.
     MessageDeleted,
+    /// The account already added that reaction.
     DuplicateReaction,
+    /// Storing the pin broke a database constraint.
     PinFailed,
+    /// Storing the read marker broke a database constraint.
     ReadMarker,
+    /// A session with that token hash exists.
     TokenExists,
+    /// An upload with that id exists.
     UploadExists,
+    /// The username is taken.
     UsernameTaken,
 }
 
@@ -157,6 +184,7 @@ fn create_private(dir: &Path, db: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Handle to the database. Cheap to clone; clones share one connection pool.
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,

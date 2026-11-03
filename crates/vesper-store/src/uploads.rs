@@ -6,14 +6,23 @@ use sqlx::FromRow;
 use crate::{Conflict, Result, Store, StoreError, constraint};
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+/// A stored upload.
 pub struct UploadRow {
+    /// Upload id.
     pub id: String,
+    /// Room the file was uploaded to.
     pub room_id: i64,
+    /// Account id of the uploader.
     pub uploader_id: String,
+    /// The message it is attached to, None until attached.
     pub message_id: Option<i64>,
+    /// Original file name.
     pub name: String,
+    /// Content type.
     pub mime: String,
+    /// Size in bytes.
     pub size: i64,
+    /// Upload time in milliseconds since the epoch.
     pub created_at: i64,
 }
 
@@ -38,6 +47,7 @@ impl Store {
         Ok(())
     }
 
+    /// One upload by id, or `NotFound`.
     pub async fn upload(&self, id: &str) -> Result<UploadRow> {
         sqlx::query_as("SELECT * FROM uploads WHERE id = ?1")
             .bind(id)

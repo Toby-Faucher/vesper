@@ -9,9 +9,13 @@ pub const SESSION_TTL_MS: i64 = 90 * 24 * 3600 * 1000;
 /// `last_seen_at` is written at most this often.
 const TOUCH_MS: i64 = 3600 * 1000;
 
+/// Fields of a session to store.
 pub struct NewSession<'a> {
+    /// SHA-256 of the session token. The token itself never reaches the store.
     pub token_hash: [u8; 32],
+    /// Device label shown in the session list.
     pub label: &'a str,
+    /// Creation time in milliseconds since the epoch.
     pub now: i64,
 }
 
@@ -42,6 +46,7 @@ struct SessionUser {
 }
 
 impl Store {
+    /// Stores a session for the account and returns its id. `NotFound` for an unknown account.
     pub async fn create_session(&self, user_id: &str, s: NewSession<'_>) -> Result<i64> {
         insert_session(&mut *self.pool.acquire().await?, user_id, &s).await
     }

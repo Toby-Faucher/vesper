@@ -12,29 +12,47 @@ pub const MAX_PUSH_DEVICES: i64 = 5;
 /// Which switch a push needs. The test push goes to one session whatever its switches say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushKind {
+    /// The "mentions" switch.
     Mentions,
+    /// The "voice" switch.
     Voice,
 }
 
+/// Fields of a push subscription to store.
 pub struct NewPushSub<'a> {
+    /// Owner account id.
     pub account_id: &'a str,
+    /// Session the subscription belongs to.
     pub session_id: i64,
+    /// Push service URL.
     pub endpoint: &'a str,
+    /// Client public key.
     pub p256dh: &'a [u8],
+    /// Client auth secret.
     pub auth: &'a [u8],
+    /// Send pushes for mentions.
     pub mentions: bool,
+    /// Send pushes for voice calls.
     pub voice: bool,
+    /// Short device label for the settings list.
     pub user_agent_hint: &'a str,
+    /// Time in milliseconds since the epoch.
     pub now: i64,
 }
 
 /// Where to send one push. The endpoint and keys never leave the server except to the endpoint.
 #[derive(Clone, PartialEq, Eq, FromRow)]
+/// A stored push subscription ready to send to.
 pub struct PushTarget {
+    /// Row id.
     pub id: i64,
+    /// Owner account id.
     pub account_id: String,
+    /// Push service URL.
     pub endpoint: String,
+    /// Client public key.
     pub p256dh: Vec<u8>,
+    /// Client auth secret.
     pub auth: Vec<u8>,
 }
 
@@ -227,6 +245,7 @@ impl Store {
         Ok(())
     }
 
+    /// Records a successful delivery to subscription `id` at `now`.
     pub async fn push_delivered(&self, id: i64, now: i64) -> Result<()> {
         sqlx::query("UPDATE push_subscriptions SET last_ok_at = ?2 WHERE id = ?1")
             .bind(id)

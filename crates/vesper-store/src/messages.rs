@@ -7,14 +7,19 @@ use crate::{Conflict, Result, Store, StoreError, constraint};
 
 /// Validated by the server (body rules, mentions resolved to user ids) before it gets here.
 pub struct NewMessage<'a> {
+    /// Room to post in.
     pub room_id: i64,
+    /// Account id of the author.
     pub author_id: &'a str,
+    /// Message text.
     pub body: &'a str,
+    /// Id of the message replied to, in the same room.
     pub reply_to: Option<i64>,
     /// User ids.
     pub mentions: &'a [String],
     /// Upload ids: each must be the author's, in the same room and not attached yet.
     pub attachments: &'a [String],
+    /// Creation time in milliseconds since the epoch.
     pub now: i64,
 }
 
@@ -22,13 +27,19 @@ pub struct NewMessage<'a> {
 /// others are posted meanwhile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cursor {
+    /// The newest messages.
     Latest,
+    /// Messages older than this id.
     Before(i64),
+    /// Messages newer than this id.
     After(i64),
+    /// This message and its neighbours on both sides.
     Around(i64),
 }
 
+/// Most different reactions one message can hold.
 pub const MAX_REACTIONS: i64 = 20;
+/// Most pinned messages one room can hold.
 pub const MAX_PINS: i64 = 50;
 
 macro_rules! msg_select {
@@ -468,6 +479,7 @@ impl Store {
         Ok(msg)
     }
 
+    /// One message by id, or `NotFound`.
     pub async fn message(&self, id: i64) -> Result<Message> {
         let mut c = self.pool.acquire().await?;
         by_id(&mut c, id).await

@@ -7,17 +7,25 @@ use crate::{
     Conflict, Result, Store, StoreError, constraint, now_ms, parse_role, random_hex, role_str,
 };
 
+/// Fields for a new account.
 pub struct NewAccount<'a> {
+    /// Login name. A taken name is `Conflict(UsernameTaken)`.
     pub username: &'a str,
+    /// Name shown to others.
     pub display_name: &'a str,
+    /// Argon2 PHC string, or None for an account that cannot log in with a password.
     pub password_phc: Option<&'a str>,
+    /// Role of the new account. `signup` ignores it and uses the invite's role.
     pub role: Role,
 }
 
 /// What login needs. Never leaves the server.
 pub struct LoginRow {
+    /// The account id: 32 lowercase hex characters.
     pub user_id: String,
+    /// The stored password hash, if the account has one.
     pub password_phc: Option<String>,
+    /// True when the account is banned and must not log in.
     pub banned: bool,
 }
 
@@ -94,6 +102,7 @@ pub(crate) async fn user_by_id(c: &mut SqliteConnection, id: &str) -> Result<Use
 }
 
 impl Store {
+    /// Creates an account with no session. `Conflict(UsernameTaken)` when the name is taken.
     pub async fn create_account(&self, a: NewAccount<'_>) -> Result<UserInfo> {
         let mut c = self.pool.acquire().await?;
         let id = insert_account(&mut c, &a, a.role).await?;
@@ -132,6 +141,7 @@ impl Store {
         Ok((user, sid))
     }
 
+    /// The login data for `username`, or None when no such account exists.
     pub async fn login_row(&self, username: &str) -> Result<Option<LoginRow>> {
         let row: Option<(String, Option<String>, Option<i64>)> =
             sqlx::query_as("SELECT id, password_phc, banned_at FROM accounts WHERE username = ?1")
@@ -145,10 +155,12 @@ impl Store {
         }))
     }
 
+    /// One account by id, or `NotFound`.
     pub async fn user(&self, id: &str) -> Result<UserInfo> {
         user_by_id(&mut *self.pool.acquire().await?, id).await
     }
 
+    /// Every account.
     pub async fn users(&self) -> Result<Vec<UserInfo>> {
         sqlx::query_as::<_, AccountRow>(concat!(
             "SELECT ",
@@ -162,6 +174,7 @@ impl Store {
         .collect()
     }
 
+    /// Sets the profile fields that are `Some` and leaves the rest. `NotFound` for an unknown id.
     pub async fn update_profile(
         &self,
         id: &str,
@@ -322,6 +335,7 @@ impl Store {
         .ok_or(StoreError::NotFound)
     }
 
+    /// True when an owner account exists.
     pub async fn owner_exists(&self) -> Result<bool> {
         owner_exists(&mut *self.pool.acquire().await?).await
     }

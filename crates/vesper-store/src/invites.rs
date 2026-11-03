@@ -35,6 +35,7 @@ impl InviteRow {
 }
 
 impl Store {
+    /// Stores an invite by the hash of its code. `Conflict(InviteExists)` when the hash is taken.
     pub async fn create_invite(
         &self,
         code_hash: &[u8; 32],
