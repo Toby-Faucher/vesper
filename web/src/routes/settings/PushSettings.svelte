@@ -39,10 +39,10 @@
     }
   }
 
-  async function kinds(change: Partial<Pick<PushDevice, 'mentions' | 'voice'>>) {
+  async function kinds(change: Partial<Pick<PushDevice, 'mentions' | 'voice' | 'dms'>>) {
     if (!view?.mine) return;
     try {
-      await setKinds({ mentions: view.mine.mentions, voice: view.mine.voice, ...change });
+      await setKinds({ mentions: view.mine.mentions, voice: view.mine.voice, dms: view.mine.dms, ...change });
     } catch (err) {
       error = errorText(err);
     }
@@ -88,7 +88,8 @@
   </div>
   {#if on && view?.mine}
     <ul class="kinds flex flex-col gap-3">
-      <li><Switch label="Mentions and direct messages" checked={view.mine.mentions} onchange={(e) => kinds({ mentions: e.currentTarget.checked })} /></li>
+      <li><Switch label="Mentions" checked={view.mine.mentions} onchange={(e) => kinds({ mentions: e.currentTarget.checked })} /></li>
+      <li><Switch label="Direct messages" checked={view.mine.dms} onchange={(e) => kinds({ dms: e.currentTarget.checked })} /></li>
       <li><Switch label="Someone starts voice" help="At most once every 10 minutes per room." checked={view.mine.voice}
         onchange={(e) => kinds({ voice: e.currentTarget.checked })} /></li>
     </ul>

@@ -13,6 +13,7 @@
   let prefs = $state(loadPrefs());
   let perm = $state(permission());
   const on = $derived(prefs.mentions && perm === 'granted');
+  const dmsOn = $derived(prefs.dms && perm === 'granted');
   const STATE: Record<typeof perm, string> = {
     granted: 'Allowed',
     denied: 'Blocked by your browser. Allow notifications for this site in the address bar, then turn this on again.',
@@ -26,12 +27,12 @@
     { key: 'sounds', label: 'Others joining and leaving', help: 'When someone joins or leaves your call.', cues: ['join', 'leave'] },
   ];
 
-  async function setMentions(e: Event & { currentTarget: HTMLInputElement }) {
+  async function setKind(key: 'mentions' | 'dms', e: Event & { currentTarget: HTMLInputElement }) {
     const box = e.currentTarget;
-    if (box.checked) perm = await requestMentions(); // turns mentions on when allowed
-    else savePrefs({ ...loadPrefs(), mentions: false });
+    if (box.checked) perm = await requestMentions([key]); // turns it on when allowed
+    else savePrefs({ ...loadPrefs(), [key]: false });
     prefs = loadPrefs();
-    box.checked = on; // a refusal leaves the switch off
+    box.checked = key === 'mentions' ? on : dmsOn; // a refusal leaves the switch off
   }
   function set(p: Partial<NotifyPrefs>) {
     savePrefs({ ...loadPrefs(), ...p });
@@ -53,9 +54,11 @@
   <section role="group" aria-labelledby="notify-mentions">
     <div class="flex h-8 items-center"><h3 id="notify-mentions" class="text-base font-medium text-fg">Mentions and direct messages</h3></div>
     <div>
-      <Switch label="Notify me when someone mentions me or sends me a direct message" checked={on} disabled={perm === 'unsupported'}
-        aria-describedby="mention-state" onchange={setMentions} />
+      <Switch label="Notify me when someone mentions me" checked={on} disabled={perm === 'unsupported'}
+        aria-describedby="mention-state" onchange={(e) => setKind('mentions', e)} />
       <p id="mention-state" role="status" class="-mt-1 pr-11 text-xs text-fg-2">{STATE[perm]}</p>
+      <Switch label="Notify me when someone sends me a direct message" checked={dmsOn} disabled={perm === 'unsupported'}
+        onchange={(e) => setKind('dms', e)} />
       {#if perm === 'granted'}
         <div class="mt-2"><Button size="sm" onclick={testNotification}>Send a test notification</Button></div>
       {/if}

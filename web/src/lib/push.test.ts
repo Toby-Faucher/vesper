@@ -34,7 +34,7 @@ describe('keys', () => {
   });
   it('sends the subscription and the switches', () => {
     const sub = { toJSON: () => ({ endpoint: 'https://e', keys: { p256dh: 'p', auth: 'a' } }) } as unknown as PushSubscription;
-    expect(subscribeBody(sub, { mentions: true, voice: false })).toEqual({ endpoint: 'https://e', p256dh: 'p', auth: 'a', mentions: true, voice: false });
+    expect(subscribeBody(sub, { mentions: true, voice: false, dms: true })).toEqual({ endpoint: 'https://e', p256dh: 'p', auth: 'a', mentions: true, voice: false, dms: true });
   });
 });
 
@@ -81,7 +81,7 @@ describe('turnOn and turnOff', () => {
     expect(await turnOn('AQI')).toBe('granted');
     expect(calls).toEqual(['permission', 'register', 'get', 'subscribe', 'PUT /api/push/subscription']);
     // Both kinds start off until the person turns them on.
-    expect(JSON.parse(bodies.at(-1) as string)).toMatchObject({ mentions: false, voice: false });
+    expect(JSON.parse(bodies.at(-1) as string)).toMatchObject({ mentions: false, voice: false, dms: false });
   });
   it('drops a subscription made for another server key', async () => {
     stub('granted');
@@ -108,7 +108,7 @@ describe('loadPush', () => {
       userAgent: 'x', platform: 'Linux', maxTouchPoints: 0,
       serviceWorker: { getRegistration: async () => ({ pushManager: { getSubscription: async () => sub } }) },
     });
-    const device = { id: 1, label: 'Chrome on Linux', created_at: 0, last_ok_at: null, current: true, mentions: true, voice: false };
+    const device = { id: 1, label: 'Chrome on Linux', created_at: 0, last_ok_at: null, current: true, mentions: true, voice: false, dms: true };
     const serve = (key: string) => vi.stubGlobal('fetch', async () => Response.json({ public_key: key, devices: [device] }));
     serve('AQI');
     expect((await loadPush()).state).toBe('on');

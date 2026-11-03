@@ -2,7 +2,7 @@
 
 /**
  * `PUT /api/push/subscription`: this browser's push subscription (from
- * `PushSubscription.toJSON()`) and its two switches. Replaces this session's earlier one.
+ * `PushSubscription.toJSON()`) and its three switches. Replaces this session's earlier one.
  */
 export type PushSubscribe = { endpoint: string, 
 /**
@@ -12,4 +12,8 @@ p256dh: string,
 /**
  * base64url of the 16-byte auth secret.
  */
-auth: string, mentions: boolean, voice: boolean, };
+auth: string, mentions: boolean, voice: boolean, 
+/**
+ * Absent from an older client: on, as it was before this switch existed.
+ */
+dms: boolean, };

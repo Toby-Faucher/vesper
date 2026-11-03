@@ -319,6 +319,37 @@ async fn no_push_with_a_socket_open_to_the_sender_when_hidden_or_switched_off() 
 }
 
 #[tokio::test]
+async fn dm_push_follows_the_dms_switch_not_the_mentions_one() {
+    let server = TestServer::new().await;
+    let mut fake = Fake::start().await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let general = room(&server, &alice, "general").await;
+    // bob has mentions on and direct messages off.
+    let endpoint = format!("http://127.0.0.1:{}/push/bob", fake.port);
+    let mut sub = Browser::new().subscription(&endpoint, true, false);
+    sub["dms"] = json!(false);
+    let (st, v) = subscribe(&server, &bob, sub).await;
+    assert_eq!(st, StatusCode::NO_CONTENT, "{v}");
+    let (st, _, v) = server
+        .call(post(
+            "/api/dms",
+            json!({ "user_id": bob.user.user_id }),
+            &alice,
+        ))
+        .await;
+    assert!(st.is_success(), "{v}");
+    say(&server, &alice, v["id"].as_i64().unwrap(), "hello").await;
+    fake.quiet().await;
+    // The mentions switch still works.
+    say(&server, &alice, general.id, "@bob hi").await;
+    assert!(fake.next().await.head.starts_with("POST /push/bob "));
+    // The device list shows the switch.
+    let (_, _, v) = server.call(get("/api/push", &bob)).await;
+    assert_eq!(v["devices"][0]["dms"], json!(false));
+}
+
+#[tokio::test]
 async fn voice_started_goes_once_per_ten_minutes_to_who_can_see_the_room() {
     let server = TestServer::new().await;
     let mut fake = Fake::start().await;

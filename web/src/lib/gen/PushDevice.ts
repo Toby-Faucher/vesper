@@ -3,4 +3,4 @@
 /**
  * A browser that gets push for this account. `current` is the one the request came from.
  */
-export type PushDevice = { id: number, label: string, created_at: number, last_ok_at: number | null, current: boolean, mentions: boolean, voice: boolean, };
+export type PushDevice = { id: number, label: string, created_at: number, last_ok_at: number | null, current: boolean, mentions: boolean, voice: boolean, dms: boolean, };

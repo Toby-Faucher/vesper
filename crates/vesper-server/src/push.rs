@@ -527,7 +527,7 @@ impl Push {
     }
 
     /// `sender` wrote in the DM `room`. The other member gets one push per [`DM_EVERY`], and only
-    /// with no socket open. It uses the device's mentions switch, and carries no message text.
+    /// with no socket open. It uses the device's direct messages switch, and carries no message text.
     pub async fn direct_message(&self, room: &RoomInfo, sender: &UserInfo) {
         if self.public_key().is_none() {
             return;
@@ -551,7 +551,7 @@ impl Push {
         };
         self.fan_out(
             who,
-            PushKind::Mentions,
+            PushKind::Dms,
             payload,
             24 * 3600,
             "high",

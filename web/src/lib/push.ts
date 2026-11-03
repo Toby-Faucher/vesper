@@ -62,7 +62,7 @@ export function sameBytes(a: ArrayBuffer | null, b: Uint8Array): boolean {
 }
 
 /** The body for PUT /api/push/subscription. */
-export function subscribeBody(sub: PushSubscription, kinds: { mentions: boolean; voice: boolean }): PushSubscribe {
+export function subscribeBody(sub: PushSubscription, kinds: { mentions: boolean; voice: boolean; dms: boolean }): PushSubscribe {
   const { endpoint = '', keys = {} } = sub.toJSON();
   return { endpoint, p256dh: keys.p256dh ?? '', auth: keys.auth ?? '', ...kinds };
 }
@@ -90,9 +90,9 @@ export async function loadPush(): Promise<PushView> {
   return { state, devices: info.devices, mine, publicKey: info.public_key };
 }
 
-/** Only from a click: the permission prompt must come first, before any other await. Both kinds start off: the person
+/** Only from a click: the permission prompt must come first, before any other await. All kinds start off: the person
  * picks them (the ruling for #58). */
-export async function turnOn(publicKey: string, kinds = { mentions: false, voice: false }): Promise<NotificationPermission> {
+export async function turnOn(publicKey: string, kinds = { mentions: false, voice: false, dms: false }): Promise<NotificationPermission> {
   const p = await Notification.requestPermission();
   if (p !== 'granted') return p;
   await navigator.serviceWorker.register('/sw.js', { scope: '/' });
@@ -107,7 +107,7 @@ export async function turnOn(publicKey: string, kinds = { mentions: false, voice
 }
 
 /** This device's switches. */
-export async function setKinds(kinds: { mentions: boolean; voice: boolean }): Promise<void> {
+export async function setKinds(kinds: { mentions: boolean; voice: boolean; dms: boolean }): Promise<void> {
   const sub = await registration().then((r) => r?.pushManager.getSubscription() ?? null);
   if (sub) await api('PUT', '/api/push/subscription', subscribeBody(sub, kinds));
 }

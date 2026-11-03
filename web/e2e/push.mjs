@@ -119,14 +119,14 @@ try {
   await toggle.check();
   await b.getByText(/^On for this device/).waitFor();
   // Both kinds start off; bob turns them on.
-  for (const name of ['Mentions and direct messages', 'Someone starts voice']) {
+  for (const name of ['Mentions', 'Direct messages', 'Someone starts voice']) {
     const s = b.getByRole('switch', { name, exact: true });
     assert.equal(await s.isChecked(), false, `${name} starts off`);
     await s.check();
     await sleep(300);
   }
   const kinds = await b.evaluate(() => fetch('/api/push').then((r) => r.json()).then((i) => i.devices[0]));
-  assert.deepEqual([kinds.mentions, kinds.voice], [true, true], 'switches saved');
+  assert.deepEqual([kinds.mentions, kinds.dms, kinds.voice], [true, true, true], 'switches saved');
   assert.equal(await b.evaluate(() => navigator.serviceWorker.ready.then((r) => r.active?.scriptURL)), `${ORIGIN}/sw.js`);
   await b.getByRole('list', { name: 'Devices that get notifications' }).getByText('This device').waitFor();
   const info = await b.evaluate(() => fetch('/api/push').then((r) => r.json()));
