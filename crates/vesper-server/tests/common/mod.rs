@@ -82,6 +82,7 @@ impl TestServer {
             push,
             store,
             voice: Voice::new(sfu.clone(), hub.clone(), cfg.max_room_size),
+            passkeys: Arc::new(vesper_server::api_passkeys::Passkeys::new(&cfg.origin)),
             cfg: Arc::new(cfg),
             limits: Limiter::default(),
             hub,

@@ -21,7 +21,10 @@ async fn open() -> (TempDir, Store, String) {
 #[tokio::test]
 async fn add_list_rename_delete_and_caps() {
     let (_t, s, id) = open().await;
-    let pk = s.add_passkey(&id, b"cred-1", "{}", "Laptop", 10).await.unwrap();
+    let pk = s
+        .add_passkey(&id, b"cred-1", "{}", "Laptop", 10)
+        .await
+        .unwrap();
     assert!(matches!(
         s.add_passkey(&id, b"cred-1", "{}", "Again", 11).await,
         Err(StoreError::Conflict(Conflict::PasskeyExists))
@@ -34,9 +37,15 @@ async fn add_list_rename_delete_and_caps() {
     s.rename_passkey(&id, pk, "Phone").await.unwrap();
     s.passkey_used(pk, "{\"n\":2}", 20).await.unwrap();
     let list = s.passkeys(&id).await.unwrap();
-    assert_eq!((list[0].name.as_str(), list[0].last_used_at), ("Phone", Some(20)));
+    assert_eq!(
+        (list[0].name.as_str(), list[0].last_used_at),
+        ("Phone", Some(20))
+    );
     let found = s.passkey_by_credential(b"cred-1").await.unwrap().unwrap();
-    assert_eq!((found.account_id.as_str(), found.banned), (id.as_str(), false));
+    assert_eq!(
+        (found.account_id.as_str(), found.banned),
+        (id.as_str(), false)
+    );
     assert_eq!(found.credential, "{\"n\":2}");
 
     // Another account cannot touch it.

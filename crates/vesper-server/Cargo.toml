@@ -37,7 +37,7 @@ vesper-protocol.workspace = true
 vesper-sfu.workspace = true
 vesper-store.workspace = true
 webpki-roots = "1"
-webauthn-rs = { version = "0.6.2", features = ["resident-key-support"] }
+webauthn-rs = { version = "0.6.2", features = ["conditional-ui", "resident-key-support"] }
 
 [dev-dependencies]
 tempfile = "3"
