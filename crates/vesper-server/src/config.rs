@@ -18,6 +18,8 @@ pub struct Config {
     /// UDP port clients reach the SFU on through the router forward.
     pub udp_port_public: u16,
     pub max_room_size: usize,
+    /// How long a DM ring lasts when nobody answers.
+    pub ring_timeout: Duration,
     /// Server ping period; a socket silent for two periods is dropped.
     pub ping_interval: Duration,
     /// Concurrent WebSockets; upgrades beyond this get 503.
@@ -92,6 +94,7 @@ impl Config {
             public_host: get("VESPER_PUBLIC_HOST").filter(|h| !h.is_empty()),
             udp_port_public,
             max_room_size: 12,
+            ring_timeout: Duration::from_secs(30),
             ping_interval: Duration::from_secs(25),
             max_sockets: num("VESPER_MAX_SOCKETS", 256)? as usize,
             web_dir: get("VESPER_WEB_DIR")

@@ -1962,3 +1962,202 @@ async fn archive_ends_voice_in_the_room() {
         "{refused:?}"
     );
 }
+
+// DM ring: the other member's open sockets hear `RingStart` when someone joins a DM's voice.
+
+async fn dm_room(server: &TestServer, from: &Session, to: &Session) -> i64 {
+    let (status, _, v) = server
+        .call(post(
+            "/api/dms",
+            json!({ "user_id": to.user.user_id }),
+            from,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    v["id"].as_i64().unwrap()
+}
+
+fn is_ring(m: &ServerMsg) -> bool {
+    matches!(m, ServerMsg::RingStart { .. } | ServerMsg::RingStop { .. })
+}
+
+/// Everything `c` is sent until a hub-wide `ForceMuted`, which cannot overtake earlier messages.
+/// Call it after the server handled the join (see `settled`).
+async fn drain(server: &TestServer, c: &mut Conn) -> Vec<ServerMsg> {
+    server
+        .state
+        .hub
+        .broadcast(ServerMsg::ForceMuted { muted: false });
+    let mut seen = vec![];
+    loop {
+        match c.next().await {
+            ServerMsg::ForceMuted { .. } => return seen,
+            m => seen.push(m),
+        }
+    }
+}
+
+/// `caller` has joined and the server has finished the join (the ring is sent after `Joined`):
+/// a mute is handled in order after it, and `observer` (who can see the room) hears it.
+async fn settled(caller: &Conn, observer: &mut Conn, caller_id: &str) {
+    caller.mute(true);
+    observer.until_state(caller_id).await;
+}
+
+#[tokio::test]
+async fn ring_reaches_only_the_other_member() {
+    let server = TestServer::new().await;
+    let alice = server.member("alice").await;
+    let bob = server.member("bob").await;
+    let carol = server.member("carol").await;
+    let dm = dm_room(&server, &alice, &bob).await;
+    let mut b1 = Conn::open(&server, &bob).await;
+    let mut b2 = Conn::open(&server, &bob).await;
+    let mut c = Conn::open(&server, &carol).await;
+    let mut a_other = Conn::open(&server, &alice).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, dm).await;
+    for b in [&mut b1, &mut b2] {
+        let m = b.until("RingStart", is_ring).await;
+        assert_eq!(
+            m,
+            ServerMsg::RingStart {
+                room_id: dm,
+                user_id: a_id.clone()
+            }
+        );
+    }
+    settled(&a, &mut b1, &a_id).await;
+    for other in [&mut c, &mut a_other] {
+        let seen = drain(&server, other).await;
+        assert!(!seen.iter().any(is_ring), "{seen:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_room_does_not_ring() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.member("alice").await;
+    let bob = server.member("bob").await;
+    let mut b = Conn::open(&server, &bob).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    settled(&a, &mut b, &a_id).await;
+    let seen = drain(&server, &mut b).await;
+    assert!(!seen.iter().any(is_ring), "{seen:?}");
+}
+
+#[tokio::test]
+async fn no_ring_when_the_other_member_is_already_in_the_call() {
+    let server = TestServer::new().await;
+    let alice = server.member("alice").await;
+    let bob = server.member("bob").await;
+    let dm = dm_room(&server, &alice, &bob).await;
+    let mut a = Conn::open(&server, &alice).await;
+    let (b, _, _) = Conn::joined(&server, &bob, dm).await;
+    // Bob's call rang alice; alice joining stops it and does not ring bob back.
+    a.until("RingStart", is_ring).await;
+    a.join(dm);
+    a.until("Joined", |m| matches!(m, ServerMsg::Joined { .. }))
+        .await;
+    a.until("RingStop", is_ring).await;
+    let mut b = b;
+    let a_id = alice.user.user_id.clone();
+    settled(&a, &mut b, &a_id).await;
+    let seen = drain(&server, &mut b).await;
+    assert!(!seen.iter().any(is_ring), "bob was rung: {seen:?}");
+}
+
+#[tokio::test]
+async fn ring_stops_when_the_caller_leaves() {
+    let server = TestServer::new().await;
+    let alice = server.member("alice").await;
+    let bob = server.member("bob").await;
+    let dm = dm_room(&server, &alice, &bob).await;
+    let mut b = Conn::open(&server, &bob).await;
+    let (a, _, _) = Conn::joined(&server, &alice, dm).await;
+    b.until("RingStart", is_ring).await;
+    a.send(&ClientMsg::Leave);
+    let m = b.until("RingStop", is_ring).await;
+    assert_eq!(m, ServerMsg::RingStop { room_id: dm });
+}
+
+#[tokio::test]
+async fn ring_stops_when_the_other_member_joins_in_any_tab() {
+    let server = TestServer::new().await;
+    let alice = server.member("alice").await;
+    let bob = server.member("bob").await;
+    let dm = dm_room(&server, &alice, &bob).await;
+    let mut b1 = Conn::open(&server, &bob).await;
+    let (_a, _, _) = Conn::joined(&server, &alice, dm).await;
+    b1.until("RingStart", is_ring).await;
+    let b2 = Conn::open(&server, &bob).await;
+    let _b2 = b2.join_as(dm).await;
+    let m = b1.until("RingStop", is_ring).await;
+    assert_eq!(m, ServerMsg::RingStop { room_id: dm });
+}
+
+#[tokio::test]
+async fn decline_silences_the_ring_and_keeps_the_caller_in_the_call() {
+    let server = TestServer::new().await;
+    let alice = server.member("alice").await;
+    let bob = server.member("bob").await;
+    let dm = dm_room(&server, &alice, &bob).await;
+    let mut b = Conn::open(&server, &bob).await;
+    let (_a, a_id, _) = Conn::joined(&server, &alice, dm).await;
+    b.until("RingStart", is_ring).await;
+    b.send(&ClientMsg::DeclineRing { room_id: dm });
+    let m = b.until("RingStop", is_ring).await;
+    assert_eq!(m, ServerMsg::RingStop { room_id: dm });
+    assert!(
+        server
+            .state
+            .voice
+            .peers(|r| r == dm)
+            .iter()
+            .any(|p| p.user_id == a_id)
+    );
+}
+
+#[tokio::test]
+async fn only_the_called_member_can_decline() {
+    let server = TestServer::new().await;
+    let alice = server.member("alice").await;
+    let bob = server.member("bob").await;
+    let carol = server.member("carol").await;
+    let dm = dm_room(&server, &alice, &bob).await;
+    let mut b = Conn::open(&server, &bob).await;
+    let c = Conn::open(&server, &carol).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, dm).await;
+    b.until("RingStart", is_ring).await;
+    c.send(&ClientMsg::DeclineRing { room_id: dm });
+    a.send(&ClientMsg::DeclineRing { room_id: dm });
+    // The mute is handled after both declines; bob hears it before any stop.
+    a.mute(true);
+    let seen = b.until_state(&a_id).await;
+    assert!(!seen.iter().any(is_ring), "{seen:?}");
+    a.send(&ClientMsg::Leave);
+    b.until("RingStop", is_ring).await;
+}
+
+#[tokio::test]
+async fn ring_times_out() {
+    let server =
+        TestServer::with(|c| c.ring_timeout = Duration::from_millis(300), spawn_sfu()).await;
+    let alice = server.member("alice").await;
+    let bob = server.member("bob").await;
+    let dm = dm_room(&server, &alice, &bob).await;
+    let mut b = Conn::open(&server, &bob).await;
+    let (_a, a_id, _) = Conn::joined(&server, &alice, dm).await;
+    b.until("RingStart", is_ring).await;
+    let m = b.until("RingStop", is_ring).await;
+    assert_eq!(m, ServerMsg::RingStop { room_id: dm });
+    assert!(
+        server
+            .state
+            .voice
+            .peers(|r| r == dm)
+            .iter()
+            .any(|p| p.user_id == a_id),
+        "the caller stays"
+    );
+}

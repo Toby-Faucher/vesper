@@ -332,6 +332,10 @@ impl Calls {
                 typing(st, user_id, room_id, tx).await;
                 None
             }
+            (Ok(ClientMsg::DeclineRing { room_id }), _) => {
+                voice.decline_ring(user_id, room_id);
+                None
+            }
             (Ok(ClientMsg::Answer { sdp }), Some(j)) => {
                 voice.answer(&j.user_id, j.session, sdp);
                 None
@@ -399,6 +403,7 @@ async fn join(
         .join(&user, &room, offer, tx.clone())
         .await
         .map_err(|code| voice_error(st, code))?;
+    st.app.voice.ring(&room, user_id);
     if j.first {
         let push = st.app.push.clone();
         tokio::spawn(async move { push.voice_started(&room, &user).await });
