@@ -42,7 +42,7 @@ The "Not verified" list at the end says what was only read.
   typing come over the socket. A `message_updated` copy with a smaller `updated_at` than the one held is dropped, and after
   every `hello` the shown room's newest page is fetched again and merged, so missed or reordered events heal. A message pushed while that
   page is in flight (also on a room's first open) is held and kept. Re-entering a room left on an older slice after a search jump shows its newest page. Unread counts come from `Hello.unread` and live events (`state.ts`); a room is
-  marked read when its newest message is on screen in a visible tab. Typing is sent at most every 3 s and shown for 5 s. Drafts are kept in memory
+  marked read when its newest message is on screen in a visible tab. Typing is sent at most every 3 s and shown for 5 s. The shown line has two dots that pulse and, for one typer, their picture; both enter and leave with the `row` preset inside the fixed 16 px line, so the list never moves, and under reduced motion only the text stays. The text is the live region. Drafts are kept in memory
   only. Search is a dialog (`SearchDialog.svelte`, Ctrl/Cmd+Shift+F or the header's Search button) with `from:`, `in:`, `after:` and
   `before:` in the text (`lib/ui/searchq.ts`; dates are whole local days, both included; the box takes 200 characters and sends at most 12
   words). Ctrl/Cmd+Shift+F works while typing in the composer too. On macOS, Cmd+Shift+F may also be a browser's full screen key (not

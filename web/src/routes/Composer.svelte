@@ -81,6 +81,10 @@
   const listOpen = $derived(people.length > 0);
   const typingIds = $derived(typers(chat.state, roomId, now).filter((id) => id !== myId));
   const typing = $derived(typingLine(typingIds.map(name)));
+  // The picture only for one typer (always so in a DM); several people get the dots alone.
+  const typer = $derived(typingIds.length === 1 ? session.state.users[typingIds[0]] : undefined);
+  // Shown with the typing text only: not while the offline, error or too-long line holds the slot.
+  const showTyping = $derived(!!typing && !(!online || error || over > 0));
   const notice = $derived(!online ? UI_MESSAGES.composerOffline : error || (over > 0 ? UI_MESSAGES.tooLong(over) : ''));
 
   $effect(() => {
@@ -257,7 +261,7 @@
     <!-- Always rendered, so a new text is announced: the offline and too-long lines, else who is typing (that changes when
          someone starts or stops, not per key press). -->
     <p class="truncate" class:hidden={online && !!error} class:text-danger={over > 0} class:text-fg-2={!online && over <= 0}
-      class:text-fg-3={online && over <= 0} role="status" title={notice || undefined}>{online && error ? '' : notice || typing}</p>
+      class:text-fg-3={online && over <= 0} role="status" title={notice || undefined}>{#if showTyping}<span class="ind" aria-hidden="true" in:motion={'row'} out:motion={'row'}>{#if typer}<span class="av"><Avatar user={typer} size={20} /></span>{/if}<span class="dots"><i></i><i></i><i></i></span></span>{/if}{online && error ? '' : notice || typing}</p>
   </div>
 
   <span class="sr-only" role="status">{trayLine}</span>
@@ -345,6 +349,15 @@
 
 <style>
   .slot { position: relative; height: 16px; margin: 0 0 4px; font-size: 12px; line-height: 16px; } /* flush with the box edge */
+  /* The typing mark sits inside the fixed 16 px line, so the list never moves. The picture is the 20 px Avatar scaled to 16. */
+  .ind { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; vertical-align: top; height: 16px; }
+  .av { width: 16px; height: 16px; }
+  .av > :global(*) { transform: scale(0.8); transform-origin: 0 0; }
+  .dots { display: inline-flex; gap: 3px; }
+  .dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.35; animation: dot 1.2s var(--ease-out) infinite; }
+  .dots i:nth-child(2) { animation-delay: 0.15s; }
+  .dots i:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes dot { 0%, 60%, 100% { opacity: 0.35; } 30% { opacity: 1; } }
   .box {
     position: relative;
     border: 1px solid var(--line);
@@ -455,5 +468,6 @@
   .help code { padding: 0 4px; border-radius: var(--radius-sm); background: var(--bg-element); font-family: var(--font-mono); font-size: 12px; }
   @media (prefers-reduced-motion: reduce) {
     .box, .attach, .send { transition: none; }
+    .ind { display: none; } /* text only */
   }
 </style>
