@@ -206,9 +206,10 @@ impl Store {
         Ok(room)
     }
 
-    /// The DM between two different accounts, made if it does not exist. The pair is the same
-    /// whichever way round it is given. `NotFound` if either account does not exist.
-    pub async fn dm_with(&self, a: &str, b: &str, now: i64) -> Result<RoomInfo> {
+    /// The DM between two different accounts, made if it does not exist; the flag is true when
+    /// this call made it. The pair is the same whichever way round it is given. `NotFound` if
+    /// either account does not exist.
+    pub async fn dm_with(&self, a: &str, b: &str, now: i64) -> Result<(RoomInfo, bool)> {
         if a == b {
             return Err(StoreError::Conflict("a DM needs two different people"));
         }
@@ -221,6 +222,7 @@ impl Store {
                 .bind(&name)
                 .fetch_optional(&mut *tx)
                 .await?;
+        let created = found.is_none();
         let id = match found {
             Some(id) => id,
             None => {
@@ -246,6 +248,6 @@ impl Store {
         };
         let room = room_by_id(&mut tx, id).await?;
         tx.commit().await?;
-        Ok(room)
+        Ok((room, created))
     }
 }

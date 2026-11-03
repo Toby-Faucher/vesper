@@ -16,7 +16,7 @@ use common::{Session, TestServer, get, post, request};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
-use vesper_protocol::{PushPayload, Role, RoomInfo};
+use vesper_protocol::{PushPayload, PushPayloadKind, Role, RoomInfo};
 
 const SUBJECT: &str = "mailto:test@example.invalid";
 
@@ -245,7 +245,7 @@ async fn a_mention_reaches_the_push_service_signed_and_encrypted() {
         );
     }
     let p: PushPayload = serde_json::from_slice(&phone.decrypt(&got.body)).unwrap();
-    assert_eq!(p.kind, "mention");
+    assert_eq!(p.kind, PushPayloadKind::Mention);
     assert_eq!(p.room_id, general.id);
     assert_eq!(p.title, "Vesper");
     assert_eq!(p.body, "alice mentioned you in general");
@@ -346,8 +346,8 @@ async fn voice_started_goes_once_per_ten_minutes_to_who_can_see_the_room() {
     assert_eq!(header(&got.head, "ttl"), Some("600"));
     let p: PushPayload = serde_json::from_slice(&phone.decrypt(&got.body)).unwrap();
     assert_eq!(
-        (p.kind.as_str(), p.body.as_str()),
-        ("voice", "alice started voice in general")
+        (p.kind, p.body.as_str()),
+        (PushPayloadKind::Voice, "alice started voice in general")
     );
     fake.quiet().await;
     // Again within ten minutes: nothing.

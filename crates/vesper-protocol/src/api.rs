@@ -660,12 +660,23 @@ impl std::fmt::Debug for PushSubscribe {
     }
 }
 
-/// What the service worker gets, encrypted (RFC 8291): never a message body. `kind` is
-/// `mention`, `voice` or `test`; `room_id` is 0 for `test`.
+/// What a push is about. The service worker reads the snake_case name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PushPayloadKind {
+    Mention,
+    Dm,
+    Voice,
+    Test,
+}
+
+/// What the service worker gets, encrypted (RFC 8291): never a message body. `room_id` is 0
+/// for `test`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PushPayload {
-    pub kind: String,
+    pub kind: PushPayloadKind,
     #[ts(type = "number")]
     pub room_id: i64,
     pub title: String,

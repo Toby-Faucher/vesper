@@ -150,8 +150,11 @@ async fn open_dm(
     if st.store.user(&other).await?.banned {
         return Err(bad("that account is banned"));
     }
-    let room = st.store.dm_with(&a.user.user_id, &other, now_ms()).await?;
-    rooms_changed(&st).await;
+    let (room, created) = st.store.dm_with(&a.user.user_id, &other, now_ms()).await?;
+    // Opening a DM that exists changes nothing for anyone, so only a new one is announced.
+    if created {
+        rooms_changed(&st).await;
+    }
     Ok(Json(room))
 }
 

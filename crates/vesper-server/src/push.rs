@@ -26,7 +26,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
-use vesper_protocol::{PushPayload, RoomInfo, RoomKind, UserInfo};
+use vesper_protocol::{PushPayload, PushPayloadKind, RoomInfo, RoomKind, UserInfo};
 use vesper_store::{PushKind, PushTarget, Store, StoreError, now_ms};
 
 use crate::api_rooms::can_see;
@@ -342,6 +342,18 @@ impl VoiceDedupe {
     }
 }
 
+/// The Web Push `Topic`: a newer push with the same topic replaces one still waiting, so there is
+/// one per room and kind (a "started voice" never hides a mention).
+fn topic(kind: PushPayloadKind, room_id: i64) -> String {
+    let tag = match kind {
+        PushPayloadKind::Mention => 'm',
+        PushPayloadKind::Dm => 'd',
+        PushPayloadKind::Voice => 'v',
+        PushPayloadKind::Test => 't',
+    };
+    format!("{tag}{room_id}")
+}
+
 /// The path the service worker fetches for a person's picture; none while they have the letter avatar.
 fn avatar_icon(u: &UserInfo) -> Option<String> {
     let v = u.avatar.as_ref()?;
@@ -498,7 +510,7 @@ impl Push {
             |id| self.0.hub.online(id),
         );
         let payload = PushPayload {
-            kind: "mention".into(),
+            kind: PushPayloadKind::Mention,
             room_id: room.id,
             title: "Vesper".into(),
             body: format!("{} mentioned you in {}", sender.display_name, room.name),
@@ -510,7 +522,7 @@ impl Push {
             payload,
             24 * 3600,
             "high",
-            format!("m{}", room.id),
+            topic(PushPayloadKind::Mention, room.id),
         );
     }
 
@@ -531,7 +543,7 @@ impl Push {
             who.retain(|id| d.take_within(room.id, id, now, DM_EVERY));
         }
         let payload = PushPayload {
-            kind: "dm".into(),
+            kind: PushPayloadKind::Dm,
             room_id: room.id,
             title: "Vesper".into(),
             body: format!("{} sent you a message", sender.display_name),
@@ -543,7 +555,7 @@ impl Push {
             payload,
             24 * 3600,
             "high",
-            format!("d{}", room.id),
+            topic(PushPayloadKind::Dm, room.id),
         );
     }
 
@@ -568,7 +580,7 @@ impl Push {
             format!("{} started voice in {}", starter.display_name, room.name)
         };
         let payload = PushPayload {
-            kind: "voice".into(),
+            kind: PushPayloadKind::Voice,
             room_id: room.id,
             title: "Vesper".into(),
             body,
@@ -583,7 +595,7 @@ impl Push {
             payload,
             600,
             "normal",
-            format!("v{}", room.id),
+            topic(PushPayloadKind::Voice, room.id),
         );
     }
 
@@ -1080,6 +1092,24 @@ mod tests {
         assert!(d.take_within(1, "b", t, DM_EVERY));
         assert!(!d.take_within(1, "b", t + DM_EVERY - Duration::from_secs(1), DM_EVERY));
         assert!(d.take_within(1, "b", t + DM_EVERY, DM_EVERY));
+    }
+
+    #[test]
+    fn topics_differ_by_kind_and_room() {
+        let kinds = [
+            PushPayloadKind::Mention,
+            PushPayloadKind::Dm,
+            PushPayloadKind::Voice,
+            PushPayloadKind::Test,
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for k in kinds {
+            for room in [1, 2] {
+                assert!(seen.insert(topic(k, room)), "{k:?} {room}");
+            }
+        }
+        // The Web Push Topic is at most 32 URL-safe base64 characters.
+        assert!(topic(PushPayloadKind::Dm, i64::MAX).len() <= 32);
     }
 
     #[test]
