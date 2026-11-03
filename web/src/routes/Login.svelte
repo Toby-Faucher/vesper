@@ -23,18 +23,18 @@
   const next = () => navigate(safeNext(new URLSearchParams(location.search).get('next')) ?? '/', true);
   const dayOf = (ms: number) => new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 
-  async function submit(e: Event) {
-    e.preventDefault();
+  // Runs one way of signing in (password or passkey); `fail` turns its error into the text shown.
+  async function attempt(signIn: () => Promise<Me>, fail: (err: unknown) => string) {
     if (busy) return;
     busy = true;
     error = '';
     try {
-      session.state.me = await api<Me>('POST', '/api/login', { username, password });
+      session.state.me = await signIn();
       session.notice = '';
       notices = await api<ResetNotice[]>('POST', '/api/me/reset-notices').catch(() => []);
       if (!notices.length) next();
     } catch (err) {
-      error = err instanceof ApiFailure && err.status === 401 ? 'Wrong username or password.' : errorText(err);
+      error = fail(err);
     } finally {
       password = '';
       busy = false;
@@ -44,6 +44,14 @@
       (error ? errorEl : continueEl)?.focus();
     }
   }
+
+  const submit = (e: Event) => {
+    e.preventDefault();
+    return attempt(
+      () => api<Me>('POST', '/api/login', { username, password }),
+      (err) => (err instanceof ApiFailure && err.status === 401 ? 'Wrong username or password.' : errorText(err)),
+    );
+  };
 </script>
 
 <AuthCard>
@@ -66,6 +74,9 @@
     </Field>
     <Button variant="primary" type="submit" loading={busy}>Sign in</Button>
   </form>
+  {#if window.PublicKeyCredential}
+    {#await import('./PasskeyButton.svelte') then m}<m.default {busy} {attempt} />{/await}
+  {/if}
   {#if error}<p role="alert" class="mt-4 text-danger" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
   {/if}
   {#snippet below()}

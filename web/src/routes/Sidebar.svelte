@@ -3,6 +3,7 @@
   import type { Peer } from '../lib/gen/Peer';
   import { inRoom } from '../lib/peers';
   import { href } from '../lib/route';
+  import { sortDms } from '../lib/state';
   import { navigate, session } from '../lib/session.svelte';
   import { voice } from '../lib/voice.svelte';
   import { setCollapsed } from '../lib/ui/sidebar.svelte';
@@ -22,8 +23,7 @@
   let { current }: { current: number | null } = $props();
 
   const rooms = $derived([...session.state.rooms].sort((a, b) => a.position - b.position));
-  // By name: the list has no activity time to sort by.
-  const dms = $derived([...session.state.dms].sort((a, b) => a.name.localeCompare(b.name)));
+  const dms = $derived(sortDms(session.state.dms, session.state.unread, session.state.activity));
   const me = $derived(session.state.me?.user);
   const staff = $derived(me?.role === 'owner' || me?.role === 'moderator');
   // The server tells everyone else about your join, not you: your own row comes from the call itself.

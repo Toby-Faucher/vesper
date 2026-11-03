@@ -4,20 +4,29 @@
   import { EXAMPLE, PRESETS, SURFACE, applyAccent, check, contrast, fillOf, isHex, nearest } from '../../lib/ui/accent';
   import * as I from '../../lib/ui/icons';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
-  import { STYLES, STYLE_KEY, applyStyle, loadStyle, type StyleId } from '../../lib/ui/style';
+  import { CHOICES, SCHEME_KEY, applyScheme, loadScheme, type Choice } from '../../lib/ui/scheme';
+  import { STYLES, STYLE_KEY, loadStyle, useStyle, type StyleDef, type StyleId } from '../../lib/ui/style';
   import Button from '../../lib/ui/c/Button.svelte';
   import Field from '../../lib/ui/c/Field.svelte';
   import Icon from '../../lib/ui/c/Icon.svelte';
   import Status from '../../lib/ui/c/Status.svelte';
   import TextInput from '../../lib/ui/c/TextInput.svelte';
   import type { UserInfo } from '../../lib/gen/UserInfo';
-  // Settings > Appearance: the style (this browser, vesper.style) and the accent (the account, ui_accent on the server).
+  // Settings > Appearance: the style and the color scheme (this browser: vesper.style, vesper.scheme) and the accent (the account, ui_accent on the server).
   const store = (() => { try { return localStorage; } catch { return null; } })();
   let style = $state<StyleId>(loadStyle(store));
-  function pick(id: StyleId) {
+  let scheme = $state<Choice>(loadScheme(store));
+  const fixed = $derived((STYLES.find((s) => s.id === style) as StyleDef).scheme);
+  async function pick(id: StyleId) {
     style = id;
     try { store?.setItem(STYLE_KEY, id); } catch { /* storage blocked: applied for this visit only */ }
-    applyStyle(id);
+    await useStyle(id);
+    applyScheme(scheme); // the style may fix the scheme; this also repaints the accent
+  }
+  function pickScheme(c: Choice) {
+    scheme = c;
+    try { store?.setItem(SCHEME_KEY, c); } catch { /* storage blocked: applied for this visit only */ }
+    applyScheme(c);
   }
 
   // A preset key or #rrggbb. It paints at once (the preview), then saves; a failed save puts the saved one back.
@@ -48,15 +57,28 @@
 </script>
 
 <div class="flex flex-col gap-8">
-  <fieldset class="flex flex-col gap-2" aria-describedby="style-later">
-    <legend class="mb-2 text-base font-medium text-fg">Style</legend>
+  <fieldset class="flex flex-col gap-2" aria-describedby="style-help">
+    <legend class="mb-1 text-base font-medium text-fg">Style</legend>
+    <p id="style-help" class="mb-1 text-sm text-fg-2">On this device only.</p>
     {#each STYLES as s (s.id)}
-      <label class="option flex h-10 cursor-pointer items-center gap-3 rounded-md px-3 text-sm text-fg">
+      <label class="option flex min-h-10 cursor-pointer items-center gap-3 rounded-md px-3 py-1.5 text-sm text-fg">
         <input type="radio" name="style" value={s.id} checked={style === s.id} onchange={() => pick(s.id)} />
-        {s.name}
+        <span class="flex flex-col"><span>{s.name}</span><span class="text-xs text-fg-2">{s.blurb}</span></span>
       </label>
     {/each}
-    <p id="style-later" class="mt-1 text-sm text-fg-2">More styles will come later.</p>
+  </fieldset>
+
+  <fieldset class="flex flex-col gap-2" aria-describedby="scheme-help" disabled={fixed !== 'both'}>
+    <legend class="mb-1 text-base font-medium text-fg">Color scheme</legend>
+    <p id="scheme-help" class="mb-1 text-sm text-fg-2">
+      {fixed === 'both' ? 'On this device only. System follows your device setting.' : `This style is ${fixed} only, so the choice does not apply to it.`}
+    </p>
+    {#each CHOICES as c (c.id)}
+      <label class="option flex h-10 cursor-pointer items-center gap-3 rounded-md px-3 text-sm text-fg">
+        <input type="radio" name="scheme" value={c.id} checked={scheme === c.id} onchange={() => pickScheme(c.id)} />
+        {c.name}
+      </label>
+    {/each}
   </fieldset>
 
   <fieldset class="flex max-w-120 flex-col gap-3" aria-describedby="accent-help">
@@ -98,6 +120,7 @@
 
 <style>
   .option { max-width: 320px; border: 1px solid var(--line); }
+  fieldset:disabled .option { cursor: not-allowed; opacity: 0.6; }
   .option:hover { background: var(--bg-hover); }
   .option:has(:checked) { border-color: var(--line-strong); background: var(--bg-selected); }
   .option:has(:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }

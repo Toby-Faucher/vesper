@@ -1,0 +1,72 @@
+/* Style "Persona": red, black and white, sharp diagonal cuts. Dark only. Ported from the look of Brisk's Persona style onto
+   Vesper's own roles and components (no copied selectors). Lazy: loaded by src/lib/ui/style.ts only when this style is chosen.
+   Tokens first (the roles tokens.css defines; the ones not listed here stay Vesper dark), then a few shape and motion rules.
+   Message text stays Rubik regular in white on near-black: the display type is only for names, headings and buttons. */
+@font-face { font-family: 'Anton'; font-weight: 400; font-display: swap; src: url('./fonts/anton-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Rubik'; font-weight: 400; font-display: swap; src: url('./fonts/rubik-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Rubik'; font-weight: 700; font-display: swap; src: url('./fonts/rubik-latin-700-normal.woff2') format('woff2'); }
+
+html[data-style='persona'] {
+  color-scheme: dark;
+  --bg-app: #0b0b0b; --bg-sidebar: #000000; --bg-raised: #161616; --bg-element: #1d1d1d; --bg-hover: #2a2a2a; --bg-selected: #3d0810;
+  --line-subtle: #3a3a3a; --line: #5a5a5a; --line-strong: #a0a0a0;
+  --fg: #ffffff; --fg-2: #d4d4d4; --fg-3: #b8b8b8; --fg-disabled: #8a8a8a;
+  --accent: #e60012; --accent-hover: #b8000f; --on-accent: #ffffff;
+  --accent-fg: #ff6674; --accent-subtle: #3d0810; --accent-line: #8a0a16;
+  --focus: #ffffff;
+  --on-avatar: #000000;
+  --weight-strong: 700; --weight-ui: 400;
+  --font-sans: 'Rubik', ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
+  --font-display: 'Anton', Impact, 'Arial Narrow Bold', 'Franklin Gothic Medium', sans-serif;
+  --radius-sm: 0; --radius: 0; --radius-lg: 0;
+  --shadow-float: 6px 6px 0 var(--accent);
+  --spring: linear(0, 0.2 12%, 0.62 24%, 0.98 36%, 1.14 46%, 1.1 54%, 0.97 68%, 1.02 82%, 1);
+  /* a star as the pointer, white; red over buttons and links. The hot spot is the middle. */
+  --star: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 100 100'%3E%3Cpolygon points='50,2 60,36 97,33 68,56 80,92 50,71 19,93 31,57 3,36 40,35' fill='%23fff' stroke='%23000' stroke-width='7'/%3E%3C/svg%3E") 13 13, auto;
+  --star-hot: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='0 0 100 100'%3E%3Cpolygon points='50,2 60,36 97,33 68,56 80,92 50,71 19,93 31,57 3,36 40,35' fill='%23e60012' stroke='%23fff' stroke-width='7'/%3E%3C/svg%3E") 15 15, pointer;
+  scrollbar-color: var(--accent) var(--bg-app);
+}
+
+html[data-style='persona'] body { cursor: var(--star); }
+html[data-style='persona'] :is(a, button, [role='button'], [role='option'], [role='menuitem'], summary, label, select, input[type='checkbox'], input[type='radio']) { cursor: var(--star-hot); }
+html[data-style='persona'] :is(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']), textarea, [contenteditable]) { cursor: text; }
+html[data-style='persona'] ::selection { background: var(--accent); color: var(--on-accent); }
+/* A white ring with a red one outside it, so it shows on black and on red. */
+html[data-style='persona'] :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; box-shadow: 0 0 0 5px var(--accent); }
+
+/* Headings: Anton, italic, upper case. The small section labels become white tabs. */
+html[data-style='persona'] :is(h1, h3) { font-family: var(--font-display); font-weight: 400; font-style: italic; text-transform: uppercase; letter-spacing: 0.05em; }
+html[data-style='persona'] h1 { font-size: 22px; line-height: 28px; text-shadow: 2px 2px 0 var(--accent); }
+html[data-style='persona'] :is(h2, h3).text-xs { width: fit-content; margin: 6px 0 2px; padding: 0 10px; background: #ffffff; color: #000000; font-family: var(--font-sans); font-weight: 700; font-style: italic; letter-spacing: 0.1em; text-shadow: none; transform: skewX(-9deg); }
+
+/* The sidebar: black, with a slanted red edge. */
+html[data-style='persona'] aside { position: relative; z-index: 2; border-right: 0; }
+html[data-style='persona'] aside::after { content: ''; position: absolute; inset: 0 -8px 0 auto; width: 12px; background: var(--accent); clip-path: polygon(0 0, 5px 0, 12px 100%, 7px 100%); pointer-events: none; }
+/* The room you are in: a red slash with a cut end. The text on it is --on-accent. */
+html[data-style='persona'] .row { transition: translate 0.35s var(--spring), background-color var(--dur-1) var(--ease-out); }
+html[data-style='persona'] .row .name { font-family: var(--font-display); font-weight: 400; font-size: 15px; text-transform: uppercase; letter-spacing: 0.05em; }
+html[data-style='persona'] .row.current { position: relative; background: transparent; color: var(--on-accent); }
+html[data-style='persona'] .row.current::before { content: ''; position: absolute; inset: 0 -4px 0 -4px; z-index: -1; background: var(--accent); clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 6px 100%); }
+html[data-style='persona'] .row.current :is(.meta, .name) { color: var(--on-accent); }
+
+/* Buttons and chips: slanted parallelograms. The focus ring would be cut by the clip, so a focused one is square. */
+html[data-style='persona'] .btn { clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); border-color: transparent; font-style: italic; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+html[data-style='persona'] .btn.secondary { background: #ffffff; color: #000000; }
+html[data-style='persona'] .btn.secondary:hover:enabled { background: var(--accent-fg); color: #000000; }
+html[data-style='persona'] .btn:disabled, html[data-style='persona'] .btn[aria-disabled='true']:not([aria-busy]) { background: #2a2a2a; color: var(--fg-disabled); }
+html[data-style='persona'] .btn.ghost:disabled { background: none; }
+html[data-style='persona'] .btn:focus-visible { clip-path: none; }
+html[data-style='persona'] .badge { border-radius: 0; clip-path: polygon(4px 0, 100% 0, calc(100% - 4px) 100%, 0 100%); font-style: italic; font-weight: 700; }
+
+/* Dialogs and the call bar: a red edge and a hard shadow. */
+html[data-style='persona'] dialog { border: 0; border-left: 6px solid var(--accent); border-bottom: 3px solid #ffffff; }
+html[data-style='persona'] section.bar { border-left: 6px solid var(--accent); }
+
+/* Motion. Only for people who have not asked for less: a tilted spring on dialogs, a hop on hover. */
+@media (prefers-reduced-motion: no-preference) {
+  html[data-style='persona'] dialog[open] { rotate: 0deg; transition: rotate 0.5s var(--spring); }
+  @starting-style { html[data-style='persona'] dialog[open] { rotate: -7deg; } }
+  html[data-style='persona'] .row:hover:not(.current) { translate: 4px 0; }
+  html[data-style='persona'] .btn { transition: scale 0.35s var(--spring), background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out); }
+  html[data-style='persona'] .btn:hover:enabled { scale: 1.06; }
+}

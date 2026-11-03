@@ -2,6 +2,8 @@
 
 pub mod api;
 pub use api::*;
+pub mod passkeys;
+pub use passkeys::*;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -61,6 +63,11 @@ pub enum ClientMsg {
         offer: String,
     },
     Typing {
+        #[ts(type = "number")]
+        room_id: i64,
+    },
+    /// Silence the ring of a DM call for this user. The caller stays in the call.
+    DeclineRing {
         #[ts(type = "number")]
         room_id: i64,
     },
@@ -136,6 +143,18 @@ pub enum ServerMsg {
     Error {
         code: ErrorCode,
         message: String,
+    },
+    /// Someone started voice in a DM with this user. Sent to this user's open sockets only.
+    RingStart {
+        #[ts(type = "number")]
+        room_id: i64,
+        /// The caller's account id.
+        user_id: String,
+    },
+    /// The ring is over: the caller left, someone joined or declined, or it timed out.
+    RingStop {
+        #[ts(type = "number")]
+        room_id: i64,
     },
 }
 

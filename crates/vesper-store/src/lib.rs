@@ -15,6 +15,7 @@ mod accounts;
 mod calls;
 mod invites;
 mod messages;
+mod passkeys;
 mod push;
 mod resets;
 mod rooms;
@@ -25,6 +26,7 @@ mod uploads;
 pub use accounts::{LoginRow, NewAccount};
 pub use calls::{CALLS_KEPT, CALLS_TTL_MS};
 pub use messages::{Cursor, MAX_PINS, MAX_REACTIONS, NewMessage};
+pub use passkeys::{MAX_PASSKEYS, PasskeyAuth};
 pub use push::{MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget};
 pub use resets::RESET_TTL_MS;
 #[doc(hidden)] // test seam: the search tests EXPLAIN this query
@@ -85,6 +87,10 @@ pub enum Conflict {
     UploadExists,
     /// The username is taken.
     UsernameTaken,
+    /// The account already has `MAX_PASSKEYS` passkeys.
+    TooManyPasskeys,
+    /// That passkey is already registered.
+    PasskeyExists,
 }
 
 impl fmt::Display for Conflict {
@@ -113,6 +119,8 @@ impl fmt::Display for Conflict {
             Conflict::TokenExists => "token exists",
             Conflict::UploadExists => "upload exists",
             Conflict::UsernameTaken => "username taken",
+            Conflict::TooManyPasskeys => "too many passkeys",
+            Conflict::PasskeyExists => "that passkey is already registered",
         })
     }
 }

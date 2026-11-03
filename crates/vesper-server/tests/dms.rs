@@ -177,6 +177,48 @@ async fn no_room_edit_reaches_a_dm() {
 }
 
 #[tokio::test]
+async fn a_dm_message_cannot_be_pinned() {
+    let t = TestServer::new().await;
+    t.owner().await;
+    let alice = t.member("alice").await;
+    let m = moderator(&t, "mod1").await;
+    let id = dm(&t, &alice, &m).await;
+    let (_, _, msg) = t
+        .call(post(
+            &format!("/api/rooms/{id}/messages"),
+            json!({ "body": "hi" }),
+            &alice,
+        ))
+        .await;
+    let pin = format!("/api/messages/{}/pin", msg["id"]);
+    // A member, and a moderator who is a member, are refused.
+    for s in [&alice, &m] {
+        let on = Some(json!({ "on": true }));
+        assert_eq!(
+            status(&t, Method::PUT, &pin, on, s).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let (_, _, v) = t.call(get(&format!("/api/rooms/{id}/pins"), &alice)).await;
+    assert!(v.as_array().unwrap().is_empty(), "{v}");
+    // A normal room still pins.
+    let (_, _, rooms) = t.call(get("/api/rooms", &alice)).await;
+    let general = rooms[0]["id"].as_i64().unwrap();
+    let (_, _, msg) = t
+        .call(post(
+            &format!("/api/rooms/{general}/messages"),
+            json!({ "body": "hi" }),
+            &alice,
+        ))
+        .await;
+    let pin = format!("/api/messages/{}/pin", msg["id"]);
+    assert_eq!(
+        status(&t, Method::PUT, &pin, Some(json!({ "on": true })), &alice).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn a_dm_does_not_count_as_a_room_for_the_last_room_rule() {
     let t = TestServer::new().await;
     let o = t.owner().await;

@@ -42,3 +42,10 @@ edit for a lost password ([deploy.md](../deploy.md#password-recovery)). The code
 invite, and using it ends every session of the account. Making one needs the maker's own password and never works on yourself
 in the app. Every reset row is kept in the database; the owner's Members page lists the latest link and the resets used in
 the last 30 days.
+
+Update, v1.6: passkeys (WebAuthn, issue #151) are a second way to sign in, not a new kind of session. A passkey sign in ends in the
+same code as a password one: a random cookie token, only its SHA-256 stored, the same cookie flags, and the same drop of a presented
+cookie. The Origin check covers its routes like every other change, and WebAuthn checks the origin and rp id again inside the
+signed data. Sign in finds the account from the credential (no username), so the answer does not tell who has a passkey. Passwords
+stay, and are the recovery path. A banned account is refused at passkey sign in. A password reset does not remove passkeys
+(see [known issues](../known-issues.md)). Challenges are single use and held in memory for 5 minutes.

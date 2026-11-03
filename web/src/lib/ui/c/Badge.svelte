@@ -8,7 +8,7 @@
 </script>
 
 {#key text}<span in:motion|global={pop ? 'bump' : null}
-  class="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1.5 text-xs font-medium tabular-nums {kind === 'mention'
+  class="badge inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1.5 text-xs font-medium tabular-nums {kind === 'mention'
     ? 'bg-accent text-on-accent'
     : 'bg-selected text-fg-2'}"
   aria-hidden="true">{kind === 'mention' ? `@${text}` : text}</span

@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
-use vesper_protocol::{ErrorCode, Peer, RoomInfo, ServerMsg, UserInfo};
+use vesper_protocol::{ErrorCode, Peer, RoomInfo, RoomKind, ServerMsg, UserInfo};
 use vesper_sfu::{JoinError, SfuEvent, SfuHandle};
 use vesper_store::random_hex;
 
@@ -44,6 +44,8 @@ struct Inner {
     sfu: SfuHandle,
     hub: Hub,
     max_room_size: usize,
+    /// How long a DM ring lasts if nobody answers.
+    ring_timeout: Duration,
     next_session: AtomicU64,
     /// Serialises joins, so a rejoin finishes closing the old session before anyone else joins
     /// and the room-size check cannot race another join.
@@ -60,6 +62,15 @@ struct State {
     force_muted: HashSet<String>,
     /// SFU ids of the connection checks that run.
     checks: HashSet<String>,
+    /// The DM ring that is up, by room: one per call.
+    rings: HashMap<i64, Ring>,
+    next_ring: u64,
+}
+
+struct Ring {
+    id: u64,
+    caller: String,
+    callee: String,
 }
 
 struct Member {
@@ -116,11 +127,12 @@ fn sfu_error(who: &str, e: JoinError) -> ErrorCode {
 }
 
 impl Voice {
-    pub fn new(sfu: SfuHandle, hub: Hub, max_room_size: usize) -> Voice {
+    pub fn new(sfu: SfuHandle, hub: Hub, max_room_size: usize, ring_timeout: Duration) -> Voice {
         Voice(Arc::new(Inner {
             sfu,
             hub,
             max_room_size,
+            ring_timeout,
             next_session: AtomicU64::new(1),
             join_lock: tokio::sync::Mutex::new(()),
             state: Mutex::default(),
@@ -219,6 +231,9 @@ impl Voice {
             st.tell(&self.0.hub, room.id, joined, &[&tx]);
             first = !st.members.values().any(|m| m.room == room.id);
             st.members.insert(user_id.clone(), member);
+            if st.rings.get(&room.id).is_some_and(|r| r.callee == *user_id) {
+                self.stop_ring(&mut st, room.id);
+            }
         }
 
         tokio::spawn(self.clone().forward_events(
@@ -406,6 +421,9 @@ impl Voice {
         }
         let m = st.members.remove(user_id)?;
         self.0.sfu.leave(user_id);
+        if st.rings.get(&m.room).is_some_and(|r| r.caller == user_id) {
+            self.stop_ring(&mut st, m.room);
+        }
         let left = ServerMsg::PeerLeft {
             user_id: user_id.into(),
         };
@@ -413,6 +431,62 @@ impl Voice {
         st.tell(&self.0.hub, m.room, left.clone(), &skip);
         m.tx.send(left);
         Some(m)
+    }
+
+    /// Ring the other member of a DM after `caller` joined its voice. Nothing for a room, when the
+    /// other member is already in the call, or when a ring is already up. It ends when the caller
+    /// leaves, the other member joins or declines, or after the timeout.
+    pub fn ring(&self, room: &RoomInfo, caller: &str) {
+        if room.kind != RoomKind::Dm {
+            return;
+        }
+        let Some(callee) = room.members.iter().find(|m| *m != caller) else {
+            return;
+        };
+        let id = {
+            let mut st = self.lock();
+            let in_call = |u: &str| st.members.get(u).is_some_and(|m| m.room == room.id);
+            if !in_call(caller) || in_call(callee) || st.rings.contains_key(&room.id) {
+                return;
+            }
+            st.next_ring += 1;
+            let id = st.next_ring;
+            let ring = Ring {
+                id,
+                caller: caller.into(),
+                callee: callee.clone(),
+            };
+            st.rings.insert(room.id, ring);
+            let msg = ServerMsg::RingStart {
+                room_id: room.id,
+                user_id: caller.into(),
+            };
+            self.0.hub.send_user(callee, msg);
+            id
+        };
+        let (voice, room_id) = (self.clone(), room.id);
+        tokio::spawn(async move {
+            tokio::time::sleep(voice.0.ring_timeout).await;
+            let mut st = voice.lock();
+            if st.rings.get(&room_id).is_some_and(|r| r.id == id) {
+                voice.stop_ring(&mut st, room_id);
+            }
+        });
+    }
+
+    /// `user_id` declines the ring in `room`: it stops for them, the caller stays in the call.
+    pub fn decline_ring(&self, user_id: &str, room: i64) {
+        let mut st = self.lock();
+        if st.rings.get(&room).is_some_and(|r| r.callee == user_id) {
+            self.stop_ring(&mut st, room);
+        }
+    }
+
+    fn stop_ring(&self, st: &mut State, room: i64) {
+        if let Some(r) = st.rings.remove(&room) {
+            let msg = ServerMsg::RingStop { room_id: room };
+            self.0.hub.send_user(&r.callee, msg);
+        }
     }
 
     /// People in voice in `room`, not counting `user_id`, whose join would replace their own.
@@ -437,7 +511,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let voice = Voice::new(sfu, Hub::default(), 12);
+        let voice = Voice::new(sfu, Hub::default(), 12, Duration::from_secs(30));
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
         let (tx, mut rx) = crate::hub::outbox();
         let (closed_tx, closed_rx) = oneshot::channel();

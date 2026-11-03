@@ -39,7 +39,15 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Uploads are not scanned for viruses.** Images are served inline only after their magic bytes match, everything else is a
   download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
 - **Rooms cannot be deleted, only archived.** An archived room's messages and files stay in the database and count toward disk use. Its search index rows stay too.
-- **No passkeys yet.** Sign in is username and password only (plan Task 6, a stretch goal, not built).
+- **Passkeys are new and only tested with a software authenticator.** The server tests use a P-256 key made in the test, not a real
+  authenticator or browser, so a real phone, security key or password manager is not verified. Passkeys are sign in only: the password
+  stays and is the recovery path.
+- **Passkeys stay when a password is reset.** A reset ends every session but does not remove passkeys, so someone who holds a passkey
+  keeps being able to sign in. Remove it in Settings. A banned account cannot sign in with a passkey (it is refused at sign in), and
+  deleting the account row deletes its passkeys. At most 10 per account. Passkeys need a domain name in `VESPER_ORIGIN`
+  (an IP address host turns them off). Challenges are held in memory for 5 minutes, so a restart drops one in flight and the person
+  tries again. The login page asks for the passkey with the browser's own dialog; there is no autofill (conditional UI) sign in.
+  No attestation is checked (any authenticator is accepted).
 - **A moderator disconnect does not keep anyone out.** The sessions stay valid and the client may reconnect at once; a ban is the way to keep someone out.
 
 ## Server behaviour
@@ -98,12 +106,15 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
   means the load took at least 1 s. The reason is the last fallback or mic problem of the call, also when it recovered.
 - **The connection test reports only the local candidate type.**
 - **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
+- **The light scheme was checked on screen on the component gallery only** (headless Chromium, `/_gallery?primitives`), not on the shell, a call, the call bar, toasts, images or markdown. Contrast is checked by numbers in `tokens.test.ts` and `accent.test.ts`. The scheme choice and the first-paint script were not tried in Firefox or Safari.
+- **Persona's slanted buttons lose the slant while focused**, so the focus ring is not cut by the clip. Its fonts are the latin subset: names with other scripts fall back to the system face. Cozy and BBS use system faces, so they look different per OS.
+- **The styles (Persona, Cozy, BBS, Aurora) were looked at on the component gallery and a mock sidebar with a dialog only** (headless Chromium, dev server, fake rooms), not on the real shell, messages, the call bar, search, settings pages or an image. Contrast is checked by numbers for each style (`tokens.test.ts`). Not verified: the Persona spring, tilt and hover motion (seen as still frames), Firefox and Safari (`clip-path`, `@starting-style`, `linear()`), how the lazy CSS and fonts load on a slow link (the page waits at most 2 s, then shows Vesper dark), and the accent colours other than the default under each style.
 
 ## Direct messages
 
-- **No ring.** The other person finds out about a DM call by a push (only with no tab open), or by the speaking indicator in the sidebar.
-- **A tab that is open gets no push.** The in-page notification (when the tab is hidden and permission is granted) is the only alert then, and it needs the mentions switch.
-- **DMs are listed by name,** not by latest activity.
+- **The ring prompt and sound are not verified in a browser.** The server logic has integration tests; the prompt, the focus move and the tone were not seen or heard. A browser that has had no click or key on the page yet may keep the tone silent (autoplay policy); the prompt still shows.
+- **A ring is not repeated.** If the other person misses the 30 s, only the push (when no tab was open) and the sidebar indicator are left, until the caller leaves and joins again.
+- **A tab that is open gets no push.** The in-page notification (when the tab is hidden and permission is granted) is the only alert then, and it needs the mentions switch (or the direct messages switch, for a DM).
 - **Not end-to-end encrypted.** The server's owner can read the database.
 - **The sender's picture in a push is not verified in a browser.** The worker fetches it as a data URL; any failure shows the default icon.
 - **Not verified:** DMs and DM voice in a real browser. The server side is covered by `tests/dms.rs` and unit tests; the web side by unit tests and `svelte-check` only.

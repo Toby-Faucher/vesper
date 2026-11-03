@@ -128,17 +128,17 @@ scene('gallery', async ({ open, shot }) => {
 // Sign in: empty, a wrong password, the rate limit (faked), and the narrow window.
 scene('login', async ({ open, shot }) => {
   const page = await open(`${ORIGIN}/login`);
-  await page.getByRole('button', { name: 'Sign in' }).waitFor();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
   await rest(page);
   await shot(page, 'login');
   await page.getByLabel('Username').fill('alice');
   await page.getByLabel('Password', { exact: true }).fill('test-password-9');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByText('Wrong username or password.').waitFor();
   await shot(page, 'login-error'); // focus stays on the error, as a person sees it
   await page.route('**/api/login', (r) => r.fulfill({ status: 429, contentType: 'application/json', body: '{"code":"rate_limited"}' }));
   await page.getByLabel('Password', { exact: true }).fill('test-password-9');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.getByText('Too many tries. Wait a minute and try again.').waitFor();
   await shot(page, 'login-429');
   await page.setViewportSize({ width: 1024, height: 640 });
@@ -1163,7 +1163,7 @@ scene('settings', async (ctx) => {
   const second = await ctx.open(`${ORIGIN}/login`);
   await second.getByLabel('Username').fill('alice');
   await second.getByLabel('Password', { exact: true }).fill('test-password-1');
-  await second.getByRole('button', { name: 'Sign in' }).click();
+  await second.getByRole('button', { name: 'Sign in', exact: true }).click();
   await signedIn(second);
   await settingsPage(page, 'Account');
   await page.getByRole('list', { name: 'Signed-in devices' }).getByRole('listitem').nth(1).waitFor();
@@ -1233,7 +1233,7 @@ scene('accent', async (ctx) => {
     const out = await ctx.open(`${ORIGIN}/login`);
     await out.evaluate((k) => localStorage.setItem('vesper.accent', k), key);
     await out.reload();
-    await out.getByRole('button', { name: 'Sign in' }).waitFor();
+    await out.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
     await rest(out);
     await ctx.shot(out, `accent-login-${key}`, { fullPage: false });
   }
@@ -1372,7 +1372,7 @@ scene('admin-reset', async (ctx) => {
   await login.route('**/api/me/reset-notices', (r) => r.fulfill({ json: [{ by: 'alice', at: Date.now() - 3_600_000 }] }));
   await login.getByLabel('Username').fill('bob');
   await login.getByLabel('Password', { exact: true }).fill('test-password-1');
-  await login.getByRole('button', { name: 'Sign in' }).click();
+  await login.getByRole('button', { name: 'Sign in', exact: true }).click();
   await login.getByRole('button', { name: 'Continue' }).waitFor();
   await rest(login);
   await ctx.shot(login, 'login-reset-notice');

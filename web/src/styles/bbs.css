@@ -1,0 +1,18 @@
+/* Style "BBS": a dial-up board. Black, the old 16 colours, a monospace face, square corners, a blue selection bar. Dark only.
+   Palette and mood from Brisk's BBS style; the type is the system monospace, no font file. Lazy: loaded by src/lib/ui/style.ts
+   only when this style is chosen. Message text is the monospace face at the normal size, light grey on black. */
+html[data-style='bbs'] {
+  color-scheme: dark;
+  --bg-app: #000000; --bg-sidebar: #000000; --bg-raised: #08082e; --bg-element: #000000; --bg-hover: #14145a; --bg-selected: #0000aa;
+  --line-subtle: #22227a; --line: #3333aa; --line-strong: #5555ff;
+  --fg: #f2f2f2; --fg-2: #c4c4c4; --fg-3: #b0b0b0; --fg-disabled: #858585;
+  --accent: #ffff55; --accent-hover: #ffffaa; --on-accent: #000000;
+  --accent-fg: #55ffff; --accent-subtle: #00005f; --accent-line: #aaaa00; --focus: #ffff55;
+  --weight-strong: 700; --weight-ui: 400;
+  --font-sans: ui-monospace, 'IBM Plex Mono', 'DejaVu Sans Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  --radius-sm: 0; --radius: 0; --radius-lg: 0;
+  --shadow-float: 6px 6px 0 #00005f;
+  scrollbar-color: var(--line-strong) #000000;
+}
+html[data-style='bbs'] :is(h2, h3).text-xs { text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent-fg); }
+html[data-style='bbs'] .btn.secondary { border-color: var(--line-strong); }

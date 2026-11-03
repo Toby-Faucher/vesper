@@ -1,0 +1,19 @@
+/* Style "Cozy": warm cream paper, wood-brown text, a leaf-green accent, round shapes. Light only (it sits on html[data-scheme='light'],
+   so the Vesper light roles apply wherever this file says nothing). Palette and mood from Brisk's Cozy style; the type is the
+   system rounded face, no font file. Lazy: loaded by src/lib/ui/style.ts only when this style is chosen. */
+html[data-style='cozy'] {
+  --gray-1: #f6ecd3; --gray-2: #efe2c2; --gray-3: #fff8e6; --gray-4: #ecdcb8;
+  --gray-5: #e3cf9f; --gray-6: #dcc690; --gray-7: #d4b583; --gray-8: #b08a5c;
+  --gray-9: #8c6f55; --gray-10: #745641; --gray-11: #573c2b; --gray-12: #3d2a1d;
+  --bg-element: #fffdf5;
+  --accent: #2f7f6e; --accent-hover: #256a5c; --on-accent: #ffffff;
+  --accent-fg: #226656; --accent-subtle: #d3e8d6; --accent-line: #8cbfae; --focus: #2f7f6e;
+  --danger-fg: #a82d39; --danger-solid: #b3333f; --danger-subtle: #f8dcd8;
+  --warn-fg: #8a5000; --warn-subtle: #fbe5c4;
+  --ok-fg: #25693c; --ok-subtle: #d9eed9;
+  --font-sans: ui-rounded, 'Nunito', 'Quicksand', 'Segoe UI', system-ui, ui-sans-serif, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
+  --radius-sm: 8px; --radius: 12px; --radius-lg: 20px;
+  --shadow-float: 0 4px 0 #d9bd8c, 0 10px 18px -6px rgb(95 59 34 / 0.35);
+  scrollbar-color: var(--gray-8) var(--bg-app);
+}
+html[data-style='cozy'] :is(.btn, .badge) { border-radius: 999px; }

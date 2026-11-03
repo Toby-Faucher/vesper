@@ -45,6 +45,7 @@ pub fn config(data: &TempDir) -> Config {
         public_host: None,
         udp_port_public: 0,
         max_room_size: 12,
+        ring_timeout: Duration::from_secs(30),
         ping_interval: Duration::from_secs(30),
         max_sockets: 16,
         web_dir: "does-not-exist".into(),
@@ -81,7 +82,13 @@ impl TestServer {
         let state = AppState {
             push,
             store,
-            voice: Voice::new(sfu.clone(), hub.clone(), cfg.max_room_size),
+            voice: Voice::new(
+                sfu.clone(),
+                hub.clone(),
+                cfg.max_room_size,
+                cfg.ring_timeout,
+            ),
+            passkeys: Arc::new(vesper_server::api_passkeys::Passkeys::new(&cfg.origin)),
             cfg: Arc::new(cfg),
             limits: Limiter::default(),
             hub,

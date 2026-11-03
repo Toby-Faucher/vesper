@@ -15,7 +15,7 @@ const msg = (o: Partial<Message> = {}): Message => ({
   id: 5, room_id: 2, author_id: 'b', body: 'hi @alice', created_at: 0, edited_at: null, updated_at: 0, deleted: false,
   reply_to: null, reactions: [], attachments: [], mentions: ['a'], pinned: false, ...o,
 });
-const on = { mentions: true, sounds: true, call: true, muteCues: true, connectCues: true, volume: 50 };
+const on = { mentions: true, dms: true, sounds: true, call: true, muteCues: true, connectCues: true, volume: 50, ring: true };
 const nctx = { myId: 'a', activeRoom: 1, hidden: false, prefs: on, permission: 'granted' as NotificationPermission };
 
 describe('shouldNotify', () => {
@@ -27,6 +27,8 @@ describe('shouldNotify', () => {
     expect(shouldNotify(msg({ mentions: [], author_id: 'a' }), dm)).toBe(false);
     expect(shouldNotify(msg({ mentions: [] }), { ...dm, activeRoom: 2 })).toBe(false);
     expect(shouldNotify(msg({ mentions: [] }), nctx)).toBe(false);
+    expect(shouldNotify(msg({ mentions: [] }), { ...dm, prefs: { ...on, dms: false } })).toBe(false);
+    expect(shouldNotify(msg({ mentions: [] }), { ...dm, prefs: { ...on, mentions: false } })).toBe(true);
   });
   it('each condition alone turns it off', () => {
     expect(shouldNotify(msg({ mentions: [] }), nctx)).toBe(false);
@@ -89,15 +91,24 @@ describe('title count', () => {
 describe('prefs', () => {
   beforeEach(() => localStorage.clear());
   it('defaults: mentions and join/leave off, my call cues on at volume 50; saved', () => {
-    expect(loadPrefs()).toEqual({ mentions: false, sounds: false, call: true, muteCues: true, connectCues: true, volume: 50 });
+    expect(loadPrefs()).toEqual({ mentions: false, dms: false, sounds: false, call: true, muteCues: true, connectCues: true, volume: 50, ring: true });
     savePrefs({ ...DEFAULTS, mentions: true, connectCues: false, volume: 20 });
     expect(loadPrefs()).toEqual({ ...DEFAULTS, mentions: true, connectCues: false, volume: 20 });
     localStorage.setItem(NOTIFY_KEY, 'not json');
     expect(loadPrefs()).toEqual(DEFAULTS);
   });
+  it('the ring has its own switch: on by default, off only when saved off, apart from the call sounds', () => {
+    expect(loadPrefs().ring).toBe(true);
+    savePrefs({ ...DEFAULTS, ring: false });
+    expect(loadPrefs()).toMatchObject({ ring: false, call: true });
+    savePrefs({ ...DEFAULTS, call: false });
+    expect(loadPrefs()).toMatchObject({ ring: true, call: false });
+  });
   it('an old saved value keeps its join and leave choice', () => {
     localStorage.setItem(NOTIFY_KEY, JSON.stringify({ mentions: true, sounds: true }));
-    expect(loadPrefs()).toEqual({ ...DEFAULTS, mentions: true, sounds: true });
+    expect(loadPrefs()).toEqual({ ...DEFAULTS, mentions: true, dms: true, sounds: true });
+    localStorage.setItem(NOTIFY_KEY, JSON.stringify({ mentions: true, dms: false }));
+    expect(loadPrefs().dms).toBe(false); // once set, dms stands alone
   });
   it('a bad volume falls back or is clamped', () => {
     for (const [v, want] of [['70', 50], [null, 50], [-5, 0], [140, 100], [33.4, 33]] as const) {

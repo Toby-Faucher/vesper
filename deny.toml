@@ -15,6 +15,11 @@ ignore = [
     # pinned, sha256-checked DeepFilterNet3 and DNSMOS models, never the NNEF loader. Added 2026-10-31.
     # TODO: remove when tract moves past the =0.21.4 pin (see crates/vesper-dsp/Cargo.toml).
     { id = "RUSTSEC-2026-0217", reason = "NNEF loader not reachable; tract pinned at 0.21.4 for deep_filter" },
+    # rsa 0.10.0-rc (Marvin timing attack on RSA private-key operations), via webauthn-rs and crypto-glue.
+    # Not reachable: Vesper only verifies passkey signatures with the public key (RS256 credentials) and
+    # never decrypts or signs with an RSA key. No patched version exists. Added 2026-11-03.
+    # TODO: remove when rsa has a fix or webauthn-rs drops it.
+    { id = "RUSTSEC-2023-0071", reason = "rsa private-key ops not used; only public-key signature checks for passkeys" },
 ]
 
 [licenses]
@@ -29,6 +34,7 @@ allow = [
     "CDLA-Permissive-2.0",
     "ISC",          # aws-lc-rs, aws-lc-sys
     "MIT",
+    "MPL-2.0",      # webauthn-rs and crypto-glue (passkeys, issue #151); file-level copyleft, used unmodified
     "Unicode-3.0",  # unicode-ident, unicode-normalization
     "Zlib",         # foldhash, via sqlx-core's hashlink
 ]

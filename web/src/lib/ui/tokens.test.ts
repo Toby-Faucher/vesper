@@ -1,23 +1,33 @@
-import { expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import tokens from '../../styles/tokens.css?raw';
 import app from '../../app.css?raw';
 import { contrast as ratio } from './accent';
+import aurora from '../../styles/aurora.css?raw';
+import bbs from '../../styles/bbs.css?raw';
+import cozy from '../../styles/cozy.css?raw';
+import persona from '../../styles/persona.css?raw';
+import { block } from './cssvars';
 
-// The vesper style block: every `--name: value;` in it.
-const block = tokens.slice(tokens.indexOf("[data-style='vesper']"));
-const vars = new Map([...block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+// Each look to check: the base block is Vesper dark; the light block overrides it. A style adds its own entry below.
+const base = block(tokens, ':root');
+const LOOKS: Record<string, Map<string, string>> = {
+  'vesper dark': base,
+  'vesper light': new Map([...base, ...block(tokens, "html[data-scheme='light']")]),
+  persona: new Map([...base, ...block(persona, "html[data-style='persona']")]),
+  bbs: new Map([...base, ...block(bbs, "html[data-style='bbs']")]),
+  aurora: new Map([...base, ...block(aurora, "html[data-style='aurora']")]),
+};
+// Cozy is light only: it sits on the light block, which index.html and scheme.ts always set for it.
+LOOKS.cozy = new Map([...LOOKS['vesper light'], ...block(cozy, "html[data-style='cozy']")]);
 
-function hex(name: string, seen = 0): string {
+function resolve(vars: Map<string, string>, name: string, seen = 0): string {
   const v = vars.get(name);
   if (v === undefined) throw new Error(`${name} is not defined`);
   const ref = v.match(/^var\((--[\w-]+)\)$/);
-  if (ref && seen < 10) return hex(ref[1], seen + 1);
+  if (ref && seen < 10) return resolve(vars, ref[1], seen + 1);
   if (!/^#[0-9a-f]{6}$/i.test(v)) throw new Error(`${name} is not a hex colour: ${v}`);
   return v;
 }
-
-// The same helpers the accent check uses (accent.ts), on resolved role names.
-const contrast = (a: string, b: string) => ratio(hex(a), hex(b));
 
 const slots = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `--avatar-${n}`);
 // The pairs in the plan's "Measured contrast": text needs 4.5, UI parts (rings, swatches) 3.
@@ -29,33 +39,43 @@ const TEXT: [string, string][] = [
 ];
 const UI: [string, string][] = [
   ['--focus', '--bg-sidebar'], ['--focus', '--bg-app'], ['--focus', '--bg-raised'],
-  ...slots.flatMap((s): [string, string][] => [[s, '--gray-1'], [s, '--gray-2']]),
+  ...slots.flatMap((s): [string, string][] => [[s, '--bg-app'], [s, '--bg-sidebar']]),
 ];
 
-it('text_pairs_meet_4_5', () => {
-  const low = TEXT.map(([f, b]) => [f, b, contrast(f, b)] as const).filter((p) => p[2] < 4.5);
-  expect(low).toEqual([]);
-});
+describe.each(Object.entries(LOOKS))('%s', (_look, vars) => {
+  const contrast = (a: string, b: string) => ratio(resolve(vars, a), resolve(vars, b));
 
-it('ui_pairs_meet_3', () => {
-  const low = UI.map(([f, b]) => [f, b, contrast(f, b)] as const).filter((p) => p[2] < 3);
-  expect(low).toEqual([]);
-});
+  it('text_pairs_meet_4_5', () => {
+    const low = TEXT.map(([f, b]) => [f, b, contrast(f, b)] as const).filter((p) => p[2] < 4.5);
+    expect(low).toEqual([]);
+  });
 
-// --fg-3 is borderline on hover rows and fails on selected ones: selected rows use --fg-2 for meta (checked above).
-it('fg_3_passes_on_hover_and_fails_on_selected', () => {
-  expect(contrast('--fg-3', '--bg-hover')).toBeGreaterThanOrEqual(4.5);
-  expect(contrast('--fg-3', '--bg-selected')).toBeLessThan(4.5);
+  it('ui_pairs_meet_3', () => {
+    const low = UI.map(([f, b]) => [f, b, contrast(f, b)] as const).filter((p) => p[2] < 3);
+    expect(low).toEqual([]);
+  });
+
+  // --fg-3 is borderline on hover rows and fails on selected ones: selected rows use --fg-2 for meta (checked above).
+  it.runIf(_look.startsWith('vesper'))('fg_3_passes_on_hover_and_fails_on_selected', () => {
+    expect(contrast('--fg-3', '--bg-hover')).toBeGreaterThanOrEqual(4.5);
+    expect(contrast('--fg-3', '--bg-selected')).toBeLessThan(4.5);
+  });
 });
 
 it('measured_values_match_the_plan', () => {
+  const contrast = (a: string, b: string) => ratio(resolve(base, a), resolve(base, b));
   expect(contrast('--fg', '--bg-app')).toBeCloseTo(16.4, 0);
   expect(contrast('--on-accent', '--accent')).toBeCloseTo(10.0, 0);
+});
+
+it('light_redefines_roles_and_adds_none', () => {
+  const light = block(tokens, "html[data-scheme='light']");
+  expect([...light.keys()].filter((k) => !base.has(k))).toEqual([]);
 });
 
 it('every_role_in_the_theme_exists', () => {
   const theme = app.slice(app.indexOf('@theme'));
   const used = [...theme.matchAll(/var\((--[\w-]+)\)/g)].map((m) => m[1]);
   expect(used.length).toBeGreaterThan(30);
-  expect(used.filter((v) => !vars.has(v))).toEqual([]);
+  expect(used.filter((v) => !base.has(v))).toEqual([]);
 });

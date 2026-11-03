@@ -2,7 +2,7 @@
   import { avatarSlot, avatarUrl, initials } from '../avatar';
   import * as I from '../icons';
   // The user's picture when they have one, else initials on the user's slot colour (also while the picture loads or if
-  // it fails). Speaking draws the ring (2 px gap in --bg-sidebar, 2 px slot colour), toggled
+  // it fails). Speaking draws the ring (2 px gap in --bg-sidebar, 2 px accent colour), toggled
   // instantly, with no fade (a fade repainted every frame while someone talked). Mute or deafen shows a glyph at the bottom right at 32 and 40 px; at
   // 20 px it would be a 10 px speck, so it is left out and the row shows the state after the name (an Icon plus the word,
   // as the gallery's sidebar mock does). Decorative: the row next to it carries the name and the state in words.
@@ -58,7 +58,7 @@
     position: absolute;
     inset: 0;
     border-radius: 50%;
-    box-shadow: 0 0 0 2px var(--bg-sidebar), 0 0 0 4px var(--c);
+    box-shadow: 0 0 0 2px var(--bg-sidebar), 0 0 0 4px var(--accent);
     opacity: 0; /* an instant toggle: nothing animates because someone speaks (and a fade repaints every frame) */
   }
   .av[data-speaking]::before { opacity: 1; }
