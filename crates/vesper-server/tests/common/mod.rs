@@ -88,6 +88,7 @@ impl TestServer {
                 cfg.max_room_size,
                 cfg.ring_timeout,
             ),
+            passkeys: Arc::new(vesper_server::api_passkeys::Passkeys::new(&cfg.origin)),
             cfg: Arc::new(cfg),
             limits: Limiter::default(),
             hub,

@@ -39,7 +39,15 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Uploads are not scanned for viruses.** Images are served inline only after their magic bytes match, everything else is a
   download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
 - **Rooms cannot be deleted, only archived.** An archived room's messages and files stay in the database and count toward disk use. Its search index rows stay too.
-- **No passkeys yet.** Sign in is username and password only (plan Task 6, a stretch goal, not built).
+- **Passkeys are new and only tested with a software authenticator.** The server tests use a P-256 key made in the test, not a real
+  authenticator or browser, so a real phone, security key or password manager is not verified. Passkeys are sign in only: the password
+  stays and is the recovery path.
+- **Passkeys stay when a password is reset.** A reset ends every session but does not remove passkeys, so someone who holds a passkey
+  keeps being able to sign in. Remove it in Settings. A banned account cannot sign in with a passkey (it is refused at sign in), and
+  deleting the account row deletes its passkeys. At most 10 per account. Passkeys need a domain name in `VESPER_ORIGIN`
+  (an IP address host turns them off). Challenges are held in memory for 5 minutes, so a restart drops one in flight and the person
+  tries again. The login page asks for the passkey with the browser's own dialog; there is no autofill (conditional UI) sign in.
+  No attestation is checked (any authenticator is accepted).
 - **A moderator disconnect does not keep anyone out.** The sessions stay valid and the client may reconnect at once; a ban is the way to keep someone out.
 
 ## Server behaviour

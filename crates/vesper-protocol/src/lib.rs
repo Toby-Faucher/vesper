@@ -2,6 +2,8 @@
 
 pub mod api;
 pub use api::*;
+pub mod passkeys;
+pub use passkeys::*;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

@@ -5,6 +5,7 @@ pub mod api_accounts;
 pub mod api_admin;
 pub mod api_calls;
 pub mod api_messages;
+pub mod api_passkeys;
 pub mod api_push;
 pub mod api_rooms;
 pub mod auth;
@@ -75,6 +76,7 @@ pub struct AppState {
     pub hub: Hub,
     pub voice: Voice,
     pub push: Push,
+    pub passkeys: Arc<api_passkeys::Passkeys>,
 }
 
 /// The `/api` routes, with the Origin check, the body cap and the body timeouts.
@@ -83,6 +85,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api_admin::routes())
         .merge(api_rooms::routes())
         .merge(api_messages::routes())
+        .merge(api_passkeys::routes())
         .merge(api_push::routes())
         .merge(api_calls::routes())
         .layer(RequestBodyTimeoutLayer::new(state.cfg.body_idle))
@@ -171,6 +174,7 @@ pub async fn start_with_sfu(
     let state = AppState {
         store,
         push,
+        passkeys: Arc::new(api_passkeys::Passkeys::new(&cfg.origin)),
         cfg: Arc::new(cfg),
         limits: Limiter::default(),
         hub,

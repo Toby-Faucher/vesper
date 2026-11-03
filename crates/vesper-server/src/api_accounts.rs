@@ -149,7 +149,7 @@ pub(crate) async fn session_of(
 
 /// Session fixation: a cookie sent with a login or signup never survives it. Already gone
 /// (another tab logged out meanwhile) is fine.
-async fn drop_presented_session(h: &HeaderMap, st: &AppState) -> Result<(), ApiError> {
+pub(crate) async fn drop_presented_session(h: &HeaderMap, st: &AppState) -> Result<(), ApiError> {
     if let Some((sid, old)) = session_of(h, st).await? {
         st.hub.close_session(sid, CLOSE_SESSION_ENDED);
         match st.store.delete_session(&old.user_id, sid).await {
@@ -180,7 +180,7 @@ pub(crate) fn limit(st: &AppState, kind: Kind, key: &str) -> Result<(), ApiError
 }
 
 /// A fresh session for `user_id`: the token goes only into the returned cookie.
-async fn new_session(
+pub(crate) async fn new_session(
     st: &AppState,
     user_id: &str,
     h: &HeaderMap,
