@@ -18,9 +18,11 @@ export type AppState = {
   voice: Peer[];
   /** By room id. A room missing here has nothing unread. */
   unread: Record<number, Unread>;
+  /** By room id: the id of its newest message seen, a stand-in for activity time (ids only grow). Used to order DMs. */
+  activity: Record<number, number>;
 };
 
-export const emptyState = (): AppState => ({ me: null, users: {}, rooms: [], archived: [], dms: [], voice: [], unread: {} });
+export const emptyState = (): AppState => ({ me: null, users: {}, rooms: [], archived: [], dms: [], voice: [], unread: {}, activity: {} });
 
 /** The other person of a DM. */
 export const dmPeer = (r: RoomInfo, myId: string) => r.members.find((m) => m !== myId) ?? myId;
@@ -36,6 +38,15 @@ export const splitRooms = (list: RoomInfo[], users: Record<string, UserInfo> = {
   dms: titled(list.filter((r) => r.kind === 'dm'), users, myId),
 });
 
+/** DMs with unread first, then newest message first, then by name. A DM with no known message sorts after those with one. */
+export const sortDms = (dms: RoomInfo[], unread: Record<number, Unread>, activity: Record<number, number>): RoomInfo[] =>
+  [...dms].sort(
+    (a, b) =>
+      Number((unread[b.id]?.unread ?? 0) > 0) - Number((unread[a.id]?.unread ?? 0) > 0) ||
+      (activity[b.id] ?? 0) - (activity[a.id] ?? 0) ||
+      a.name.localeCompare(b.name),
+  );
+
 /** A room or a DM by id. */
 export const findRoom = (s: AppState, id: number | null | undefined) => (id == null ? undefined : s.rooms.find((r) => r.id === id) ?? s.dms.find((r) => r.id === id));
 
@@ -49,10 +60,13 @@ export function applyServerMsg(s: AppState, m: ServerMsg): AppState {
         ...splitRooms(m.rooms, users, m.me.user.user_id),
         voice: m.voice,
         unread: Object.fromEntries(m.unread.map((u) => [u.room_id, u])),
+        activity: {},
       };
     }
     case 'message_new': {
       const msg = m.message;
+      const seen = s.activity[msg.room_id] ?? 0;
+      if (msg.id > seen) s = { ...s, activity: { ...s.activity, [msg.room_id]: msg.id } };
       const u = s.unread[msg.room_id] ?? { room_id: msg.room_id, last_read_id: 0, unread: 0, mentions: 0 };
       const mine = msg.author_id === s.me?.user.user_id;
       if (mine || msg.id <= u.last_read_id) return s;

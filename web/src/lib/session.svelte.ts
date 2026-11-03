@@ -8,6 +8,7 @@ import { tray } from './ui/tray.svelte';
 import { Signaling } from './signaling';
 import { applyServerMsg, emptyState, type AppState } from './state';
 import type { Me } from './gen/Me';
+import type { MessagePage } from './gen/MessagePage';
 
 /** The current path, without the query and the fragment. App.svelte renders from it. */
 export const route = $state({ path: location.pathname });
@@ -103,6 +104,14 @@ export const session = $state({
   },
 });
 
+/** Newest message id of each DM, from one small page per DM (Hello carries no activity). A failed fetch leaves that DM unranked. */
+async function seedActivity(dms: AppState['dms']): Promise<Record<number, number>> {
+  const got = await Promise.all(
+    dms.map((d) => api<MessagePage>('GET', `/api/rooms/${d.id}/messages?limit=1`).then((p) => [d.id, p.messages.at(-1)?.id ?? 0] as const, () => [d.id, 0] as const)),
+  );
+  return Object.fromEntries(got);
+}
+
 function open(): void {
   const sig = new Signaling(wsUrl());
   session.sig = sig;
@@ -118,6 +127,7 @@ function open(): void {
     chat.state = applyChatMsg(chat.state, m);
     onServerMsg(m, prev); // mention notifications and the join and leave sounds
     badge(session.state.unread);
+    if (m.type === 'hello') void seedActivity(session.state.dms).then((a) => (session.state = { ...session.state, activity: { ...a, ...session.state.activity } }));
     if (m.type === 'hello') void resync(); // events may have been missed while the socket was down
   });
   sig.onClose((byClient, code) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyServerMsg, emptyState, findRoom, type AppState } from './state';
+import { applyServerMsg, emptyState, findRoom, sortDms, type AppState } from './state';
 import type { Peer } from './gen/Peer';
 import type { RoomInfo } from './gen/RoomInfo';
 import type { UserInfo } from './gen/UserInfo';
@@ -19,11 +19,11 @@ const unread1 = { room_id: 1, last_read_id: 5, unread: 2, mentions: 0 };
 
 describe('applyServerMsg', () => {
   it('hello_replaces_state', () => {
-    const old: AppState = { me: null, users: { x: user('x') }, rooms: [room(9)], archived: [], dms: [], voice: [peer('x', 9)], unread: {} };
+    const old: AppState = { me: null, users: { x: user('x') }, rooms: [room(9)], archived: [], dms: [], voice: [peer('x', 9)], unread: {}, activity: {} };
     const s = applyServerMsg(old, {
       type: 'hello', me, users: [user('a'), user('b')], rooms: [room(1)], voice: [peer('b', 1)], unread: [unread1],
     });
-    expect(s).toEqual({ me, users: { a: user('a'), b: user('b') }, rooms: [room(1)], archived: [], dms: [], voice: [peer('b', 1)], unread: { 1: unread1 } });
+    expect(s).toEqual({ me, users: { a: user('a'), b: user('b') }, rooms: [room(1)], archived: [], dms: [], voice: [peer('b', 1)], unread: { 1: unread1 }, activity: {} });
   });
   it('rooms_changed_keeps_voice', () => {
     const s: AppState = { ...emptyState(), rooms: [room(1), room(2)], voice: [peer('a', 1), peer('b', 2)] };
@@ -96,5 +96,25 @@ describe('applyServerMsg', () => {
     const changed = applyServerMsg(withVoice, { type: 'rooms_changed', rooms: [room(1), dm(7, 'a', 'b'), dm(8, 'a', 'c')] });
     expect(changed.voice.map((p) => p.room_id)).toEqual([7, 1]);
     expect(changed.dms.map((r) => r.name)).toEqual(['Bea', 'Someone']);
+  });
+});
+
+describe('sortDms', () => {
+  const a = { ...dm(1, 'a', 'x'), name: 'Amy' };
+  const b = { ...dm(2, 'a', 'y'), name: 'Bea' };
+  const c = { ...dm(3, 'a', 'z'), name: 'Cy' };
+  const ids = (l: RoomInfo[]) => l.map((r) => r.id);
+  it('puts the newest message first, then name when nothing is known', () => {
+    expect(ids(sortDms([a, b, c], {}, { 1: 5, 2: 9 }))).toEqual([2, 1, 3]);
+    expect(ids(sortDms([c, b, a], {}, {}))).toEqual([1, 2, 3]);
+  });
+  it('keeps unread DMs above the rest', () => {
+    const unread = { 1: { room_id: 1, last_read_id: 0, unread: 1, mentions: 0 } };
+    expect(ids(sortDms([b, a], unread, { 2: 9, 1: 2 }))).toEqual([1, 2]);
+  });
+  it('moves a DM up when a message arrives', () => {
+    let s: AppState = { ...emptyState(), me, dms: [a, b], activity: { 1: 5, 2: 9 } };
+    s = applyServerMsg(s, { type: 'message_new', message: { id: 12, room_id: 1, author_id: 'a' } as Message });
+    expect(ids(sortDms(s.dms, s.unread, s.activity))).toEqual([1, 2]);
   });
 });
