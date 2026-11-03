@@ -170,5 +170,5 @@ Built in `6e03f31` and the commits after it on this branch. The differences, all
   makes a data URL, because the notification system fetches icons without the cookie. Not checked in a browser.
 - **The privacy line** is the tooltip of the "Direct message" label in the DM header, not an empty-state text.
 - **DMs are sorted by name** in the sidebar. The state has no activity time to sort on.
-- **Pins are hidden in the DM header.** The server does not refuse a pin; a moderator who is a member could still pin through the API.
+- **Pins are hidden in the DM header.** The server also refuses a pin in a DM (403), so a moderator who is a member cannot pin through the API either.
 - **No ring**, as the design said. The question is still open.

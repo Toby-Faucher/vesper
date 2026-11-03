@@ -359,7 +359,7 @@ an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets th
 - **Mentions.** `@name` at a word start, the name being `[a-z0-9_]{3,24}` after an ASCII lowercase, at most 20 per message, read again
   on each edit. A name that is unknown, banned or cannot see the room is dropped, so it never counts as a mention.
 - **Reactions.** 1 to 32 bytes with no ASCII letter or digit, whitespace or control character (400). At most 20 different ones per message (409).
-- **Pins.** At most 50 per room (409).
+- **Pins.** At most 50 per room (409). A DM has no pins: the pin route answers 403 for a DM message.
 - **Read marker.** `last_read_id` is 0 or a message of that room (else 400), so it cannot be set past future messages. It never
   moves back; `read` carries where it really is. Unread counts skip your own and deleted messages.
 - **Typing.** `typing { room_id }` on the socket goes to every other socket that can see the room (not back to the sender's
