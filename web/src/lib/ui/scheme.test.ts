@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import html from '../../../index.html?raw';
+import html from '../../../public/scheme-init.js?raw';
+import page from '../../../index.html?raw';
 import { loadScheme, resolveScheme, SCHEME_KEY } from './scheme';
 import { STYLES, type StyleDef } from './style';
 
@@ -23,11 +24,12 @@ it('resolve_follows_the_choice_and_a_fixed_style_wins', () => {
   expect(resolveScheme('dark', 'light', false)).toBe('light');
 });
 
-it('the_inline_script_in_index_html_knows_the_fixed_styles', () => {
+it('the_scheme_script_loaded_by_index_html_knows_the_fixed_styles', () => {
   const map = html.match(/f = \{([^}]*)\}/)![1];
   const fixed = Object.fromEntries([...map.matchAll(/(\w+): '(\w+)'/g)].map((m) => [m[1], m[2]]));
   const expected = Object.fromEntries((STYLES as readonly StyleDef[]).filter((s) => s.scheme !== 'both').map((s) => [s.id, s.scheme]));
   expect(fixed).toEqual(expected);
   expect(html).toContain("'vesper.scheme'");
   expect(html).toContain("'vesper.style'");
+  expect(page).toContain('src="/scheme-init.js"'); // a file, not inline: the CSP forbids inline script
 });

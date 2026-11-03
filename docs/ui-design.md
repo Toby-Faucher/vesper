@@ -69,7 +69,7 @@ A new style is a block in `tokens.css` or a lazy file with the same role names, 
 
 **Color scheme.** Settings > Appearance > Color scheme: Dark, Light or System (follows `prefers-color-scheme`, and a change of the
 system setting applies at once). Per device, in `localStorage` (`vesper.scheme`), no server change. The default is Dark, so the
-look people have stays. `index.html` has a small inline script that sets `data-scheme` and the `theme-color` meta before the first
+look people have stays. `index.html` loads `public/scheme-init.js`, a small blocking script (a file, because the CSP forbids inline script) that sets `data-scheme` and the `theme-color` meta before the first
 paint, so there is no flash; `scheme.ts` repeats the rules and keeps the tab colour right after a change. The base block of
 `tokens.css` is dark; `html[data-scheme='light']` at the end of it redefines the grey steps, the accent roles, danger, warn, ok,
 the avatar slots, code colours and the shadow, and sets `color-scheme: light` (native controls, scrollbars and the select list).
@@ -108,7 +108,7 @@ light, scanlines and page transitions are not ported. Not picked: Blueprint and 
 **Style and scheme.** Each style says in `STYLES` (`style.ts`) what it does with the Color scheme choice: `both` (Vesper: the
 choice applies), `dark` or `light` (the style is that by nature). For a fixed style the choice is ignored: Settings greys the
 Color scheme group and says "This style is dark only", and `data-scheme` is set to the style's own. The map of fixed styles is
-repeated in the inline script of `index.html` (it must set the right scheme before the first paint); `scheme.test.ts` checks the two agree.
+repeated in `public/scheme-init.js` (it must set the right scheme before the first paint); `scheme.test.ts` checks the two agree.
 
 **Style and accent.** Amber is the default accent, and the default is replaced by a style's own colour when the style sets
 `own: true` (`data-own-accent` on `<html>`; `applyAccent` then leaves the accent roles to the style's CSS). Any other accent the
@@ -129,7 +129,7 @@ Fonts are self-hosted in `web/src/styles/fonts/`, latin subset only, loaded with
    (roles not listed stay Vesper dark). Set `color-scheme`. Then shape rules, all starting with `html[data-style='<id>']`. Prefer
    tokens (`--radius`, `--font-sans`, `--shadow-float`) to component selectors; where a component needs a hook, add a class, not a rule in the component.
 2. Add the entry to `STYLES` with `scheme`, `own` and `load: () => import('../../styles/<id>.css')`. If the scheme is `dark` or
-   `light`, add the id to the map in `index.html`.
+   `light`, add the id to the map in `public/scheme-init.js`.
 3. Add the file to `LOOKS` in `tokens.test.ts`: every text pair needs 4.5:1 and every UI pair 3:1 in the style's own colours.
 4. Put motion inside `@media (prefers-reduced-motion: no-preference)`. Fonts are self-hosted (check the licence) or a system stack; never a CDN.
 5. Run `npm run size` and say what it did to the CSS budget. All CSS was 16.3 kB gzip of 20 before the styles and is 19.5 with the four, so the next style needs a justified, dated raise of that budget in `size-check.mjs`. Update this section.
