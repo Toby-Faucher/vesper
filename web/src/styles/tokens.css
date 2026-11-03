@@ -1,7 +1,7 @@
-/* Design tokens. One block per style, chosen by data-style on <html> (src/lib/ui/style.ts).
+/* Design tokens. This base block is the Vesper look, dark. A style is another block under html[data-style='x'] (a lazy file in
+   src/styles/, see src/lib/ui/style.ts); the light scheme is html[data-scheme='light'] at the end of this file (src/lib/ui/scheme.ts).
    Raw steps are hex so src/lib/ui/tokens.test.ts can check contrast; components use only the roles. */
-:root:not([data-style]),
-[data-style='vesper'] {
+:root {
   color-scheme: dark;
   /* warm grey, oklch(L 0.0055 75), steps 1..12 */
   --gray-1: #100e0c; --gray-2: #151311; --gray-3: #1a1816; --gray-4: #201e1b;
@@ -40,4 +40,25 @@
   --dur-1: 100ms; --dur-2: 160ms; --dur-3: 220ms; --ease-out: cubic-bezier(0.2, 0, 0, 1);
   /* exits are shorter and ease in; --dur-calm is every preset under reduced motion; --ease-pop overshoots a little */
   --dur-out: 120ms; --dur-calm: 80ms; --ease-in: cubic-bezier(0.4, 0, 1, 1); --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Light scheme (Vesper only; a style that is dark or light by nature sets its own and the scheme choice does not apply).
+   The accent roles are what accent.ts roles(amber, 'light') gives: a darker amber with white text on it. applyAccent repaints them. */
+html[data-scheme='light'] {
+  color-scheme: light;
+  --gray-1: #fbfaf8; --gray-2: #f4f2ef; --gray-3: #ffffff; --gray-4: #ece9e5;
+  --gray-5: #e3e0db; --gray-6: #d9d6d0; --gray-7: #c8c5bf; --gray-8: #a8a59f;
+  --gray-9: #8d8a85; --gray-10: #6a6763; --gray-11: #4d4b47; --gray-12: #1b1917;
+  --accent: #976f0a; --accent-hover: #856209; --on-accent: #ffffff;
+  --accent-fg: #856209; --accent-subtle: #ede7d7; --accent-line: #c9b581;
+  --focus: #976f0a;
+  --danger-fg: #b42318; --danger-solid: #c4281f; --on-danger: #ffffff; --danger-subtle: #fde8e6;
+  --warn-fg: #a14a00; --warn-subtle: #fdebd9;
+  --ok-fg: #1a7a3a; --ok-subtle: #e1f4e6;
+  /* avatar slots: the dark scheme's hues, darkened until white text on them is 4.5:1 (and the disc 3:1 on the sidebar) */
+  --avatar-1: #a66357; --avatar-2: #a06841; --avatar-3: #677b40; --avatar-4: #497f56;
+  --avatar-5: #208177; --avatar-6: #2c7e9b; --avatar-7: #4a78a6; --avatar-8: #a1617a;
+  --on-avatar: #ffffff;
+  --syn-kw: #6f4fb8; --syn-str: #3f7a22; --syn-num: #b0346f; --syn-ty: #1f6aae;
+  --shadow-float: 0 4px 16px rgb(40 30 20 / 0.16);
 }

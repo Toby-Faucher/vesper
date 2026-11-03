@@ -106,6 +106,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
   means the load took at least 1 s. The reason is the last fallback or mic problem of the call, also when it recovered.
 - **The connection test reports only the local candidate type.**
 - **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
+- **The light scheme was checked on screen on the component gallery only** (headless Chromium, `/_gallery?primitives`), not on the shell, a call, the call bar, toasts, images or markdown. Contrast is checked by numbers in `tokens.test.ts` and `accent.test.ts`. The scheme choice and the first-paint script were not tried in Firefox or Safari.
 
 ## Direct messages
 

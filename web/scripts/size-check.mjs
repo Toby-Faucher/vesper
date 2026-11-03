@@ -22,7 +22,9 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 170, cssFirst: 12, css
 // 57.0 on the dev machine and 57.2 in CI, whose gzip output is a little larger.
 // 2026-11-03: 57.5 to 57.9 for v1.6.0 (the DM sort, the ring state and its small shell hook, the DM switch); measured 57.6 on
 // the dev machine, so CI is expected near 57.8.
-export const RATCHET_GZIP_KB = { first: 57.9 };
+// 2026-11-03: 57.9 to 58.9 for the color scheme and styles (scheme.ts, the style loader, the light accent roles); measured 58.4
+// on the dev machine, so CI is expected near 58.6. The light block adds 0.3 kB to the first load CSS (8.3 to 8.6).
+export const RATCHET_GZIP_KB = { first: 58.9 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.

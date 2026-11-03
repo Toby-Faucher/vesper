@@ -1,8 +1,8 @@
 # UI design principles
 
-Principles only, so later work does not invent. Last updated 2026-11-01.
+Principles only, so later work does not invent. Last updated 2026-11-03.
 
-Who it is for: a voice room for a few friends on desktop Chrome or Firefox. Dark only. No light theme and no mobile layout.
+Who it is for: a voice room for a few friends on desktop Chrome or Firefox. Dark by default, with a light scheme in Settings. No mobile layout.
 
 ## Principles
 
@@ -43,7 +43,7 @@ tabular figures.
 - The accent is amber (the logo colour) unless the person picks another in Settings > Appearance. Below, "amber" means
   the accent.
 - Amber means one of five things: the primary action, focus, a selection marker, a mention, or the unread line. A view has
-  one amber fill at most. Text on an amber fill is near-black.
+  one amber fill at most. Text on an amber fill is near-black (white in the light scheme).
 - Warnings use their own orange plus an icon and words. They never use amber.
 - A person's colour shows only on their avatar and their speaking ring. Names, text, row borders and messages stay grey.
   There are no role colours.
@@ -63,17 +63,33 @@ matrix that moves amber to the fill and keeps every grey, applied to the logo by
 it fetches the PNG and makes a `blob:` URL). Amber leaves both files untouched. The avatar colours, the notification icon and the speaking ring do not
 change. There is no coral: it sat between the danger red and the warning orange.
 
-**The switch point.** The look is chosen in one place: `data-style` on `<html>`, set by `web/src/lib/ui/style.ts` before the app
-mounts. A new style is a new block in `tokens.css` with the same role names, plus one entry in `STYLES`. Components never read
-`data-style`.
+**The switch point.** The look is chosen in two places, both on `<html>` and both set before the app mounts: `data-style` by
+`web/src/lib/ui/style.ts` and `data-scheme` (`dark` or `light`) by `web/src/lib/ui/scheme.ts`. Components never read either.
+A new style is a block in `tokens.css` or a lazy file with the same role names, plus one entry in `STYLES`.
+
+**Color scheme.** Settings > Appearance > Color scheme: Dark, Light or System (follows `prefers-color-scheme`, and a change of the
+system setting applies at once). Per device, in `localStorage` (`vesper.scheme`), no server change. The default is Dark, so the
+look people have stays. `index.html` has a small inline script that sets `data-scheme` and the `theme-color` meta before the first
+paint, so there is no flash; `scheme.ts` repeats the rules and keeps the tab colour right after a change. The base block of
+`tokens.css` is dark; `html[data-scheme='light']` at the end of it redefines the grey steps, the accent roles, danger, warn, ok,
+the avatar slots, code colours and the shadow, and sets `color-scheme: light` (native controls, scrollbars and the select list).
+Components need no light rules: they use roles only. Light surfaces are warm white (`#fbfaf8` page, `#f4f2ef` sidebar, `#ffffff`
+panels and inputs).
+
+Light accent: a light page cannot take the dark preset fills (amber is 1.9:1 on it). So `roles(fill, 'light')` in `accent.ts`
+darkens the fill, in the same hue, until white text on it passes 4.5:1, makes the hover darker, and finds a link colour that passes
+4.5:1 on the page and on the soft fill. In light the text on an accent fill is white (`--on-accent`), in dark it stays near-black.
+Settings still checks a custom colour in dark only (the stored value is the same on every device); a colour that passes there
+always paints in light, which `accent.test.ts` checks for the presets and a grid of colours. The logo and the tab icon keep the
+unchanged accent colour: the logo has its own dark ring, so it reads on a light sidebar. This was not checked on screen.
 
 ## Tokens
 
-Colours, type, radii and motion live in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css), one block per style. The style is
-chosen in one place: `data-style` on `<html>`, set by `web/src/lib/ui/style.ts` before the app mounts. Components never read it.
+Colours, type, radii and motion live in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css): the base block (Vesper dark) and the
+light block. The look is chosen by `data-style` and `data-scheme` on `<html>` (see the switch point above). Components never read them.
 `web/src/app.css` maps the roles to Tailwind names (`bg-app`, `text-fg-3`, `bg-accent`, `text-danger` ...) and turns the default
 Tailwind palette off, so a class like `bg-neutral-800` does not exist. `web/src/lib/ui/no-raw-colours.test.ts` fails on a hex value,
-`rgb()`, `hsl()`, `oklch()` or a palette class outside `tokens.css`, and `tokens.test.ts` checks the contrast of each text and UI pair.
+`rgb()`, `hsl()`, `oklch()` or a palette class outside `tokens.css`, and `tokens.test.ts` checks the contrast of each text and UI pair in every look (dark and light so far).
 
 To see every role, the type scale, the radii and the focus ring, run `npm --prefix web run dev` and open `/_gallery` (dev server only).
 

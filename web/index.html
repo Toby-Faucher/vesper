@@ -7,6 +7,18 @@
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#100e0c" />
+    <!-- Before the first paint: the colour scheme (rules of src/lib/ui/scheme.ts; scheme.test.ts keeps them in step). The map is the
+         styles that are dark or light by nature. -->
+    <script>
+      try {
+        var s = localStorage.getItem('vesper.scheme'),
+          f = {}[localStorage.getItem('vesper.style')],
+          l = f ? f === 'light' : s === 'light' || (s === 'system' && matchMedia('(prefers-color-scheme: light)').matches),
+          d = document.documentElement;
+        d.setAttribute('data-scheme', l ? 'light' : 'dark');
+        document.querySelector('meta[name=theme-color]').setAttribute('content', l ? '#fbfaf8' : '#100e0c');
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <!-- The logo in the accent: accent.ts sets the matrix and --logo-filter. Amber leaves the logo unfiltered. -->
