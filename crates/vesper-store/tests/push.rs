@@ -45,6 +45,7 @@ fn sub<'a>(account_id: &'a str, session_id: i64, endpoint: &'a str) -> NewPushSu
         auth: &[1; 16],
         mentions: true,
         voice: false,
+        dms: true,
         user_agent_hint: "Chrome on Linux",
         now: now_ms(),
     }
@@ -167,6 +168,7 @@ async fn targets_follow_switches_bans_and_session_age() {
     s.put_push_subscription(NewPushSub {
         mentions: false,
         voice: true,
+        dms: false,
         ..sub(&bob, sb, "https://a/b")
     })
     .await
@@ -185,6 +187,11 @@ async fn targets_follow_switches_bans_and_session_age() {
     assert_eq!(
         who(s.push_targets(&all, PushKind::Voice, now).await.unwrap()),
         std::slice::from_ref(&bob)
+    );
+    // Carol's dead session aside, alice has dms on and bob turned it off.
+    assert_eq!(
+        who(s.push_targets(&all, PushKind::Dms, now).await.unwrap()),
+        std::slice::from_ref(&alice)
     );
     assert!(
         s.push_targets(&[], PushKind::Voice, now)

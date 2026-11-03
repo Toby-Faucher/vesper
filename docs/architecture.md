@@ -103,7 +103,7 @@ transaction. Messages, reactions, reads, uploads, search, typing and voice use t
 - **Bans.** A banned account cannot be messaged and cannot see anything, but its DMs stay readable to the other person.
 - **Voice.** `Voice::join`, presence and `Voice::refresh` all use `can_see`, so a DM has voice for its two members with no extra code.
 - **Push.** A DM message pushes `kind: "dm"` ("alice sent you a message", no text) to the other member when they have no socket open, at most
-  once per 30 s per DM and person, under the device's mentions switch. A mention push is not sent for a DM. A voice start in a DM reads "alice is in
+  once per 30 s per DM and person, under the device's own direct messages switch (`push_subscriptions.dms`, migration `0012_push_dms.sql`, default on so an older device keeps getting them). A mention push is not sent for a DM. A voice start in a DM reads "alice is in
   voice with you". Both carry `icon`, the sender's picture path; the service worker fetches it with the session cookie and falls back to the default icon.
 - **Web.** `AppState.dms` holds them apart from `rooms`, each renamed to the other person's display name (`titled` in `state.ts`), so every
   room name on screen shows the person. The sidebar has a "Direct messages" section; the person card has a "Message" button.
@@ -508,8 +508,9 @@ Notifications while Vesper is closed (issue #58): "alice mentioned you in Games"
 `routes/settings/PushSettings.svelte` and `web/public/sw.js`.
 
 - **Opt-in per device.** Settings > Notifications > While Vesper is closed. The switch asks for permission (from the click), registers
-  `/sw.js` and subscribes with the server's VAPID public key. Each device has a mentions switch (it also covers direct messages) and a voice switch, both off
-  until the person turns them on. Turning it off, or logging out, unregisters the worker; the server deletes the subscription with the session.
+  `/sw.js` and subscribes with the server's VAPID public key. Each device has a mentions switch, a direct messages switch and a voice switch, all off
+  until the person turns them on (a device saved before `dms` existed keeps direct messages on). The in-page notification has its own
+  mentions and direct messages switches in `vesper.notify`; `dms` follows `mentions` until it is set. Turning it off, or logging out, unregisters the worker; the server deletes the subscription with the session.
 - **Who gets one.** A new message pushes to the accounts it mentions (already limited to people who can see the room and are not
   banned). The first join of an empty voice room pushes to everyone who can see the room. Never to the sender, never to an account with a
   WebSocket open at that moment (its tab shows the event), never to a device with that switch off or a session unused for 90 days,

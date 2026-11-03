@@ -102,7 +102,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 ## Direct messages
 
 - **No ring.** The other person finds out about a DM call by a push (only with no tab open), or by the speaking indicator in the sidebar.
-- **A tab that is open gets no push.** The in-page notification (when the tab is hidden and permission is granted) is the only alert then, and it needs the mentions switch.
+- **A tab that is open gets no push.** The in-page notification (when the tab is hidden and permission is granted) is the only alert then, and it needs the mentions switch (or the direct messages switch, for a DM).
 - **DMs are listed by name,** not by latest activity.
 - **Not end-to-end encrypted.** The server's owner can read the database.
 - **The sender's picture in a push is not verified in a browser.** The worker fetches it as a data URL; any failure shows the default icon.

@@ -632,10 +632,11 @@ pub struct PushDevice {
     pub current: bool,
     pub mentions: bool,
     pub voice: bool,
+    pub dms: bool,
 }
 
 /// `PUT /api/push/subscription`: this browser's push subscription (from
-/// `PushSubscription.toJSON()`) and its two switches. Replaces this session's earlier one.
+/// `PushSubscription.toJSON()`) and its three switches. Replaces this session's earlier one.
 // `Debug` is written by hand: the endpoint is a capability URL and `auth` a secret.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -647,6 +648,13 @@ pub struct PushSubscribe {
     pub auth: String,
     pub mentions: bool,
     pub voice: bool,
+    /// Absent from an older client: on, as it was before this switch existed.
+    #[serde(default = "yes")]
+    pub dms: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl std::fmt::Debug for PushSubscribe {
@@ -656,6 +664,7 @@ impl std::fmt::Debug for PushSubscribe {
             .field("auth", &"***")
             .field("mentions", &self.mentions)
             .field("voice", &self.voice)
+            .field("dms", &self.dms)
             .finish()
     }
 }
@@ -800,6 +809,7 @@ mod tests {
                     auth: secret.into(),
                     mentions: true,
                     voice: false,
+                    dms: true,
                 }
             ),
         ];

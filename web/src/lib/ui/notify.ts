@@ -16,13 +16,13 @@ export { DEFAULTS, NOTIFY_KEY, loadPrefs, savePrefs, type NotifyPrefs } from './
 export const supported = () => typeof Notification !== 'undefined';
 export const permission = (): NotificationPermission | 'unsupported' => (supported() ? Notification.permission : 'unsupported');
 
-/** A mention of me, or any message in a DM, by someone else, not deleted, mentions on and allowed, and I am not looking at that room. */
+/** A mention of me (mentions on), or any message in a DM (direct messages on), by someone else, not deleted, allowed, and I am not looking at that room. */
 export function shouldNotify(
   m: Message,
   ctx: { myId: string; activeRoom: number | null; hidden: boolean; prefs: NotifyPrefs; permission: NotificationPermission; dm?: boolean },
 ): boolean {
   return (
-    (ctx.dm || m.mentions.includes(ctx.myId)) && m.author_id !== ctx.myId && !m.deleted && ctx.prefs.mentions &&
+    (ctx.dm ? ctx.prefs.dms : m.mentions.includes(ctx.myId) && ctx.prefs.mentions) && m.author_id !== ctx.myId && !m.deleted &&
     ctx.permission === 'granted' && (ctx.hidden || ctx.activeRoom !== m.room_id)
   );
 }
@@ -43,11 +43,11 @@ export function shouldChime(
   return null;
 }
 
-/** Asks the browser, then turns mentions on when allowed. Only ever call it from a click handler. */
-export async function requestMentions(): Promise<NotificationPermission> {
+/** Asks the browser, then turns `keys` on when allowed. Only ever call it from a click handler. */
+export async function requestMentions(keys: ('mentions' | 'dms')[] = ['mentions', 'dms']): Promise<NotificationPermission> {
   if (!supported()) return 'denied';
   const p = await Notification.requestPermission();
-  if (p === 'granted') savePrefs({ ...loadPrefs(), mentions: true });
+  if (p === 'granted') savePrefs({ ...loadPrefs(), ...Object.fromEntries(keys.map((k) => [k, true])) });
   return p;
 }
 

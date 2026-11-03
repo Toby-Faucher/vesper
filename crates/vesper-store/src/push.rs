@@ -16,6 +16,8 @@ pub enum PushKind {
     Mentions,
     /// The "voice" switch.
     Voice,
+    /// The "direct messages" switch.
+    Dms,
 }
 
 /// Fields of a push subscription to store.
@@ -34,6 +36,8 @@ pub struct NewPushSub<'a> {
     pub mentions: bool,
     /// Send pushes for voice calls.
     pub voice: bool,
+    /// Send pushes for direct messages.
+    pub dms: bool,
     /// Short device label for the settings list.
     pub user_agent_hint: &'a str,
     /// Time in milliseconds since the epoch.
@@ -75,6 +79,7 @@ struct DeviceRow {
     last_ok_at: Option<i64>,
     mentions: bool,
     voice: bool,
+    dms: bool,
 }
 
 impl Store {
@@ -129,8 +134,8 @@ impl Store {
         }
         let id = sqlx::query_scalar(
             "INSERT INTO push_subscriptions (account_id, session_id, endpoint, p256dh, auth,
-                 mentions, voice, created_at, user_agent_hint)
-             SELECT ?1, id, ?3, ?4, ?5, ?6, ?7, ?8, ?9 FROM sessions
+                 mentions, voice, dms, created_at, user_agent_hint)
+             SELECT ?1, id, ?3, ?4, ?5, ?6, ?7, ?10, ?8, ?9 FROM sessions
              WHERE id = ?2 AND account_id = ?1 RETURNING id",
         )
         .bind(s.account_id)
@@ -142,6 +147,7 @@ impl Store {
         .bind(s.voice)
         .bind(s.now)
         .bind(s.user_agent_hint)
+        .bind(s.dms)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| constraint(e, Conflict::EndpointTaken))?
@@ -160,19 +166,22 @@ impl Store {
         if accounts.is_empty() {
             return Ok(Vec::new());
         }
-        let voice = kind == PushKind::Voice;
         let ids = serde_json::to_string(accounts).expect("strings serialise");
         Ok(sqlx::query_as(
             "SELECT p.id, p.account_id, p.endpoint, p.p256dh, p.auth FROM push_subscriptions p
              JOIN sessions s ON s.id = p.session_id JOIN accounts a ON a.id = p.account_id
              WHERE p.account_id IN (SELECT value FROM json_each(?1))
-               AND (CASE WHEN ?3 THEN p.voice ELSE p.mentions END) = 1
+               AND (CASE ?3 WHEN 'voice' THEN p.voice WHEN 'dms' THEN p.dms ELSE p.mentions END) = 1
                AND a.banned_at IS NULL AND s.last_seen_at >= ?2
              ORDER BY p.id",
         )
         .bind(ids)
         .bind(now - SESSION_TTL_MS)
-        .bind(voice)
+        .bind(match kind {
+            PushKind::Mentions => "mentions",
+            PushKind::Voice => "voice",
+            PushKind::Dms => "dms",
+        })
         .fetch_all(&self.pool)
         .await?)
     }
@@ -192,7 +201,7 @@ impl Store {
     pub async fn push_devices(&self, account_id: &str, current: i64) -> Result<Vec<PushDevice>> {
         let rows: Vec<DeviceRow> = sqlx::query_as(
             "SELECT id, session_id = ?2 AS current, user_agent_hint AS label, created_at,
-                 last_ok_at, mentions, voice
+                 last_ok_at, mentions, voice, dms
              FROM push_subscriptions WHERE account_id = ?1 ORDER BY created_at DESC, id DESC",
         )
         .bind(account_id)
@@ -209,6 +218,7 @@ impl Store {
                 current: r.current,
                 mentions: r.mentions,
                 voice: r.voice,
+                dms: r.dms,
             })
             .collect())
     }

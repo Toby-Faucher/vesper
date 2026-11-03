@@ -65,6 +65,7 @@ async fn subscribe(
             auth: &auth,
             mentions: req.mentions,
             voice: req.voice,
+            dms: req.dms,
             user_agent_hint: &label,
             now: now_ms(),
         })

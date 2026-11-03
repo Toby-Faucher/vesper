@@ -78,7 +78,7 @@ self.addEventListener('pushsubscriptionchange', (e) => {
       method: 'PUT',
       credentials: 'same-origin',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ endpoint, p256dh: keys.p256dh, auth: keys.auth, mentions: mine.mentions, voice: mine.voice }),
+      body: JSON.stringify({ endpoint, p256dh: keys.p256dh, auth: keys.auth, mentions: mine.mentions, voice: mine.voice, dms: mine.dms }),
     });
   })());
 });

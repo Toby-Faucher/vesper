@@ -102,7 +102,7 @@ with `cargo test -p vesper-protocol`.
 - Unread badge: from `Hello.unread` and live events, as for rooms, in the quiet room style (Toby's call).
   A DM message does not count as a mention.
 - Web Push: "alice sent you a message", with alice's profile picture as the notification icon. It uses the
-  device's existing mentions switch, relabelled "Mentions and direct messages" (see the end of this document).
+  device's own direct messages switch (`push_subscriptions.dms`, issue #150; first built under the mentions switch).
 - The push does not carry the message text. This matches the existing mention push (my call).
 - A burst of messages is one push: at most one per sender and person per 30 seconds. The existing
   "started voice" dedupe is once per 10 minutes (`VOICE_EVERY`), so this needs its own small map (my call).
@@ -161,11 +161,11 @@ About two and a half days in total. Step 1 can ship alone behind no UI.
 
 Built in `6e03f31` and the commits after it on this branch. The differences, all my calls:
 
-- **No separate DM push switch.** A DM push uses the device's mentions switch (`push_subscriptions` is
-  unchanged, so there is no `dms` column). The label is now "Mentions and direct messages" in both Settings
-  panels. A separate switch is a column, two protocol structs, the store query and the settings UI.
+- **A separate DM push switch** (issue #150, v1.6.0; v1.5 first reused the mentions switch). Migration 0012 adds
+  `push_subscriptions.dms`, default on so existing devices keep their DM pushes. Both Settings panels have a
+  "Mentions" and a "Direct messages" switch.
 - **The in-page notification also covers DMs.** `notify.ts` already shows a browser notification for a mention
-  when the tab is hidden. It now does the same for any message in a DM, under the same switch.
+  when the tab is hidden. It now does the same for any message in a DM, under the direct messages switch (#150).
 - **The picture in a push** is a `PushPayload.icon` path. The service worker fetches it with the cookie and
   makes a data URL, because the notification system fetches icons without the cookie. Not checked in a browser.
 - **The privacy line** is the tooltip of the "Direct message" label in the DM header, not an empty-state text.
