@@ -1060,6 +1060,40 @@ mod tests {
     }
 
     #[test]
+    fn dm_push_goes_to_the_other_member_only_and_once_per_burst() {
+        let (a, b) = (user('a', Role::Member), user('b', Role::Member));
+        let (owner, md) = (user('o', Role::Owner), user('m', Role::Moderator));
+        let dm = RoomInfo {
+            kind: RoomKind::Dm,
+            restricted: true,
+            members: vec![a.user_id.clone(), b.user_id.clone()],
+            ..RoomInfo::default()
+        };
+        let users = [a.clone(), b.clone(), owner, md];
+        let got = recipients(&users, &dm, &a.user_id, |_| false);
+        assert_eq!(got, vec![b.user_id.clone()]);
+        // The same person with a socket open gets none.
+        assert!(recipients(&users, &dm, &a.user_id, |id| id == b.user_id).is_empty());
+
+        let mut d = VoiceDedupe::default();
+        let t = Instant::now();
+        assert!(d.take_within(1, "b", t, DM_EVERY));
+        assert!(!d.take_within(1, "b", t + DM_EVERY - Duration::from_secs(1), DM_EVERY));
+        assert!(d.take_within(1, "b", t + DM_EVERY, DM_EVERY));
+    }
+
+    #[test]
+    fn avatar_icon_is_a_same_origin_path_only_with_a_picture() {
+        let mut u = user('a', Role::Member);
+        assert_eq!(avatar_icon(&u), None);
+        u.avatar = Some("3".into());
+        assert_eq!(
+            avatar_icon(&u).unwrap(),
+            format!("/api/users/{}/avatar?v=3", u.user_id)
+        );
+    }
+
+    #[test]
     fn voice_push_once_per_ten_minutes_per_room_and_person() {
         let mut d = VoiceDedupe::default();
         let t = Instant::now();

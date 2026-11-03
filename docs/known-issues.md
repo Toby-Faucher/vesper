@@ -99,6 +99,15 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **The connection test reports only the local candidate type.**
 - **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
 
+## Direct messages
+
+- **No ring.** The other person finds out about a DM call by a push (only with no tab open), or by the speaking indicator in the sidebar.
+- **A tab that is open gets no push.** The in-page notification (when the tab is hidden and permission is granted) is the only alert then, and it needs the mentions switch.
+- **DMs are listed by name,** not by latest activity.
+- **Not end-to-end encrypted.** The server's owner can read the database.
+- **The sender's picture in a push is not verified in a browser.** The worker fetches it as a data URL; any failure shows the default icon.
+- **Not verified:** DMs and DM voice in a real browser. The server side is covered by `tests/dms.rs` and unit tests; the web side by unit tests and `svelte-check` only.
+
 ## Denoiser
 
 - **The first download is about 10 MB:** the wasm is 10.9 MB, sent as a 2.2 MB gzip copy (a 1.3 MB brotli copy where the browser accepts it, from `npm run build`), plus the 8.0 MB model, which is already gzip. It was 23.3 MB with the wasm sent as is. The model was never inside the wasm: the linker drops the unused copy, so leaving out `deep_filter`'s `wasm` feature saved only 4 kB. The 4.4 MB name section was the waste. The rest is tract's code. The gzip copy needs a browser that sends `Accept-Encoding: gzip`, and Caddy and Cloudflare must pass `Content-Encoding` through: not verified on the live host. The model is the larger part now and is not smaller.

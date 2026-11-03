@@ -158,7 +158,7 @@ async fn no_room_edit_reaches_a_dm() {
     }
     // The members are unchanged and the DM still works.
     say(&t, &alice, id, "still here").await;
-    assert_eq!(dm(&t, &carol, &alice).await != id, true);
+    assert_ne!(dm(&t, &carol, &alice).await, id);
 
     // Reordering lists the real rooms only, with a DM in the database.
     let mut real = room_ids(&t, &o).await;

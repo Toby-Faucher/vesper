@@ -1,6 +1,6 @@
 # Direct messages (v1.5)
 
-Status: draft for review. Nothing here is built. Written 2026-11-02 against `main` at v1.4.2 (`f0dd39d`).
+Status: built on this branch. The sections below are the design; "Built, and where it differs" at the end lists the changes made while building. Written 2026-11-02 against `main` at v1.4.2 (`f0dd39d`).
 "Verified" below means read in the code on that commit. Nothing was run in a browser.
 
 ## Why
@@ -56,7 +56,6 @@ Migration `0011_direct_messages.sql` (additive):
 - A DM row has `restricted = 1`, exactly two `room_members` rows, `position = 0`, and a generated name
   `dm-<idA>-<idB>` with the two account ids sorted. `rooms.name` is already `UNIQUE`, so a pair can only
   have one DM, and "find or create" is one insert that cannot race into two rooms.
-- `push_subscriptions.dms INTEGER NOT NULL DEFAULT 1 CHECK (dms IN (0, 1))`.
 
 ### Visibility (the part to review hardest)
 
@@ -102,9 +101,8 @@ with `cargo test -p vesper-protocol`.
 
 - Unread badge: from `Hello.unread` and live events, as for rooms, in the quiet room style (Toby's call).
   A DM message does not count as a mention.
-- Web Push: a third kind beside `mentions` and `voice`. "alice sent you a message", with alice's profile
-  picture as the notification icon. Settings > Notifications gets a "Direct messages" switch per device,
-  on by default.
+- Web Push: "alice sent you a message", with alice's profile picture as the notification icon. It uses the
+  device's existing mentions switch, relabelled "Mentions and direct messages" (see the end of this document).
 - The push does not carry the message text. This matches the existing mention push (my call).
 - A burst of messages is one push: at most one per sender and person per 30 seconds. The existing
   "started voice" dedupe is once per 10 minutes (`VOICE_EVERY`), so this needs its own small map (my call).
@@ -158,3 +156,19 @@ About two and a half days in total. Step 1 can ship alone behind no UI.
 - Voice in a DM. The server side is read from `voice.rs` and `hub.rs` only. No call was made, and the web call
   code was not read for assumptions that a call belongs to a named room.
 - The estimate. It assumes the existing chat panel needs no change beyond hiding voice.
+
+## Built, and where it differs
+
+Built in `6e03f31` and the commits after it on this branch. The differences, all my calls:
+
+- **No separate DM push switch.** A DM push uses the device's mentions switch (`push_subscriptions` is
+  unchanged, so there is no `dms` column). The label is now "Mentions and direct messages" in both Settings
+  panels. A separate switch is a column, two protocol structs, the store query and the settings UI.
+- **The in-page notification also covers DMs.** `notify.ts` already shows a browser notification for a mention
+  when the tab is hidden. It now does the same for any message in a DM, under the same switch.
+- **The picture in a push** is a `PushPayload.icon` path. The service worker fetches it with the cookie and
+  makes a data URL, because the notification system fetches icons without the cookie. Not checked in a browser.
+- **The privacy line** is the tooltip of the "Direct message" label in the DM header, not an empty-state text.
+- **DMs are sorted by name** in the sidebar. The state has no activity time to sort on.
+- **Pins are hidden in the DM header.** The server does not refuse a pin; a moderator who is a member could still pin through the API.
+- **No ring**, as the design said. The question is still open.

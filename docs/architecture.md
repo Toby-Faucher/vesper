@@ -91,6 +91,24 @@ The "Not verified" list at the end says what was only read.
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
+## Direct messages
+
+A DM is a row in `rooms` with `kind = 'dm'` (migration `0011_direct_messages.sql`): `restricted`, exactly two `room_members`, and the name
+`dm-<idA>-<idB>` with the ids sorted. `rooms.name` is unique, so a pair has one DM. `Store::dm_with` finds or makes it in one `BEGIN IMMEDIATE`
+transaction. Messages, reactions, reads, uploads, search, typing and voice use the room paths unchanged, because they key on `room_id`.
+
+- **Who sees it.** `can_see` (`api_rooms.rs`) lets only the two members in, whatever their role, so the owner and moderators get 404 on its
+  history, send and search, and it is not in their `GET /api/rooms` or `hello`. `patch_room`, `reorder_rooms` and `set_room_members` in the store
+  match `kind = 'room'` only, so a DM id is `NotFound` to them, and the "last room cannot be archived" count ignores DMs.
+- **Bans.** A banned account cannot be messaged and cannot see anything, but its DMs stay readable to the other person.
+- **Voice.** `Voice::join`, presence and `Voice::refresh` all use `can_see`, so a DM has voice for its two members with no extra code.
+- **Push.** A DM message pushes `kind: "dm"` ("alice sent you a message", no text) to the other member when they have no socket open, at most
+  once per 30 s per DM and person, under the device's mentions switch. A mention push is not sent for a DM. A voice start in a DM reads "alice is in
+  voice with you". Both carry `icon`, the sender's picture path; the service worker fetches it with the session cookie and falls back to the default icon.
+- **Web.** `AppState.dms` holds them apart from `rooms`, each renamed to the other person's display name (`titled` in `state.ts`), so every
+  room name on screen shows the person. The sidebar has a "Direct messages" section; the person card has a "Message" button.
+- **Not private from the server's owner.** Plain storage. Whoever can read `vesper.db` or a backup can read DMs.
+
 ## Message flow
 
 All messages are JSON on one WebSocket per tab, tagged by `type` (`vesper-protocol/src/lib.rs`).
@@ -289,7 +307,8 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/users/{id}/kick` | moderator or owner, on a lower role | 204, the user leaves voice; 404 if not in voice |
 | `POST /api/users/{id}/force-mute` (`ForceMute`) | moderator or owner, on a lower role | 204; `muted: false` lifts it; works when not in voice too |
 | `POST /api/users/{id}/disconnect` | moderator or owner, on a lower role | 204, every socket of the user closes with 4003 |
-| `GET /api/rooms` | a session | `RoomInfo[]` by position, only the rooms you can see |
+| `GET /api/rooms` | a session | `RoomInfo[]` by position, only the rooms you can see. A DM (`kind: "dm"`) is listed to its two members only |
+| `POST /api/dms` (`DmCreate`) | a session, Change limit by user | `RoomInfo` of the DM with that person, made if needed; yourself and a banned account are 400, an unknown one 404 |
 | `POST /api/rooms` (`RoomCreate`) | owner | 201 `RoomInfo`, open, placed last |
 | `PATCH /api/rooms/{id}` (`RoomPatch`: `name`, `restricted`, `archived`) | owner | the new `RoomInfo`; archiving the last room that is not archived is 409 |
 | `PUT /api/rooms/order` (`RoomOrder`) | owner | 204; `ids` must hold every room id once, else 409 |
@@ -489,7 +508,7 @@ Notifications while Vesper is closed (issue #58): "alice mentioned you in Games"
 `routes/settings/PushSettings.svelte` and `web/public/sw.js`.
 
 - **Opt-in per device.** Settings > Notifications > While Vesper is closed. The switch asks for permission (from the click), registers
-  `/sw.js` and subscribes with the server's VAPID public key. Each device has a mentions switch and a voice switch, both off
+  `/sw.js` and subscribes with the server's VAPID public key. Each device has a mentions switch (it also covers direct messages) and a voice switch, both off
   until the person turns them on. Turning it off, or logging out, unregisters the worker; the server deletes the subscription with the session.
 - **Who gets one.** A new message pushes to the accounts it mentions (already limited to people who can see the room and are not
   banned). The first join of an empty voice room pushes to everyone who can see the room. Never to the sender, never to an account with a
