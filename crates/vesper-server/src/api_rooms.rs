@@ -4,9 +4,11 @@
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, patch, put};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
-use vesper_protocol::{Role, RoomCreate, RoomInfo, RoomMembers, RoomOrder, RoomPatch, UserInfo};
+use vesper_protocol::{
+    DmCreate, Role, RoomCreate, RoomInfo, RoomKind, RoomMembers, RoomOrder, RoomPatch, UserInfo,
+};
 use vesper_store::now_ms;
 
 use crate::api_accounts::body;
@@ -16,11 +18,18 @@ use crate::{ApiError, AppState, Authed};
 
 /// Owner and moderators see every room; others see open rooms and restricted ones that list them.
 /// Nobody sees an archived room: it can not be read, posted to, searched, typed in or joined.
+/// A DM is the exception to the role rule: only its two members see it, whatever their role.
 pub fn can_see(user: &UserInfo, room: &RoomInfo) -> bool {
-    !room.archived
-        && (matches!(user.role, Role::Owner | Role::Moderator)
-            || !room.restricted
-            || room.members.contains(&user.user_id))
+    if room.archived {
+        return false;
+    }
+    let member = room.members.contains(&user.user_id);
+    match room.kind {
+        RoomKind::Dm => member,
+        RoomKind::Room => {
+            matches!(user.role, Role::Owner | Role::Moderator) || !room.restricted || member
+        }
+    }
 }
 
 /// In the user's room list: what `can_see` allows, plus archived rooms for the owner, whose
@@ -35,6 +44,7 @@ pub fn routes() -> Router<AppState> {
         .route("/rooms/order", put(reorder))
         .route("/rooms/{id}", patch(update))
         .route("/rooms/{id}/members", put(members))
+        .route("/dms", post(open_dm))
 }
 
 /// Same rule as display names: NFC, 1 to 32 chars, no control or hidden format characters.
@@ -125,6 +135,26 @@ async fn members(
     Ok(Json(room))
 }
 
+/// Opens (or makes) the DM with another person. A banned person can not be messaged; a banned
+/// account's existing DMs stay readable to the other person.
+async fn open_dm(
+    State(st): State<AppState>,
+    a: Authed,
+    req: Result<Json<DmCreate>, JsonRejection>,
+) -> Result<Json<RoomInfo>, ApiError> {
+    crate::api_accounts::limit(&st, crate::limits::Kind::Change, &a.user.user_id)?;
+    let other = body(req)?.user_id;
+    if other == a.user.user_id {
+        return Err(bad("you can not message yourself"));
+    }
+    if st.store.user(&other).await?.banned {
+        return Err(bad("that account is banned"));
+    }
+    let room = st.store.dm_with(&a.user.user_id, &other, now_ms()).await?;
+    rooms_changed(&st).await;
+    Ok(Json(room))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,7 +178,7 @@ mod tests {
             position: 0,
             restricted,
             members: members.iter().map(|m| m.to_string()).collect(),
-            archived: false,
+            ..RoomInfo::default()
         };
         let (open, closed, named) = (room(false, &[]), room(true, &["b"]), room(true, &["a"]));
         for role in [Role::Owner, Role::Moderator, Role::Member] {
@@ -166,6 +196,21 @@ mod tests {
                 assert_eq!(listed(&u, &gone), role == Role::Owner, "{role:?}");
                 assert_eq!(listed(&u, r), can_see(&u, r), "{role:?}");
             }
+            // A DM is seen by its two members only, whatever their role.
+            let dm = |members: &[&str]| RoomInfo {
+                kind: RoomKind::Dm,
+                restricted: true,
+                members: members.iter().map(|m| m.to_string()).collect(),
+                ..room(true, &[])
+            };
+            assert!(can_see(&u, &dm(&["a", "b"])), "{role:?}");
+            assert!(!can_see(&u, &dm(&["b", "c"])), "{role:?}");
+            let gone = RoomInfo {
+                archived: true,
+                ..dm(&["a", "b"])
+            };
+            assert!(!can_see(&u, &gone), "{role:?}");
+            assert!(!listed(&u, &dm(&["b", "c"])), "{role:?}");
         }
     }
 }

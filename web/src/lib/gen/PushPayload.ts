@@ -4,4 +4,8 @@
  * What the service worker gets, encrypted (RFC 8291): never a message body. `kind` is
  * `mention`, `voice` or `test`; `room_id` is 0 for `test`.
  */
-export type PushPayload = { kind: string, room_id: number, title: string, body: string, };
+export type PushPayload = { kind: string, room_id: number, title: string, body: string, 
+/**
+ * A same-origin path to the sender's profile picture, for DM pushes. Null for the default icon.
+ */
+icon: string | null, };

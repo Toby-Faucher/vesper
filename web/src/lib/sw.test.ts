@@ -37,3 +37,18 @@ describe('sw.js badge', () => {
     }
   });
 });
+
+describe('sw.js direct messages', () => {
+  it('a DM push marks the badge and uses the default icon when it has no valid picture path', async () => {
+    const nav = { setAppBadge: vi.fn(async () => {}) };
+    const { self, push } = worker(nav);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    await push({ kind: 'dm', room_id: 3, title: 'Vesper', body: 'alice sent you a message', icon: null });
+    await push({ kind: 'dm', room_id: 3, title: 'Vesper', body: 'x', icon: 'https://evil.example/a.png' });
+    expect(nav.setAppBadge).toHaveBeenCalledTimes(2);
+    const icons = self.registration.showNotification.mock.calls.map((c) => (c as unknown as [string, { icon: string }])[1].icon);
+    expect(icons).toEqual(['/icon-192.png', '/icon-192.png']);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+});

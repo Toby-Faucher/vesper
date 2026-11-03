@@ -26,7 +26,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
-use vesper_protocol::{PushPayload, RoomInfo, UserInfo};
+use vesper_protocol::{PushPayload, RoomInfo, RoomKind, UserInfo};
 use vesper_store::{PushKind, PushTarget, Store, StoreError, now_ms};
 
 use crate::api_rooms::can_see;
@@ -51,6 +51,8 @@ const PARALLEL: usize = 8;
 pub const MAX_PENDING: usize = 256;
 /// One "started voice" push per room and person in this long.
 pub const VOICE_EVERY: Duration = Duration::from_secs(10 * 60);
+/// One "sent you a message" push per DM and person in this long, so a burst is one push.
+pub const DM_EVERY: Duration = Duration::from_secs(30);
 const VAPID_SECRET: &str = "vapid_es256_pkcs8";
 /// Record size in the `aes128gcm` header: the whole payload is one record.
 const RECORD_SIZE: u32 = 4096;
@@ -320,19 +322,30 @@ pub struct VoiceDedupe(HashMap<(i64, String), Instant>);
 impl VoiceDedupe {
     /// True (and remembered) when `who` has had no voice push for `room` lately.
     pub fn take(&mut self, room: i64, who: &str, now: Instant) -> bool {
+        self.take_within(room, who, now, VOICE_EVERY)
+    }
+
+    /// Like [`VoiceDedupe::take`] with your own window.
+    pub fn take_within(&mut self, room: i64, who: &str, now: Instant, every: Duration) -> bool {
         if self.0.len() > 10_000 {
             self.0
-                .retain(|_, t| now.saturating_duration_since(*t) < VOICE_EVERY);
+                .retain(|_, t| now.saturating_duration_since(*t) < every);
         }
         let key = (room, who.to_string());
         match self.0.get(&key) {
-            Some(t) if now.saturating_duration_since(*t) < VOICE_EVERY => false,
+            Some(t) if now.saturating_duration_since(*t) < every => false,
             _ => {
                 self.0.insert(key, now);
                 true
             }
         }
     }
+}
+
+/// The path the service worker fetches for a person's picture; none while they have the letter avatar.
+fn avatar_icon(u: &UserInfo) -> Option<String> {
+    let v = u.avatar.as_ref()?;
+    Some(format!("/api/users/{}/avatar?v={v}", u.user_id))
 }
 
 /// One place in the send queue; dropping it (the task ended, panicked or was cancelled) gives
@@ -381,6 +394,7 @@ struct Inner {
     dropped_warned: Mutex<Option<Instant>>,
     timeout: Duration,
     voice: Mutex<VoiceDedupe>,
+    dm: Mutex<VoiceDedupe>,
     /// When each recent failed send ended, oldest first, for Admin > Server.
     failures: Mutex<VecDeque<Instant>>,
 }
@@ -431,6 +445,7 @@ impl Push {
             dropped_warned: Mutex::default(),
             timeout,
             voice: Mutex::default(),
+            dm: Mutex::default(),
             failures: Mutex::default(),
         })))
     }
@@ -487,6 +502,7 @@ impl Push {
             room_id: room.id,
             title: "Vesper".into(),
             body: format!("{} mentioned you in {}", sender.display_name, room.name),
+            icon: None,
         };
         self.fan_out(
             who,
@@ -495,6 +511,39 @@ impl Push {
             24 * 3600,
             "high",
             format!("m{}", room.id),
+        );
+    }
+
+    /// `sender` wrote in the DM `room`. The other member gets one push per [`DM_EVERY`], and only
+    /// with no socket open. It uses the device's mentions switch, and carries no message text.
+    pub async fn direct_message(&self, room: &RoomInfo, sender: &UserInfo) {
+        if self.public_key().is_none() {
+            return;
+        }
+        let users = match self.0.store.users().await {
+            Ok(u) => u,
+            Err(e) => return warn!("push: store: {e}"),
+        };
+        let mut who = recipients(&users, room, &sender.user_id, |id| self.0.hub.online(id));
+        {
+            let mut d = self.0.dm.lock().expect("push lock poisoned");
+            let now = Instant::now();
+            who.retain(|id| d.take_within(room.id, id, now, DM_EVERY));
+        }
+        let payload = PushPayload {
+            kind: "dm".into(),
+            room_id: room.id,
+            title: "Vesper".into(),
+            body: format!("{} sent you a message", sender.display_name),
+            icon: avatar_icon(sender),
+        };
+        self.fan_out(
+            who,
+            PushKind::Mentions,
+            payload,
+            24 * 3600,
+            "high",
+            format!("d{}", room.id),
         );
     }
 
@@ -513,11 +562,19 @@ impl Push {
             let now = Instant::now();
             who.retain(|id| d.take(room.id, id, now));
         }
+        let body = if room.kind == RoomKind::Dm {
+            format!("{} is in voice with you", starter.display_name)
+        } else {
+            format!("{} started voice in {}", starter.display_name, room.name)
+        };
         let payload = PushPayload {
             kind: "voice".into(),
             room_id: room.id,
             title: "Vesper".into(),
-            body: format!("{} started voice in {}", starter.display_name, room.name),
+            body,
+            icon: (room.kind == RoomKind::Dm)
+                .then(|| avatar_icon(starter))
+                .flatten(),
         };
         // A stale "started voice" is no use: the push service drops it after 10 minutes.
         self.fan_out(

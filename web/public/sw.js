@@ -6,7 +6,8 @@
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
-// The payload is { kind, room_id, title, body }, decrypted by the browser. It never holds a message text.
+// The payload is { kind, room_id, title, body, icon }, decrypted by the browser. It never holds a message text.
+// icon is a same-origin path to the sender's picture (DM pushes only).
 self.addEventListener('push', (e) => {
   let p = {};
   try {
@@ -18,13 +19,33 @@ self.addEventListener('push', (e) => {
   const title = typeof p.title === 'string' ? p.title.slice(0, 64) : 'Vesper';
   const body = typeof p.body === 'string' ? p.body.slice(0, 200) : 'Something happened in Vesper.';
   // One notification per room and kind: a newer mention replaces an older one, but "started voice" never hides a mention.
-  const kind = ['mention', 'voice', 'test'].includes(p.kind) ? p.kind : 'other';
+  const kind = ['mention', 'dm', 'voice', 'test'].includes(p.kind) ? p.kind : 'other';
   const tag = room ? `${kind}-${room}` : 'vesper';
   // A mention marks the app's badge (no number: the worker does not know the count; the page sets it when it opens).
   // Only where the Badging API exists: Firefox has none.
-  const mark = kind === 'mention' ? self.navigator.setAppBadge?.()?.catch(() => {}) : undefined;
-  e.waitUntil(Promise.all([self.registration.showNotification(title, { body, tag, icon: '/icon-192.png', data: { room } }), mark]));
+  const mark = kind === 'mention' || kind === 'dm' ? self.navigator.setAppBadge?.()?.catch(() => {}) : undefined;
+  e.waitUntil(Promise.all([picture(p.icon).then((icon) => self.registration.showNotification(title, { body, tag, icon, data: { room } })), mark]));
 });
+
+// The sender's picture as a data URL, because a notification icon is fetched without the session cookie. Any failure gives the default icon.
+async function picture(path) {
+  const fallback = '/icon-192.png';
+  if (typeof path !== 'string' || !/^\/api\/users\/[0-9a-f]{32}\/avatar\?v=[\w-]+$/.test(path)) return fallback;
+  try {
+    const r = await fetch(path, { credentials: 'same-origin' });
+    if (!r.ok) return fallback;
+    const blob = await r.blob();
+    if (blob.size > 512 * 1024) return fallback;
+    return await new Promise((ok, no) => {
+      const f = new FileReader();
+      f.onload = () => ok(f.result);
+      f.onerror = no;
+      f.readAsDataURL(blob);
+    });
+  } catch {
+    return fallback;
+  }
+}
 
 // Focus an open Vesper tab and open the room in it (the app navigates in place, so a call goes on), else open a new one.
 self.addEventListener('notificationclick', (e) => {

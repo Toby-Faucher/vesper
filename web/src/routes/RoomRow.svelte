@@ -4,6 +4,7 @@
   import type { RoomInfo } from '../lib/gen/RoomInfo';
   import { href } from '../lib/route';
   import { session } from '../lib/session.svelte';
+  import Avatar from '../lib/ui/c/Avatar.svelte';
   import Badge from '../lib/ui/c/Badge.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   import PresenceList from './PresenceList.svelte';
@@ -14,9 +15,10 @@
   let fold = $state<boolean | null>(null); // the reader's choice; null follows the count
   const folded = $derived(fold ?? peers.length > FOLD_ABOVE);
   const u = $derived(session.state.unread[room.id]);
+  const dmUser = $derived(room.kind === 'dm' ? session.state.users[room.members.find((m) => m !== session.state.me?.user.user_id) ?? ''] : undefined);
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const label = $derived(
-    [room.name, room.restricted && 'restricted', u?.unread && `${u.unread} unread`, u?.mentions && plural(u.mentions, 'mention'),
+    [room.name, room.kind === 'room' && room.restricted && 'restricted', u?.unread && `${u.unread} unread`, u?.mentions && plural(u.mentions, 'mention'),
       peers.length && `${peers.length} in voice`].filter(Boolean).join(', '),
   );
 </script>
@@ -25,8 +27,9 @@
   <div class="row group flex h-7 items-center rounded-sm" class:current class:unread={!!u?.unread}>
     <a href={href({ name: 'room', id: room.id })} aria-current={current ? 'page' : undefined} aria-label={label} title={room.name}
       class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2">
+      {#if dmUser}<Avatar user={dmUser} size={20} />{/if}
       <span class="name min-w-0 truncate">{room.name}</span>
-      {#if room.restricted}<span class="meta flex shrink-0"><Icon d={I.shield} /></span>{/if}
+      {#if room.kind === 'room' && room.restricted}<span class="meta flex shrink-0"><Icon d={I.shield} /></span>{/if}
       <span class="ml-auto flex shrink-0 items-center gap-1 pl-1">
         {#if u?.unread}<Badge kind="count" n={u.unread} pop />{/if}
         {#if u?.mentions}<Badge kind="mention" n={u.mentions} pop />{/if}

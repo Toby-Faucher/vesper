@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use sqlx::{FromRow, SqliteConnection};
-use vesper_protocol::RoomInfo;
+use vesper_protocol::{RoomInfo, RoomKind};
 
 use crate::{Result, Store, StoreError, constraint};
 
@@ -12,12 +12,18 @@ struct RoomRow {
     position: i64,
     restricted: bool,
     archived: bool,
+    kind: String,
 }
 
 impl RoomRow {
     fn into_info(self, members: Vec<String>) -> RoomInfo {
         RoomInfo {
             id: self.id,
+            kind: if self.kind == "dm" {
+                RoomKind::Dm
+            } else {
+                RoomKind::Room
+            },
             name: self.name,
             position: self.position,
             restricted: self.restricted,
@@ -32,7 +38,7 @@ const DUPLICATE: &str = "a room with that name exists";
 
 async fn room_by_id(c: &mut SqliteConnection, id: i64) -> Result<RoomInfo> {
     let row = sqlx::query_as::<_, RoomRow>(
-        "SELECT id, name, position, restricted, archived_at IS NOT NULL AS archived
+        "SELECT id, name, position, restricted, archived_at IS NOT NULL AS archived, kind
          FROM rooms WHERE id = ?1",
     )
     .bind(id)
@@ -53,7 +59,7 @@ impl Store {
     pub async fn rooms(&self) -> Result<Vec<RoomInfo>> {
         let mut c = self.pool.acquire().await?;
         let rows = sqlx::query_as::<_, RoomRow>(
-            "SELECT id, name, position, restricted, archived_at IS NOT NULL AS archived
+            "SELECT id, name, position, restricted, archived_at IS NOT NULL AS archived, kind
              FROM rooms ORDER BY position, id",
         )
         .fetch_all(&mut *c)
@@ -107,7 +113,7 @@ impl Store {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if archived == Some(true) {
             let others: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM rooms WHERE id != ?1 AND archived_at IS NULL",
+                "SELECT count(*) FROM rooms WHERE id != ?1 AND archived_at IS NULL AND kind = 'room'",
             )
             .bind(id)
             .fetch_one(&mut *tx)
@@ -120,7 +126,7 @@ impl Store {
             "UPDATE rooms SET name = coalesce(?2, name), restricted = coalesce(?3, restricted),
                 archived_at = CASE ?4 WHEN 1 THEN coalesce(archived_at, ?5) WHEN 0 THEN NULL
                     ELSE archived_at END
-             WHERE id = ?1",
+             WHERE id = ?1 AND kind = 'room'",
         )
         .bind(id)
         .bind(name)
@@ -150,16 +156,17 @@ impl Store {
     pub async fn reorder_rooms(&self, ids: &[i64]) -> Result<()> {
         // IMMEDIATE so a room created meanwhile can not slip between the check and the update.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let all: Vec<i64> = sqlx::query_scalar("SELECT id FROM rooms ORDER BY id")
-            .fetch_all(&mut *tx)
-            .await?;
+        let all: Vec<i64> =
+            sqlx::query_scalar("SELECT id FROM rooms WHERE kind = 'room' ORDER BY id")
+                .fetch_all(&mut *tx)
+                .await?;
         let mut given = ids.to_vec();
         given.sort_unstable();
         if given != all {
             return Err(StoreError::Conflict("the order must list every room once"));
         }
         for (pos, id) in ids.iter().enumerate() {
-            sqlx::query("UPDATE rooms SET position = ?2 WHERE id = ?1")
+            sqlx::query("UPDATE rooms SET position = ?2 WHERE id = ?1 AND kind = 'room'")
                 .bind(id)
                 .bind(pos as i64)
                 .execute(&mut *tx)
@@ -173,10 +180,12 @@ impl Store {
     pub async fn set_room_members(&self, id: i64, user_ids: &[String]) -> Result<RoomInfo> {
         // IMMEDIATE: a deferred read-then-write can fail with SQLITE_BUSY_SNAPSHOT under a racing writer.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM rooms WHERE id = ?1)")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM rooms WHERE id = ?1 AND kind = 'room')",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
         if !exists {
             return Err(StoreError::NotFound);
         }
@@ -192,6 +201,49 @@ impl Store {
                 .await
                 .map_err(|e| constraint(e, "duplicate member"))?;
         }
+        let room = room_by_id(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(room)
+    }
+
+    /// The DM between two different accounts, made if it does not exist. The pair is the same
+    /// whichever way round it is given. `NotFound` if either account does not exist.
+    pub async fn dm_with(&self, a: &str, b: &str, now: i64) -> Result<RoomInfo> {
+        if a == b {
+            return Err(StoreError::Conflict("a DM needs two different people"));
+        }
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        let name = format!("dm-{lo}-{hi}");
+        // IMMEDIATE: two first messages at once make one room, not two.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let found: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM rooms WHERE name = ?1 AND kind = 'dm'")
+                .bind(&name)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let id = match found {
+            Some(id) => id,
+            None => {
+                let id: i64 = sqlx::query_scalar(
+                    "INSERT INTO rooms (name, position, restricted, kind, created_at)
+                     VALUES (?1, 0, 1, 'dm', ?2) RETURNING id",
+                )
+                .bind(&name)
+                .bind(now)
+                .fetch_one(&mut *tx)
+                .await?;
+                for who in [lo, hi] {
+                    // The foreign key makes an unknown account fail here.
+                    sqlx::query("INSERT INTO room_members (room_id, account_id) VALUES (?1, ?2)")
+                        .bind(id)
+                        .bind(who)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| constraint(e, "no such account"))?;
+                }
+                id
+            }
+        };
         let room = room_by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok(room)

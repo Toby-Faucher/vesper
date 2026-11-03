@@ -402,7 +402,7 @@ describe('in a call', () => {
 
   it('a room that vanished from the list ends the call and tells the server', async () => {
     await joined();
-    sig.emit({ type: 'rooms_changed', rooms: [{ id: 2, name: 'r', position: 0, restricted: false, members: [], archived: false }] } as ServerMsg);
+    sig.emit({ type: 'rooms_changed', rooms: [{ id: 2, kind: 'room', name: 'r', position: 0, restricted: false, members: [], archived: false }] } as ServerMsg);
     expect(voice.joined).toBe(false);
     expect(voice.error).toBe(ROOM_GONE);
     expect(sig.leaves).toBe(1);

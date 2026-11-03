@@ -120,6 +120,7 @@ async fn test(State(st): State<AppState>, a: Authed) -> Result<StatusCode, ApiEr
         room_id: 0,
         title: "Vesper".into(),
         body: "Notifications reach this device.".into(),
+        icon: None,
     };
     let body = serde_json::to_vec(&payload).expect("payload serialises");
     match st.push.send(&t, &body, 60, "high", "test").await {

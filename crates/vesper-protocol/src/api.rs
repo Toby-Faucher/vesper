@@ -322,11 +322,30 @@ pub struct ForceMute {
     pub muted: bool,
 }
 
+/// A `dm` is a locked room of exactly two people. Its `name` is generated; show the other member.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum RoomKind {
+    #[default]
+    Room,
+    Dm,
+}
+
+/// `POST /api/dms`: the DM with this person, made if it does not exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DmCreate {
+    pub user_id: String,
+}
+
 /// A room has text and voice. `members` is filled only when `restricted`. An `archived` room is
 /// sent to the owner only (for Admin > Rooms); nobody can open, post to, search or join it.
+/// A `dm` is seen by its two members only, whatever their role.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct RoomInfo {
+    pub kind: RoomKind,
     #[ts(type = "number")]
     pub id: i64,
     pub name: String,
@@ -651,6 +670,8 @@ pub struct PushPayload {
     pub room_id: i64,
     pub title: String,
     pub body: String,
+    /// A same-origin path to the sender's profile picture, for DM pushes. Null for the default icon.
+    pub icon: Option<String>,
 }
 
 /// The noise suppression a call ended in (the web client's `DenoiseMode`).

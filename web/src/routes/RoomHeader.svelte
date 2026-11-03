@@ -32,11 +32,14 @@
     <span class="-ml-2"><IconButton icon={I.sidebar} label="Show sidebar" tip aria-expanded="false" aria-controls="sidebar" onclick={() => setCollapsed(false)} /></span>
   {/if}
   <h1 class="min-w-0 truncate text-base font-medium text-fg" title={room.name}>{room.name}</h1>
-  {#if room.restricted}
+  {#if room.kind === 'dm'}
+    <!-- Not end-to-end encrypted: whoever runs the server can read the database. -->
+    <span class="flex shrink-0 items-center gap-1 text-xs text-fg-2" title="Only you two can see this in Vesper. Whoever runs the server can still read the database."><Icon d={I.shield} />Direct message</span>
+  {:else if room.restricted}
     <span class="flex shrink-0 items-center gap-1 text-xs text-fg-2"><Icon d={I.shield} />Restricted</span>
   {/if}
   <div class="ml-auto flex shrink-0 items-center gap-2">
-    <span class="pins"><IconButton icon={I.pin} label="Pins" tip bind:el={pinsEl} onclick={togglePins} /></span>
+    {#if room.kind === 'room'}<span class="pins"><IconButton icon={I.pin} label="Pins" tip bind:el={pinsEl} onclick={togglePins} /></span>{/if}
     {#if pins}
       {#await pins then m}
         <m.default roomId={room.id} anchor={pinsEl} open={pinsOpen} onclose={() => (pinsOpen = false)} />

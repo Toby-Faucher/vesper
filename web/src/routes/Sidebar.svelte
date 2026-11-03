@@ -22,6 +22,8 @@
   let { current }: { current: number | null } = $props();
 
   const rooms = $derived([...session.state.rooms].sort((a, b) => a.position - b.position));
+  // By name: the list has no activity time to sort by.
+  const dms = $derived([...session.state.dms].sort((a, b) => a.name.localeCompare(b.name)));
   const me = $derived(session.state.me?.user);
   const staff = $derived(me?.role === 'owner' || me?.role === 'moderator');
   // The server tells everyone else about your join, not you: your own row comes from the call itself.
@@ -61,6 +63,14 @@
   </div>
 
   <nav bind:this={nav} aria-label="Rooms" class="relative isolate min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+    {#if dms.length}
+      <h2 class="flex h-7 items-center px-2 text-xs text-fg-3">Direct messages</h2>
+      <ul class="mb-2 flex flex-col gap-px">
+        {#each dms as room (room.id)}
+          <RoomRow {room} current={room.id === current} peers={peersIn(room.id)} />
+        {/each}
+      </ul>
+    {/if}
     <h2 class="flex h-7 items-center px-2 text-xs text-fg-3">Rooms</h2>
     {#if rooms.length}
       <ul class="flex flex-col gap-px">

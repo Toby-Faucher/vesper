@@ -3,7 +3,7 @@ import { CALL_ENDED, ROOM_GONE, callEvent, idleCall } from './call';
 
 const me = 'a'.repeat(32);
 const inCall = { userId: me, room: 1, muted: false };
-const room = (id: number) => ({ id, name: 'r', position: 0, restricted: false, members: [], archived: false });
+const room = (id: number) => ({ id, kind: 'room' as const, name: 'r', position: 0, restricted: false, members: [], archived: false });
 
 describe('callEvent', () => {
   it('peer_left with our own id ends the call; another id does not', () => {
