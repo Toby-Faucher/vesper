@@ -49,7 +49,7 @@ The "Not verified" list at the end says what was only read.
   verified). The dialog waits 300 ms after the last key, does not send a lone one-letter word, aborts a request the next query replaces,
   retries a 429 once after a second and then says search is busy until Enter, drops the hits of a room you can no longer see and asks again,
   and a result jumps to the message with `around=`. New messages from others are read out by a polite live region; paste
-  takes only PNG, JPEG, GIF and WebP images.
+  takes only PNG, JPEG, GIF and WebP images. A pasted image named `image.png` gets a name like `Pasted image 2026-11-03 14.05.png` (local time, ` (2)` for a repeat); other names stay.
 - **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed
   elements. The server stores and searches the raw text; only the client formats it. This is the whole subset:
 

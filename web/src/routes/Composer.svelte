@@ -23,6 +23,7 @@
   import Icon from '../lib/ui/c/Icon.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
   import Popover from '../lib/ui/c/Popover.svelte';
+  import { isGenericPaste, pastedName } from '../lib/ui/attachments';
   import { tray } from '../lib/ui/tray.svelte';
   import UploadTray from './UploadTray.svelte';
 
@@ -228,11 +229,20 @@
     if (files.length) tray.add(roomId, files);
   }
 
+  const pastedNames = new Set<string>(); // names given this session, so a sent one is not reused in the same minute
   function onPaste(e: ClipboardEvent) {
     const files = [...(e.clipboardData?.files ?? [])].filter((f) => PASTE_TYPES.includes(f.type));
     if (!files.length) return;
     e.preventDefault();
-    attach(files);
+    // Browsers name every pasted clipboard image image.png: give it a distinct name (a file with a real name keeps it).
+    const taken = new Set([...pastedNames, ...tray.items.map((i) => i.file.name)]);
+    attach(files.map((f) => {
+      if (!isGenericPaste(f.name)) return f;
+      const name = pastedName(f.type, new Date(), taken);
+      taken.add(name);
+      pastedNames.add(name);
+      return new File([f], name, { type: f.type, lastModified: f.lastModified });
+    }));
   }
 
   function cancelReply() {
