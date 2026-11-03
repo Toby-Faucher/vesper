@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BOX, fileSize, fit, typeLabel, viewCase } from './attachments';
+import { BOX, fileSize, fit, isGenericPaste, pastedName, typeLabel, viewCase } from './attachments';
 
 describe('attachments', () => {
   it('fits an image into the box without scaling it up', () => {
@@ -27,5 +27,24 @@ describe('attachments', () => {
     expect(fileSize(0)).toBe('1 KB');
     expect(fileSize(5 * 1024 * 1024)).toBe('5.0 MB');
     expect(fileSize(25 * 1024 * 1024 + 1)).toBe('25.1 MB');
+  });
+
+  it('names a pasted image by local time, with a counter, and keeps the type', () => {
+    const t = new Date(2026, 10, 3, 14, 5, 59);
+    expect(pastedName('image/png', t, new Set())).toBe('Pasted image 2026-11-03 14.05.png');
+    const taken = new Set(['Pasted image 2026-11-03 14.05.png']);
+    expect(pastedName('image/png', t, taken)).toBe('Pasted image 2026-11-03 14.05 (2).png');
+    taken.add('Pasted image 2026-11-03 14.05 (2).png');
+    expect(pastedName('image/png', t, taken)).toBe('Pasted image 2026-11-03 14.05 (3).png');
+    expect(pastedName('image/jpeg', new Date(2026, 0, 2, 3, 4), new Set())).toBe('Pasted image 2026-01-02 03.04.jpg');
+    expect(pastedName('image/webp', t, new Set())).toMatch(/\.webp$/);
+    expect(pastedName('image/gif', t, new Set())).toMatch(/\.gif$/);
+  });
+
+  it('only renames the generic clipboard name', () => {
+    expect(isGenericPaste('image.png')).toBe(true);
+    expect(isGenericPaste('Image.JPG')).toBe(true);
+    expect(isGenericPaste('holiday.png')).toBe(false);
+    expect(isGenericPaste('my image.png')).toBe(false);
   });
 });

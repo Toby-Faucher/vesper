@@ -42,14 +42,14 @@ The "Not verified" list at the end says what was only read.
   typing come over the socket. A `message_updated` copy with a smaller `updated_at` than the one held is dropped, and after
   every `hello` the shown room's newest page is fetched again and merged, so missed or reordered events heal. A message pushed while that
   page is in flight (also on a room's first open) is held and kept. Re-entering a room left on an older slice after a search jump shows its newest page. Unread counts come from `Hello.unread` and live events (`state.ts`); a room is
-  marked read when its newest message is on screen in a visible tab. Typing is sent at most every 3 s and shown for 5 s. Drafts are kept in memory
+  marked read when its newest message is on screen in a visible tab. Typing is sent at most every 3 s and shown for 5 s. The shown line has two dots that pulse and, for one typer, their picture; both enter and leave with the `row` preset inside the fixed 16 px line, so the list never moves, and under reduced motion only the text stays. The text is the live region. Drafts are kept in memory
   only. Search is a dialog (`SearchDialog.svelte`, Ctrl/Cmd+Shift+F or the header's Search button) with `from:`, `in:`, `after:` and
   `before:` in the text (`lib/ui/searchq.ts`; dates are whole local days, both included; the box takes 200 characters and sends at most 12
   words). Ctrl/Cmd+Shift+F works while typing in the composer too. On macOS, Cmd+Shift+F may also be a browser's full screen key (not
   verified). The dialog waits 300 ms after the last key, does not send a lone one-letter word, aborts a request the next query replaces,
   retries a 429 once after a second and then says search is busy until Enter, drops the hits of a room you can no longer see and asks again,
   and a result jumps to the message with `around=`. New messages from others are read out by a polite live region; paste
-  takes only PNG, JPEG, GIF and WebP images.
+  takes only PNG, JPEG, GIF and WebP images. A pasted image named `image.png` gets a name like `Pasted image 2026-11-03 14.05.png` (local time, ` (2)` for a repeat); other names stay.
 - **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed
   elements. The server stores and searches the raw text; only the client formats it. This is the whole subset:
 
