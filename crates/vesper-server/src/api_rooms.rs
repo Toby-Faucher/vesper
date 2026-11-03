@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use vesper_protocol::{
     DmCreate, Role, RoomCreate, RoomInfo, RoomKind, RoomMembers, RoomOrder, RoomPatch, UserInfo,
 };
-use vesper_store::now_ms;
+use vesper_store::{StoreError, now_ms};
 
 use crate::api_accounts::body;
 use crate::api_admin::{bad, path, require};
@@ -36,6 +36,21 @@ pub fn can_see(user: &UserInfo, room: &RoomInfo) -> bool {
 /// Admin > Rooms lists them to unarchive.
 pub fn listed(user: &UserInfo, room: &RoomInfo) -> bool {
     can_see(user, room) || (room.archived && user.role == Role::Owner)
+}
+
+/// The room, if `user` can see it. Unknown and hidden are both `NotFound`, so a caller can not
+/// probe room ids. The one place that loads a room and then asks `can_see`.
+pub(crate) async fn visible_room(
+    st: &AppState,
+    user: &UserInfo,
+    id: i64,
+) -> Result<RoomInfo, StoreError> {
+    let room = st.store.room(id).await?;
+    if can_see(user, &room) {
+        Ok(room)
+    } else {
+        Err(StoreError::NotFound)
+    }
 }
 
 pub fn routes() -> Router<AppState> {

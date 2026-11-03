@@ -68,7 +68,13 @@ async fn room_by_id(c: &mut SqliteConnection, id: i64) -> Result<RoomInfo> {
 }
 
 impl Store {
-    /// Every room, by position.
+    /// One room by id (a DM too), with its member list. Unknown is `NotFound`.
+    pub async fn room(&self, id: i64) -> Result<RoomInfo> {
+        let mut c = self.pool.acquire().await?;
+        room_by_id(&mut c, id).await
+    }
+
+    /// Every room, by position. Use [`Store::room`] when you need one.
     pub async fn rooms(&self) -> Result<Vec<RoomInfo>> {
         let mut c = self.pool.acquire().await?;
         let rows = sqlx::query_as::<_, RoomRow>(

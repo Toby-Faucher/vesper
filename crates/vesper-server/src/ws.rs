@@ -17,7 +17,7 @@ use vesper_store::{StoreError, now_ms};
 
 use crate::AppState;
 use crate::api_accounts::ApiError;
-use crate::api_rooms::{can_see, listed};
+use crate::api_rooms::{listed, visible_room};
 use crate::auth::{cookie_token, hash_token};
 use crate::hub::{Inbox, Outbox, outbox};
 use crate::limits::{Bucket, Kind};
@@ -327,19 +327,20 @@ async fn join(
         (ErrorCode::BadMessage, "server error".to_string())
     };
     let user = st.app.store.user(user_id).await.map_err(internal)?;
-    let rooms = st.app.store.rooms().await.map_err(internal)?;
     // An unknown room gets the same refusal as a hidden one, so a join cannot probe room ids.
-    let Some(room) = rooms.iter().find(|r| r.id == room_id) else {
-        return Err(voice_error(st, ErrorCode::Forbidden));
+    let room = match visible_room(&st.app, &user, room_id).await {
+        Ok(room) => room,
+        Err(StoreError::NotFound) => return Err(voice_error(st, ErrorCode::Forbidden)),
+        Err(e) => return Err(internal(e)),
     };
     let j = st
         .app
         .voice
-        .join(&user, room, offer, tx.clone())
+        .join(&user, &room, offer, tx.clone())
         .await
         .map_err(|code| voice_error(st, code))?;
     if j.first {
-        let (push, room) = (st.app.push.clone(), room.clone());
+        let push = st.app.push.clone();
         tokio::spawn(async move { push.voice_started(&room, &user).await });
     }
     Ok(j)
@@ -349,15 +350,20 @@ async fn join(
 /// limit (1 per 3 s per room), an unknown or hidden room, or a store error (logged) drops it.
 async fn typing(st: &WsState, user_id: &str, room_id: i64, tx: &Outbox) {
     // Fresh user and room, so a role or member list change counts (like `join`).
-    let (user, rooms) = match tokio::join!(st.app.store.user(user_id), st.app.store.rooms()) {
-        (Ok(user), Ok(rooms)) => (user, rooms),
-        (Err(e), _) | (_, Err(e)) => {
+    let user = match st.app.store.user(user_id).await {
+        Ok(user) => user,
+        Err(e) => {
             tracing::warn!("typing: store: {e}");
             return;
         }
     };
-    let Some(room) = rooms.iter().find(|r| r.id == room_id && can_see(&user, r)) else {
-        return;
+    let room = match visible_room(&st.app, &user, room_id).await {
+        Ok(room) => room,
+        Err(StoreError::NotFound) => return,
+        Err(e) => {
+            tracing::warn!("typing: store: {e}");
+            return;
+        }
     };
     // Keyed only after the room checks out, so made-up room ids cannot grow the limiter's map.
     let key = format!("{user_id} {room_id}");
@@ -373,7 +379,7 @@ async fn typing(st: &WsState, user_id: &str, room_id: i64, tx: &Outbox) {
         room_id,
         user_id: user_id.to_string(),
     };
-    st.app.hub.broadcast_room_except(room, msg, &[tx]);
+    st.app.hub.broadcast_room_except(&room, msg, &[tx]);
 }
 
 fn voice_error(st: &WsState, code: ErrorCode) -> (ErrorCode, String) {

@@ -285,3 +285,14 @@ async fn no_room_method_changes_a_dm() {
     assert_eq!(find(&after), find(&before));
     assert_eq!(find(&after), Some(dm));
 }
+
+#[tokio::test]
+async fn room_loads_one_room_dm_included() {
+    let (_tmp, s) = open().await;
+    let (a, b) = (user(&s, "ann").await, user(&s, "bob").await);
+    let general = s.rooms().await.unwrap()[0].clone();
+    assert_eq!(s.room(general.id).await.unwrap(), general);
+    let (dm, _) = s.dm_with(&a, &b, 5).await.unwrap();
+    assert_eq!(s.room(dm.id).await.unwrap(), dm);
+    assert!(matches!(s.room(999).await, Err(StoreError::NotFound)));
+}
