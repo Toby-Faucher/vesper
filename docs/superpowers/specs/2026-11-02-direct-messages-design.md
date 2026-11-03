@@ -14,6 +14,9 @@ PC, and it had been sent to their phone. Posting it in a room would show it to e
 - A DM is exactly two people. No private groups.
 - History is kept forever. A person can delete their own messages.
 - An unread badge, plus an optional browser notification that shows the sender's profile picture.
+- Voice in a DM, the same as in a room.
+- A moderator can never read a DM. A banned account's DMs stay readable to the other person.
+- The unread badge in a DM is the quiet room style, not the strong mention style.
 
 ## Goals
 
@@ -22,11 +25,14 @@ PC, and it had been sent to their phone. Posting it in a room would show it to e
    markdown, typing, read markers, unread counts, search.
 3. Only the two people can see a DM. The owner and moderators cannot see it in the app.
 4. A new DM message can reach a person who is in a voice room, in another tab, or has the tab closed.
+5. Two people can talk in a DM's voice, with the same mute, deafen, volume and noise suppression as a room.
 
 ## Non-goals (v1.5)
 
 - Private groups of 3 or more.
-- 1:1 voice calls. A DM has no voice. A join request for a DM room is refused.
+- Ringing. Nobody gets a ring or an accept and decline prompt. The other person sees who is in the DM's voice
+  and gets a push (see Voice).
+- Video and screen share.
 - End-to-end encryption. See "What 'private' means" below.
 - Message requests, blocking, or per-person mute.
 - Pins in a DM. They stay in the schema but the UI does not offer them.
@@ -66,7 +72,7 @@ Every place that lists or edits rooms must skip DMs:
 | `PATCH /api/rooms/:id`, reorder, `PUT members` | refuse a DM (`forbidden`) |
 | Admin > Rooms | filter out `kind = 'dm'` |
 | Search | already takes `visible_rooms` from `can_see`, so it follows the fix above |
-| `Voice::join` | refuse a DM room (`forbidden`) |
+| `Voice::join`, `Voice::refresh`, `Hub::broadcast_room` | no change: all three already gate on `can_see` (verified in `voice.rs` and `hub.rs`), so DM voice and its presence reach only the two members |
 
 A test per row. The `can_see` test already loops over every role, so a DM case goes in the same loop.
 
@@ -87,20 +93,30 @@ with `cargo test -p vesper-protocol`.
 
 - Sidebar: a "Direct messages" section above the rooms, one row per DM, newest activity first. Each row
   shows the other person's profile picture, their name and the unread badge.
-- A DM opens at `/r/<id>`, the same route as a room, with the chat panel and no voice controls.
+- A DM opens at `/r/<id>`, the same route as a room, with the chat panel and the join voice button.
+- The sidebar row shows a small speaking indicator while the other person is in the DM's voice, as a room row does.
 - The person card (`PersonCard.svelte`) gets a "Message" button that calls `POST /api/dms` and navigates.
-- Rooms keep working the same. Any code that assumes every `RoomInfo` has voice checks `kind` first.
+- Anywhere the UI shows a room name shows the other person's name for a DM, since the stored name is generated.
 
 ### Notifications
 
-- Unread badge: from `Hello.unread` and live events, as for rooms. Every unread DM message counts as a
-  mention (it is addressed to you), so the badge uses the strong style.
+- Unread badge: from `Hello.unread` and live events, as for rooms, in the quiet room style (Toby's call).
+  A DM message does not count as a mention.
 - Web Push: a third kind beside `mentions` and `voice`. "alice sent you a message", with alice's profile
   picture as the notification icon. Settings > Notifications gets a "Direct messages" switch per device,
   on by default.
 - The push does not carry the message text. This matches the existing mention push (my call).
-- One push per sender per person per 30 seconds, reusing the dedupe used for "started voice", so a burst
-  of messages is one notification (my call).
+- A burst of messages is one push: at most one per sender and person per 30 seconds. The existing
+  "started voice" dedupe is once per 10 minutes (`VOICE_EVERY`), so this needs its own small map (my call).
+
+### Voice
+
+- A DM uses the same join, SFU room (`room-<id>`) and presence as a room. The room cap of 12 does not matter.
+- The existing "started voice" push already goes to people who can see the room, so in a DM it goes to the
+  other person. In a DM the text reads "alice is in voice with you" and it uses the existing `voice` switch.
+  The 10 minute dedupe applies.
+- No ring. The other person finds out by push, or by the speaking indicator in the sidebar if the app is open.
+- If a call is up and the other person is banned, `Voice::refresh` removes them, as for any room.
 
 ### What "private" means
 
@@ -115,16 +131,23 @@ End-to-end encryption would break server-side search and history sync, and is a 
 1. Migration, store functions, `can_see` and every row in the visibility table, with tests. (about half a day)
 2. `POST /api/dms`, `RoomInfo.kind`, regenerated types, voice refusal. (about 2 hours)
 3. Sidebar section, person card button, hide voice controls. (about half a day)
-4. DM push kind and settings switch. (about 2 hours)
-5. Docs: `architecture.md`, `env.md` if a variable changes (none planned), `known-issues.md`.
+4. DM push kind and settings switch, and the DM wording of the voice push. (about 3 hours)
+5. DM voice in the web app: join from a DM, sidebar indicator, DM name in the call bar. (about half a day)
+6. Docs: `architecture.md`, `env.md` if a variable changes (none planned), `known-issues.md`.
 
-About two days in total. Step 1 can ship alone behind no UI.
+About two and a half days in total. Step 1 can ship alone behind no UI.
+
+## Decided (Toby, 2026-11-02)
+
+1. A moderator can never read a DM, for any reason.
+2. When an account is banned, the other person still sees the DMs.
+3. The unread badge in a DM is the quiet room style.
+4. DMs have voice.
 
 ## Open questions for Toby
 
-1. Should a moderator ever be able to read a DM, for abuse reports? This design says no. Say if that is wrong.
-2. When an account is banned, should its DMs stay readable to the other person? This design says yes.
-3. Unread DM messages as strong badges, or the quieter room style?
+1. Is a push and a sidebar indicator enough for voice, or do you want a ring (a sound and an accept prompt) in v1.5?
+   This design says no ring, because a ring is its own piece of work.
 
 ## Not verified
 
@@ -132,4 +155,6 @@ About two days in total. Step 1 can ship alone behind no UI.
 - Whether every call site of `Store::rooms()` is covered by the table above. A grep for callers is the
   first task of step 1.
 - That push icons work on every browser Vesper supports.
+- Voice in a DM. The server side is read from `voice.rs` and `hub.rs` only. No call was made, and the web call
+  code was not read for assumptions that a call belongs to a named room.
 - The estimate. It assumes the existing chat panel needs no change beyond hiding voice.
