@@ -120,6 +120,7 @@
 
 <style>
   .option { max-width: 320px; border: 1px solid var(--line); }
+  fieldset:disabled .option { cursor: not-allowed; opacity: 0.6; }
   .option:hover { background: var(--bg-hover); }
   .option:has(:checked) { border-color: var(--line-strong); background: var(--bg-selected); }
   .option:has(:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }

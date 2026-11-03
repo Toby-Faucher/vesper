@@ -12,7 +12,7 @@
     <script>
       try {
         var s = localStorage.getItem('vesper.scheme'),
-          f = {}[localStorage.getItem('vesper.style')],
+          f = { persona: 'dark' }[localStorage.getItem('vesper.style')],
           l = f ? f === 'light' : s === 'light' || (s === 'system' && matchMedia('(prefers-color-scheme: light)').matches),
           d = document.documentElement;
         d.setAttribute('data-scheme', l ? 'light' : 'dark');

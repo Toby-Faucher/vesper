@@ -83,6 +83,47 @@ Settings still checks a custom colour in dark only (the stored value is the same
 always paints in light, which `accent.test.ts` checks for the presets and a grid of colours. The logo and the tab icon keep the
 unchanged accent colour: the logo has its own dark ring, so it reads on a light sidebar. This was not checked on screen.
 
+## Styles
+
+Settings > Appearance > Style, per device (`vesper.style`). A style is a lazy CSS file in `web/src/styles/`, loaded by a dynamic
+`import()` only when it is chosen, so the first load does not grow (Vesper itself is `tokens.css`, in the first load). `main.ts`
+waits for the file (at most 2 s) before it mounts, so the page never shows a style without its tokens. The stored choice and
+`data-style` are the same id; an unknown id falls back to Vesper.
+
+| Style | Scheme | Own accent | What it is |
+| --- | --- | --- | --- |
+| Vesper | both | no (amber) | The default look. |
+| Persona | dark | red | Red, black and white. Slanted buttons and chips, a red slash for the current room, Anton headings, a star cursor, tilted dialogs. |
+
+**Style and scheme.** Each style says in `STYLES` (`style.ts`) what it does with the Color scheme choice: `both` (Vesper: the
+choice applies), `dark` or `light` (the style is that by nature). For a fixed style the choice is ignored: Settings greys the
+Color scheme group and says "This style is dark only", and `data-scheme` is set to the style's own. The map of fixed styles is
+repeated in the inline script of `index.html` (it must set the right scheme before the first paint); `scheme.test.ts` checks the two agree.
+
+**Style and accent.** Amber is the default accent, and the default is replaced by a style's own colour when the style sets
+`own: true` (`data-own-accent` on `<html>`; `applyAccent` then leaves the accent roles to the style's CSS). Any other accent the
+person picked still applies, painted by `roles()` as for Vesper. The Persona red is `#e60012` with white text (5.0:1).
+
+**Persona.** Ported from the look of Brisk's Persona style (palette, type, shapes, motion), not its CSS. Tokens first: surfaces,
+lines, text, accent roles, the focus ring (white, with a red ring outside it), radii 0, a hard red shadow. Then a few rules: slanted
+`.btn` and `.badge` (`clip-path`; a focused button is square so its ring is not cut), the sidebar's slanted red edge, `.row.current`
+as a red slash, Anton on `h1`, `h3` and room names, section labels as white tabs, a star cursor (white, red over buttons and links,
+the text cursor stays over fields), dialogs with a red edge that tilt in with a spring. Message text is Rubik regular, white on
+near-black (about 19:1), unchanged in size. Left out: the page-wipe and calling card animation and the background shards. The motion
+that is there (the dialog tilt, the row and button hop) is inside `prefers-reduced-motion: no-preference`.
+Fonts are self-hosted in `web/src/styles/fonts/`, latin subset only, loaded with the style: Anton 400, Rubik 400 and 700
+(woff2, 19 kB each), SIL Open Font License 1.1 (the licence texts sit next to the files). No CDN.
+
+**Adding a style.**
+1. Write `web/src/styles/<id>.css`. One rule, `html[data-style='<id>'] { ... }`, redefines the roles of `tokens.css` that differ
+   (roles not listed stay Vesper dark). Set `color-scheme`. Then shape rules, all starting with `html[data-style='<id>']`. Prefer
+   tokens (`--radius`, `--font-sans`, `--shadow-float`) to component selectors; where a component needs a hook, add a class, not a rule in the component.
+2. Add the entry to `STYLES` with `scheme`, `own` and `load: () => import('../../styles/<id>.css')`. If the scheme is `dark` or
+   `light`, add the id to the map in `index.html`.
+3. Add the file to `LOOKS` in `tokens.test.ts`: every text pair needs 4.5:1 and every UI pair 3:1 in the style's own colours.
+4. Put motion inside `@media (prefers-reduced-motion: no-preference)`. Fonts are self-hosted (check the licence) or a system stack; never a CDN.
+5. Run `npm run size` and say what it did to the CSS budget. Update this section.
+
 ## Tokens
 
 Colours, type, radii and motion live in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css): the base block (Vesper dark) and the

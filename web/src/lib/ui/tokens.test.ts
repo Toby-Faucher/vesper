@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import tokens from '../../styles/tokens.css?raw';
 import app from '../../app.css?raw';
 import { contrast as ratio } from './accent';
+import persona from '../../styles/persona.css?raw';
 import { block } from './cssvars';
 
 // Each look to check: the base block is Vesper dark; the light block overrides it. A style adds its own entry below.
@@ -9,6 +10,7 @@ const base = block(tokens, ':root');
 const LOOKS: Record<string, Map<string, string>> = {
   'vesper dark': base,
   'vesper light': new Map([...base, ...block(tokens, "html[data-scheme='light']")]),
+  persona: new Map([...base, ...block(persona, "html[data-style='persona']")]),
 };
 
 function resolve(vars: Map<string, string>, name: string, seen = 0): string {
@@ -47,7 +49,7 @@ describe.each(Object.entries(LOOKS))('%s', (_look, vars) => {
   });
 
   // --fg-3 is borderline on hover rows and fails on selected ones: selected rows use --fg-2 for meta (checked above).
-  it('fg_3_passes_on_hover_and_fails_on_selected', () => {
+  it.runIf(_look.startsWith('vesper'))('fg_3_passes_on_hover_and_fails_on_selected', () => {
     expect(contrast('--fg-3', '--bg-hover')).toBeGreaterThanOrEqual(4.5);
     expect(contrast('--fg-3', '--bg-selected')).toBeLessThan(4.5);
   });

@@ -3,7 +3,10 @@
 // `own`: the style brings its own accent, used while the account accent is the default amber.
 // `load`: the style's CSS, a lazy chunk (Vesper is in the first load, so it has none).
 export type StyleDef = { id: string; name: string; blurb: string; scheme: 'both' | 'dark' | 'light'; own?: boolean; load?: () => Promise<unknown> };
-export const STYLES = [{ id: 'vesper', name: 'Vesper', blurb: 'The default look, dark or light.', scheme: 'both' }] as const satisfies readonly StyleDef[];
+export const STYLES = [
+  { id: 'vesper', name: 'Vesper', blurb: 'The default look, dark or light.', scheme: 'both' },
+  { id: 'persona', name: 'Persona', blurb: 'Red, black and white, with sharp cuts. Dark only.', scheme: 'dark', own: true, load: () => import('../../styles/persona.css') },
+] as const satisfies readonly StyleDef[];
 export type StyleId = (typeof STYLES)[number]['id'];
 export const STYLE_KEY = 'vesper.style';
 
