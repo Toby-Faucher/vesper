@@ -6,6 +6,7 @@ Only rules that a tool or a test checks. Run `scripts/check.sh` to check them al
 - **Warnings are errors:** `cargo clippy --workspace --all-targets -- -D warnings`.
 - **No `unsafe`.** `unsafe_code = "forbid"` in `[workspace.lints.rust]`, and every crate sets `[lints] workspace = true`.
   Each crate also has `#![forbid(unsafe_code)]`.
+- **Docs:** `vesper-store` has `#![warn(missing_docs)]`, so every public item needs a doc comment (clippy `-D warnings` enforces it). Other crates not yet.
 - **Leftover debugging:** `dbg!`, `todo!` and `unimplemented!` warn in clippy, so `-D warnings` rejects them.
   Plain `println!` is allowed on purpose in `vesper-loadtest` and the server `main`.
 - **Locks and invariants:** use `expect("<what> lock poisoned")` or another message that names the invariant, not a bare `unwrap()`.

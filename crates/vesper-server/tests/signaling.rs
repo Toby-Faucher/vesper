@@ -618,6 +618,18 @@ async fn restricted_room_presence_is_private() {
     assert_eq!(hidden, unknown);
 }
 
+/// A store failure during join is `internal`, not an invalid offer.
+#[tokio::test]
+async fn a_store_failure_on_join_is_internal() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let general = server.state.store.rooms().await.unwrap()[0].id;
+    let mut c = Conn::open(&server, &alice).await;
+    server.state.store.pool().close().await;
+    c.join(general);
+    c.expect_error(ErrorCode::Internal).await;
+}
+
 /// Presence messages (peer_joined, peer_left, peer_state) up to, not including, `user_id`'s
 /// `PeerJoined`: a barrier, since everything queued earlier for this socket arrives first.
 async fn peer_msgs_until_joined(c: &mut Conn, user_id: &str) -> Vec<ServerMsg> {

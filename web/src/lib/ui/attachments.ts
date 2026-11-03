@@ -65,3 +65,21 @@ export async function keepView(el: Element, change: () => Promise<unknown>) {
   list.scrollTop += row.getBoundingClientRect().height - before;
   requestAnimationFrame(() => (list.style.overflowAnchor = ''));
 }
+
+const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+const two = (n: number) => String(n).padStart(2, '0');
+
+/** The name browsers give every pasted clipboard image. A pasted file with another name is a real file and keeps it. */
+export const isGenericPaste = (name: string) => /^image\.[a-z0-9]{1,5}$/i.test(name);
+
+/**
+ * A readable name for a pasted clipboard image ("Pasted image 2026-11-03 14.05.png", local time), with " (2)", " (3)" when
+ * `taken` already holds it. The extension follows the MIME type. Plain characters only, far under the server's 200.
+ */
+export function pastedName(mime: string, now: Date, taken: ReadonlySet<string>): string {
+  const base = `Pasted image ${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())} ${two(now.getHours())}.${two(now.getMinutes())}`;
+  const ext = EXT[mime] ?? 'png';
+  let name = `${base}.${ext}`;
+  for (let n = 2; taken.has(name); n++) name = `${base} (${n}).${ext}`;
+  return name;
+}

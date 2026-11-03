@@ -1,7 +1,7 @@
 use sqlx::FromRow;
 use vesper_protocol::{InviteInfo, Role};
 
-use crate::{Result, Store, StoreError, constraint, now_ms, parse_role, role_str};
+use crate::{Conflict, Result, Store, StoreError, constraint, now_ms, parse_role, role_str};
 
 macro_rules! invite_cols {
     () => {
@@ -35,6 +35,7 @@ impl InviteRow {
 }
 
 impl Store {
+    /// Stores an invite by the hash of its code. `Conflict(InviteExists)` when the hash is taken.
     pub async fn create_invite(
         &self,
         code_hash: &[u8; 32],
@@ -56,7 +57,7 @@ impl Store {
         .bind(now_ms())
         .fetch_one(&self.pool)
         .await
-        .map_err(|e| constraint(e, "invite exists"))?
+        .map_err(|e| constraint(e, Conflict::InviteExists))?
         .into_info()
     }
 

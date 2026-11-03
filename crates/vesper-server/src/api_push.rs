@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use vesper_protocol::{ApiErrorCode, PushInfo, PushPayload, PushPayloadKind, PushSubscribe};
-use vesper_store::{NewPushSub, StoreError, TOO_MANY_DEVICES, now_ms};
+use vesper_store::{Conflict, NewPushSub, StoreError, now_ms};
 
 use crate::api_accounts::{body, limit};
 use crate::api_admin::{bad, path};
@@ -69,20 +69,25 @@ async fn subscribe(
             now: now_ms(),
         })
         .await
-        .map_err(|e| match e {
-            StoreError::Conflict(TOO_MANY_DEVICES) => ApiError::new(
-                ApiErrorCode::Conflict,
-                "at most 5 devices get notifications: remove one first",
-            ),
-            // Plain refusal: the endpoint is a capability URL the caller already holds, so
-            // this tells them nothing new, and pretending success would hide a real mix-up.
-            StoreError::Conflict(_) => ApiError::new(
-                ApiErrorCode::Conflict,
-                "this browser gets notifications for another session: turn them off there first",
-            ),
-            e => e.into(),
-        })?;
+        .map_err(subscribe_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The wording of the two refusals `put_push_subscription` gives. Any other conflict is a bug
+/// here, so it gets the store's own text through the generic conversion.
+fn subscribe_error(e: StoreError) -> ApiError {
+    let text = match e {
+        StoreError::Conflict(Conflict::TooManyDevices) => {
+            "at most 5 devices get notifications: remove one first"
+        }
+        // Plain refusal: the endpoint is a capability URL the caller already holds, so
+        // this tells them nothing new, and pretending success would hide a real mix-up.
+        StoreError::Conflict(Conflict::EndpointTaken) => {
+            "this browser gets notifications for another session: turn them off there first"
+        }
+        e => return e.into(),
+    };
+    ApiError::new(ApiErrorCode::Conflict, text)
 }
 
 async fn unsubscribe(State(st): State<AppState>, a: Authed) -> Result<StatusCode, ApiError> {
@@ -133,5 +138,19 @@ async fn test(State(st): State<AppState>, a: Authed) -> Result<StatusCode, ApiEr
             ApiErrorCode::Internal,
             "the push service did not take the notification",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_conflict_gets_its_own_text() {
+        let text = |c| subscribe_error(StoreError::Conflict(c)).body.message;
+        assert!(text(Conflict::TooManyDevices).starts_with("at most 5 devices"));
+        assert!(text(Conflict::EndpointTaken).contains("another session"));
+        // Not mistaken for the "another session" refusal.
+        assert_eq!(text(Conflict::PinCap), "this room has 50 pins");
     }
 }

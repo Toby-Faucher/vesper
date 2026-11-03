@@ -56,66 +56,82 @@ pub async fn run(args: &[String], cfg: &Config) -> Result<Option<String>, String
     match cmd.as_str() {
         "create-owner" => {
             allow(&[])?;
-            let store = open(cfg).await?;
-            if store.owner_exists().await.map_err(err)? {
-                return Err("an owner already exists".into());
-            }
-            invite_link(&store, cfg, Role::Owner, 1, 24).await.map(Some)
+            create_owner(cfg).await.map(Some)
         }
         "invite" => {
             allow(&["--role", "--uses", "--hours"])?;
-            let role = match flags.get("--role").map(String::as_str) {
-                None | Some("member") => Role::Member,
-                Some("moderator") => Role::Moderator,
-                Some(r) => return Err(format!("--role {r}: must be member or moderator")),
-            };
-            let uses = num(&flags, "--uses", 1)?;
-            let hours = num(&flags, "--hours", 168)?;
-            let uses = u32::try_from(uses).map_err(|_| "--uses is too large")?;
-            let store = open(cfg).await?;
-            invite_link(&store, cfg, role, uses, hours).await.map(Some)
+            invite(cfg, &flags).await.map(Some)
         }
         "loadtest-accounts" => {
             allow(&["--count", "--force-nonempty"])?;
-            if !flags.contains_key("--count") {
-                return Err(format!("loadtest-accounts needs --count N\n{USAGE}"));
-            }
-            let count = num(&flags, "--count", 0)?;
-            if count > MAX_LOAD_ACCOUNTS {
-                return Err(format!("--count must be at most {MAX_LOAD_ACCOUNTS}"));
-            }
-            let store = open(cfg).await?;
-            if !flags.contains_key("--force-nonempty")
-                && !store.users().await.map_err(err)?.is_empty()
-            {
-                return Err("this data dir already has accounts; use a throwaway one (or pass --force-nonempty yes)".into());
-            }
-            let mut tokens = Vec::new();
-            for i in 0..count {
-                let name = format!("load_{i}_{}", random_hex(2));
-                let user = store
-                    .create_account(NewAccount {
-                        username: &name,
-                        display_name: &name,
-                        password_phc: None,
-                        role: Role::Member,
-                    })
-                    .await
-                    .map_err(err)?;
-                let (token, token_hash) = new_token();
-                let s = NewSession {
-                    token_hash,
-                    label: "load test",
-                    now: now_ms(),
-                };
-                store.create_session(&user.user_id, s).await.map_err(err)?;
-                tokens.push(token);
-            }
-            Ok(Some(tokens.join("\n")))
+            loadtest_accounts(cfg, &flags).await.map(Some)
         }
         "help" | "--help" | "-h" => Ok(Some(USAGE.into())),
         other => Err(format!("unknown command {other}\n{USAGE}")),
     }
+}
+
+/// `create-owner`: a one-use owner invite link, only while no owner exists.
+async fn create_owner(cfg: &Config) -> Result<String, String> {
+    let store = open(cfg).await?;
+    if store.owner_exists().await.map_err(err)? {
+        return Err("an owner already exists".into());
+    }
+    invite_link(&store, cfg, Role::Owner, 1, 24).await
+}
+
+/// `invite [--role ..] [--uses N] [--hours H]`.
+async fn invite(cfg: &Config, flags: &HashMap<String, String>) -> Result<String, String> {
+    let role = match flags.get("--role").map(String::as_str) {
+        None | Some("member") => Role::Member,
+        Some("moderator") => Role::Moderator,
+        Some(r) => return Err(format!("--role {r}: must be member or moderator")),
+    };
+    let uses = num(flags, "--uses", 1)?;
+    let hours = num(flags, "--hours", 168)?;
+    let uses = u32::try_from(uses).map_err(|_| "--uses is too large")?;
+    let store = open(cfg).await?;
+    invite_link(&store, cfg, role, uses, hours).await
+}
+
+/// `loadtest-accounts --count N [--force-nonempty yes]`: one token per line.
+async fn loadtest_accounts(
+    cfg: &Config,
+    flags: &HashMap<String, String>,
+) -> Result<String, String> {
+    if !flags.contains_key("--count") {
+        return Err(format!("loadtest-accounts needs --count N\n{USAGE}"));
+    }
+    let count = num(flags, "--count", 0)?;
+    if count > MAX_LOAD_ACCOUNTS {
+        return Err(format!("--count must be at most {MAX_LOAD_ACCOUNTS}"));
+    }
+    let store = open(cfg).await?;
+    if !flags.contains_key("--force-nonempty") && !store.users().await.map_err(err)?.is_empty() {
+        return Err("this data dir already has accounts; use a throwaway one (or pass --force-nonempty yes)".into());
+    }
+    let mut tokens = Vec::new();
+    for i in 0..count {
+        let name = format!("load_{i}_{}", random_hex(2));
+        let user = store
+            .create_account(NewAccount {
+                username: &name,
+                display_name: &name,
+                password_phc: None,
+                role: Role::Member,
+            })
+            .await
+            .map_err(err)?;
+        let (token, token_hash) = new_token();
+        let s = NewSession {
+            token_hash,
+            label: "load test",
+            now: now_ms(),
+        };
+        store.create_session(&user.user_id, s).await.map_err(err)?;
+        tokens.push(token);
+    }
+    Ok(tokens.join("\n"))
 }
 
 /// `backup <dir>` with the clock passed in, so a test can pin the file names.
@@ -156,6 +172,49 @@ async fn write_backup(
     uploads: bool,
     manifest: Option<String>,
 ) -> Result<Written, String> {
+    let (store, src) = open_source(cfg, dir).await?;
+    let paths = Paths::new(dir, stem);
+    paths.check_free()?;
+    // Created empty with mode 600 first: VACUUM INTO writes into an empty file and keeps its mode.
+    private_file(&paths.dbp).map_err(io(&paths.dbp))?;
+    let written = async {
+        let (dbp, upp) = (&paths.dbp, &paths.upp);
+        store
+            .backup_into(dbp)
+            .await
+            .map_err(|e| format!("{}: {e}", dbp.display()))?;
+        let mut copied = None;
+        if uploads {
+            private_dir(upp, false).map_err(io(upp))?;
+            let (s, d) = (src.clone(), upp.clone());
+            // Up to the upload quota of plain file I/O: off the async workers.
+            let n = tokio::task::spawn_blocking(move || {
+                let mut n = Copied::default();
+                copy_uploads(&s, &d, &mut n).map(|()| n)
+            })
+            .await
+            .map_err(|e| format!("{}: {e}", upp.display()))?
+            .map_err(io(upp))?;
+            copied = Some((paths.up.clone(), n));
+        }
+        let db_bytes = publish(dir, &paths, uploads, manifest).await?;
+        Ok::<_, String>(Written {
+            db: paths.db.clone(),
+            db_bytes,
+            uploads: copied,
+        })
+    }
+    .await;
+    drop(store);
+    written.map_err(|e| {
+        paths.remove_all();
+        format!("{e}; the partial backup was removed")
+    })
+}
+
+/// The database to back up, and the uploads dir beside it. Checks `dir` too: made 0700, and not
+/// inside the uploads dir.
+async fn open_source(cfg: &Config, dir: &Path) -> Result<(Store, PathBuf), String> {
     let path = cfg.data_dir.join("vesper.db");
     // Not `open`: a wrong data dir must fail, not create, migrate and back up an empty database.
     if !path.is_file() {
@@ -179,90 +238,96 @@ async fn write_backup(
             src.display()
         ));
     }
-    let db = dir.join(format!("{stem}.db"));
-    let up = dir.join(format!("{stem}-uploads"));
-    let man = dir.join(format!("{stem}.json"));
-    let part = |p: &Path| PathBuf::from(format!("{}{PARTIAL}", p.display()));
-    let (dbp, upp, manp) = (part(&db), part(&up), part(&man));
-    let all = [&db, &up, &man, &dbp, &upp, &manp];
-    for p in all {
-        if p.symlink_metadata().is_ok() {
-            return Err(format!("{} exists; not overwriting", p.display()));
+    Ok((store, src))
+}
+
+/// Every path one backup writes: the final names and the `.partial` ones.
+#[derive(Clone)]
+struct Paths {
+    db: PathBuf,
+    up: PathBuf,
+    man: PathBuf,
+    dbp: PathBuf,
+    upp: PathBuf,
+    manp: PathBuf,
+}
+
+impl Paths {
+    fn new(dir: &Path, stem: &str) -> Paths {
+        let part = |p: &Path| PathBuf::from(format!("{}{PARTIAL}", p.display()));
+        let db = dir.join(format!("{stem}.db"));
+        let up = dir.join(format!("{stem}-uploads"));
+        let man = dir.join(format!("{stem}.json"));
+        Paths {
+            dbp: part(&db),
+            upp: part(&up),
+            manp: part(&man),
+            db,
+            up,
+            man,
         }
     }
-    // Created empty with mode 600 first: VACUUM INTO writes into an empty file and keeps its mode.
-    private_file(&dbp).map_err(io(&dbp))?;
-    let written = async {
-        store
-            .backup_into(&dbp)
-            .await
-            .map_err(|e| format!("{}: {e}", dbp.display()))?;
-        let mut copied = None;
-        if uploads {
-            private_dir(&upp, false).map_err(io(&upp))?;
-            let (s, d) = (src.clone(), upp.clone());
-            // Up to the upload quota of plain file I/O: off the async workers.
-            let n = tokio::task::spawn_blocking(move || {
-                let mut n = Copied::default();
-                copy_uploads(&s, &d, &mut n).map(|()| n)
-            })
-            .await
-            .map_err(|e| format!("{}: {e}", upp.display()))?
-            .map_err(io(&upp))?;
-            copied = Some((up.clone(), n));
-        }
-        let (dir, db, up, man, dbp, upp, manp, last) = (
-            dir.to_path_buf(),
-            db.clone(),
-            up.clone(),
-            man.clone(),
-            dbp.clone(),
-            upp.clone(),
-            manp.clone(),
-            db.clone(),
-        );
-        // fsyncs can take a while on a slow disk: off the async workers.
-        let db_bytes = tokio::task::spawn_blocking(move || {
-            if let Some(text) = &manifest {
-                private_file(&manp)
-                    .and_then(|mut f| {
-                        std::io::Write::write_all(&mut f, text.as_bytes())?;
-                        f.sync_all()
-                    })
-                    .map_err(io(&manp))?;
-            }
-            std::fs::File::open(&dbp)
-                .and_then(|f| f.sync_all())
-                .map_err(io(&dbp))?;
-            if uploads {
-                std::fs::rename(&upp, &up).map_err(io(&up))?;
-            }
-            if manifest.is_some() {
-                std::fs::rename(&manp, &man).map_err(io(&man))?;
-            }
-            std::fs::rename(&dbp, &db).map_err(io(&db))?;
-            // The renames themselves, so the names survive a power cut.
-            std::fs::File::open(&dir)
-                .and_then(|f| f.sync_all())
-                .map_err(io(&dir))?;
-            std::fs::metadata(&db).map(|m| m.len()).map_err(io(&db))
-        })
-        .await
-        .map_err(|e| format!("{}: {e}", last.display()))??;
-        Ok::<_, String>(Written {
-            db: last,
-            db_bytes,
-            uploads: copied,
-        })
+
+    fn all(&self) -> [&PathBuf; 6] {
+        [
+            &self.db, &self.up, &self.man, &self.dbp, &self.upp, &self.manp,
+        ]
     }
-    .await;
-    drop(store);
-    written.map_err(|e| {
-        for p in all {
+
+    /// Never overwrite: an error when any of the six names exists.
+    fn check_free(&self) -> Result<(), String> {
+        for p in self.all() {
+            if p.symlink_metadata().is_ok() {
+                return Err(format!("{} exists; not overwriting", p.display()));
+            }
+        }
+        Ok(())
+    }
+
+    fn remove_all(&self) {
+        for p in self.all() {
             let _ = std::fs::remove_file(p).or_else(|_| std::fs::remove_dir_all(p));
         }
-        format!("{e}; the partial backup was removed")
+    }
+}
+
+/// Write the manifest, sync, then rename the partials into place, the database last. Returns the
+/// size of the database copy.
+async fn publish(
+    dir: &Path,
+    paths: &Paths,
+    uploads: bool,
+    manifest: Option<String>,
+) -> Result<u64, String> {
+    let (dir, p) = (dir.to_path_buf(), paths.clone());
+    // fsyncs can take a while on a slow disk: off the async workers.
+    tokio::task::spawn_blocking(move || {
+        if let Some(text) = &manifest {
+            private_file(&p.manp)
+                .and_then(|mut f| {
+                    std::io::Write::write_all(&mut f, text.as_bytes())?;
+                    f.sync_all()
+                })
+                .map_err(io(&p.manp))?;
+        }
+        std::fs::File::open(&p.dbp)
+            .and_then(|f| f.sync_all())
+            .map_err(io(&p.dbp))?;
+        if uploads {
+            std::fs::rename(&p.upp, &p.up).map_err(io(&p.up))?;
+        }
+        if manifest.is_some() {
+            std::fs::rename(&p.manp, &p.man).map_err(io(&p.man))?;
+        }
+        std::fs::rename(&p.dbp, &p.db).map_err(io(&p.db))?;
+        // The renames themselves, so the names survive a power cut.
+        std::fs::File::open(&dir)
+            .and_then(|f| f.sync_all())
+            .map_err(io(&dir))?;
+        std::fs::metadata(&p.db).map(|m| m.len()).map_err(io(&p.db))
     })
+    .await
+    .map_err(|e| format!("{}: {e}", paths.db.display()))?
 }
 
 /// The suffix of a backup file still being written. Never a complete backup.
@@ -654,4 +719,32 @@ fn num(m: &HashMap<String, String>, k: &str, default: u64) -> Result<u64, String
 
 fn err(e: vesper_store::StoreError) -> String {
     e.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_use_the_stem_and_a_partial_suffix() {
+        let p = Paths::new(Path::new("/b"), "vesper-x");
+        assert_eq!(p.db, Path::new("/b/vesper-x.db"));
+        assert_eq!(p.up, Path::new("/b/vesper-x-uploads"));
+        assert_eq!(p.man, Path::new("/b/vesper-x.json"));
+        assert_eq!(p.dbp, Path::new("/b/vesper-x.db.partial"));
+        assert_eq!(p.upp, Path::new("/b/vesper-x-uploads.partial"));
+        assert_eq!(p.manp, Path::new("/b/vesper-x.json.partial"));
+    }
+
+    #[test]
+    fn check_free_refuses_any_existing_name() {
+        let dir = std::env::temp_dir().join(format!("vesper-paths-{}", random_hex(4)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = Paths::new(&dir, "s");
+        assert!(p.check_free().is_ok());
+        std::fs::write(&p.manp, b"").unwrap();
+        let e = p.check_free().unwrap_err();
+        assert!(e.contains("exists; not overwriting"), "{e}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

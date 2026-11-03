@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use sqlx::{FromRow, SqliteConnection};
 use vesper_protocol::{RoomInfo, RoomKind};
 
-use crate::{Result, Store, StoreError, constraint};
+use crate::{Conflict, Result, Store, StoreError, constraint};
 
 #[derive(FromRow)]
 struct RoomRow {
@@ -15,26 +15,37 @@ struct RoomRow {
     kind: String,
 }
 
+const fn kind_sql(k: RoomKind) -> &'static str {
+    match k {
+        RoomKind::Room => "room",
+        RoomKind::Dm => "dm",
+    }
+}
+
+fn parse_kind(s: &str) -> Result<RoomKind> {
+    match s {
+        "room" => Ok(RoomKind::Room),
+        "dm" => Ok(RoomKind::Dm),
+        _ => Err(StoreError::Db(sqlx::Error::Decode(
+            format!("unknown room kind {s:?}").into(),
+        ))),
+    }
+}
+
 impl RoomRow {
-    fn into_info(self, members: Vec<String>) -> RoomInfo {
-        RoomInfo {
+    fn into_info(self, members: Vec<String>) -> Result<RoomInfo> {
+        Ok(RoomInfo {
             id: self.id,
-            kind: if self.kind == "dm" {
-                RoomKind::Dm
-            } else {
-                RoomKind::Room
-            },
+            kind: parse_kind(&self.kind)?,
             name: self.name,
             position: self.position,
             restricted: self.restricted,
             // An open room has no list (opening clears it), so this only guards a list set while open.
             members: if self.restricted { members } else { Vec::new() },
             archived: self.archived,
-        }
+        })
     }
 }
-
-const DUPLICATE: &str = "a room with that name exists";
 
 async fn room_by_id(c: &mut SqliteConnection, id: i64) -> Result<RoomInfo> {
     let row = sqlx::query_as::<_, RoomRow>(
@@ -51,11 +62,17 @@ async fn room_by_id(c: &mut SqliteConnection, id: i64) -> Result<RoomInfo> {
     .bind(id)
     .fetch_all(&mut *c)
     .await?;
-    Ok(row.into_info(members))
+    row.into_info(members)
 }
 
 impl Store {
-    /// Every room, by position.
+    /// One room by id (a DM too), with its member list. Unknown is `NotFound`.
+    pub async fn room(&self, id: i64) -> Result<RoomInfo> {
+        let mut c = self.pool.acquire().await?;
+        room_by_id(&mut c, id).await
+    }
+
+    /// Every room, by position. Use [`Store::room`] when you need one.
     pub async fn rooms(&self) -> Result<Vec<RoomInfo>> {
         let mut c = self.pool.acquire().await?;
         let rows = sqlx::query_as::<_, RoomRow>(
@@ -73,13 +90,12 @@ impl Store {
         for (room, account) in pairs {
             members.entry(room).or_default().push(account);
         }
-        Ok(rows
-            .into_iter()
+        rows.into_iter()
             .map(|r| {
                 let m = members.remove(&r.id).unwrap_or_default();
                 r.into_info(m)
             })
-            .collect())
+            .collect()
     }
 
     /// A new open room at the end of the list. A name that differs only in case is `Conflict`.
@@ -94,7 +110,7 @@ impl Store {
         .bind(now)
         .fetch_one(&mut *c)
         .await
-        .map_err(|e| constraint(e, DUPLICATE))?;
+        .map_err(|e| constraint(e, Conflict::NameTaken))?;
         room_by_id(&mut c, id).await
     }
 
@@ -113,29 +129,31 @@ impl Store {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if archived == Some(true) {
             let others: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM rooms WHERE id != ?1 AND archived_at IS NULL AND kind = 'room'",
+                "SELECT count(*) FROM rooms WHERE id != ?1 AND archived_at IS NULL AND kind = ?2",
             )
             .bind(id)
+            .bind(kind_sql(RoomKind::Room))
             .fetch_one(&mut *tx)
             .await?;
             if others == 0 {
-                return Err(StoreError::Conflict("the last room cannot be archived"));
+                return Err(StoreError::Conflict(Conflict::LastRoom));
             }
         }
         let n = sqlx::query(
             "UPDATE rooms SET name = coalesce(?2, name), restricted = coalesce(?3, restricted),
                 archived_at = CASE ?4 WHEN 1 THEN coalesce(archived_at, ?5) WHEN 0 THEN NULL
                     ELSE archived_at END
-             WHERE id = ?1 AND kind = 'room'",
+             WHERE id = ?1 AND kind = ?6",
         )
         .bind(id)
         .bind(name)
         .bind(restricted)
         .bind(archived)
         .bind(now)
+        .bind(kind_sql(RoomKind::Room))
         .execute(&mut *tx)
         .await
-        .map_err(|e| constraint(e, DUPLICATE))?
+        .map_err(|e| constraint(e, Conflict::NameTaken))?
         .rows_affected();
         if n == 0 {
             return Err(StoreError::NotFound);
@@ -156,19 +174,20 @@ impl Store {
     pub async fn reorder_rooms(&self, ids: &[i64]) -> Result<()> {
         // IMMEDIATE so a room created meanwhile can not slip between the check and the update.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let all: Vec<i64> =
-            sqlx::query_scalar("SELECT id FROM rooms WHERE kind = 'room' ORDER BY id")
-                .fetch_all(&mut *tx)
-                .await?;
+        let all: Vec<i64> = sqlx::query_scalar("SELECT id FROM rooms WHERE kind = ?1 ORDER BY id")
+            .bind(kind_sql(RoomKind::Room))
+            .fetch_all(&mut *tx)
+            .await?;
         let mut given = ids.to_vec();
         given.sort_unstable();
         if given != all {
-            return Err(StoreError::Conflict("the order must list every room once"));
+            return Err(StoreError::Conflict(Conflict::OrderIncomplete));
         }
         for (pos, id) in ids.iter().enumerate() {
-            sqlx::query("UPDATE rooms SET position = ?2 WHERE id = ?1 AND kind = 'room'")
+            sqlx::query("UPDATE rooms SET position = ?2 WHERE id = ?1 AND kind = ?3")
                 .bind(id)
                 .bind(pos as i64)
+                .bind(kind_sql(RoomKind::Room))
                 .execute(&mut *tx)
                 .await?;
         }
@@ -180,12 +199,12 @@ impl Store {
     pub async fn set_room_members(&self, id: i64, user_ids: &[String]) -> Result<RoomInfo> {
         // IMMEDIATE: a deferred read-then-write can fail with SQLITE_BUSY_SNAPSHOT under a racing writer.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM rooms WHERE id = ?1 AND kind = 'room')",
-        )
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM rooms WHERE id = ?1 AND kind = ?2)")
+                .bind(id)
+                .bind(kind_sql(RoomKind::Room))
+                .fetch_one(&mut *tx)
+                .await?;
         if !exists {
             return Err(StoreError::NotFound);
         }
@@ -199,7 +218,7 @@ impl Store {
                 .bind(user)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| constraint(e, "duplicate member"))?;
+                .map_err(|e| constraint(e, Conflict::DuplicateMember))?;
         }
         let room = room_by_id(&mut tx, id).await?;
         tx.commit().await?;
@@ -211,15 +230,16 @@ impl Store {
     /// either account does not exist.
     pub async fn dm_with(&self, a: &str, b: &str, now: i64) -> Result<(RoomInfo, bool)> {
         if a == b {
-            return Err(StoreError::Conflict("a DM needs two different people"));
+            return Err(StoreError::Conflict(Conflict::DmSelf));
         }
         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
         let name = format!("dm-{lo}-{hi}");
         // IMMEDIATE: two first messages at once make one room, not two.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let found: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM rooms WHERE name = ?1 AND kind = 'dm'")
+            sqlx::query_scalar("SELECT id FROM rooms WHERE name = ?1 AND kind = ?2")
                 .bind(&name)
+                .bind(kind_sql(RoomKind::Dm))
                 .fetch_optional(&mut *tx)
                 .await?;
         let created = found.is_none();
@@ -228,10 +248,11 @@ impl Store {
             None => {
                 let id: i64 = sqlx::query_scalar(
                     "INSERT INTO rooms (name, position, restricted, kind, created_at)
-                     VALUES (?1, 0, 1, 'dm', ?2) RETURNING id",
+                     VALUES (?1, 0, 1, ?3, ?2) RETURNING id",
                 )
                 .bind(&name)
                 .bind(now)
+                .bind(kind_sql(RoomKind::Dm))
                 .fetch_one(&mut *tx)
                 .await?;
                 for who in [lo, hi] {
@@ -241,7 +262,7 @@ impl Store {
                         .bind(who)
                         .execute(&mut *tx)
                         .await
-                        .map_err(|e| constraint(e, "no such account"))?;
+                        .map_err(|e| constraint(e, Conflict::NoSuchAccount))?;
                 }
                 id
             }
@@ -249,5 +270,18 @@ impl Store {
         let room = room_by_id(&mut tx, id).await?;
         tx.commit().await?;
         Ok((room, created))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kind_round_trips_and_unknown_is_an_error() {
+        for k in [RoomKind::Room, RoomKind::Dm] {
+            assert_eq!(parse_kind(kind_sql(k)).unwrap(), k);
+        }
+        assert!(matches!(parse_kind("channel"), Err(StoreError::Db(_))));
     }
 }

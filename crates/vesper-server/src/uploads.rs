@@ -26,7 +26,7 @@ use vesper_store::{StoreError, UploadRow, now_ms, random_hex};
 
 use crate::api_accounts::limit;
 use crate::api_admin::{bad, path, require};
-use crate::api_messages::visible_room;
+use crate::api_rooms::visible_room;
 use crate::auth::is_hidden_format;
 use crate::limits::Kind;
 use crate::{ApiError, AppState, Authed};

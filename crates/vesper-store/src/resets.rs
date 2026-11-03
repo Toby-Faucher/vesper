@@ -1,7 +1,7 @@
 use sqlx::{FromRow, SqliteConnection};
 use vesper_protocol::{ResetInfo, ResetNotice};
 
-use crate::{Result, Store, constraint, now_ms};
+use crate::{Conflict, Result, Store, constraint, now_ms};
 
 /// A reset code works for 24 hours.
 pub const RESET_TTL_MS: i64 = 24 * 3600 * 1000;
@@ -84,7 +84,7 @@ impl Store {
         .bind(now)
         .execute(&mut *tx)
         .await
-        .map_err(|e| constraint(e, "reset code exists"))?;
+        .map_err(|e| constraint(e, Conflict::ResetCodeExists))?;
         tx.commit().await?;
         Ok(())
     }

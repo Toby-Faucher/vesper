@@ -3,18 +3,23 @@ use std::collections::HashMap;
 use sqlx::{FromRow, SqliteConnection};
 use vesper_protocol::{Attachment, Message, MessagePage, Reaction, ReplyPreview, Unread};
 
-use crate::{Result, Store, StoreError, constraint};
+use crate::{Conflict, Result, Store, StoreError, constraint};
 
 /// Validated by the server (body rules, mentions resolved to user ids) before it gets here.
 pub struct NewMessage<'a> {
+    /// Room to post in.
     pub room_id: i64,
+    /// Account id of the author.
     pub author_id: &'a str,
+    /// Message text.
     pub body: &'a str,
+    /// Id of the message replied to, in the same room.
     pub reply_to: Option<i64>,
     /// User ids.
     pub mentions: &'a [String],
     /// Upload ids: each must be the author's, in the same room and not attached yet.
     pub attachments: &'a [String],
+    /// Creation time in milliseconds since the epoch.
     pub now: i64,
 }
 
@@ -22,13 +27,19 @@ pub struct NewMessage<'a> {
 /// others are posted meanwhile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cursor {
+    /// The newest messages.
     Latest,
+    /// Messages older than this id.
     Before(i64),
+    /// Messages newer than this id.
     After(i64),
+    /// This message and its neighbours on both sides.
     Around(i64),
 }
 
+/// Most different reactions one message can hold.
 pub const MAX_REACTIONS: i64 = 20;
+/// Most pinned messages one room can hold.
 pub const MAX_PINS: i64 = 50;
 
 macro_rules! msg_select {
@@ -241,7 +252,7 @@ async fn set_mentions(c: &mut SqliteConnection, id: i64, users: &[String]) -> Re
     .bind(json_strs(users))
     .execute(&mut *c)
     .await
-    .map_err(|e| constraint(e, "duplicate mention"))?;
+    .map_err(|e| constraint(e, Conflict::DuplicateMention))?;
     Ok(())
 }
 
@@ -259,7 +270,7 @@ impl Store {
             .fetch_one(&mut *tx)
             .await?;
             if !same {
-                return Err(StoreError::Conflict("reply must be in the same room"));
+                return Err(StoreError::Conflict(Conflict::ReplyOutsideRoom));
             }
         }
         let id: i64 = sqlx::query_scalar(
@@ -273,7 +284,7 @@ impl Store {
         .bind(m.now)
         .fetch_one(&mut *tx)
         .await
-        .map_err(|e| constraint(e, "message exists"))?;
+        .map_err(|e| constraint(e, Conflict::MessageExists))?;
         set_mentions(&mut tx, id, m.mentions).await?;
         for upload in m.attachments {
             let n = sqlx::query(
@@ -288,7 +299,7 @@ impl Store {
             .await?
             .rows_affected();
             if n == 0 {
-                return Err(StoreError::Conflict("attachment not available"));
+                return Err(StoreError::Conflict(Conflict::AttachmentUnavailable));
             }
         }
         let msg = by_id(&mut tx, id).await?;
@@ -347,7 +358,7 @@ impl Store {
         .bind(by)
         .execute(&mut *tx)
         .await
-        .map_err(|e| constraint(e, "message deleted"))?
+        .map_err(|e| constraint(e, Conflict::MessageDeleted))?
         .rows_affected();
         if n == 0 {
             return Err(StoreError::NotFound);
@@ -399,7 +410,7 @@ impl Store {
             .fetch_one(&mut *tx)
             .await?;
             if !present && distinct >= MAX_REACTIONS {
-                return Err(StoreError::Conflict("too many different reactions"));
+                return Err(StoreError::Conflict(Conflict::TooManyReactions));
             }
             sqlx::query(
                 "INSERT OR IGNORE INTO reactions (message_id, account_id, emoji, created_at)
@@ -411,7 +422,7 @@ impl Store {
             .bind(now)
             .execute(&mut *tx)
             .await
-            .map_err(|e| constraint(e, "duplicate reaction"))?;
+            .map_err(|e| constraint(e, Conflict::DuplicateReaction))?;
         } else {
             sqlx::query(
                 "DELETE FROM reactions WHERE message_id = ?1 AND account_id = ?2 AND emoji = ?3",
@@ -447,7 +458,7 @@ impl Store {
             .fetch_one(&mut *tx)
             .await?;
             if count >= MAX_PINS {
-                return Err(StoreError::Conflict("this room has 50 pins"));
+                return Err(StoreError::Conflict(Conflict::PinCap));
             }
             sqlx::query("UPDATE messages SET pinned_at = ?2, pinned_by = ?3 WHERE id = ?1")
                 .bind(id)
@@ -455,7 +466,7 @@ impl Store {
                 .bind(by)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| constraint(e, "pin"))?;
+                .map_err(|e| constraint(e, Conflict::PinFailed))?;
         } else if !on && pinned {
             sqlx::query("UPDATE messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ?1")
                 .bind(id)
@@ -468,6 +479,7 @@ impl Store {
         Ok(msg)
     }
 
+    /// One message by id, or `NotFound`.
     pub async fn message(&self, id: i64) -> Result<Message> {
         let mut c = self.pool.acquire().await?;
         by_id(&mut c, id).await
@@ -544,7 +556,7 @@ impl Store {
         .bind(last_read_id)
         .execute(&self.pool)
         .await
-        .map_err(|e| constraint(e, "read marker"))?;
+        .map_err(|e| constraint(e, Conflict::ReadMarker))?;
         Ok(())
     }
 

@@ -549,7 +549,17 @@ async fn a_killed_backup_leaves_no_complete_looking_file() {
     let left = names(&dir);
     assert!(left.iter().all(|n| n.ends_with(".partial")), "{left:?}");
     // The aborted task's blocking copy may still run; let it end, as a killed process would.
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Wait until every file is copied (a fixed sleep was too short under CPU load).
+    let upp = dir.join(left.iter().find(|n| n.contains("-uploads")).unwrap());
+    let started = std::time::Instant::now();
+    while count_files(&upp) < 4000 {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "copy did not finish: {} files",
+            count_files(&upp)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert!(names(&dir).iter().all(|n| n.ends_with(".partial")));
 
     cfg.backup_uploads = false;
@@ -561,6 +571,19 @@ async fn a_killed_backup_leaves_no_complete_looking_file() {
             "pre-schema-0009-19700101T000002.000Z.json"
         ]
     );
+}
+
+/// Regular files under `dir`, at any depth.
+fn count_files(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |rd| {
+        rd.flatten()
+            .map(|e| match e.file_type() {
+                Ok(t) if t.is_dir() => count_files(&e.path()),
+                Ok(t) if t.is_file() => 1,
+                _ => 0,
+            })
+            .sum()
+    })
 }
 
 fn names_or_empty(dir: &std::path::Path) -> Vec<String> {

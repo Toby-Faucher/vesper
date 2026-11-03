@@ -95,7 +95,7 @@ async fn one_subscription_per_session_and_endpoint() {
     };
     assert!(matches!(
         s.put_push_subscription(other_keys).await,
-        Err(StoreError::Conflict(vesper_store::ENDPOINT_TAKEN))
+        Err(StoreError::Conflict(vesper_store::Conflict::EndpointTaken))
     ));
     assert_eq!(s.push_devices(&bob, sb).await.unwrap().len(), 1);
     // A session that is not the account's is refused.

@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 //! SQLite storage (ADR 0005). The only crate that imports sqlx. It sees token and code hashes,
 //! never the tokens or codes themselves.
 
@@ -24,22 +25,113 @@ mod uploads;
 pub use accounts::{LoginRow, NewAccount};
 pub use calls::{CALLS_KEPT, CALLS_TTL_MS};
 pub use messages::{Cursor, MAX_PINS, MAX_REACTIONS, NewMessage};
-pub use push::{
-    ENDPOINT_TAKEN, MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget, TOO_MANY_DEVICES,
-};
+pub use push::{MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget};
 pub use resets::RESET_TTL_MS;
-pub use search::{HITS as SEARCH_SQL, MAX_SEARCH, fts_query};
+#[doc(hidden)] // test seam: the search tests EXPLAIN this query
+pub use search::HITS as SEARCH_SQL;
+pub use search::{MAX_SEARCH, fts_query};
 pub use sessions::{NewSession, SESSION_TTL_MS};
 pub use uploads::UploadRow;
 
+/// Result of a store call.
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+/// Which rule a change broke. `Display` is the text the user sees; callers match on the variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conflict {
+    /// The last live room cannot be archived.
+    LastRoom,
+    /// A room reorder must list every live room exactly once.
+    OrderIncomplete,
+    /// A direct message needs two different people.
+    DmSelf,
+    /// A reply must point at a message in the same room.
+    ReplyOutsideRoom,
+    /// An attachment is missing, not the author's, in another room or already used.
+    AttachmentUnavailable,
+    /// A message already has `MAX_REACTIONS` different reactions.
+    TooManyReactions,
+    /// A room already has `MAX_PINS` pins.
+    PinCap,
+    /// A room with that name exists.
+    NameTaken,
+    /// The account already has `MAX_PUSH_DEVICES` push devices.
+    TooManyDevices,
+    /// The push endpoint belongs to another session.
+    EndpointTaken,
+    /// An invite with that code hash exists.
+    InviteExists,
+    /// A reset link with that code hash exists.
+    ResetCodeExists,
+    /// The account is already a member of the room.
+    DuplicateMember,
+    /// The account does not exist.
+    NoSuchAccount,
+    /// The same account is mentioned twice in one message.
+    DuplicateMention,
+    /// A message with that id exists.
+    MessageExists,
+    /// The message was deleted and cannot be changed.
+    MessageDeleted,
+    /// The account already added that reaction.
+    DuplicateReaction,
+    /// Storing the pin broke a database constraint.
+    PinFailed,
+    /// Storing the read marker broke a database constraint.
+    ReadMarker,
+    /// A session with that token hash exists.
+    TokenExists,
+    /// An upload with that id exists.
+    UploadExists,
+    /// The username is taken.
+    UsernameTaken,
+}
+
+impl fmt::Display for Conflict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Conflict::LastRoom => "the last room cannot be archived",
+            Conflict::OrderIncomplete => "the order must list every room once",
+            Conflict::DmSelf => "a DM needs two different people",
+            Conflict::ReplyOutsideRoom => "reply must be in the same room",
+            Conflict::AttachmentUnavailable => "attachment not available",
+            Conflict::TooManyReactions => "too many different reactions",
+            Conflict::PinCap => "this room has 50 pins",
+            Conflict::NameTaken => "a room with that name exists",
+            Conflict::TooManyDevices => "too many push devices",
+            Conflict::EndpointTaken => "push endpoint belongs to another session",
+            Conflict::InviteExists => "invite exists",
+            Conflict::ResetCodeExists => "reset code exists",
+            Conflict::DuplicateMember => "duplicate member",
+            Conflict::NoSuchAccount => "no such account",
+            Conflict::DuplicateMention => "duplicate mention",
+            Conflict::MessageExists => "message exists",
+            Conflict::MessageDeleted => "message deleted",
+            Conflict::DuplicateReaction => "duplicate reaction",
+            Conflict::PinFailed => "pin",
+            Conflict::ReadMarker => "read marker",
+            Conflict::TokenExists => "token exists",
+            Conflict::UploadExists => "upload exists",
+            Conflict::UsernameTaken => "username taken",
+        })
+    }
+}
+
+/// What a store call can fail with. Print it with `{}`, or walk [`std::error::Error::source`] to
+/// reach the `sqlx::Error` or `io::Error` underneath. A caller can act on the first three; `Db`
+/// and `Io` mean the server is at fault.
 #[derive(Debug)]
 pub enum StoreError {
+    /// The row asked for is not there (also a failed foreign key).
     NotFound,
-    Conflict(&'static str),
+    /// The change breaks a rule (a duplicate, a cap). Its `Display` is meant for the user.
+    Conflict(Conflict),
+    /// The invite code is unknown, used, expired or revoked.
     InviteInvalid,
+    /// The database failed, or returned a value this binary can not read.
     Db(sqlx::Error),
+    /// The data directory or a backup path could not be used.
+    Io(std::io::Error),
 }
 
 impl fmt::Display for StoreError {
@@ -49,11 +141,20 @@ impl fmt::Display for StoreError {
             StoreError::Conflict(what) => write!(f, "conflict: {what}"),
             StoreError::InviteInvalid => f.write_str("invite not valid"),
             StoreError::Db(e) => write!(f, "database error: {e}"),
+            StoreError::Io(e) => write!(f, "io error: {e}"),
         }
     }
 }
 
-impl std::error::Error for StoreError {}
+impl std::error::Error for StoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StoreError::Db(e) => Some(e),
+            StoreError::Io(e) => Some(e),
+            StoreError::NotFound | StoreError::Conflict(_) | StoreError::InviteInvalid => None,
+        }
+    }
+}
 
 impl From<sqlx::Error> for StoreError {
     fn from(e: sqlx::Error) -> Self {
@@ -83,6 +184,7 @@ fn create_private(dir: &Path, db: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Handle to the database. Cheap to clone; clones share one connection pool.
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
@@ -92,7 +194,7 @@ impl Store {
     /// Opens (or creates) the database, creating the parent directory, and runs the migrations.
     pub async fn open(path: &Path) -> Result<Store> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            create_private(dir, path).map_err(|e| StoreError::Db(sqlx::Error::Io(e)))?;
+            create_private(dir, path).map_err(StoreError::Io)?;
         }
         let opts = SqliteConnectOptions::new()
             .filename(path)
@@ -161,10 +263,10 @@ impl Store {
     /// `dest` must not exist or must be an empty file; SQLite refuses anything else.
     pub async fn backup_into(&self, dest: &Path) -> Result<()> {
         let dest = dest.to_str().ok_or_else(|| {
-            StoreError::Db(sqlx::Error::Io(std::io::Error::new(
+            StoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "backup path is not UTF-8",
-            )))
+            ))
         })?;
         // Bound, never formatted into the SQL: SQLite 3.27+ takes an expression here.
         sqlx::query("VACUUM INTO ?1")
@@ -252,7 +354,7 @@ fn parse_role(s: &str) -> Result<Role> {
 }
 
 /// Maps a unique-constraint failure to `Conflict(what)` and a foreign key failure to `NotFound`.
-fn constraint(e: sqlx::Error, what: &'static str) -> StoreError {
+fn constraint(e: sqlx::Error, what: Conflict) -> StoreError {
     if let sqlx::Error::Database(d) = &e {
         if d.is_unique_violation() {
             return StoreError::Conflict(what);
@@ -262,4 +364,19 @@ fn constraint(e: sqlx::Error, what: &'static str) -> StoreError {
         }
     }
     StoreError::Db(e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn source_reaches_the_cause() {
+        let io = StoreError::Io(std::io::Error::other("disk"));
+        assert_eq!(io.source().unwrap().to_string(), "disk");
+        let db = StoreError::from(sqlx::Error::RowNotFound);
+        assert!(db.source().unwrap().is::<sqlx::Error>());
+        assert!(StoreError::NotFound.source().is_none());
+    }
 }

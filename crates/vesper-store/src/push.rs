@@ -4,40 +4,55 @@ use sqlx::FromRow;
 use vesper_protocol::PushDevice;
 
 use crate::sessions::SESSION_TTL_MS;
-use crate::{Result, Store, StoreError, constraint};
+use crate::{Conflict, Result, Store, StoreError, constraint};
 
 /// Devices (sessions) per account that get push. Tabs of one browser share a session, so one row.
 pub const MAX_PUSH_DEVICES: i64 = 5;
 
-pub const TOO_MANY_DEVICES: &str = "too many push devices";
-pub const ENDPOINT_TAKEN: &str = "push endpoint belongs to another session";
-
 /// Which switch a push needs. The test push goes to one session whatever its switches say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushKind {
+    /// The "mentions" switch.
     Mentions,
+    /// The "voice" switch.
     Voice,
 }
 
+/// Fields of a push subscription to store.
 pub struct NewPushSub<'a> {
+    /// Owner account id.
     pub account_id: &'a str,
+    /// Session the subscription belongs to.
     pub session_id: i64,
+    /// Push service URL.
     pub endpoint: &'a str,
+    /// Client public key.
     pub p256dh: &'a [u8],
+    /// Client auth secret.
     pub auth: &'a [u8],
+    /// Send pushes for mentions.
     pub mentions: bool,
+    /// Send pushes for voice calls.
     pub voice: bool,
+    /// Short device label for the settings list.
     pub user_agent_hint: &'a str,
+    /// Time in milliseconds since the epoch.
     pub now: i64,
 }
 
 /// Where to send one push. The endpoint and keys never leave the server except to the endpoint.
 #[derive(Clone, PartialEq, Eq, FromRow)]
+/// A stored push subscription ready to send to.
 pub struct PushTarget {
+    /// Row id.
     pub id: i64,
+    /// Owner account id.
     pub account_id: String,
+    /// Push service URL.
     pub endpoint: String,
+    /// Client public key.
     pub p256dh: Vec<u8>,
+    /// Client auth secret.
     pub auth: Vec<u8>,
 }
 
@@ -91,7 +106,7 @@ impl Store {
     /// Sets this session's subscription, replacing its earlier one. A row of another session
     /// with the same endpoint is taken over only when the keys match too (the same browser,
     /// now signed in as someone else): knowing an endpoint is not enough to take it.
-    /// `Conflict(ENDPOINT_TAKEN)` otherwise, `Conflict(TOO_MANY_DEVICES)` past [`MAX_PUSH_DEVICES`].
+    /// `Conflict(EndpointTaken)` otherwise, `Conflict(Conflict::TooManyDevices)` past [`MAX_PUSH_DEVICES`].
     pub async fn put_push_subscription(&self, s: NewPushSub<'_>) -> Result<i64> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
@@ -110,7 +125,7 @@ impl Store {
                 .fetch_one(&mut *tx)
                 .await?;
         if n >= MAX_PUSH_DEVICES {
-            return Err(StoreError::Conflict(TOO_MANY_DEVICES));
+            return Err(StoreError::Conflict(Conflict::TooManyDevices));
         }
         let id = sqlx::query_scalar(
             "INSERT INTO push_subscriptions (account_id, session_id, endpoint, p256dh, auth,
@@ -129,7 +144,7 @@ impl Store {
         .bind(s.user_agent_hint)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| constraint(e, ENDPOINT_TAKEN))?
+        .map_err(|e| constraint(e, Conflict::EndpointTaken))?
         .ok_or(StoreError::NotFound)?;
         tx.commit().await?;
         Ok(id)
@@ -230,6 +245,7 @@ impl Store {
         Ok(())
     }
 
+    /// Records a successful delivery to subscription `id` at `now`.
     pub async fn push_delivered(&self, id: i64, now: i64) -> Result<()> {
         sqlx::query("UPDATE push_subscriptions SET last_ok_at = ?2 WHERE id = ?1")
             .bind(id)

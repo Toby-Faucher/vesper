@@ -20,7 +20,7 @@ use vesper_store::{Cursor, NewMessage, StoreError, now_ms};
 
 use crate::api_accounts::{body, limit};
 use crate::api_admin::{bad, path, require};
-use crate::api_rooms::can_see;
+use crate::api_rooms::{can_see, visible_room};
 use crate::limits::Kind;
 use crate::{ApiError, AppState, Authed};
 
@@ -81,24 +81,6 @@ pub fn routes() -> Router<AppState> {
         .route("/messages/{id}/reaction", put(react))
         .route("/messages/{id}/pin", put(pin))
         .route("/search", get(search))
-}
-
-fn not_found() -> ApiError {
-    ApiError::new(ApiErrorCode::NotFound, "not found")
-}
-
-/// The room, if `user` can see it; unknown and hidden look the same.
-pub(crate) async fn visible_room(
-    st: &AppState,
-    user: &UserInfo,
-    id: i64,
-) -> Result<RoomInfo, ApiError> {
-    st.store
-        .rooms()
-        .await?
-        .into_iter()
-        .find(|r| r.id == id && can_see(user, r))
-        .ok_or_else(not_found)
 }
 
 /// The message and its room, if `user` can see the room.
