@@ -11,6 +11,7 @@
   import PasswordInput from '../../lib/ui/c/PasswordInput.svelte';
   import TextInput from '../../lib/ui/c/TextInput.svelte';
   import Swatches from '../Swatches.svelte';
+  import Passkeys from './Passkeys.svelte';
   import RecentCalls from './RecentCalls.svelte';
   import type { Device } from '../../lib/gen/Device';
   import type { UserInfo } from '../../lib/gen/UserInfo';
@@ -258,6 +259,8 @@
       {#if revokeError}<p role="alert" class="text-sm text-danger">{revokeError}</p>{/if}
     {/if}
   </section>
+
+  <div class="calls-sep"><Passkeys /></div>
 
   <div class="calls-sep"><RecentCalls /></div>
 
