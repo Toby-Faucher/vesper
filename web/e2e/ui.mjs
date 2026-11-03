@@ -65,7 +65,7 @@ async function signIn(page, name) {
   await page.goto(`${ORIGIN}/login`);
   await page.getByLabel('Username').fill(name);
   await page.getByLabel('Password', { exact: true }).fill('test-password-1');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await signedIn(page);
 }
 
@@ -634,12 +634,12 @@ try {
   await bn.getByRole('heading', { name: 'Your password is set' }).waitFor();
   await b.waitForURL(/\/login/);
   await b.getByText('Your session ended. Sign in again.').waitFor();
-  await bn.getByRole('button', { name: 'Sign in' }).click();
+  await bn.getByRole('button', { name: 'Sign in', exact: true }).click();
   await bn.getByText('Forgot your password? Ask the owner for a reset link.').waitFor();
   const bobSignIn = async (password) => {
     await bn.getByLabel('Username').fill('bob');
     await bn.getByLabel('Password', { exact: true }).fill(password);
-    await bn.getByRole('button', { name: 'Sign in' }).click();
+    await bn.getByRole('button', { name: 'Sign in', exact: true }).click();
   };
   await bobSignIn('test-password-1');
   await bn.getByText('Wrong username or password.').waitFor();

@@ -34,7 +34,7 @@ async function signInAgain(page, name) {
   await page.goto(`${ORIGIN}/login`);
   await page.getByLabel('Username').fill(name);
   await page.getByLabel('Password', { exact: true }).fill('test-password-1');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await signedIn(page);
 }
 const focusedText = (page) => page.evaluate(() => document.activeElement?.textContent?.trim());
@@ -160,7 +160,7 @@ try {
 
   // Wrong password: plain text, the password field is empty, focus is on the error.
   await logout(a);
-  await a.getByRole('button', { name: 'Sign in' }).waitFor();
+  await a.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
   assert.equal(await a.getByLabel('Username').getAttribute('autocomplete'), 'username');
   assert.equal(await a.getByLabel('Password', { exact: true }).getAttribute('autocomplete'), 'current-password');
   await a.getByLabel('Username').fill('alice');
@@ -170,14 +170,14 @@ try {
   await showPw.click();
   assert.deepEqual([await showPw.textContent(), await showPw.getAttribute('aria-pressed')], ['Show', 'true']);
   assert.equal(await a.getByLabel('Password', { exact: true }).getAttribute('type'), 'text');
-  await a.getByRole('button', { name: 'Sign in' }).click();
+  await a.getByRole('button', { name: 'Sign in', exact: true }).click();
   await a.getByText('Wrong username or password.').waitFor();
   assert.equal(await a.getByLabel('Password', { exact: true }).inputValue(), '', 'password kept after a failed sign in');
   assert.equal(await a.getByLabel('Password', { exact: true }).getAttribute('type'), 'password', 'password left visible after a failed sign in');
   assert.equal(await showPw.getAttribute('aria-pressed'), 'false');
   assert.equal(await focusedText(a), 'Wrong username or password.', 'focus did not move to the error');
   await a.getByLabel('Password', { exact: true }).fill('test-password-1');
-  await a.getByRole('button', { name: 'Sign in' }).click();
+  await a.getByRole('button', { name: 'Sign in', exact: true }).click();
   await signedIn(a);
   console.log('failed sign in: ok');
 
@@ -447,7 +447,7 @@ try {
   await a2.goto(`${ORIGIN}/login`);
   await a2.getByLabel('Username').fill('alice');
   await a2.getByLabel('Password', { exact: true }).fill('test-password-1');
-  await a2.getByRole('button', { name: 'Sign in' }).click();
+  await a2.getByRole('button', { name: 'Sign in', exact: true }).click();
   await signedIn(a2);
 
   // Settings > Appearance, the accent: a preset paints at once, follows the account to the second browser (live and after
@@ -538,7 +538,7 @@ try {
   const bobSignIn = async (password) => {
     await bd.getByLabel('Username').fill('bob');
     await bd.getByLabel('Password', { exact: true }).fill(password);
-    await bd.getByRole('button', { name: 'Sign in' }).click();
+    await bd.getByRole('button', { name: 'Sign in', exact: true }).click();
   };
   await bd.goto(`${ORIGIN}/login`);
   await bobSignIn('test-password-1');
@@ -720,15 +720,15 @@ try {
     await page.waitForURL(`${ORIGIN}/login?next=${encodeURIComponent(path)}`);
     await page.getByLabel('Username').fill('alice');
     await page.getByLabel('Password', { exact: true }).fill('test-password-1');
-    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.waitForURL(`${ORIGIN}${path}`);
   };
   await logout(a);
-  await a.getByRole('button', { name: 'Sign in' }).waitFor();
+  await a.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
   await signInAs(a, `/r/${music.id}`);
   await a.getByRole('heading', { name: 'music' }).waitFor();
   await logout(a);
-  await a.getByRole('button', { name: 'Sign in' }).waitFor();
+  await a.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
   await signInAs(a, '/r/99999');
   await a.getByText('This room is not here.').waitFor();
   console.log('room link survives sign in: ok');
