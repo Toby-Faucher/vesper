@@ -278,6 +278,9 @@ async fn pin(
     let id = path(id)?;
     let req = body(req)?;
     let (_, room) = visible_message(&st, &a.user, id).await?;
+    if room.kind == RoomKind::Dm {
+        return Err(ApiError::new(ApiErrorCode::Forbidden, "a DM has no pins"));
+    }
     limit(&st, Kind::Change, &a.user.user_id)?;
     let msg = st
         .store
