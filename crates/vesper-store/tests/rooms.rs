@@ -219,3 +219,69 @@ async fn dm_with_says_whether_it_made_the_room() {
         Err(StoreError::Conflict(_))
     ));
 }
+
+#[tokio::test]
+async fn no_room_method_changes_a_dm() {
+    let (_tmp, s) = open().await;
+    let (a, b) = (user(&s, "ann").await, user(&s, "bob").await);
+    let (dm, _) = s.dm_with(&a, &b, 5).await.unwrap();
+    let rooms = s.rooms().await.unwrap();
+    let room_ids: Vec<i64> = rooms
+        .iter()
+        .filter(|r| r.id != dm.id)
+        .map(|r| r.id)
+        .collect();
+    let before = s.rooms().await.unwrap();
+
+    for (archived, restricted) in [
+        (Some(true), None),
+        (Some(false), Some(false)),
+        (None, Some(true)),
+    ] {
+        assert!(
+            matches!(
+                s.patch_room(dm.id, Some("renamed"), restricted, archived, 9)
+                    .await,
+                Err(StoreError::NotFound)
+            ),
+            "patch_room"
+        );
+    }
+    assert!(matches!(
+        s.set_room_members(dm.id, std::slice::from_ref(&a)).await,
+        Err(StoreError::NotFound)
+    ));
+    // The order may not name the DM, and may not leave it to be reordered by omission either.
+    let mut with_dm = room_ids.clone();
+    with_dm.push(dm.id);
+    assert!(matches!(
+        s.reorder_rooms(&with_dm).await,
+        Err(StoreError::Conflict(_))
+    ));
+    s.reorder_rooms(&room_ids.iter().rev().copied().collect::<Vec<_>>())
+        .await
+        .unwrap();
+    // The DM's name is taken, and asking for the same pair again finds the same room.
+    assert!(matches!(
+        s.create_room(&dm.name, 9).await,
+        Err(StoreError::Conflict(_))
+    ));
+    let (again, made) = s.dm_with(&b, &a, 9).await.unwrap();
+    assert!(!made);
+    assert_eq!(again, dm);
+    // Archiving every ordinary room but one still counts only ordinary rooms.
+    assert!(
+        s.patch_room(room_ids[0], None, None, Some(true), 9)
+            .await
+            .is_ok()
+    );
+    assert!(matches!(
+        s.patch_room(room_ids[1], None, None, Some(true), 9).await,
+        Err(StoreError::Conflict(_))
+    ));
+
+    let after = s.rooms().await.unwrap();
+    let find = |v: &[vesper_protocol::RoomInfo]| v.iter().find(|r| r.id == dm.id).cloned();
+    assert_eq!(find(&after), find(&before));
+    assert_eq!(find(&after), Some(dm));
+}
