@@ -34,12 +34,21 @@ pub use uploads::UploadRow;
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
+/// What a store call can fail with. Print it with `{}`, or walk [`std::error::Error::source`] to
+/// reach the `sqlx::Error` or `io::Error` underneath. A caller can act on the first three; `Db`
+/// and `Io` mean the server is at fault.
 #[derive(Debug)]
 pub enum StoreError {
+    /// The row asked for is not there (also a failed foreign key).
     NotFound,
+    /// The change breaks a rule (a duplicate, a cap). The text is meant for the user.
     Conflict(&'static str),
+    /// The invite code is unknown, used, expired or revoked.
     InviteInvalid,
+    /// The database failed, or returned a value this binary can not read.
     Db(sqlx::Error),
+    /// The data directory or a backup path could not be used.
+    Io(std::io::Error),
 }
 
 impl fmt::Display for StoreError {
@@ -49,11 +58,20 @@ impl fmt::Display for StoreError {
             StoreError::Conflict(what) => write!(f, "conflict: {what}"),
             StoreError::InviteInvalid => f.write_str("invite not valid"),
             StoreError::Db(e) => write!(f, "database error: {e}"),
+            StoreError::Io(e) => write!(f, "io error: {e}"),
         }
     }
 }
 
-impl std::error::Error for StoreError {}
+impl std::error::Error for StoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StoreError::Db(e) => Some(e),
+            StoreError::Io(e) => Some(e),
+            StoreError::NotFound | StoreError::Conflict(_) | StoreError::InviteInvalid => None,
+        }
+    }
+}
 
 impl From<sqlx::Error> for StoreError {
     fn from(e: sqlx::Error) -> Self {
@@ -92,7 +110,7 @@ impl Store {
     /// Opens (or creates) the database, creating the parent directory, and runs the migrations.
     pub async fn open(path: &Path) -> Result<Store> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            create_private(dir, path).map_err(|e| StoreError::Db(sqlx::Error::Io(e)))?;
+            create_private(dir, path).map_err(StoreError::Io)?;
         }
         let opts = SqliteConnectOptions::new()
             .filename(path)
@@ -161,10 +179,10 @@ impl Store {
     /// `dest` must not exist or must be an empty file; SQLite refuses anything else.
     pub async fn backup_into(&self, dest: &Path) -> Result<()> {
         let dest = dest.to_str().ok_or_else(|| {
-            StoreError::Db(sqlx::Error::Io(std::io::Error::new(
+            StoreError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "backup path is not UTF-8",
-            )))
+            ))
         })?;
         // Bound, never formatted into the SQL: SQLite 3.27+ takes an expression here.
         sqlx::query("VACUUM INTO ?1")
@@ -262,4 +280,19 @@ fn constraint(e: sqlx::Error, what: &'static str) -> StoreError {
         }
     }
     StoreError::Db(e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    #[test]
+    fn source_reaches_the_cause() {
+        let io = StoreError::Io(std::io::Error::other("disk"));
+        assert_eq!(io.source().unwrap().to_string(), "disk");
+        let db = StoreError::from(sqlx::Error::RowNotFound);
+        assert!(db.source().unwrap().is::<sqlx::Error>());
+        assert!(StoreError::NotFound.source().is_none());
+    }
 }

@@ -90,7 +90,7 @@ impl From<StoreError> for ApiError {
             StoreError::NotFound => ApiError::new(ApiErrorCode::NotFound, "not found"),
             StoreError::Conflict(what) => ApiError::new(ApiErrorCode::Conflict, what),
             StoreError::InviteInvalid => ApiError::new(ApiErrorCode::InviteInvalid, BAD_INVITE),
-            StoreError::Db(e) => {
+            e @ (StoreError::Db(_) | StoreError::Io(_)) => {
                 tracing::error!("store: {e}");
                 ApiError::new(ApiErrorCode::Internal, "server error")
             }
