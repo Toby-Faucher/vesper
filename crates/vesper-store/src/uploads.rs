@@ -3,7 +3,7 @@
 
 use sqlx::FromRow;
 
-use crate::{Result, Store, StoreError, constraint};
+use crate::{Conflict, Result, Store, StoreError, constraint};
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct UploadRow {
@@ -34,7 +34,7 @@ impl Store {
         .bind(u.created_at)
         .execute(&self.pool)
         .await
-        .map_err(|e| constraint(e, "upload exists"))?;
+        .map_err(|e| constraint(e, Conflict::UploadExists))?;
         Ok(())
     }
 

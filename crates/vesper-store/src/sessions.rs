@@ -2,7 +2,7 @@ use sqlx::{FromRow, SqliteConnection};
 use vesper_protocol::{Device, UserInfo};
 
 use crate::accounts::{AccountRow, user_cols};
-use crate::{Result, Store, StoreError, constraint};
+use crate::{Conflict, Result, Store, StoreError, constraint};
 
 /// A session dies 90 days after its last use.
 pub const SESSION_TTL_MS: i64 = 90 * 24 * 3600 * 1000;
@@ -30,7 +30,7 @@ pub(crate) async fn insert_session(
     .bind(s.now)
     .fetch_one(c)
     .await
-    .map_err(|e| constraint(e, "token exists"))
+    .map_err(|e| constraint(e, Conflict::TokenExists))
 }
 
 #[derive(FromRow)]

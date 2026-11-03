@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use sqlx::{FromRow, SqliteConnection};
 use vesper_protocol::{RoomInfo, RoomKind};
 
-use crate::{Result, Store, StoreError, constraint};
+use crate::{Conflict, Result, Store, StoreError, constraint};
 
 #[derive(FromRow)]
 struct RoomRow {
@@ -46,8 +46,6 @@ impl RoomRow {
         })
     }
 }
-
-const DUPLICATE: &str = "a room with that name exists";
 
 async fn room_by_id(c: &mut SqliteConnection, id: i64) -> Result<RoomInfo> {
     let row = sqlx::query_as::<_, RoomRow>(
@@ -112,7 +110,7 @@ impl Store {
         .bind(now)
         .fetch_one(&mut *c)
         .await
-        .map_err(|e| constraint(e, DUPLICATE))?;
+        .map_err(|e| constraint(e, Conflict::NameTaken))?;
         room_by_id(&mut c, id).await
     }
 
@@ -138,7 +136,7 @@ impl Store {
             .fetch_one(&mut *tx)
             .await?;
             if others == 0 {
-                return Err(StoreError::Conflict("the last room cannot be archived"));
+                return Err(StoreError::Conflict(Conflict::LastRoom));
             }
         }
         let n = sqlx::query(
@@ -155,7 +153,7 @@ impl Store {
         .bind(kind_sql(RoomKind::Room))
         .execute(&mut *tx)
         .await
-        .map_err(|e| constraint(e, DUPLICATE))?
+        .map_err(|e| constraint(e, Conflict::NameTaken))?
         .rows_affected();
         if n == 0 {
             return Err(StoreError::NotFound);
@@ -183,7 +181,7 @@ impl Store {
         let mut given = ids.to_vec();
         given.sort_unstable();
         if given != all {
-            return Err(StoreError::Conflict("the order must list every room once"));
+            return Err(StoreError::Conflict(Conflict::OrderIncomplete));
         }
         for (pos, id) in ids.iter().enumerate() {
             sqlx::query("UPDATE rooms SET position = ?2 WHERE id = ?1 AND kind = ?3")
@@ -220,7 +218,7 @@ impl Store {
                 .bind(user)
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| constraint(e, "duplicate member"))?;
+                .map_err(|e| constraint(e, Conflict::DuplicateMember))?;
         }
         let room = room_by_id(&mut tx, id).await?;
         tx.commit().await?;
@@ -232,7 +230,7 @@ impl Store {
     /// either account does not exist.
     pub async fn dm_with(&self, a: &str, b: &str, now: i64) -> Result<(RoomInfo, bool)> {
         if a == b {
-            return Err(StoreError::Conflict("a DM needs two different people"));
+            return Err(StoreError::Conflict(Conflict::DmSelf));
         }
         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
         let name = format!("dm-{lo}-{hi}");
@@ -264,7 +262,7 @@ impl Store {
                         .bind(who)
                         .execute(&mut *tx)
                         .await
-                        .map_err(|e| constraint(e, "no such account"))?;
+                        .map_err(|e| constraint(e, Conflict::NoSuchAccount))?;
                 }
                 id
             }

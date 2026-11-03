@@ -3,7 +3,9 @@ use vesper_protocol::{Role, UserInfo};
 
 use crate::resets::{cancel_made_by, cancel_reset};
 use crate::sessions::{NewSession, insert_session};
-use crate::{Result, Store, StoreError, constraint, now_ms, parse_role, random_hex, role_str};
+use crate::{
+    Conflict, Result, Store, StoreError, constraint, now_ms, parse_role, random_hex, role_str,
+};
 
 pub struct NewAccount<'a> {
     pub username: &'a str,
@@ -74,7 +76,7 @@ async fn insert_account(
     .bind(now_ms())
     .execute(c)
     .await
-    .map_err(|e| constraint(e, "username taken"))?;
+    .map_err(|e| constraint(e, Conflict::UsernameTaken))?;
     Ok(id)
 }
 

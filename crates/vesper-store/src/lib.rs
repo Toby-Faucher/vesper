@@ -24,15 +24,71 @@ mod uploads;
 pub use accounts::{LoginRow, NewAccount};
 pub use calls::{CALLS_KEPT, CALLS_TTL_MS};
 pub use messages::{Cursor, MAX_PINS, MAX_REACTIONS, NewMessage};
-pub use push::{
-    ENDPOINT_TAKEN, MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget, TOO_MANY_DEVICES,
-};
+pub use push::{MAX_PUSH_DEVICES, NewPushSub, PushKind, PushTarget};
 pub use resets::RESET_TTL_MS;
 pub use search::{HITS as SEARCH_SQL, MAX_SEARCH, fts_query};
 pub use sessions::{NewSession, SESSION_TTL_MS};
 pub use uploads::UploadRow;
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+
+/// Which rule a change broke. `Display` is the text the user sees; callers match on the variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conflict {
+    LastRoom,
+    OrderIncomplete,
+    DmSelf,
+    ReplyOutsideRoom,
+    AttachmentUnavailable,
+    TooManyReactions,
+    PinCap,
+    NameTaken,
+    TooManyDevices,
+    EndpointTaken,
+    InviteExists,
+    ResetCodeExists,
+    DuplicateMember,
+    NoSuchAccount,
+    DuplicateMention,
+    MessageExists,
+    MessageDeleted,
+    DuplicateReaction,
+    PinFailed,
+    ReadMarker,
+    TokenExists,
+    UploadExists,
+    UsernameTaken,
+}
+
+impl fmt::Display for Conflict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Conflict::LastRoom => "the last room cannot be archived",
+            Conflict::OrderIncomplete => "the order must list every room once",
+            Conflict::DmSelf => "a DM needs two different people",
+            Conflict::ReplyOutsideRoom => "reply must be in the same room",
+            Conflict::AttachmentUnavailable => "attachment not available",
+            Conflict::TooManyReactions => "too many different reactions",
+            Conflict::PinCap => "this room has 50 pins",
+            Conflict::NameTaken => "a room with that name exists",
+            Conflict::TooManyDevices => "too many push devices",
+            Conflict::EndpointTaken => "push endpoint belongs to another session",
+            Conflict::InviteExists => "invite exists",
+            Conflict::ResetCodeExists => "reset code exists",
+            Conflict::DuplicateMember => "duplicate member",
+            Conflict::NoSuchAccount => "no such account",
+            Conflict::DuplicateMention => "duplicate mention",
+            Conflict::MessageExists => "message exists",
+            Conflict::MessageDeleted => "message deleted",
+            Conflict::DuplicateReaction => "duplicate reaction",
+            Conflict::PinFailed => "pin",
+            Conflict::ReadMarker => "read marker",
+            Conflict::TokenExists => "token exists",
+            Conflict::UploadExists => "upload exists",
+            Conflict::UsernameTaken => "username taken",
+        })
+    }
+}
 
 /// What a store call can fail with. Print it with `{}`, or walk [`std::error::Error::source`] to
 /// reach the `sqlx::Error` or `io::Error` underneath. A caller can act on the first three; `Db`
@@ -41,8 +97,8 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 pub enum StoreError {
     /// The row asked for is not there (also a failed foreign key).
     NotFound,
-    /// The change breaks a rule (a duplicate, a cap). The text is meant for the user.
-    Conflict(&'static str),
+    /// The change breaks a rule (a duplicate, a cap). Its `Display` is meant for the user.
+    Conflict(Conflict),
     /// The invite code is unknown, used, expired or revoked.
     InviteInvalid,
     /// The database failed, or returned a value this binary can not read.
@@ -270,7 +326,7 @@ fn parse_role(s: &str) -> Result<Role> {
 }
 
 /// Maps a unique-constraint failure to `Conflict(what)` and a foreign key failure to `NotFound`.
-fn constraint(e: sqlx::Error, what: &'static str) -> StoreError {
+fn constraint(e: sqlx::Error, what: Conflict) -> StoreError {
     if let sqlx::Error::Database(d) = &e {
         if d.is_unique_violation() {
             return StoreError::Conflict(what);
