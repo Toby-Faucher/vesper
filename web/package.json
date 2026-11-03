@@ -2,7 +2,7 @@
   "name": "vesper-web",
   "private": true,
   "license": "MIT",
-  "version": "1.4.2",
+  "version": "1.5.1",
   "type": "module",
   "engines": {
     "node": ">=22.12"
