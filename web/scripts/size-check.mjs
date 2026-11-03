@@ -20,7 +20,9 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 170, cssFirst: 12, css
 // 1 kB. Lower it when the first load shrinks; raise it only on purpose, in the commit that needs it, and say why.
 // 2026-11-03: 56.9 to 57.5 for direct messages (the DM list in state.ts, the sidebar section and row, findRoom); measured
 // 57.0 on the dev machine and 57.2 in CI, whose gzip output is a little larger.
-export const RATCHET_GZIP_KB = { first: 57.5 };
+// 2026-11-03: 57.5 to 57.9 for v1.6.0 (the DM sort, the ring state and its small shell hook, the DM switch); measured 57.6 on
+// the dev machine, so CI is expected near 57.8.
+export const RATCHET_GZIP_KB = { first: 57.9 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.
