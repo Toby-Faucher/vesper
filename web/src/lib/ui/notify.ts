@@ -6,6 +6,7 @@ import { chat, jumpTo } from '../chat.svelte';
 import { navigate, session } from '../session.svelte';
 import { voice } from '../voice.svelte';
 import { chime } from './chime';
+import { onRingMsg } from '../ring.svelte';
 import { loadPrefs, savePrefs, type NotifyPrefs } from './prefs';
 
 // Mention notifications and the join and leave sounds. The browser is asked for permission only from a click
@@ -61,6 +62,7 @@ let helloAt = 0;
 /** Called by the session after each server message is applied; `prev` is the state before it. */
 export function onServerMsg(m: ServerMsg, prev: AppState): void {
   if (m.type === 'hello') helloAt = Date.now();
+  onRingMsg(m);
   const myId = session.state.me?.user.user_id ?? '';
   if (m.type === 'message_new') {
     const ctx = { myId, activeRoom: chat.active, hidden: document.hidden || !document.hasFocus(), prefs: loadPrefs() };

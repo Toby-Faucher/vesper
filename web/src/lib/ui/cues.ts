@@ -1,6 +1,6 @@
 // Which call sound a change of my own call state plays. Pure, so the table of transitions is tested on its own.
 
-export type Cue = 'join' | 'leave' | 'mute' | 'unmute' | 'deafen' | 'undeafen' | 'connect' | 'disconnect' | 'lost';
+export type Cue = 'join' | 'leave' | 'mute' | 'unmute' | 'deafen' | 'undeafen' | 'connect' | 'disconnect' | 'lost' | 'ring';
 /** `online` is the socket: a call that ends while it is down was lost, not left. */
 export type CallSnap = { joined: boolean; muted: boolean; deafened: boolean; online: boolean };
 export type CuePrefs = { call: boolean; muteCues: boolean; connectCues: boolean };

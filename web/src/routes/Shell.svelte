@@ -10,6 +10,7 @@
   import { layers } from '../lib/ui/layers.svelte';
   import { settle } from '../lib/ui/motion';
   import { chat } from '../lib/chat.svelte';
+  import { ring } from '../lib/ring.svelte';
   import { isMac, isTyping, nextUnread, shortcut, stepRoom } from '../lib/ui/keys';
   import { loadRecent, pushRecent } from '../lib/ui/recent';
   import { UI_MESSAGES } from '../lib/ui/messages-first';
@@ -221,6 +222,8 @@
     {/if}
   {/if}
 </Dialog>
+<!-- The incoming DM call prompt is a chunk of its own: loaded on the first ring. -->
+{#if ring.list.length}{#await import('./RingPrompt.svelte') then m}<m.default />{/await}{/if}
 {#if layersMod}<layersMod.Shortcuts open={layers.shortcuts} onclose={() => (layers.shortcuts = false)} />{/if}
 
 <style>

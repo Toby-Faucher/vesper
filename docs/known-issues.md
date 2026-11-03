@@ -101,9 +101,9 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 
 ## Direct messages
 
-- **No ring.** The other person finds out about a DM call by a push (only with no tab open), or by the speaking indicator in the sidebar.
+- **The ring prompt and sound are not verified in a browser.** The server logic has integration tests; the prompt, the focus move and the tone were not seen or heard. A browser that has had no click or key on the page yet may keep the tone silent (autoplay policy); the prompt still shows.
+- **A ring is not repeated.** If the other person misses the 30 s, only the push (when no tab was open) and the sidebar indicator are left, until the caller leaves and joins again.
 - **A tab that is open gets no push.** The in-page notification (when the tab is hidden and permission is granted) is the only alert then, and it needs the mentions switch (or the direct messages switch, for a DM).
-- **DMs are listed by name,** not by latest activity.
 - **Not end-to-end encrypted.** The server's owner can read the database.
 - **The sender's picture in a push is not verified in a browser.** The worker fetches it as a data URL; any failure shows the default icon.
 - **Not verified:** DMs and DM voice in a real browser. The server side is covered by `tests/dms.rs` and unit tests; the web side by unit tests and `svelte-check` only.

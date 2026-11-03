@@ -156,7 +156,12 @@ pub async fn start_with_sfu(
         spawn_backups(cfg.clone());
     }
     let hub = Hub::default();
-    let voice = Voice::new(sfu.clone(), hub.clone(), cfg.max_room_size);
+    let voice = Voice::new(
+        sfu.clone(),
+        hub.clone(),
+        cfg.max_room_size,
+        cfg.ring_timeout,
+    );
     let push = Push::new(store.clone(), hub.clone(), cfg.push_subject.clone())
         .await
         .map_err(std::io::Error::other)?;

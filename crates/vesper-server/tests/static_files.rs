@@ -38,6 +38,7 @@ async fn start_at(web_dir: std::path::PathBuf, origin: &str) -> SocketAddr {
         public_host: None,
         udp_port_public: 0,
         max_room_size: 12,
+        ring_timeout: std::time::Duration::from_secs(30),
         ping_interval: Duration::from_secs(30),
         max_sockets: 4,
         web_dir,
