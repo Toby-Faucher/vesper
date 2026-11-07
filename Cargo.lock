@@ -4568,7 +4568,7 @@ dependencies = [
  "hound",
  "opus",
  "rand 0.9.5",
- "rand_chacha 0.9.0",
+ "rand_chacha 0.10.0",
  "rayon",
  "realfft",
  "serde",
