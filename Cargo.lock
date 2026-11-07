@@ -4618,7 +4618,7 @@ dependencies = [
  "argon2 0.6.0",
  "aws-lc-rs",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "futures-util",
  "http-body-util",
  "hyper",
