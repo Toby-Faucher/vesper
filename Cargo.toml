@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/vesper-protocol", "crates/vesper-dsp", "crates/vesper-sfu", "crates/vesper-server", "crates/vesper-loadtest", "crates/vesper-audiolab", "crates/vesper-store"]
 
 [workspace.package]
-version = "1.6.0"
+version = "1.6.2"
 edition = "2024"
 publish = false
 license = "MIT"
