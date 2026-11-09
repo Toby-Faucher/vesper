@@ -1,10 +1,13 @@
 export const VOLUME_KEY = 'vesper.volumes';
 
-/** Slider percent (0 to 200) to linear gain: quadratic to 1.0 at 100, linear to 2.5 at 200. */
+/** The per-person volume slider's top, in percent. */
+export const MAX_VOLUME = 400;
+
+/** Slider percent (0 to 400) to linear gain: quadratic to 1.0 at 100, then even dB steps to +20 dB (10x) at 400. */
 export function volumeToGain(v: number): number {
   if (Number.isNaN(v)) return 1;
-  const c = Math.min(200, Math.max(0, v));
-  return c <= 100 ? (c / 100) ** 2 : 1 + ((c - 100) / 100) * 1.5;
+  const c = Math.min(MAX_VOLUME, Math.max(0, v));
+  return c <= 100 ? (c / 100) ** 2 : 10 ** ((c - 100) / 300);
 }
 
 export function restoreVolumes(store: Storage): Map<string, number> {

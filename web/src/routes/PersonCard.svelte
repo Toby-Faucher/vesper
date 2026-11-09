@@ -9,6 +9,7 @@
   import { canModerate } from '../lib/ui/person.svelte';
   import { loadUsers } from '../lib/ui/users';
   import { setVolume, voice } from '../lib/voice.svelte';
+  import { MAX_VOLUME } from '../lib/volume';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
   import Dialog from '../lib/ui/c/Dialog.svelte';
@@ -120,7 +121,7 @@
           <span class="text-fg tabular-nums">{volume} %</span>
           {#if volume !== 100}<button type="button" class="link" onclick={() => setVolume(userId, 100)}>Reset</button>{/if}
         </div>
-        <Range min={0} max={200} value={volume} aria-label="Volume for {name}" aria-valuetext="{volume} %{volume > 100 ? ', above 100 % can distort' : ''}"
+        <Range min={0} max={MAX_VOLUME} value={volume} aria-label="Volume for {name}" aria-valuetext="{volume} %{volume > 100 ? ', above 100 % can distort' : ''}"
           oninput={(e) => setVolume(userId, +e.currentTarget.value)} />
       </div>
     {/if}
