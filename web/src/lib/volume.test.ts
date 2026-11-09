@@ -7,15 +7,16 @@ describe('volumeToGain', () => {
   it('pins the curve', () => {
     expect(volumeToGain(0)).toBe(0);
     expect(volumeToGain(100)).toBe(1);
-    expect(volumeToGain(200)).toBe(2.5);
     expect(volumeToGain(50)).toBe(0.25);
+    expect(20 * Math.log10(volumeToGain(250))).toBeCloseTo(10); // even dB steps above 100
+    expect(volumeToGain(400)).toBeCloseTo(10); // +20 dB at the top
   });
   it('is monotonic', () => {
-    for (let v = 1; v <= 200; v++) expect(volumeToGain(v)).toBeGreaterThan(volumeToGain(v - 1));
+    for (let v = 1; v <= 400; v++) expect(volumeToGain(v)).toBeGreaterThan(volumeToGain(v - 1));
   });
   it('clamps', () => {
     expect(volumeToGain(-5)).toBe(0);
-    expect(volumeToGain(999)).toBe(2.5);
+    expect(volumeToGain(999)).toBe(volumeToGain(400));
     expect(volumeToGain(NaN)).toBe(1);
   });
 });

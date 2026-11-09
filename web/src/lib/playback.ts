@@ -1,11 +1,12 @@
 import { effectiveGain, isSpeaking } from './volume';
 import type { LevelState } from './level';
 
-type Node = { gain?: GainNode; level?: GainNode; ls?: LevelState; analyser: AnalyserNode; src: MediaStreamAudioSourceNode; el?: HTMLAudioElement };
+type Node = { gain?: GainNode; level?: GainNode; limit?: DynamicsCompressorNode; ls?: LevelState; analyser: AnalyserNode; src: MediaStreamAudioSourceNode; el?: HTMLAudioElement };
 
 /**
- * One AudioContext; per stream: source -> level -> gain -> destination, plus an analyser for the speaking ring. `level` is the
- * "Even out voices" gain (1 when off), under the manual volume in `gain`.
+ * One AudioContext; per stream: source -> level -> gain -> limit -> destination, plus an analyser for the speaking ring. `level` is
+ * the "Even out voices" gain (1 when off), under the manual volume in `gain`. `limit` keeps a loud word at a high volume from
+ * clipping.
  */
 export class Playback {
   private ctx: AudioContext;
@@ -42,8 +43,14 @@ export class Playback {
     this.remove(id);
     const gain = this.ctx.createGain();
     const level = this.ctx.createGain();
-    const n = { ...this.tap(stream), gain, level } as Node;
-    n.src.connect(level).connect(gain).connect(this.ctx.destination);
+    const limit = this.ctx.createDynamicsCompressor();
+    limit.threshold.value = -3; // dBFS: speech at a normal volume stays below it, so only boosted peaks are touched
+    limit.knee.value = 0;
+    limit.ratio.value = 20;
+    limit.attack.value = 0.002;
+    limit.release.value = 0.1;
+    const n = { ...this.tap(stream), gain, level, limit } as Node;
+    n.src.connect(level).connect(gain).connect(limit).connect(this.ctx.destination);
     // Chrome only pulls remote WebRTC audio when the stream is also attached to a media element.
     const el = new Audio();
     el.muted = true;
@@ -61,6 +68,7 @@ export class Playback {
     n.src.disconnect();
     n.gain?.disconnect();
     n.level?.disconnect();
+    n.limit?.disconnect();
     if (n.el) {
       n.el.pause();
       n.el.srcObject = null;

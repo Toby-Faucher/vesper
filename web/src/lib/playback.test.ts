@@ -4,6 +4,7 @@ import { Playback } from './playback';
 const node = () => ({ connect: vi.fn(function (this: any, n: any) { return n; }), disconnect: vi.fn() });
 function fakeCtx() {
   const gains: any[] = [];
+  const limits: any[] = [];
   const ctx = {
     destination: {},
     resume: vi.fn(async () => {}),
@@ -12,13 +13,19 @@ function fakeCtx() {
     currentTime: 0,
     amp: 0, // the peak of the sine every analyser reads
     createAnalyser: () => ({ fftSize: 0, getFloatTimeDomainData: (b: Float32Array) => b.forEach((_, i) => (b[i] = ctx.amp * Math.sin(i / 3))) }),
+    createDynamicsCompressor: () => {
+      const p = () => ({ value: 0 });
+      const c = { ...node(), threshold: p(), knee: p(), ratio: p(), attack: p(), release: p() };
+      limits.push(c);
+      return c;
+    },
     createGain: () => {
       const g = { ...node(), gain: { value: 1, setTargetAtTime: vi.fn((v: number) => (g.gain.value = v)), cancelScheduledValues: vi.fn() } };
       gains.push(g);
       return g;
     },
   };
-  return { ctx: ctx as unknown as AudioContext & { amp: number; currentTime: number }, gains };
+  return { ctx: ctx as unknown as AudioContext & { amp: number; currentTime: number }, gains, limits };
 }
 class FakeAudio { muted = false; srcObject: unknown = {}; pause = vi.fn(); play = async () => {}; }
 afterEach(() => vi.unstubAllGlobals());
@@ -43,6 +50,16 @@ describe('Playback', () => {
     expect(vol()).toEqual([0, 0]);
     p.setDeafened(false);
     expect(vol()).toEqual([0.25, 1]);
+  });
+  it('the volume feeds a limiter, and only the limiter reaches the speakers', () => {
+    const { p, gains, limits, ctx } = setup();
+    p.addRemote('a', {} as MediaStream);
+    expect(gains[0].connect).toHaveBeenCalledWith(limits[0]);
+    expect(limits[0].connect).toHaveBeenCalledWith(ctx.destination);
+    expect(gains[0].connect).not.toHaveBeenCalledWith(ctx.destination);
+    expect(limits[0].threshold.value).toBe(-3);
+    p.remove('a');
+    expect(limits[0].disconnect).toHaveBeenCalled();
   });
   it('remove disconnects nodes; unknown id is a no-op', () => {
     const { p, gains } = setup();
