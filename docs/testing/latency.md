@@ -47,10 +47,19 @@ Measured 2026-11-10, release build, loopback, 30 s, 4 speakers. CPU: Intel Core 
 | 4 sharers x 10 Mbps | P-cores | 28.4% | 99.9% | 94.7% | PASS |
 | 4 sharers x 20 Mbps | E-cores | 48.6% to 49.0% | 87.9% (loss 11.8%), 2 runs | 75.2% to 76.3% | FAIL |
 | 4 sharers x 20 Mbps | P-cores | 44.9% to 45.1% | 93.2% (loss 5.6% to 6.6%), 2 runs | 66.7% to 72.7% | FAIL |
+| 4 sharers x 20 Mbps, cap raised locally, drop counters read | E-cores | 48.9% | 86.9% (loss 12.70% to 12.89%), 1 run | 75.7% | FAIL |
 
 The 4 x 20 Mbps rows were taken before the cap existed; on this build the third 20 Mbps share is refused, and the load test then exits 2 with the server's error. Only 4-person rooms were measured, and the cap scales with viewers, so a larger room with one share can pass the cap untested. The usual load (2 sharers x 10 Mbps) and 4 x 10 Mbps (120 000 kbps counted per viewer) pass. The worst load (4 x 20 Mbps, 240 000 kbps counted per viewer) fails on both pinnings, so the server caps a room's shares in total at 120 000 kbps (`MAX_ROOM_SHARE_KBPS` in `voice.rs`; see [known issues](../known-issues.md)). The cap is the highest tested load that passed; loads between 120 000 and 240 000 were not tested.
 
-Not verified: the failing runs did not show a saturated core (server CPU stayed under 50% of one core), so the loss may come from the load test's own UDP sockets on loopback and not from the SFU thread. The cap is conservative for that reason. The load test was not run on the Dockge VM; that is Toby's call. The i7-12700 E-cores are estimated, not measured, to match a 3700X thread.
+The failing runs did not show a saturated core (server CPU stayed under 50% of one core). The drop counters below show where the loss is. The load test was not run on the Dockge VM; that is Toby's call. The i7-12700 E-cores are estimated, not measured, to match a 3700X thread.
+
+**Where the 4 x 20 Mbps loss is** (measured 2026-11-10, the last row above: one run, E-cores, with `MAX_ROOM_SHARE_KBPS` raised locally for the run and then put back). The UDP drop counters were read before and after the run, and once a second during it, since the load test's sockets close when it exits: the `drops` column of `/proc/net/udp` per socket (the `d` field of `ss -uapm`), and `nstat -az UdpRcvbufErrors UdpSndbufErrors UdpInErrors` for the whole machine.
+
+- The server's media socket dropped 50 146 packets, about 1 600 a second from the second second of the run on. Its receive buffer was the kernel default, 212 992 bytes.
+- The load test's four sockets dropped none while the run lasted. Two of them dropped 1 400 and 187 in the last sample, after the load test had begun to close its sockets.
+- `UdpRcvbufErrors` rose by 51 733, the sum of the drops above. `UdpSndbufErrors` stayed at 0.
+
+So the voice loss is at the server's receive buffer. The SFU thread reads its one socket too slowly for this load, and voice packets that arrive behind the video are dropped with it. The CPU figure is an average over the run, so it does not rule out bursts. Likely, not verified: the fake senders write each 41 kB frame at once, so the four sharers' frames arrive in bursts that the buffer cannot hold. A bigger buffer was not tried; see [known issues](../known-issues.md).
 
 ## 2. Mouth-to-ear latency: acoustic loopback
 
