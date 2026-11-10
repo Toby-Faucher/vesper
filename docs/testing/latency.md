@@ -30,6 +30,28 @@ With sessions (release build, 12 speakers on loopback, 2026-11-01, the commands 
 
 The server's `no advertised addresses` warning is expected on loopback; the fake clients use host candidates. Run the load test on the same machine as the server: client and server CPU are then both on that box, so read the CPU figure as an upper bound.
 
+## Video load
+
+Voice and video share one SFU thread, so a screen share must never make voice break up. `vesper-loadtest` can add sharers: `--sharers N` (default 0) makes the first N speakers share a screen, and `--share-mbps M` (default 10, at most 34) sets the rate. Every speaker watches every sharer. Sharers send 60 frames a second of `M * 1_000_000 / 8 / 60` bytes each. The readiness gate counts audio tracks only. PASS is still the audio rule (95% in aggregate and from each peer); video delivery is printed per viewer and sharer and does not decide PASS. The "video" figure is frames received out of frames queued (`seconds * 60`); the fake sender paces at about 57 frames a second in practice, so a pair that lost nothing still shows about 93 to 95%.
+
+Run it as in section 1, with the server and the load test pinned to separate cores (`taskset -c SERVERCPUS target/release/vesper-server`, `taskset -c 4-11 target/release/vesper-loadtest ...`) and extra flags, for example `--speakers 4 --sharers 2 --share-mbps 10 --seconds 30 --pid $SERVER`.
+
+Measured 2026-11-10, release build, loopback, 30 s, 4 speakers. CPU: Intel Core i7-12700. "E-cores" is `taskset -c 16,17` (the closer proxy for the 2 vCPU Ryzen 7 3700X VM); "P-cores" is `taskset -c 0,2` (two physical cores). Server CPU is percent of one core.
+
+| Load | Server pinning | Server CPU | Audio, min per speaker | Video, min pair | Result |
+|---|---|---|---|---|---|
+| 12 speakers, no share | E-cores | 26.8% | 100% | n/a | PASS |
+| 2 sharers x 10 Mbps | E-cores | 27.4% | 100% | 93.5% | PASS |
+| 2 sharers x 10 Mbps | P-cores | 17.1% | 100% | 93.9% | PASS |
+| 4 sharers x 10 Mbps | E-cores | 40.2% | 99.98% | 95.1% | PASS |
+| 4 sharers x 10 Mbps | P-cores | 28.4% | 100% | 94.7% | PASS |
+| 4 sharers x 20 Mbps | E-cores | 48.6% to 49.0% | 88.1% worst pair (loss 11.8%), 2 runs | 75.2% to 76.3% | FAIL |
+| 4 sharers x 20 Mbps | P-cores | 44.9% to 45.1% | 93.2% worst pair (loss 5.6% to 6.6%), 2 runs | 66.7% to 72.7% | FAIL |
+
+The usual load (2 sharers x 10 Mbps) and 4 x 10 Mbps (120 000 kbps counted per viewer) pass. The worst load (4 x 20 Mbps, 240 000 kbps counted per viewer) fails on both pinnings, so the server caps a room's shares in total at 120 000 kbps (`MAX_ROOM_SHARE_KBPS` in `voice.rs`; see [known issues](../known-issues.md)). The cap is the highest tested load that passed; loads between 120 000 and 240 000 were not tested.
+
+Not verified: the failing runs did not show a saturated core (server CPU stayed under 50% of one core), so the loss may come from the load test's own UDP sockets on loopback and not from the SFU thread. The cap is conservative for that reason. The load test was not run on the Dockge VM (10.0.0.163); that is Toby's call. The i7-12700 E-cores are estimated, not measured, to match a 3700X thread.
+
 ## 2. Mouth-to-ear latency: acoustic loopback
 
 This measures the whole path including capture, DeepFilterNet, Opus, network, jitter buffer and playback, which WebRTC stats cannot see.

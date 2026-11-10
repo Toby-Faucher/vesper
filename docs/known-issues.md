@@ -67,6 +67,7 @@ Last updated 2026-11-01. Nothing here was run in a headed browser or a real depl
 - **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are pinned by digest (v1.4), so they get no security updates until someone bumps the digests on purpose. Precompressed `.br` and `.gz` files (v1.4) are served only for files read from `web/dist`; the SPA fallback page (`index.html` for a path like `/r/1`) goes out as it is. Whether this gains anything behind the Cloudflare tunnel, which may compress too, is not measured.
 - **The SFU wakes every 10 ms when idle.** Cheap, but it is not zero.
 - **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof).
+- **A room's shares are capped in total.** Each share counts its bitrate once per other person in the call, and the sum may not pass 120 000 kbps (for example 4 people sharing 10 Mbps each). A share that would go over is refused with "Too many screens are being shared right now." The number is the highest load that held voice at 95% in the [video load test](testing/latency.md#video-load) on two cores. It is measured on a Core i7-12700, not on the production VM.
 
 ## Web client
 

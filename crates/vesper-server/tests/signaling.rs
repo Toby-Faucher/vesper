@@ -2236,6 +2236,38 @@ async fn bad_share_settings_are_refused() {
 }
 
 #[tokio::test]
+async fn share_over_the_room_total_is_refused() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let mut conns = vec![];
+    for name in ["alice", "bob", "carol", "dave"] {
+        let acct = server.account(name, Role::Member).await;
+        conns.push(Conn::joined(&server, &acct, room).await.0);
+    }
+    // 30 Mbps to three viewers is 90 000 kbps; a second one would pass the 120 000 cap.
+    share_start(&conns[0], 60, 30_000);
+    share_start(&conns[1], 60, 30_000);
+    let m = conns[1]
+        .until("RateLimited", |m| matches!(m, ServerMsg::Error { .. }))
+        .await;
+    assert!(matches!(
+        m,
+        ServerMsg::Error {
+            code: ErrorCode::RateLimited,
+            ..
+        }
+    ));
+    // A smaller second share still fits.
+    share_start(&conns[1], 60, 5_000);
+    conns[0]
+        .until(
+            "PeerShare",
+            |m| matches!(m, ServerMsg::PeerShare { share: Some(s), .. } if s.bitrate_kbps == 5_000),
+        )
+        .await;
+}
+
+#[tokio::test]
 async fn share_needs_a_call() {
     let server = TestServer::new().await;
     let alice = server.account("alice", Role::Member).await;

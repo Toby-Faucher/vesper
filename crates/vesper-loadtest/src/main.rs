@@ -13,10 +13,11 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use vesper_protocol::{ClientMsg, ServerMsg};
-use vesper_sfu::testing::FakeClient;
+use vesper_sfu::testing::{FakeClient, MediaKind};
 
 const PASS_PERCENT: f64 = 95.0;
 const PACKETS_PER_SECOND: u64 = 50;
+const VIDEO_FPS: u64 = 60;
 
 /// Per-speaker verdict.
 #[derive(Debug, PartialEq)]
@@ -80,6 +81,9 @@ struct Args {
     tokens: Vec<String>,
     room_id: i64,
     speakers: usize,
+    /// With sharers, every speaker is built `with_video` (a viewer needs VP8). The first `sharers` speakers share a screen; everyone watches them.
+    sharers: usize,
+    share_mbps: u64,
     seconds: u64,
     pid: Option<u32>,
 }
@@ -99,6 +103,17 @@ fn parse_args() -> Result<Args, String> {
     }
     if seconds < 1 {
         return Err("--seconds must be at least 1".into());
+    }
+    let opt = |k: &str, d: u64| match m.get(k) {
+        Some(v) => v.parse::<u64>().map_err(|e| format!("{k}: {e}")),
+        None => Ok(d),
+    };
+    let (sharers, share_mbps) = (opt("--sharers", 0)? as usize, opt("--share-mbps", 10)?);
+    if sharers > speakers {
+        return Err("--sharers cannot exceed --speakers".into());
+    }
+    if !(1..35).contains(&share_mbps) {
+        return Err("--share-mbps must be 1 to 34 (the SFU cuts a share above 35 Mbps)".into());
     }
     let file = get("--tokens")?;
     let tokens: Vec<String> = std::fs::read_to_string(&file)
@@ -122,6 +137,8 @@ fn parse_args() -> Result<Args, String> {
             .parse()
             .map_err(|e| format!("--room-id: {e}"))?,
         speakers,
+        sharers,
+        share_mbps,
         seconds,
         pid: match m.get("--pid") {
             Some(p) => Some(p.parse().map_err(|e| format!("--pid: {e}"))?),
@@ -141,13 +158,30 @@ fn cpu_ticks(pid: u32) -> Option<u64> {
 /// shortcut: assumes CLK_TCK = 100 (true on Linux x86/ARM); reading it needs libc/unsafe.
 const CLK_TCK: f64 = 100.0;
 
+type Sink = futures_util::stream::SplitSink<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    Message,
+>;
+
 struct Speaker {
     client: Arc<FakeClient>,
     task: JoinHandle<()>,
+    sink: Arc<tokio::sync::Mutex<Sink>>,
+    user_id: String,
+}
+
+impl Speaker {
+    async fn send(&self, m: &ClientMsg) -> Result<(), String> {
+        let text = serde_json::to_string(m).unwrap();
+        let mut sink = self.sink.lock().await;
+        sink.send(Message::text(text))
+            .await
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Join like a browser: Join with the offer, apply the Joined answer, answer every later Offer.
-async fn join(a: &Args, n: usize) -> Result<Speaker, String> {
+async fn join(a: &Args, n: usize, video: bool) -> Result<Speaker, String> {
     let mut req = a
         .url
         .as_str()
@@ -168,7 +202,14 @@ async fn join(a: &Args, n: usize) -> Result<Speaker, String> {
     let (ws, _) = tokio_tungstenite::connect_async(req)
         .await
         .map_err(|e| format!("speaker {n}: connect: {e}"))?;
-    let client = Arc::new(FakeClient::new().map_err(|e| e.to_string())?);
+    let client = Arc::new(
+        if video {
+            FakeClient::with_video()
+        } else {
+            FakeClient::new()
+        }
+        .map_err(|e| e.to_string())?,
+    );
     let (mut sink, mut stream) = ws.split();
     let join = ClientMsg::Join {
         room_id: a.room_id,
@@ -177,9 +218,10 @@ async fn join(a: &Args, n: usize) -> Result<Speaker, String> {
     sink.send(Message::text(serde_json::to_string(&join).unwrap()))
         .await
         .map_err(|e| e.to_string())?;
-    let (joined_tx, joined_rx) = oneshot::channel::<Result<(), String>>();
+    let (joined_tx, joined_rx) = oneshot::channel::<Result<String, String>>();
+    let sink = Arc::new(tokio::sync::Mutex::new(sink));
     let task = {
-        let client = client.clone();
+        let (client, sink) = (client.clone(), sink.clone());
         tokio::spawn(async move {
             let mut joined_tx = Some(joined_tx);
             while let Some(Ok(m)) = stream.next().await {
@@ -188,8 +230,10 @@ async fn join(a: &Args, n: usize) -> Result<Speaker, String> {
                     continue;
                 };
                 match msg {
-                    ServerMsg::Joined { answer, .. } => {
-                        let r = client.accept_answer(&answer);
+                    ServerMsg::Joined {
+                        answer, user_id, ..
+                    } => {
+                        let r = client.accept_answer(&answer).map(|()| user_id);
                         if let Some(tx) = joined_tx.take() {
                             let _ = tx.send(r);
                         }
@@ -199,7 +243,7 @@ async fn join(a: &Args, n: usize) -> Result<Speaker, String> {
                             continue;
                         };
                         let a = serde_json::to_string(&ClientMsg::Answer { sdp }).unwrap();
-                        if sink.send(Message::text(a)).await.is_err() {
+                        if sink.lock().await.send(Message::text(a)).await.is_err() {
                             return;
                         }
                     }
@@ -214,7 +258,12 @@ async fn join(a: &Args, n: usize) -> Result<Speaker, String> {
         })
     };
     match tokio::time::timeout(Duration::from_secs(10), joined_rx).await {
-        Ok(Ok(Ok(()))) => Ok(Speaker { client, task }),
+        Ok(Ok(Ok(user_id))) => Ok(Speaker {
+            client,
+            task,
+            sink,
+            user_id,
+        }),
         Ok(Ok(Err(e))) => Err(format!("speaker {n}: {e}")),
         _ => Err(format!("speaker {n}: no Joined within 10 s")),
     }
@@ -230,16 +279,46 @@ async fn run(a: Args) -> Result<bool, String> {
     }
     let mut speakers = vec![];
     for n in 0..a.speakers {
-        speakers.push(join(&a, n).await?);
+        speakers.push(join(&a, n, a.sharers > 0).await?);
     }
     // Media can only flow once ICE/DTLS are up and every other voice has a negotiated track.
     let ready = Instant::now() + Duration::from_secs(20);
-    while !speakers
-        .iter()
-        .all(|s| s.client.is_connected() && s.client.remote_tracks() + 1 >= a.speakers)
-    {
+    while !speakers.iter().all(|s| {
+        s.client.is_connected() && s.client.remote_tracks_of(MediaKind::Audio) + 1 >= a.speakers
+    }) {
         if Instant::now() > ready {
             return Err("speakers not connected with all tracks within 20 s".into());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Sharers announce, then everyone watches every other sharer; the SFU then renegotiates a
+    // video track to each viewer.
+    let frame_bytes = (a.share_mbps * 1_000_000 / 8 / VIDEO_FPS) as usize;
+    for s in speakers.iter().take(a.sharers) {
+        s.send(&ClientMsg::ShareStart {
+            fps: VIDEO_FPS as u8,
+            bitrate_kbps: (a.share_mbps * 1000) as u32,
+        })
+        .await?;
+    }
+    for (i, v) in speakers.iter().enumerate() {
+        for sh in speakers.iter().take(a.sharers).enumerate() {
+            if sh.0 != i {
+                v.send(&ClientMsg::Watch {
+                    user_id: sh.1.user_id.clone(),
+                    on: true,
+                })
+                .await?;
+            }
+        }
+    }
+    let ready = Instant::now() + Duration::from_secs(20);
+    while !speakers.iter().enumerate().all(|(i, s)| {
+        s.client.remote_tracks_of(MediaKind::Video) >= a.sharers - usize::from(i < a.sharers)
+    }) {
+        if Instant::now() > ready {
+            return Err("viewers did not get every video track within 20 s".into());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -250,6 +329,10 @@ async fn run(a: Args) -> Result<bool, String> {
     for s in &speakers {
         s.client
             .send_audio((a.seconds * PACKETS_PER_SECOND) as usize);
+    }
+    for s in speakers.iter().take(a.sharers) {
+        s.client
+            .send_video((a.seconds * VIDEO_FPS) as usize, frame_bytes);
     }
     tokio::time::sleep(Duration::from_secs(a.seconds)).await;
     let cpu_end = a.pid.and_then(cpu_ticks);
@@ -274,6 +357,22 @@ async fn run(a: Args) -> Result<bool, String> {
             let mut counts = vec![0; speakers.len()];
             for p in s.client.received() {
                 if let Some(&j) = tag(&p).and_then(|t| tags.get(&t)) {
+                    counts[j] += 1;
+                }
+            }
+            counts
+        })
+        .collect();
+
+    // Video frames carry the same sender tag as that sender's audio.
+    let video_got: Vec<Vec<u64>> = speakers
+        .iter()
+        .map(|s| {
+            let mut counts = vec![0; a.sharers];
+            for p in s.client.received_video() {
+                if let Some(&j) = tag(&p).and_then(|t| tags.get(&t))
+                    && j < a.sharers
+                {
                     counts[j] += 1;
                 }
             }
@@ -309,6 +408,36 @@ async fn run(a: Args) -> Result<bool, String> {
             );
         }
     }
+    if a.sharers > 0 {
+        let queued = a.seconds * VIDEO_FPS;
+        let mut worst = u64::MAX;
+        for (i, row) in video_got.iter().enumerate() {
+            let per: Vec<String> = row
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(j, g)| format!("{j}:{g}"))
+                .collect();
+            worst = row
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, &g)| g)
+                .chain(Some(worst))
+                .min()
+                .unwrap_or(worst);
+            println!(
+                "viewer {i:>2}: video frames of {queued} queued [from sharer: {}]",
+                per.join(" ")
+            );
+        }
+        println!(
+            "video: {} sharers at {} Mbps, worst viewer-sharer pair got {worst}/{queued} frames ({:.1}%); not part of PASS",
+            a.sharers,
+            a.share_mbps,
+            worst as f64 * 100.0 / queued as f64
+        );
+    }
     if let (Some((t0, at)), Some(t1)) = (cpu_start, cpu_end) {
         let secs = at.elapsed().as_secs_f64() - 2.0;
         println!(
@@ -328,7 +457,7 @@ async fn run(a: Args) -> Result<bool, String> {
 async fn main() {
     let args = parse_args().unwrap_or_else(|e| {
         eprintln!(
-            "vesper-loadtest: {e}\nusage: vesper-loadtest --url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--pid PID]"
+            "vesper-loadtest: {e}\nusage: vesper-loadtest --url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--sharers N] [--share-mbps M] [--pid PID]"
         );
         std::process::exit(2);
     });

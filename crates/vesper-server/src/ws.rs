@@ -352,6 +352,10 @@ impl Calls {
                         ErrorCode::Forbidden,
                         "Screen share is only in group rooms.".into(),
                     )),
+                    Err(ErrorCode::RateLimited) => Some((
+                        ErrorCode::RateLimited,
+                        "Too many screens are being shared right now.".into(),
+                    )),
                     Err(code) => Some((code, "Bad share settings.".into())),
                 }
             }

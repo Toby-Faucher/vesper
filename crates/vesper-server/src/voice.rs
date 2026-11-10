@@ -137,6 +137,10 @@ impl State {
     }
 }
 
+/// Most the shares of one room may add up to, counting each one once per viewer who could watch
+/// it (kbps). The video load test held voice at 95% up to this total on two cores, and not above.
+const MAX_ROOM_SHARE_KBPS: u64 = 120_000;
+
 /// The frame rates and bitrates a share may ask for.
 fn valid_share(info: &ShareInfo) -> bool {
     matches!(info.fps, 30 | 60) && (500..=30_000).contains(&info.bitrate_kbps)
@@ -388,6 +392,17 @@ impl Voice {
         }
         if !valid_share(&info) {
             return Err(ErrorCode::BadMessage);
+        }
+        let viewers = st.members.values().filter(|o| o.room == room).count() as u64 - 1;
+        let others: u64 = st
+            .members
+            .iter()
+            .filter(|(id, o)| o.room == room && id.as_str() != user_id)
+            .filter_map(|(_, o)| o.share)
+            .map(|sh| u64::from(sh.bitrate_kbps) * viewers)
+            .sum();
+        if others + u64::from(info.bitrate_kbps) * viewers > MAX_ROOM_SHARE_KBPS {
+            return Err(ErrorCode::RateLimited);
         }
         let m = st.members.get_mut(user_id).expect("checked above");
         let began = m.share.replace(info).is_none();

@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::format::Codec;
-use str0m::media::{Direction, Frequency, KeyframeRequestKind, MediaKind, MediaTime, Mid};
+pub use str0m::media::MediaKind;
+use str0m::media::{Direction, Frequency, KeyframeRequestKind, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
@@ -25,8 +26,9 @@ const FRAME: Duration = Duration::from_millis(20);
 const FRAME_TICKS: u64 = 960;
 /// 64 kbps * 20 ms.
 const PAYLOAD_LEN: usize = 160;
-/// Video frames go at the same 20 ms pacing, on the 90 kHz video clock.
-const VIDEO_FRAME_TICKS: u64 = 1800;
+/// Video frames go at 60 a second, on the 90 kHz video clock.
+const VIDEO_FRAME: Duration = Duration::from_micros(16_667);
+const VIDEO_FRAME_TICKS: u64 = 1500;
 
 pub struct FakeClient {
     shared: Arc<Mutex<State>>,
@@ -157,7 +159,7 @@ impl FakeClient {
         self.state().to_send += n;
     }
 
-    /// Queue `frames` video frames of `bytes` bytes, sent at 20 ms pacing once ICE is connected.
+    /// Queue `frames` video frames of `bytes` bytes, sent at 60 frames a second once ICE is connected.
     /// Every frame is unique to this client and frame. Panics without [`with_video`](Self::with_video).
     pub fn send_video(&self, frames: usize, bytes: usize) {
         let mut s = self.state();
@@ -348,7 +350,7 @@ impl State {
         if writer.write(pt, now, time, payload).is_ok() {
             video.sent += 1;
             video.to_send -= 1;
-            video.next_send = now + FRAME;
+            video.next_send = now + VIDEO_FRAME;
         }
     }
 
