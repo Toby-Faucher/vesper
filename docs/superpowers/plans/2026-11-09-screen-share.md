@@ -592,7 +592,7 @@ Expected: FAIL.
 Run: `cd web && npm test && npm run check && npm run ci`
 Expected: PASS, including the gzip size budget. If the budget fails, keep `SharePanel` and `ShareTile` in their own lazy chunk.
 
-- [ ] **Step 5: Look at it.** With a release server and `scripts/build-dsp.sh` done, run the app in two headless Chromium pages (the e2e helpers in `web/e2e/lib.mjs` help), share a stubbed canvas screen (as in Task 10), and screenshot the three layouts. Compare with the mockups at `/home/toby/Downloads/share-panel-shots/layout-{A,B,C}.png`. Fix layout gaps before committing.
+- [ ] **Step 5: Look at it.** With a release server and `scripts/build-dsp.sh` done, run the app in two headless Chromium pages (the e2e helpers in `web/e2e/lib.mjs` help), share a stubbed canvas screen (as in Task 10), and screenshot the three layouts. Compare with the mockups at `~/Downloads/share-panel-shots/layout-{A,B,C}.png` on bawn. Fix layout gaps before committing.
 
 - [ ] **Step 6: Commit**
 

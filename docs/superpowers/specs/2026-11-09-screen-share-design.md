@@ -280,7 +280,7 @@ grow. Note this in `docs/known-issues.md`.
 
 ## Test page
 
-A throwaway page outside the repo, `/home/toby/Downloads/screen-test.html`. It shares the screen back to itself in one page and reports capture, encode
+A throwaway page outside the repo, `screen-test.html` in `~/Downloads` on bawn. It shares the screen back to itself in one page and reports capture, encode
 and decode stats, so each person can check their PC without a call. It does not test the network.
 
 Results so far (Toby, Zen 154, Arch, 2026-11-09):
