@@ -440,22 +440,20 @@ impl Voice {
                 message: "Your screen share sent more than 35 Mbps and was stopped.".into(),
             });
         }
-        // Watches end with the share, so a later share starts with no viewers.
-        for (viewer, v) in st.members.iter_mut() {
-            if v.watching.remove(user_id) {
-                self.0.sfu.watch(viewer, user_id, false);
-            }
-        }
     }
 
     /// `user_id` starts or stops receiving `sharer`'s screen. Ignored if `session` was replaced
-    /// or `sharer` is not in the same call.
+    /// or `user_id` is `sharer`. Starting also needs `sharer` in the same call; stopping always
+    /// applies, so a viewer's watch is theirs to end even after the sharer left.
     pub fn watch(&self, user_id: &str, session: u64, sharer: &str, on: bool) {
         let mut st = self.lock();
         let Some(m) = st.members.get(user_id) else {
             return;
         };
-        if m.session != session || st.members.get(sharer).is_none_or(|s| s.room != m.room) {
+        if m.session != session
+            || user_id == sharer
+            || (on && st.members.get(sharer).is_none_or(|s| s.room != m.room))
+        {
             return;
         }
         let m = st.members.get_mut(user_id).expect("checked above");
@@ -605,12 +603,8 @@ impl Voice {
         let skip: Vec<&Outbox> = [Some(&m.tx), joining].into_iter().flatten().collect();
         st.tell(&self.0.hub, m.room, left.clone(), &skip);
         m.tx.send(left);
-        // The leaver's own share ends with the call; their watches end too.
         for sharer in &m.watching {
             st.send_watchers(sharer);
-        }
-        for o in st.members.values_mut() {
-            o.watching.remove(user_id);
         }
         Some(m)
     }

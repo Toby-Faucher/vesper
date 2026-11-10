@@ -149,8 +149,8 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `internal`
 7. `set_voice_state` updates presence. `leave`, a closed socket, a kick, a lost room or the SFU ending the session removes the user.
    `share_start` (group rooms only; also changes the settings of a running share) and `share_stop` set `Peer.share`, which is `null` when
    nobody shares, and tell the room with `peer_share`. A share ends with the call.
-   `watch` asks the SFU to forward a sharer's video to the viewer (or stops it). The sharer gets `watchers { count }` when a share
-   starts and whenever the count of watchers in the call changes, also when a watcher leaves. A share ending clears its watchers.
+   `watch` (not for yourself) asks the SFU to forward a sharer's video to the viewer (or stops it). The sharer gets `watchers { count }` when a share
+   starts and whenever the count of watchers in the call changes, also when a watcher leaves.
    `point` (x and y from 0 to 1, else `bad_message`) goes as a server `point { user_id, from, x, y }` to everyone else in the call
    while `user_id` shares. The socket budget below is its rate limit. If the SFU cuts a share for going over its rate ceiling,
    the server sends `peer_share` with `null` to the whole room and `error { code: rate_limited }` to the sharer.
@@ -160,7 +160,7 @@ Each socket may send a burst of 20 messages, then 5 a second (`answer` does not 
 over the limit is dropped with `error { code: rate_limited }`. Past 20 such refusals (then 1 a second) the socket closes with 1008.
 
 Presence goes to every socket whose user can see the room (`Hub::broadcast_room`), in voice or not, so the room list shows who
-is talking. `peer_joined`, `peer_state` and `peer_share` skip the session's own socket. `peer_left` also reaches the session's own socket: that
+is talking. `peer_joined`, `peer_state` and `peer_share` skip the session's own socket (a cut share is the exception: the sharer gets `peer_share` with `null` too). `peer_left` also reaches the session's own socket: that
 is how a tab learns its call ended (kick, another tab took over, lost access, SFU). The socket stays open for the rest.
 A restricted room's presence reaches only sockets that can see it. When a room's member list or a role changes, or the room is archived, everyone in
 voice who can no longer see their room is taken out (`Voice::refresh`, called from `api_rooms::rooms_changed`). A socket that

@@ -2396,3 +2396,59 @@ async fn bad_point_is_refused() {
     });
     b.expect_error(ErrorCode::BadMessage).await;
 }
+
+#[tokio::test]
+async fn watchers_survive_a_restart() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (mut a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (b, _, _) = Conn::joined(&server, &bob, room).await;
+    b.send(&ClientMsg::Watch {
+        user_id: a_id,
+        on: true,
+    });
+    share_start(&a, 30, 2000);
+    assert_eq!(watchers(&mut a).await, 1);
+    a.send(&ClientMsg::ShareStop);
+    share_start(&a, 30, 2000);
+    assert_eq!(watchers(&mut a).await, 1);
+}
+
+#[tokio::test]
+async fn watch_off_after_the_sharer_left_is_applied() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (b, _, _) = Conn::joined(&server, &bob, room).await;
+    b.send(&ClientMsg::Watch {
+        user_id: a_id.clone(),
+        on: true,
+    });
+    a.send(&ClientMsg::Leave);
+    b.send(&ClientMsg::Watch {
+        user_id: a_id,
+        on: false,
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (mut a2, _, _) = Conn::joined(&server, &alice, room).await;
+    share_start(&a2, 30, 2000);
+    assert_eq!(watchers(&mut a2).await, 0);
+}
+
+#[tokio::test]
+async fn self_watch_is_ignored() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let (mut a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    a.send(&ClientMsg::Watch {
+        user_id: a_id,
+        on: true,
+    });
+    share_start(&a, 30, 2000);
+    assert_eq!(watchers(&mut a).await, 0);
+}
