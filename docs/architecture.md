@@ -197,7 +197,9 @@ unit tests in `hub.rs` and `voice.rs`.
 - A user is an account. The WebSocket takes the session cookie on the upgrade; no message carries a name or a key.
 - `user_id` is `accounts.id`: 16 random bytes as 32 lowercase hex characters. Hex keeps it a valid MSID stream id (RFC 8830).
 - The SFU labels each forwarded track with the sender's `user_id` as its MSID stream id (`vesper-sfu/src/client.rs`, `TrackIn.user`). In the
-  browser, `ontrack` gives `MediaStream.id` equal to that `user_id`, and the client keys remote streams on it (`signaling.ts`).
+  browser, `ontrack` gives `MediaStream.id` equal to that `user_id`, and the client keys remote streams on it and the track kind (`join.ts`):
+  audio goes to playback, a screen share's video to `shares.streams` (`share/state.svelte.ts`). The join offer always has a send-only video
+  transceiver with no track. Starting a share is `replaceTrack`, so the sharer never renegotiates.
 - A second voice join by the same account (another tab) takes the call over. The first tab's socket stays open and gets
   `peer_left` for itself; it may join again, which takes the call back. Each join gets a fresh `session` number
   (`next_session`, `voice.rs`). `answer`, `set_voice_state` and `leave` carry the socket's session and are

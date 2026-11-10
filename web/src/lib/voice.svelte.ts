@@ -21,6 +21,9 @@ import { loadLevelling, loadPrefs, saveLevelling } from './ui/prefs';
 import { lazy } from './ui/lazy';
 import { api } from './api';
 import type { CallTally } from './call-summary';
+import type { ServerMsg } from './gen/ServerMsg';
+import type { ShareSettings } from './share/prefs';
+import { clearShares, resetWatches, shares } from './share/state.svelte';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();
@@ -64,6 +67,8 @@ export const voice = new Voice();
 let callOff: (() => void) | undefined; // drops the call's handlers from the shared socket
 let playback: Playback | undefined;
 let sender: RTCRtpSender | undefined;
+let video: RTCRtpSender | undefined; // the screen share's sender, from joinRoom
+let applying: Promise<unknown> = Promise.resolve(); // a sender takes one setParameters at a time
 let known: MediaDeviceInfo[] = [];
 let poll: ReturnType<typeof setInterval> | undefined;
 let statsPoll: ReturnType<typeof setInterval> | undefined;
@@ -212,6 +217,7 @@ export function startVoice(): () => void {
           playback?.remove(m.user_id);
           if (voice.speaking.has(m.user_id)) voice.speaking = new Set([...voice.speaking].filter((i) => i !== m.user_id));
         }
+        onShareMsg(m);
         const c = callEvent(m, { userId: voice.joined ? voice.userId : '', room: voice.joinedRoom, muted: voice.muted });
         if (c.end) {
           if (c.leave) session.sig?.leave();
@@ -301,6 +307,9 @@ function teardown() {
   voice.capture?.close();
   voice.capture = undefined;
   sender = undefined;
+  endShare();
+  video = undefined;
+  clearShares();
   voice.pc?.close();
   voice.pc = undefined;
   voice.deviceError = '';
@@ -408,12 +417,18 @@ export async function join(roomId: number): Promise<boolean> {
     const r = await code.joinRoom(sig, {
       roomId: room, stream, bitrateKbps: voice.settings.bitrateKbps, dtx: voice.settings.dtx,
       onError: (err) => (voice.error = err.message),
-      onRemoteStream: (id, s) => {
+      onRemoteStream: (id, s, kind) => {
+        if (kind === 'video') return void (shares.streams = new Map(shares.streams).set(id, s)); // never to playback
         tracks.forEach((u, t) => u === id && tracks.delete(t));
         s.getAudioTracks().forEach((t) => tracks.set(t.id, id));
         playback?.addRemote(id, s);
       },
-      onRemoteStreamEnd: (id) => {
+      onRemoteStreamEnd: (id, kind) => {
+        if (kind === 'video') {
+          const next = new Map(shares.streams);
+          next.delete(id);
+          return void (shares.streams = next);
+        }
         tracks.forEach((u, t) => u === id && tracks.delete(t));
         if (id in voice.links) voice.links = Object.fromEntries(Object.entries(voice.links).filter(([u]) => u !== id)); // a rejoin starts measuring again
         playback?.remove(id);
@@ -423,6 +438,8 @@ export async function join(roomId: number): Promise<boolean> {
     voice.userId = r.userId;
     voice.pc = r.pc;
     voice.joinedBitrate = voice.settings.bitrateKbps;
+    video = r.video;
+    resetWatches(); // the server forgot this client's watches: send them again
     playback?.addLocal(r.userId, stream);
     const audioSender = r.pc.getSenders().find((s) => s.track?.kind === 'audio');
     sender = audioSender;
@@ -461,4 +478,89 @@ export async function join(roomId: number): Promise<boolean> {
   } finally {
     voice.joining = false;
   }
+}
+
+// Screen share. Mine starts with the encoder off; the server's watcher count turns it on and off.
+const SHARE_FAILED = 'Could not share your screen.';
+const MARKER_MS = 3000;
+
+/** The bitrate to send: the setting, or the suggestion when none is set, never above the browser's ceiling for this size. */
+function shareKbps(code: NonNullable<typeof stack>, kbps: number | null, track: MediaStreamTrack): number {
+  const { width = 0, height = 0 } = track.getSettings();
+  const ceiling = code.ceilingKbps(code.engineOf(navigator.userAgent), width, height);
+  return Math.min(kbps ?? code.suggestKbps(null, ceiling), ceiling);
+}
+function applyMine(): Promise<unknown> {
+  const m = shares.mine;
+  const s = video;
+  if (!m || !s) return applying;
+  return (applying = applying.then(() => stack!.applyShare(s, m, m.watchers > 0)).catch(() => {
+    if (shares.mine) voice.error = `${SHARE_FAILED} The settings did not apply.`;
+  }));
+}
+/** Ends my share here only. True if there was one. */
+function endShare(): boolean {
+  const m = shares.mine;
+  if (!m) return false;
+  shares.mine = null;
+  m.track.stop();
+  void video?.replaceTrack(null).catch(() => {});
+  return true;
+}
+function onShareMsg(m: ServerMsg) {
+  if (m.type === 'watchers' && shares.mine) {
+    shares.mine = { ...shares.mine, watchers: m.count };
+    void applyMine();
+  } else if (m.type === 'peer_share' && m.user_id === voice.userId && !m.share) {
+    endShare(); // the server cut my share; its error says why
+  } else if (m.type === 'point') {
+    const mk = { share: m.user_id, from: m.from, x: m.x, y: m.y, until: Date.now() + MARKER_MS };
+    shares.markers = [...shares.markers, mk];
+    setTimeout(() => (shares.markers = shares.markers.filter((k) => k !== mk)), MARKER_MS);
+  }
+}
+
+/** Opens the browser's screen picker and shares the pick. Does nothing if the person cancels it. */
+export async function startShare(s: ShareSettings): Promise<void> {
+  const sender = video;
+  if (!sender || shares.mine) return;
+  const code = stack!; // loaded: there is a call
+  let track: MediaStreamTrack | null = null;
+  try {
+    track = await code.capture(s.fps, s.prefer);
+    if (!track) return;
+    if (video !== sender || shares.mine) return void track.stop(); // the call ended, or another start won, during the picker
+    const t = track;
+    shares.mine = { track: t, fps: s.fps, kbps: shareKbps(code, s.kbps, t), prefer: s.prefer, watchers: 0 };
+    t.addEventListener('ended', () => shares.mine?.track === t && stopShare()); // the browser's own Stop sharing
+    await code.applyShare(sender, shares.mine, false);
+    await sender.replaceTrack(t);
+  } catch (e) {
+    if (track) {
+      if (shares.mine?.track !== track) return; // the call ended meanwhile
+      endShare();
+    }
+    voice.error = `${SHARE_FAILED} Details: ${e}`;
+    return;
+  }
+  const m = shares.mine;
+  if (m?.track === track) session.sig?.send({ type: 'share_start', fps: m.fps, bitrate_kbps: m.kbps });
+}
+/** New settings for my running share. */
+export async function updateShare(s: ShareSettings): Promise<void> {
+  const m = shares.mine;
+  if (!m) return;
+  if (s.fps !== m.fps) void m.track.applyConstraints({ frameRate: s.fps }).catch(() => {});
+  shares.mine = { ...m, fps: s.fps, kbps: shareKbps(stack!, s.kbps, m.track), prefer: s.prefer };
+  session.sig?.send({ type: 'share_start', fps: s.fps, bitrate_kbps: shares.mine.kbps });
+  await applyMine();
+}
+export function stopShare(): void {
+  if (endShare()) session.sig?.send({ type: 'share_stop' });
+}
+export function watchShare(userId: string, on: boolean): void {
+  session.sig?.send({ type: 'watch', user_id: userId, on });
+}
+export function pointAt(userId: string, x: number, y: number): void {
+  session.sig?.send({ type: 'point', user_id: userId, x, y });
 }

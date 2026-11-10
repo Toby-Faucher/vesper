@@ -7,4 +7,6 @@ export { summarize } from './diag';
 export { CallTally } from './call-summary';
 export { quality } from './ui/quality';
 export { linkSamples, ownSample, stepLink } from './ui/link-stats';
+export { applyShare, capture } from './share/send';
+export { ceilingKbps, engineOf, suggestKbps } from './share/ceiling';
 export { default as CallBar } from '../routes/CallBar.svelte';

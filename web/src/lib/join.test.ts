@@ -14,17 +14,21 @@ class FakePC {
   closed = false;
   ontrack: unknown;
   remotes: { type: string; sdp: string }[] = [];
-  params: { encodings: { maxBitrate?: number }[] } = { encodings: [{}] };
+  params: { encodings: RTCRtpEncodingParameters[] } = { encodings: [{}] };
   sender = {
     track: { kind: 'audio' },
     getParameters: () => this.params,
-    setParameters: async (p: { encodings: { maxBitrate?: number }[] }) => { this.params = p; },
+    setParameters: async (p: { encodings: RTCRtpEncodingParameters[] }) => { this.params = p; },
   };
+  video = { track: null };
+  added: unknown[][] = []; // addTrack and addTransceiver calls, in order
+  offered: unknown[][] = []; // `added` when the offer was made
   constructor() { FakePC.last = this; }
-  getSenders() { return [this.sender]; }
-  addTrack() {}
+  getSenders() { return [this.sender, this.video]; }
+  addTrack(t: { kind: string }) { this.added.push(['track', t.kind]); }
+  addTransceiver(kind: string, init: unknown) { this.added.push(['transceiver', kind, init]); return { sender: this.video }; }
   close() { this.closed = true; }
-  async createOffer() { return { type: 'offer', sdp: 'v=0' }; }
+  async createOffer() { this.offered = [...this.added]; return { type: 'offer', sdp: 'v=0' }; }
   async createAnswer() { return { type: 'answer', sdp: 'ans' }; }
   async setLocalDescription(d: { type: string; sdp: string }) { this.log.push(`local:${d.type}`); }
   async setRemoteDescription(d: { type: string; sdp: string }) {
@@ -73,9 +77,33 @@ describe('joinRoom', () => {
       expect(fmtp).toEqual(expect.arrayContaining(['maxaveragebitrate=96000', 'useinbandfec=1', 'stereo=0']));
       expect(fmtp).toContain(dtx ? 'usedtx=1' : 'usedtx=0');
       expect(ans.match(/^a=ptime:20$/gm)).toHaveLength(1);
-      expect(FakePC.last.params.encodings[0].maxBitrate).toBe(96000);
+      expect(FakePC.last.params.encodings[0]).toMatchObject({ maxBitrate: 96000, priority: 'high', networkPriority: 'high' });
     });
   }
+  it('a voice priority the browser refuses does not fail the join', async () => {
+    const t = setup();
+    const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64, onError: t.onError });
+    await tick();
+    const set = FakePC.last.sender.setParameters;
+    FakePC.last.sender.setParameters = async (x) => {
+      if (x.encodings[0].priority) throw new Error('no priority');
+      return set(x);
+    };
+    t.emit(joined);
+    await expect(p).resolves.toBeTruthy();
+    expect(FakePC.last.params.encodings[0].maxBitrate).toBe(64000);
+    expect(t.onError).not.toHaveBeenCalled();
+  });
+  it('offers the audio track and one send-only video transceiver, and returns its sender', async () => {
+    const t = setup();
+    const mic = { kind: 'audio' };
+    const stream = { ...t.stream, getAudioTracks: () => [mic] } as unknown as MediaStream;
+    const p = joinRoom(t.sig, { roomId: 1, stream, bitrateKbps: 64 });
+    await tick();
+    expect(FakePC.last.offered).toEqual([['track', 'audio'], ['transceiver', 'video', { direction: 'sendonly' }]]);
+    t.emit(joined);
+    expect((await p).video).toBe(FakePC.last.video);
+  });
   it('tunes SFU renegotiation offers before applying them', async () => {
     const t = setup();
     const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64 });
@@ -119,7 +147,7 @@ describe('joinRoom', () => {
   it('rejoin_plays_the_new_track (#45): a new track for a known id is played, alone, and the old one ending does not drop it', async () => {
     vi.stubGlobal('MediaStream', class { id = crypto.randomUUID(); constructor(public tracks: unknown[]) {} });
     const track = () => {
-      const t = { readyState: 'live', ends: [] as (() => void)[], addEventListener: (_: string, f: () => void) => t.ends.push(f) };
+      const t = { kind: 'audio', readyState: 'live', ends: [] as (() => void)[], addEventListener: (_: string, f: () => void) => t.ends.push(f) };
       return t;
     };
     const end = (t: ReturnType<typeof track>) => ((t.readyState = 'ended'), t.ends.forEach((f) => f()));
@@ -127,7 +155,8 @@ describe('joinRoom', () => {
     const added: [string, unknown[]][] = [];
     const ended: string[] = [];
     const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64,
-      onRemoteStream: (id, s) => added.push([id, (s as unknown as { tracks: unknown[] }).tracks]), onRemoteStreamEnd: (id) => ended.push(id) });
+      onRemoteStream: (id, s, kind) => kind === 'audio' && added.push([id, (s as unknown as { tracks: unknown[] }).tracks]),
+      onRemoteStreamEnd: (id, kind) => kind === 'audio' && ended.push(id) });
     await tick();
     t.emit(joined);
     await p;
@@ -146,6 +175,33 @@ describe('joinRoom', () => {
     expect(ended).toEqual([bob.id]);
     end(fresh);
     expect(ended).toEqual([bob.id, bob.id]);
+  });
+  it('a video track and an audio track for one user are both live: neither ends the other', async () => {
+    vi.stubGlobal('MediaStream', class { id = crypto.randomUUID(); constructor(public tracks: unknown[]) {} });
+    const track = (kind: string) => {
+      const t = { kind, ends: [] as (() => void)[], addEventListener: (_: string, f: () => void) => t.ends.push(f) };
+      return t;
+    };
+    const t = setup();
+    const added: [string, string, unknown[]][] = [];
+    const ended: [string, string][] = [];
+    const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64,
+      onRemoteStream: (id, s, kind) => added.push([id, kind, (s as unknown as { tracks: unknown[] }).tracks]),
+      onRemoteStreamEnd: (id, kind) => ended.push([id, kind]) });
+    await tick();
+    t.emit(joined);
+    await p;
+    const ontrack = FakePC.last.ontrack as (e: unknown) => void;
+    const u1 = { id: 'u1' };
+    const [screen, voice] = [track('video'), track('audio')];
+    ontrack({ track: screen, streams: [u1] });
+    ontrack({ track: voice, streams: [u1] });
+    expect(added).toEqual([['u1', 'video', [screen]], ['u1', 'audio', [voice]]]);
+    expect(ended).toEqual([]);
+    screen.ends.forEach((f) => f());
+    expect(ended).toEqual([['u1', 'video']]);
+    voice.ends.forEach((f) => f());
+    expect(ended).toEqual([['u1', 'video'], ['u1', 'audio']]);
   });
   it('reports post-join errors and cleans up on close', async () => {
     const t = setup();

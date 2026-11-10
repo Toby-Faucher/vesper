@@ -37,6 +37,8 @@ vi.mock('./audio/capture', () => ({
 vi.mock('../routes/CallBar.svelte', () => ({ default: {} })); // in the call chunk; its styles need a real document
 const joinRoom = vi.fn();
 vi.mock('./join', () => ({ joinRoom: (...a: unknown[]) => joinRoom(...a) }));
+const send = vi.hoisted(() => ({ capture: vi.fn(), applyShare: vi.fn() }));
+vi.mock('./share/send', () => send);
 
 // Counts listeners on window, document and mediaDevices.
 class Target {
@@ -65,6 +67,7 @@ const { CALL_ENDED, ROOM_GONE } = await import('./call');
 const { SETTINGS_KEY } = await import('./audio/settings');
 const { createCapture } = await import('./audio/capture');
 const { MIC_FALLBACK, SPEAKER_FALLBACK } = await import('./devices');
+const { shares } = await import('./share/state.svelte');
 
 class FakeSig {
   msg = new Set<(m: ServerMsg) => void>();
@@ -110,12 +113,13 @@ async function joined() {
   const cap = fakeCapture();
   const pc = fakePc();
   const off = vi.fn();
-  joinRoom.mockResolvedValue({ pc, userId: me, off, peers: [] });
+  const video = { replaceTrack: vi.fn(async (_t: unknown) => {}) };
+  joinRoom.mockResolvedValue({ pc, userId: me, off, peers: [], video });
   const p = v.join(1);
   h.capture!.resolve(cap);
   expect(await p).toBe(false);
   expect(voice.joined).toBe(true);
-  return { cap, pc, off };
+  return { cap, pc, off, video };
 }
 
 // Must stay the first test: it needs the call chunk not loaded yet.
@@ -422,6 +426,153 @@ describe('in a call', () => {
     expect(sig.close.size).toBe(1);
     await joined();
     expect(joinRoom.mock.calls.at(-1)![0]).toBe(sig);
+  });
+});
+
+describe('screen share', () => {
+  const bob = 'b'.repeat(32);
+  // A captured screen track: `fire('ended')` is the browser's own Stop sharing.
+  const screen = (width = 1920, height = 1080) => {
+    const on = new Map<string, () => void>();
+    return {
+      stop: vi.fn(),
+      applyConstraints: vi.fn(async () => {}),
+      getSettings: () => ({ width, height }),
+      addEventListener: (t: string, f: () => void) => on.set(t, f),
+      fire: (t: string) => on.get(t)?.(),
+    };
+  };
+  const shareMsgs = () => sig.sent.filter((m) => (m as { type: string }).type.startsWith('share_'));
+  beforeEach(() => {
+    send.capture.mockReset();
+    send.applyShare.mockReset().mockResolvedValue(undefined);
+  });
+  async function sharing(s = { fps: 60 as const, kbps: 8000, prefer: 'sharp' as const }) {
+    const call = await joined();
+    const track = screen();
+    send.capture.mockResolvedValue(track);
+    await v.startShare(s);
+    return { ...call, track };
+  }
+
+  it('starts_a_share', async () => {
+    const { video, track } = await sharing();
+    expect(send.capture).toHaveBeenCalledWith(60, 'sharp');
+    expect(video.replaceTrack).toHaveBeenCalledWith(track);
+    expect(send.applyShare).toHaveBeenCalledWith(video, expect.objectContaining({ fps: 60, kbps: 8000, prefer: 'sharp' }), false); // on once someone watches
+    expect(send.applyShare.mock.invocationCallOrder[0]).toBeLessThan(video.replaceTrack.mock.invocationCallOrder[0]); // never sends before that
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
+    expect(shares.mine).toMatchObject({ track, fps: 60, kbps: 8000, prefer: 'sharp', watchers: 0 });
+  });
+
+  it('no bitrate set: the suggestion, capped by the browser ceiling for the captured size', async () => {
+    const nav = navigator as unknown as { userAgent?: string };
+    nav.userAgent = 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0';
+    try {
+      await joined();
+      send.capture.mockResolvedValue(screen(1280, 720));
+      await v.startShare({ fps: 30, kbps: null, prefer: 'smooth' });
+      expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 30, bitrate_kbps: 5000 }]);
+      await v.updateShare({ fps: 30, kbps: 9000, prefer: 'smooth' });
+      expect(shareMsgs().at(-1)).toEqual({ type: 'share_start', fps: 30, bitrate_kbps: 5000 });
+    } finally {
+      delete nav.userAgent;
+    }
+  });
+
+  it('cancelled_picker_sends_nothing', async () => {
+    await joined();
+    send.capture.mockResolvedValue(null);
+    await v.startShare({ fps: 60, kbps: 8000, prefer: 'sharp' });
+    expect(shareMsgs()).toEqual([]);
+    expect(voice.error).toBe('');
+    expect(shares.mine).toBeNull();
+  });
+
+  it('browser_stop_ends_the_share', async () => {
+    const { video, track } = await sharing();
+    track.fire('ended');
+    expect(shareMsgs().at(-1)).toEqual({ type: 'share_stop' });
+    expect(shares.mine).toBeNull();
+    expect(video.replaceTrack).toHaveBeenLastCalledWith(null);
+  });
+
+  it('Stop ends the share and tells the server once', async () => {
+    const { track } = await sharing();
+    v.stopShare();
+    v.stopShare();
+    expect(track.stop).toHaveBeenCalled();
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }, { type: 'share_stop' }]);
+  });
+
+  it('watchers_turn_the_encoder_on_and_off', async () => {
+    const { video } = await sharing();
+    sig.emit({ type: 'watchers', count: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send.applyShare).toHaveBeenLastCalledWith(video, expect.objectContaining({ fps: 60, kbps: 8000, prefer: 'sharp' }), true);
+    expect(shares.mine?.watchers).toBe(1);
+    sig.emit({ type: 'watchers', count: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send.applyShare).toHaveBeenLastCalledWith(video, expect.objectContaining({ fps: 60 }), false);
+  });
+
+  it('new settings while sharing: applied with the encoder still on, and sent', async () => {
+    const { video, track } = await sharing();
+    sig.emit({ type: 'watchers', count: 2 });
+    await v.updateShare({ fps: 30, kbps: 4000, prefer: 'smooth' });
+    expect(track.applyConstraints).toHaveBeenCalledWith({ frameRate: 30 });
+    expect(send.applyShare).toHaveBeenLastCalledWith(video, expect.objectContaining({ fps: 30, kbps: 4000, prefer: 'smooth' }), true);
+    expect(shareMsgs().at(-1)).toEqual({ type: 'share_start', fps: 30, bitrate_kbps: 4000 });
+    expect(shares.mine).toMatchObject({ fps: 30, kbps: 4000, prefer: 'smooth', watchers: 2 });
+  });
+
+  it('server_cut_stops_locally', async () => {
+    const { track } = await sharing();
+    sig.emit({ type: 'peer_share', user_id: me, share: null });
+    expect(track.stop).toHaveBeenCalled();
+    expect(shares.mine).toBeNull();
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
+  });
+
+  it('leaving the call ends the share locally and clears the shares', async () => {
+    const { track } = await sharing();
+    joinRoom.mock.calls.at(-1)![1].onRemoteStream(bob, { id: bob }, 'video');
+    v.leave();
+    expect(track.stop).toHaveBeenCalled();
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
+    expect(shares.mine).toBeNull();
+    expect(shares.streams.size).toBe(0);
+  });
+
+  it('remote_video_never_reaches_playback', async () => {
+    await joined();
+    const { onRemoteStream, onRemoteStreamEnd } = joinRoom.mock.calls.at(-1)![1];
+    const s = { id: bob, getAudioTracks: () => [] };
+    onRemoteStream(bob, s, 'video');
+    expect(shares.streams.get(bob)).toBe(s);
+    const pb = h.playbacks[0] as unknown as { addRemote: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> };
+    expect(pb.addRemote).not.toHaveBeenCalled();
+    onRemoteStreamEnd(bob, 'video');
+    expect(shares.streams.has(bob)).toBe(false);
+    expect(pb.remove).not.toHaveBeenCalled();
+  });
+
+  it('watch and point go to the server', async () => {
+    await joined();
+    v.watchShare(bob, true);
+    v.pointAt(bob, 0.5, 0.25);
+    expect(sig.sent.slice(-2)).toEqual([{ type: 'watch', user_id: bob, on: true }, { type: 'point', user_id: bob, x: 0.5, y: 0.25 }]);
+  });
+
+  it('point_adds_a_marker', async () => {
+    await joined();
+    const from = 'c'.repeat(32);
+    sig.emit({ type: 'point', user_id: bob, from, x: 0.5, y: 0.25 });
+    expect(shares.markers).toEqual([{ share: bob, from, x: 0.5, y: 0.25, until: Date.now() + 3000 }]);
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(shares.markers).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(shares.markers).toEqual([]);
   });
 });
 

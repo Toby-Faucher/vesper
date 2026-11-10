@@ -14,6 +14,8 @@ export function applyPeerMsg(peers: Peer[], m: ServerMsg): Peer[] {
       return peers.map((p) =>
         p.user_id === m.user_id ? { ...p, muted: m.muted, deafened: m.deafened, force_muted: m.force_muted } : p,
       );
+    case 'peer_share':
+      return peers.map((p) => (p.user_id === m.user_id ? { ...p, share: m.share } : p));
     default:
       return peers;
   }

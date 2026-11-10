@@ -21,6 +21,12 @@ describe('applyPeerMsg', () => {
     const m = { type: 'peer_state', user_id: 'b', muted: true, deafened: true, force_muted: true } as const;
     expect(applyPeerMsg([a, b], m)).toEqual([a, { ...b, muted: true, deafened: true, force_muted: true }]);
   });
+  it('peer_share sets the share; null clears it', () => {
+    const share = { fps: 60, bitrate_kbps: 8000 };
+    const on = applyPeerMsg([a, b], { type: 'peer_share', user_id: 'b', share });
+    expect(on).toEqual([a, { ...b, share }]);
+    expect(applyPeerMsg(on, { type: 'peer_share', user_id: 'b', share: null })).toEqual([a, b]);
+  });
   it('ignores other messages', () => {
     const l = [a];
     expect(applyPeerMsg(l, { type: 'offer', sdp: 'x' })).toBe(l);
