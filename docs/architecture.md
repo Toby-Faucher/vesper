@@ -121,10 +121,10 @@ transaction. Messages, reactions, reads, uploads, search, typing and voice use t
 
 All messages are JSON on one WebSocket per tab, tagged by `type` (`vesper-protocol/src/lib.rs`).
 
-Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `share_start { fps, bitrate_kbps }`, `share_stop`, `leave`, `check { offer }`,
+Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `share_start { fps, bitrate_kbps }`, `share_stop`, `watch { user_id, on }`, `point { user_id, x, y }`, `leave`, `check { offer }`,
 `typing { room_id }`, `decline_ring { room_id }`.
 Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is the server's `version` and `build` id), `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
-`peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `peer_share { user_id, share }`, `rooms_changed { rooms }`, `user_updated { user }`,
+`peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `peer_share { user_id, share }`, `watchers { count }`, `point { user_id, from, x, y }`, `rooms_changed { rooms }`, `user_updated { user }`,
 `user_created { user }`,
 `force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
 `read { room_id, last_read_id }`, `ring_start { room_id, user_id }`, `ring_stop { room_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
@@ -149,6 +149,11 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `internal`
 7. `set_voice_state` updates presence. `leave`, a closed socket, a kick, a lost room or the SFU ending the session removes the user.
    `share_start` (group rooms only; also changes the settings of a running share) and `share_stop` set `Peer.share`, which is `null` when
    nobody shares, and tell the room with `peer_share`. A share ends with the call.
+   `watch` asks the SFU to forward a sharer's video to the viewer (or stops it). The sharer gets `watchers { count }` when a share
+   starts and whenever the count of watchers in the call changes, also when a watcher leaves. A share ending clears its watchers.
+   `point` (x and y from 0 to 1, else `bad_message`) goes as a server `point { user_id, from, x, y }` to everyone else in the call
+   while `user_id` shares. The socket budget below is its rate limit. If the SFU cuts a share for going over its rate ceiling,
+   the server sends `peer_share` with `null` to the whole room and `error { code: rate_limited }` to the sharer.
 8. The server pings every 25 s and drops a socket silent for two periods (`ws.rs`).
 
 Each socket may send a burst of 20 messages, then 5 a second (`answer` does not count, since the server asks for it). A message

@@ -52,7 +52,7 @@ pub enum ErrorCode {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ClientMsg {
@@ -74,6 +74,17 @@ pub enum ClientMsg {
         bitrate_kbps: u32,
     },
     ShareStop,
+    /// Start or stop receiving `user_id`'s screen share.
+    Watch {
+        user_id: String,
+        on: bool,
+    },
+    /// Point at a spot on `user_id`'s shared screen. `x` and `y` run from 0 to 1.
+    Point {
+        user_id: String,
+        x: f32,
+        y: f32,
+    },
     Leave,
     /// Connectivity check: a voice session that is not shown to anyone.
     Check {
@@ -90,7 +101,7 @@ pub enum ClientMsg {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ServerMsg {
@@ -126,6 +137,17 @@ pub enum ServerMsg {
     PeerShare {
         user_id: String,
         share: Option<ShareInfo>,
+    },
+    /// To a sharer: how many people watch the share.
+    Watchers {
+        count: u32,
+    },
+    /// Someone pointed at `user_id`'s shared screen.
+    Point {
+        user_id: String,
+        from: String,
+        x: f32,
+        y: f32,
     },
     /// The rooms this user can see, after any change.
     RoomsChanged {

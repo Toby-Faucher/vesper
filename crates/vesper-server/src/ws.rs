@@ -359,6 +359,27 @@ impl Calls {
                 voice.share_stop(&j.user_id, j.session);
                 None
             }
+            (
+                Ok(ClientMsg::Watch {
+                    user_id: sharer,
+                    on,
+                }),
+                Some(j),
+            ) => {
+                voice.watch(&j.user_id, j.session, &sharer, on);
+                None
+            }
+            (
+                Ok(ClientMsg::Point {
+                    user_id: sharer,
+                    x,
+                    y,
+                }),
+                Some(j),
+            ) => voice
+                .point(&j.user_id, j.session, &sharer, x, y)
+                .err()
+                .map(|code| (code, "Bad pointer position.".into())),
             // Ends the call and the connection check, whichever runs.
             (Ok(ClientMsg::Leave), j) if j.is_some() || self.check.is_some() => {
                 self.end(st);
