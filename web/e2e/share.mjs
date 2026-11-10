@@ -58,6 +58,14 @@ const stat = (page, type, pick) =>
     }
     return null;
   }, [type, pick]);
+const outVideo = (page) =>
+  page.evaluate(async () => {
+    for (const pc of window.__pcs.filter((p) => p.connectionState !== 'closed'))
+      for (const r of (await pc.getStats()).values())
+        if (r.type === 'outbound-rtp' && r.kind === 'video')
+          return { bytes: r.bytesSent, enc: r.framesEncoded, sent: r.framesSent, rtx: r.retransmittedBytesSent ?? 0 };
+    return null;
+  });
 const bytesSent = (page) => stat(page, 'outbound-rtp', 'bytesSent');
 const bytesReceived = (page) => stat(page, 'inbound-rtp', 'bytesReceived');
 const tileVideoWidth = (page) => page.evaluate(() => document.querySelector('[aria-label="alice\'s screen"] video')?.videoWidth ?? 0);
@@ -88,7 +96,6 @@ try {
 
   // Bob gets video, and bytes keep arriving.
   const tile = bob.page.getByLabel("alice's screen");
-  await tile.waitFor({ timeout: 10000 });
   let ms = await until('bob tile video', 10000, async () => (await tileVideoWidth(bob.page)) > 0);
   console.log(`tile video: ${ms} ms, ${await tileVideoWidth(bob.page)} px wide`);
   const rx0 = await bytesReceived(bob.page);
@@ -105,17 +112,38 @@ try {
   });
   console.log(`availableOutgoingBitrate passed 2 Mbps after ${ms} ms (peak ${peak})`);
 
+  // Watched baseline: alice's video payload rate over 3 s.
+  const w0 = await outVideo(alice.page);
+  await sleep(3000);
+  const w1 = await outVideo(alice.page);
+  const watchedRate = (w1.bytes - w0.bytes) / 3;
+  console.log(`watched: ${Math.round(watchedRate)} B/s, ${(w1.enc - w0.enc) / 3} frames/s encoded`);
+  assert.ok(watchedRate > 50_000, `alice sends too little while watched (${watchedRate} B/s)`);
+
   // Bob hides the tile: after the 10 s grace the server counts 0 and the encoder goes quiet.
   await tile.getByRole('button', { name: 'Hide' }).click();
   await bob.page.getByText("alice's screen is hidden.").waitFor();
   ms = await until('0 watching', 15000, async () => alice.page.getByText('0 watching').isVisible());
   console.log(`0 watching after ${ms} ms`);
-  await sleep(1000); // let the last packets drain
-  const tx0 = await bytesSent(alice.page);
-  await sleep(3000);
-  const tx1 = await bytesSent(alice.page);
-  assert.ok(tx1 - tx0 < 20000, `alice still sends video with nobody watching (${tx0} -> ${tx1})`);
-  console.log(`bytesSent over 3 s with no watcher: ${tx1 - tx0}`);
+  // Per-second deltas for 14 s. After a 2 s settle the encoder must be still and bytes under 2% of the watched rate.
+  let prev = await outVideo(alice.page);
+  let bursts = 0;
+  const base = prev;
+  for (let i = 1; i <= 14; i++) {
+    await sleep(1000);
+    const cur = await outVideo(alice.page);
+    const d = { bytes: cur.bytes - prev.bytes, enc: cur.enc - prev.enc, sent: cur.sent - prev.sent, rtx: cur.rtx - prev.rtx };
+    console.log(`unwatched s${i}: bytes ${d.bytes} framesEncoded ${d.enc} framesSent ${d.sent} rtxBytes ${d.rtx}`);
+    if (i > 2) {
+      if (d.bytes) bursts++;
+      assert.equal(d.enc, 0, `encoder still running with no watcher (s${i}: ${d.enc} frames)`);
+    }
+    prev = cur;
+  }
+  // Bytes are not zero: about 10 kB leaves every ~5 s with no frames encoded. Bound the mean after the settle, not each second.
+  const mean = (prev.bytes - base.bytes) / 14;
+  console.log(`unwatched mean ${Math.round(mean)} B/s (${((100 * mean) / watchedRate).toFixed(2)}% of watched), ${bursts} bursts`);
+  assert.ok(mean < watchedRate * 0.02, `alice still sends ${Math.round(mean)} B/s with no watcher (watched ${Math.round(watchedRate)} B/s)`);
 
   // Bob shows it again and video resumes.
   await bob.page.getByRole('button', { name: 'Show' }).click();
@@ -140,6 +168,7 @@ try {
   await bob.page.goto(`${ORIGIN}/r/${dm.id}`);
   await bob.page.getByRole('button', { name: 'Join' }).click();
   await bob.page.getByRole('button', { name: 'Leave' }).waitFor();
+  await bob.page.getByRole('button', { name: 'Mute' }).or(bob.page.getByRole('button', { name: 'Unmute' })).first().waitFor();
   assert.equal(await bob.page.getByRole('button', { name: 'Share screen' }).count(), 0, 'a DM call shows "Share screen"');
   console.log('dm_no_share: ok');
 
