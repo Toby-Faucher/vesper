@@ -452,4 +452,30 @@ mod tests {
         c.handle_track_open(Arc::downgrade(&video));
         assert_eq!(c.tracks_out.len(), 2);
     }
+
+    #[test]
+    fn share_is_cut_only_after_windows_over_the_ceiling_in_a_row() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let cfg = SfuConfig {
+            answer_timeout: Duration::MAX,
+            share_ceiling_bps: 8_000_000,
+            share_ceiling_secs: 2,
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let (over, under) = (2_000_000, 500_000); // bytes in one window: 16 and 4 Mbit/s
+        let rtc = Rtc::builder().build(t0);
+        let mut c = Client::new(rtc, "r".into(), "b".into(), tx, vec![], false, &cfg);
+        c.sharing = true;
+        // The first call opens the first window. Over, under, over: the count starts again.
+        for (bytes, s) in [(0, 0), (over, 1), (under, 2), (over, 3)] {
+            assert!(c.share_within_ceiling(bytes, at(s)), "cut at {s} s");
+        }
+        assert!(c.sharing && rx.try_recv().is_err());
+        // A second window over in a row cuts the share.
+        assert!(!c.share_within_ceiling(over, at(4)));
+        assert!(!c.sharing);
+        assert!(matches!(rx.try_recv(), Ok(SfuEvent::ShareCut)));
+    }
 }

@@ -387,7 +387,7 @@ impl Voice {
             return Ok(());
         }
         let room = m.room;
-        if st.rooms.get(&room).is_some_and(|r| r.kind == RoomKind::Dm) {
+        if st.rooms.get(&room).is_none_or(|r| r.kind == RoomKind::Dm) {
             return Err(ErrorCode::Forbidden);
         }
         if !valid_share(&info) {
