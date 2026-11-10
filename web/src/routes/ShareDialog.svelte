@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import { shares } from '../lib/share/state.svelte';
   import { engineOf, ceilingKbps, suggestKbps, MIN_KBPS } from '../lib/share/ceiling';
   import { loadShareSettings, saveShareSettings, type Prefer } from '../lib/share/prefs';
@@ -30,20 +30,24 @@
   let prefer = $state<Prefer>(untrack(() => (edit && shares.mine ? shares.mine.prefer : saved.prefer)));
   let kbps = $state(Math.min(ceiling, untrack(() => (edit && shares.mine ? shares.mine.kbps : saved.kbps ?? suggestKbps(null, ceiling)))));
   let upload = $state<number | null | undefined>(editing ? null : undefined); // undefined: measuring
+  let moved = false; // the person moved the slider: a later measurement does not overwrite it
+  let closed = false;
+  onDestroy(() => (closed = true));
   if (!editing) void measureUploadKbps().then((u) => {
+    if (closed) return;
     upload = u;
-    if (saved.kbps === null && u !== null) kbps = suggestKbps(u, ceiling);
+    if (saved.kbps === null && u !== null && !moved) kbps = suggestKbps(u, ceiling);
   });
 
   function go() {
     const s = { fps, kbps, prefer };
     saveShareSettings(s);
     onclose();
-    void (edit ? updateShare(s) : startShare(s));
+    void (editing ? updateShare(s) : startShare(s));
   }
 </script>
 
-<Dialog open title={edit ? M.shareEditTitle : M.shareTitle} {onclose}>
+<Dialog open title={editing ? M.shareEditTitle : M.shareTitle} {onclose}>
   <div class="flex flex-col gap-4">
     <Field label={M.shareFps}>
       <Select bind:value={fps}>
@@ -52,9 +56,9 @@
       </Select>
     </Field>
     <Field label={M.shareBitrate} value={M.shareMbps(mbps(kbps))}>
-      <Range bind:value={kbps} min={MIN_KBPS} max={ceiling} step={500} aria-valuetext={M.shareMbps(mbps(kbps))} />
+      <Range bind:value={kbps} oninput={() => (moved = true)} min={MIN_KBPS} max={ceiling} step={500} aria-valuetext={M.shareMbps(mbps(kbps))} />
     </Field>
-    {#if !edit}
+    {#if !editing}
       <p class="text-xs text-fg-2" role="status">
         {#if upload === undefined}{M.shareMeasuring}
         {:else if upload === null}{M.shareMeasureFailed}
@@ -71,7 +75,7 @@
     </Field>
     <div class="flex justify-end gap-2">
       <Button variant="ghost" onclick={onclose}>{M.shareCancel}</Button>
-      <Button variant="primary" onclick={go}>{edit ? M.shareSave : M.shareStart}</Button>
+      <Button variant="primary" onclick={go}>{editing ? M.shareSave : M.shareStart}</Button>
     </div>
     <p class="text-xs text-fg-3">{M.shareNothing}</p>
   </div>

@@ -26,9 +26,10 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 170, cssFirst: 12, css
 // on the dev machine, so CI is expected near 58.6. The light block adds 0.3 kB to the first load CSS (8.3 to 8.6).
 // 2026-11-09: 58.9 to 59.8 for screen share (the shares state, which the shell reads, and the share messages in the call
 // subscription); measured 59.3 on the dev machine. The sending code stays in the lazy call-stack chunk.
-// 2026-11-09: 59.8 to 60.2 for the sharer UI (the share cue and its two tones, the cut notice, the sidebar share icon and the
-// two new icons the first chunk keeps); measured 60.0 on the dev machine against 59.3 before. The dialog and card are lazy.
-export const RATCHET_GZIP_KB = { first: 60.2 };
+// 2026-11-09: 59.8 to 60.4 for the sharer UI (the share cue and its two tones, the cut notice, the sidebar share icon and the
+// two new icons the first chunk keeps); measured 60.0 on the dev machine against 59.3 before,
+// so CI is expected near 60.2. The dialog and card are lazy.
+export const RATCHET_GZIP_KB = { first: 60.4 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.

@@ -4,6 +4,8 @@ import type { ServerMsg } from './gen/ServerMsg';
 
 // Fakes for everything that touches audio, WebRTC and the browser. `calls` records the order of the join's steps.
 const calls: string[] = [];
+const chime = vi.hoisted(() => vi.fn());
+vi.mock('./ui/chime', () => ({ chime }));
 const h = vi.hoisted(() => ({
   capture: null as null | { resolve: (c: unknown) => void; reject: (e: unknown) => void },
   playbacks: [] as { close: ReturnType<typeof vi.fn>; setSink: ReturnType<typeof vi.fn>; setLevelling: ReturnType<typeof vi.fn> }[],
@@ -548,6 +550,28 @@ describe('screen share', () => {
     voice.error = '';
     onError(new Error('Something else.'));
     expect(voice.error).toBe('Something else.');
+  });
+
+  describe('share cue', () => {
+    const peer = (share: { fps: number; bitrate_kbps: number } | null) => ({ user_id: bob, name: 'bob', room_id: 1, muted: false, deafened: false, force_muted: false, share });
+    const setPeers = (voiceList: ReturnType<typeof peer>[]) => { session.state = { ...session.state, voice: voiceList }; flushSync(); };
+    it('a_peer_in_my_call_starting_a_share_plays_share_start', async () => {
+      await joined();
+      setPeers([peer(null)]);
+      chime.mockClear();
+      setPeers([peer({ fps: 60, bitrate_kbps: 8000 })]);
+      expect(chime).toHaveBeenCalledWith('share-start', null, expect.any(Number));
+      setPeers([peer(null)]);
+      expect(chime).toHaveBeenLastCalledWith('share-stop', null, expect.any(Number));
+    });
+    it('call_cues_off_plays_nothing', async () => {
+      await joined();
+      stored.set('vesper.notify', JSON.stringify({ call: false }));
+      setPeers([peer(null)]);
+      chime.mockClear();
+      setPeers([peer({ fps: 60, bitrate_kbps: 8000 })]);
+      expect(chime).not.toHaveBeenCalled();
+    });
   });
 
   it('rate_limited_without_a_share_keeps_its_text', async () => {

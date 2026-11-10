@@ -8,15 +8,14 @@
   // My own share in the call bar: a muted preview, the live figures from the video sender's stats (every 2 s), the settings
   // and Stop. Nothing here is a live region: the figures change on every poll.
   let { onsettings }: { onsettings: () => void } = $props();
-  const m = $derived(shares.mine);
+  const track = $derived(shares.mine?.track); // keyed on the track: a watcher count or settings change must not restart the preview or the stats
   let video: HTMLVideoElement;
   let stats = $state({ width: 0, height: 0, fps: 0, kbps: 0 });
 
   $effect(() => {
-    if (m) video.srcObject = new MediaStream([m.track]);
+    if (track) video.srcObject = new MediaStream([track]);
   });
   $effect(() => {
-    const track = m?.track;
     const sender = voice.pc?.getSenders().find((s) => s.track === track);
     if (!sender) return;
     let bytes = -1, at = 0;
@@ -36,7 +35,7 @@
 
 <div class="flex min-w-0 items-center gap-2">
   <video bind:this={video} class="h-8 w-14 shrink-0 rounded-sm bg-element object-contain" muted autoplay playsinline aria-hidden="true"></video>
-  <span class="truncate text-xs text-fg-2 tabular-nums">{shareLine({ ...stats, watchers: m?.watchers ?? 0 })}</span>
+  <span class="truncate text-xs text-fg-2 tabular-nums">{shareLine({ ...stats, watchers: shares.mine?.watchers ?? 0 })}</span>
   <IconButton icon={I.settings} label="Share settings" tip="up" onclick={onsettings} />
   <Button variant="danger-ghost" onclick={stopShare}>Stop</Button>
 </div>
