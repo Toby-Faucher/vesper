@@ -33,7 +33,8 @@ Consequences:
   share is on and watched.
 - A viewer with a bad link gets the same stream as everyone else. Its keyframe requests cost every viewer a little.
 - A share and its watchers must be set again after a rejoin, because the SFU forgets them with the session.
-- Video shares the voice thread. Whether that holds at the spec's loads is not measured yet.
+- Video shares the voice thread and its socket. The [video load test](../testing/latency.md#video-load) measured it: the usual load
+  (2 x 10 Mbps) and 4 x 10 Mbps pass; 4 x 20 Mbps drops packets at the server's socket buffer, so the server caps a room's shares.
 
 Verified: `crates/vesper-sfu/tests/forwarding.rs` with `FakeClient` over loopback (`video_reaches_only_watchers`, `video_needs_a_share`,
 `late_viewer_gets_video`, `audio_only_client_gets_no_video`, `force_mute_keeps_video`, `hostile_offers_are_rejected`), and

@@ -297,7 +297,7 @@ run: Toby at 1920x1200, and the three friends.
 
 Built in `ccaef6f` through `0d6dc5d` on `feat/screen-share`. The differences, all my calls:
 
-- **SFU.** VP8 only. Video m-lines are fixed at join: a client whose offer had a video m-line gets one recv-only video m-line per other video-capable member; an audio-only client gets none. Forwarding needs the server's `set_sharing` and the viewer's `watch`. A watch and a viewer keyframe request send a PLI, with no throttle. A share over 35 Mbps for 5 s is cut with `ShareCut`; one second under resets the count.
+- **SFU.** VP8 only. Video m-lines are fixed at join: a client whose offer had a video m-line gets one recv-only video m-line per other video-capable member; an audio-only client gets none. Forwarding needs the server's `set_sharing` and the viewer's `watch`. A watch and a viewer keyframe request send a PLI, with no throttle. A share over 35 Mbps for 5 s is cut with `ShareCut`; one second at or under resets the count.
 - **Server.** Messages `share_start`, `share_stop`, `watch`, `point` in and `peer_share`, `watchers`, `point` out. A share in a DM is refused (`Forbidden`). A viewer's watch entry belongs to the viewer: it survives the sharer stopping, restarting or leaving, and `watch off` always applies.
 - **The pointer uses the per-socket message budget** (5 a second), not a new kind in `limits.rs`.
 - **`POST /api/speedtest`** serves the upload test for share settings.
@@ -314,5 +314,6 @@ Built in `ccaef6f` through `0d6dc5d` on `feat/screen-share`. The differences, al
 
 - **Verified by tests:** SFU and server tests with fake clients; web unit tests with fakes.
 - **Measured in the e2e** (`web/e2e/share.mjs`, two headless Chromium pages, stubbed canvas screen, not a real screen): video arrived in 257 ms; the sender's bandwidth estimate peaked at about 5.85 Mbps; watchers dropped to 0 at 10.2 s after the viewer's tab went away; encoder `framesEncoded` was 0 per second while unwatched, over 7 runs. A burst of about 10 kB every 5 s was seen while unwatched; its cause is unknown.
-- **Measured in the load test** (Core i7-12700, server pinned to two E-cores; see [latency.md](../../testing/latency.md#video-load)): the usual load passes with 100% voice. 4 x 20 Mbps failed before the cap existed. The cause is unclear, since server CPU stayed under 50%.
+- **Measured in the load test** (Core i7-12700, server pinned to two E-cores; see [latency.md](../../testing/latency.md#video-load)): the usual load passes with 99.7% voice on the worst pair. 4 x 20 Mbps failed before the cap existed. Its loss is at the server's UDP receive buffer (50 146 drops in one 30 s run), while server CPU stayed under 50%.
+- **The load test measures delivery, not latency.** The spec asked for voice loss and latency at the same time; only loss (packets received out of packets sent) and server CPU are measured.
 - **Not verified:** Firefox or Zen in a real share, a real network, a real call, the Dockge VM and Windows browsers. The "Test page" results above are the only real-browser numbers (Zen 154, one person).
