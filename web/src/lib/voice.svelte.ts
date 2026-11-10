@@ -15,7 +15,8 @@ import type { DenoiseMode } from './audio/mode';
 import type { Diag } from './diag';
 import type { Quality } from './ui/quality';
 import type { Link } from './ui/link';
-import { callCue, type CallSnap } from './ui/cues';
+import { callCue, shareCue, type CallSnap } from './ui/cues';
+import type { Peer } from './gen/Peer';
 import { chime } from './ui/chime';
 import { loadLevelling, loadPrefs, saveLevelling } from './ui/prefs';
 import { lazy } from './ui/lazy';
@@ -208,6 +209,16 @@ export function startVoice(): () => void {
       was = now;
       if (cue) untrack(() => chime(cue, voice.settings.speakerId, prefs.volume));
     });
+    // Someone in my call starts or stops sharing.
+    let peers: Peer[] = [];
+    $effect(() => {
+      const next = session.state.voice;
+      const room = voice.joinedRoom;
+      const prefs = loadPrefs();
+      const cue = room !== null && prefs.call ? shareCue(peers, next, room) : null;
+      peers = next;
+      if (cue) untrack(() => chime(cue, voice.settings.speakerId, prefs.volume));
+    });
     // Call events on the shared socket. It is replaced after a reconnect, so this re-subscribes.
     $effect(() => {
       const s = session.sig;
@@ -308,6 +319,7 @@ function teardown() {
   voice.capture = undefined;
   sender = undefined;
   endShare();
+  cutAt = 0;
   video = undefined;
   clearShares();
   voice.pc?.close();
@@ -416,7 +428,7 @@ export async function join(roomId: number): Promise<boolean> {
     asked = true;
     const r = await code.joinRoom(sig, {
       roomId: room, stream, bitrateKbps: voice.settings.bitrateKbps, dtx: voice.settings.dtx,
-      onError: (err) => (voice.error = err.message),
+      onError: (err) => (voice.error = shareLimited(err) ? SHARE_CUT : err.message),
       onRemoteStream: (id, s, kind) => {
         if (kind === 'video') return void (shares.streams = new Map(shares.streams).set(id, s)); // never to playback
         tracks.forEach((u, t) => u === id && tracks.delete(t));
@@ -482,7 +494,9 @@ export async function join(roomId: number): Promise<boolean> {
 
 // Screen share. Mine starts with the encoder off; the server's watcher count turns it on and off.
 const SHARE_FAILED = 'Could not share your screen.';
+const SHARE_CUT = 'Your screen share sent more than 35 Mbps and was stopped.';
 const MARKER_MS = 3000;
+let cutAt = 0; // when the server last cut my share
 
 /** The bitrate to send: the setting, or the suggestion when none is set, never above the browser's ceiling for this size. */
 function shareKbps(code: NonNullable<typeof stack>, kbps: number | null, track: MediaStreamTrack): number {
@@ -507,12 +521,14 @@ function endShare(): boolean {
   void video?.replaceTrack(null).catch(() => {});
   return true;
 }
+/** The server sends rate_limited when it cuts a share; while sharing, or just after a cut, that is what it means. */
+const shareLimited = (e: Error & { code?: string }) => e.code === 'rate_limited' && (!!shares.mine || Date.now() - cutAt < 5000);
 function onShareMsg(m: ServerMsg) {
   if (m.type === 'watchers' && shares.mine) {
     shares.mine = { ...shares.mine, watchers: m.count };
     void applyMine();
   } else if (m.type === 'peer_share' && m.user_id === voice.userId && !m.share) {
-    endShare(); // the server cut my share; its error says why
+    if (endShare()) cutAt = Date.now(); // the server cut my share; its error says why
   } else if (m.type === 'point') {
     const mk = { share: m.user_id, from: m.from, x: m.x, y: m.y, until: Date.now() + MARKER_MS };
     shares.markers = [...shares.markers, mk];

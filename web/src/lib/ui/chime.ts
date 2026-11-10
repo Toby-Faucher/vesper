@@ -20,6 +20,8 @@ export const TONES: Record<Cue, Tone> = {
   connect: { hz: [587.33, 880], step: 0.11, wave: 'triangle' }, // D5 A5
   disconnect: { hz: [880, 587.33], step: 0.11, wave: 'triangle' },
   ring: { hz: [659.25, 523.25, 659.25, 523.25], step: 0.16, wave: 'triangle', gap: 0.04 }, // E5 C5 twice, an incoming DM call
+  'share-start': { hz: [698.46, 1046.5], step: 0.07, wave: 'triangle' }, // F5 C6
+  'share-stop': { hz: [1046.5, 698.46], step: 0.07, wave: 'triangle' },
   lost: { hz: [220, 164.81], step: 0.12, wave: 'triangle' }, // A3 E3
 };
 /** Peak gain at volume 100; the default 50 gives 0.08 (about -22 dBFS). */

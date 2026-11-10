@@ -10,6 +10,7 @@
   import { glide } from '../lib/ui/motion';
   import { layers } from '../lib/ui/layers.svelte';
   import { isMac } from '../lib/ui/keys';
+  import { shares } from '../lib/share/state.svelte';
   import { UI_MESSAGES } from '../lib/ui/messages-first';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
@@ -29,7 +30,7 @@
   // The server tells everyone else about your join, not you: your own row comes from the call itself.
   const self = $derived<Peer | null>(
     me && voice.joined && voice.joinedRoom !== null
-      ? { user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted, share: null }
+      ? { user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted, share: shares.mine && { fps: shares.mine.fps, bitrate_kbps: shares.mine.kbps } }
       : null,
   );
   const peersIn = (id: number) => {

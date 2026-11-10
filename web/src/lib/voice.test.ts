@@ -534,6 +534,28 @@ describe('screen share', () => {
     expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
   });
 
+  it('rate_limited_while_sharing_or_just_cut_says_the_share_was_stopped', async () => {
+    const cut = 'Your screen share sent more than 35 Mbps and was stopped.';
+    const limited = Object.assign(new Error('Too many tries. Wait a moment and try again.'), { code: 'rate_limited' });
+    await sharing();
+    const { onError } = joinRoom.mock.calls.at(-1)![1];
+    onError(limited);
+    expect(voice.error).toBe(cut);
+    voice.error = '';
+    sig.emit({ type: 'peer_share', user_id: me, share: null });
+    onError(limited);
+    expect(voice.error).toBe(cut);
+    voice.error = '';
+    onError(new Error('Something else.'));
+    expect(voice.error).toBe('Something else.');
+  });
+
+  it('rate_limited_without_a_share_keeps_its_text', async () => {
+    await joined();
+    joinRoom.mock.calls.at(-1)![1].onError(Object.assign(new Error('Too many tries. Wait a moment and try again.'), { code: 'rate_limited' }));
+    expect(voice.error).toBe('Too many tries. Wait a moment and try again.');
+  });
+
   it('leaving the call ends the share locally and clears the shares', async () => {
     const { track } = await sharing();
     joinRoom.mock.calls.at(-1)![1].onRemoteStream(bob, { id: bob }, 'video');

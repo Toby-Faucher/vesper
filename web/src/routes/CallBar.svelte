@@ -13,6 +13,9 @@
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
+  import ShareCard from './ShareCard.svelte';
+  import ShareDialog from './ShareDialog.svelte';
+  import { shares } from '../lib/share/state.svelte';
   import Status from '../lib/ui/c/Status.svelte';
   // The call, floating at the bottom of the main pane while you are in voice. Everything here is read from the voice
   // store; nothing animates while the call runs (the speaking ring is an instant toggle from the store's 100 ms poll).
@@ -31,12 +34,13 @@
     };
   }
 
+  let sharing = $state(false); // the share dialog is open
   const AVATARS = 5; // drawn; the rest is "+n"
   const room = $derived(findRoom(session.state, voice.joinedRoom));
   const me = $derived(session.state.me?.user);
   const people = $derived.by<Peer[]>(() => {
     const others = voice.joinedRoom === null ? [] : inRoom(session.state.voice, voice.joinedRoom).filter((p) => p.user_id !== me?.user_id);
-    return me ? [{ user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom ?? 0, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted, share: null }, ...others] : others;
+    return me ? [{ user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom ?? 0, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted, share: shares.mine && { fps: shares.mine.fps, bitrate_kbps: shares.mine.kbps } }, ...others] : others;
   });
   const user = (p: Peer) => session.state.users[p.user_id] ?? { user_id: p.user_id, display_name: p.name, accent: '' };
   const LEVEL = { good: 3, fair: 2, poor: 1, unknown: 0 } as const;
@@ -71,6 +75,13 @@
            bar there is only the screen edge. -->
       <IconButton icon={voice.muted ? I.micOff : I.mic} label={voice.muted ? 'Unmute' : 'Mute'} tip="up" danger={voice.muted} disabled={voice.forceMuted} onclick={toggleMute} />
       <IconButton icon={voice.deafened ? I.headphonesOff : I.headphones} label={voice.deafened ? 'Undeafen' : 'Deafen'} tip="up" danger={voice.deafened} onclick={toggleDeafen} />
+      {#if room?.kind !== 'dm'}
+        {#if shares.mine}
+          <ShareCard onsettings={() => (sharing = true)} />
+        {:else}
+          <IconButton icon={I.monitorUp} label="Share screen" tip="up" onclick={() => (sharing = true)} />
+        {/if}
+      {/if}
       {#if voice.settings.pushToTalk.enabled}
         <!-- Both texts share one grid cell, so the pill keeps its width while the key goes down and up. Not a live region:
              it changes on every press, and the Mute state already speaks. -->
@@ -117,6 +128,7 @@
     </div>
   </section>
 </div>
+{#if sharing}<ShareDialog edit={!!shares.mine} onclose={() => (sharing = false)} />{/if}
 
 <style>
   /* The speaking ring's gap is drawn in the sidebar colour; on the bar it takes the bar's own. */
