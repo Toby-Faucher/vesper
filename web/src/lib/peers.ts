@@ -24,3 +24,8 @@ export function applyPeerMsg(peers: Peer[], m: ServerMsg): Peer[] {
 export function inRoom(peers: Peer[], roomId: number): Peer[] {
   return peers.filter((p) => p.room_id === roomId);
 }
+
+/** Who shares a screen in the call in `roomId`, me left out: my own share is in the call bar, not in a tile. */
+export function sharersIn(peers: Peer[], roomId: number | null, me: string): string[] {
+  return peers.filter((p) => p.room_id === roomId && p.share && p.user_id !== me).map((p) => p.user_id);
+}

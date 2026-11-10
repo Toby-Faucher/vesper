@@ -24,7 +24,7 @@ import { api } from './api';
 import type { CallTally } from './call-summary';
 import type { ServerMsg } from './gen/ServerMsg';
 import type { ShareSettings } from './share/prefs';
-import { clearShares, resetWatches, shares } from './share/state.svelte';
+import { clearShares, shares } from './share/state.svelte';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();
@@ -321,6 +321,7 @@ function teardown() {
   endShare();
   cutAt = 0;
   video = undefined;
+  stack?.resetWatches(); // no call code, no gates
   clearShares();
   voice.pc?.close();
   voice.pc = undefined;
@@ -451,7 +452,7 @@ export async function join(roomId: number): Promise<boolean> {
     voice.pc = r.pc;
     voice.joinedBitrate = voice.settings.bitrateKbps;
     video = r.video;
-    resetWatches(); // the server forgot this client's watches: send them again
+    code.resetWatches(); // the server forgot this client's watches: send them again
     playback?.addLocal(r.userId, stream);
     const audioSender = r.pc.getSenders().find((s) => s.track?.kind === 'audio');
     sender = audioSender;

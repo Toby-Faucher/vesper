@@ -1,6 +1,5 @@
 // Screen shares in the current call, for the call bar and the share panel. voice.svelte.ts fills and clears it.
 import { loadLayout, type Layout, type Prefer } from './prefs';
-import { WatchGate, wantsWatch } from './watch';
 
 /** A pointer click on a share, shown until `until` (Date.now() ms). */
 export type Marker = { share: string; from: string; x: number; y: number; until: number };
@@ -25,26 +24,9 @@ class Shares {
 }
 export const shares = new Shares();
 
-const gates = new Map<string, WatchGate>();
-
-/** Sends watch on or off for each sharer in the call. A share that ended keeps its gate, so the off still goes out. */
-export function syncWatches(sharing: string[], send: (userId: string, on: boolean) => void): void {
-  for (const id of new Set([...sharing, ...gates.keys()])) {
-    let g = gates.get(id);
-    if (!g) gates.set(id, (g = new WatchGate((on) => send(id, on))));
-    g.set(sharing.includes(id) && wantsWatch({ inPanel: shares.shown.has(id), tabVisible: shares.tabVisible, poppedOut: shares.popped === id }));
-  }
-}
-
-/** A new call: the server forgot this client's watches, so the next syncWatches sends them again. Sends nothing. */
-export function resetWatches(): void {
-  gates.forEach((g) => g.dispose());
-  gates.clear();
-}
-
-/** The call ended: everything of it goes, without telling the server. My own track is stopped by the caller. */
+/** The call ended: everything of it goes, without telling the server. My own track is stopped by the caller, and the watch
+ * gates are reset by the call code (watch.ts). */
 export function clearShares(): void {
-  resetWatches();
   Object.assign(shares, {
     streams: new Map(), hidden: new Set(), shown: new Set(), popped: null, focus: null, panelOpen: true, chatOpen: false, markers: [], mine: null,
   });

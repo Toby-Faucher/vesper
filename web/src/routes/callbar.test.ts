@@ -39,7 +39,7 @@ it('live_regions_hold_words_only', () => {
 // No DOM in the tests, so the share controls are checked in the markup.
 it('share_button_is_in_group_calls_only_and_the_card_replaces_it_while_sharing', () => {
   expect(src).toMatch(/\{#if room\?\.kind !== 'dm'\}\s*\{#if shares\.mine\}\s*<ShareCard/);
-  expect(src).toMatch(/<IconButton icon=\{I\.monitorUp\} label="Share screen" tip="up"/);
+  expect(src).toMatch(/<IconButton icon=\{monitorUp\} label="Share screen" tip="up"/);
   expect(src).toContain('<ShareDialog');
 });
 it('share_card_shows_stop_and_the_watchers_outside_any_live_region', () => {

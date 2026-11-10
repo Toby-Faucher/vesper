@@ -37,6 +37,7 @@ vi.mock('./audio/capture', () => ({
   }),
 }));
 vi.mock('../routes/CallBar.svelte', () => ({ default: {} })); // in the call chunk; its styles need a real document
+vi.mock('../routes/SharePanel.svelte', () => ({ default: {} })); // the same
 const joinRoom = vi.fn();
 vi.mock('./join', () => ({ joinRoom: (...a: unknown[]) => joinRoom(...a) }));
 const send = vi.hoisted(() => ({ capture: vi.fn(), applyShare: vi.fn() }));
@@ -608,6 +609,19 @@ describe('screen share', () => {
     v.watchShare(bob, true);
     v.pointAt(bob, 0.5, 0.25);
     expect(sig.sent.slice(-2)).toEqual([{ type: 'watch', user_id: bob, on: true }, { type: 'point', user_id: bob, x: 0.5, y: 0.25 }]);
+  });
+
+  it('a rejoin sends watch on again: the server forgot the watches, so the gates start over', async () => {
+    const { syncWatches } = await import('./share/watch');
+    const watches = () => sig.sent.filter((m) => (m as { type: string }).type === 'watch');
+    await joined();
+    shares.shown = new Set([bob]);
+    syncWatches([bob], v.watchShare);
+    v.leave();
+    await joined();
+    shares.shown = new Set([bob]);
+    syncWatches([bob], v.watchShare);
+    expect(watches()).toEqual([{ type: 'watch', user_id: bob, on: true }, { type: 'watch', user_id: bob, on: true }]);
   });
 
   it('point_adds_a_marker', async () => {

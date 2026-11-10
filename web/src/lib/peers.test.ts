@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyPeerMsg, inRoom } from './peers';
+import { applyPeerMsg, inRoom, sharersIn } from './peers';
 import type { Peer } from './gen/Peer';
 
 const peer = (user_id: string, room_id = 1): Peer => ({
@@ -39,5 +39,14 @@ describe('inRoom', () => {
     expect(inRoom([a, c, b], 1)).toEqual([a, b]);
     expect(inRoom([a, c, b], 2)).toEqual([c]);
     expect(inRoom([a], 9)).toEqual([]);
+  });
+});
+
+describe('sharersIn', () => {
+  it('lists the sharers in my call room, not me and not other rooms', () => {
+    const share = { fps: 60, bitrate_kbps: 8000 };
+    const peers = [{ ...a, share }, b, { ...peer('c', 2), share }, { ...peer('me'), share }];
+    expect(sharersIn(peers, 1, 'me')).toEqual(['a']);
+    expect(sharersIn(peers, null, 'me')).toEqual([]);
   });
 });

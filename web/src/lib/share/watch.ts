@@ -1,3 +1,5 @@
+import { shares } from './state.svelte';
+
 export const WATCH_GRACE_MS = 10_000;
 
 /** Watching: tile in the panel with the tab visible, or popped out. */
@@ -30,4 +32,21 @@ export class WatchGate {
   private clear(): void {
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
   }
+}
+
+const gates = new Map<string, WatchGate>();
+
+/** Sends watch on or off for each sharer in the call. A share that ended keeps its gate, so the off still goes out. */
+export function syncWatches(sharing: string[], send: (userId: string, on: boolean) => void): void {
+  for (const id of new Set([...sharing, ...gates.keys()])) {
+    let g = gates.get(id);
+    if (!g) gates.set(id, (g = new WatchGate((on) => send(id, on))));
+    g.set(sharing.includes(id) && wantsWatch({ inPanel: shares.shown.has(id), tabVisible: shares.tabVisible, poppedOut: shares.popped === id }));
+  }
+}
+
+/** A new call: the server forgot this client's watches, so the next syncWatches sends them again. Sends nothing. */
+export function resetWatches(): void {
+  gates.forEach((g) => g.dispose());
+  gates.clear();
 }
