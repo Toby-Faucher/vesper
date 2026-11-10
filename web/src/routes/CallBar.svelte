@@ -19,9 +19,9 @@
   import ShareCard from './ShareCard.svelte';
   import ShareDialog from './ShareDialog.svelte';
   import { monitorUp } from '../lib/share/icons';
-  import { closePopOut } from '../lib/share/pip';
+  import { canPopOut, closePopOut } from '../lib/share/pip';
   import { shares } from '../lib/share/state.svelte';
-  import { syncWatches } from '../lib/share/watch';
+  import { syncWatches, tabCounts } from '../lib/share/watch';
   import Status from '../lib/ui/c/Status.svelte';
   // The call, floating at the bottom of the main pane while you are in voice. Everything here is read from the voice
   // store; nothing animates while the call runs (the speaking ring is an instant toggle from the store's 100 ms poll).
@@ -72,7 +72,7 @@
     if (shares.popped && !sharers.includes(shares.popped)) closePopOut(); // that share ended
     syncWatches(sharers, watchShare);
   });
-  const visible = () => (shares.tabVisible = document.visibilityState === 'visible');
+  const visible = () => (shares.tabVisible = tabCounts(document.visibilityState, canPopOut()));
   onMount(visible);
   onDestroy(closePopOut); // a popped-out share outlives the room page, not the call
   // Away from the call room, the shares there are one link back (the panel lives on that room's page).

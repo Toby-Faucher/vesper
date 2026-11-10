@@ -86,6 +86,7 @@ describe('popOut', () => {
     videos[0].dispatchEvent(new Event('loadedmetadata'));
     await p;
     expect(onClose).toHaveBeenCalledOnce();
+    expect(videos[0].srcObject).toBeNull(); // the hidden video stops drawing the share
   });
   it('a newer pop-out replaces the onClose of the one before', async () => {
     const first = vi.fn(), second = vi.fn();

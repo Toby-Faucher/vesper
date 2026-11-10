@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WATCH_GRACE_MS, WatchGate, resetWatches, syncWatches, wantsWatch } from './watch';
+import { WATCH_GRACE_MS, WatchGate, resetWatches, syncWatches, tabCounts, wantsWatch } from './watch';
 import { shares } from './state.svelte';
 
 describe('wantsWatch', () => {
@@ -111,5 +111,16 @@ describe('syncWatches', () => {
     shares.shown = new Set(['a']);
     syncWatches(['a'], send);
     expect(send.mock.calls).toEqual([['a', true], ['a', true]]);
+  });
+});
+
+describe('tabCounts', () => {
+  it('a visible tab counts', () => {
+    expect(tabCounts('visible', true)).toBe(true);
+    expect(tabCounts('visible', false)).toBe(true);
+  });
+  it('a hidden tab counts only where our pop-out is missing (Firefox: its own pop-out is invisible to the page)', () => {
+    expect(tabCounts('hidden', true)).toBe(false);
+    expect(tabCounts('hidden', false)).toBe(true);
   });
 });

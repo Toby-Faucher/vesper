@@ -31,7 +31,11 @@ export async function popOut(stream: MediaStream, onClose: () => void): Promise<
   void v.play().catch(() => {});
   if (v.readyState < 1) await new Promise((r) => v.addEventListener('loadedmetadata', r, { once: true }));
   if (v.srcObject !== stream) return; // closed, or another share popped out, while it loaded
-  await v.requestPictureInPicture().catch(() => closed === onClose && ended()); // the gesture ran out, or the browser said no
+  await v.requestPictureInPicture().catch(() => {
+    // the gesture ran out, or the browser said no: the hidden video stops drawing the share
+    if (v.srcObject === stream) v.srcObject = null; // not a newer pop-out's
+    if (closed === onClose) ended();
+  });
 }
 
 /** Closes the window, if any, and runs the pending onClose. */
