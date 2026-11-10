@@ -201,11 +201,16 @@ unit tests in `hub.rs` and `voice.rs`.
 ## SFU ownership
 
 - The SFU thread owns the UDP socket, every str0m `Rtc` client and all media state. Nothing else touches them. The server sends it commands
-  (`join`, `answer`, `leave`, `set_muted`, `set_sharing`, `watch`, `set_advertised`) over a channel and gets `SfuEvent::Offer` and
-  `SfuEvent::Closed` back per session.
+  (`join`, `answer`, `leave`, `set_muted`, `set_sharing`, `watch`, `set_advertised`) over a channel and gets `SfuEvent::Offer`,
+  `SfuEvent::ShareCut` and `SfuEvent::Closed` back per session.
 - Video ([ADR 0009](decisions/0009-video-in-the-sfu.md)): a join offer has one audio m-line and at most one VP8 video m-line. A client with
   video is offered every other video track at join. Packets flow only while `set_sharing(user, true)` holds for the sender and
   `watch(viewer, sharer, true)` for the receiver. Both are per session, so a rejoin starts with neither.
+- Keyframes: `watch(viewer, sharer, true)` sends the sharer a PLI, so the new viewer gets a picture right away. A viewer's own PLI or FIR on a
+  forwarded video goes to the sharer as the same kind. Covered by `tests/forwarding.rs` with str0m test clients, not a browser.
+- Share ceiling: the SFU measures each sharer's incoming video in windows of at least a second. When it stays above `share_ceiling_bps`
+  (35 Mbps) for `share_ceiling_secs` (5) windows in a row, the SFU stops forwarding it, sets the sender to not sharing, and sends
+  `SfuEvent::ShareCut` once to that session. Video from a client that is not sharing is dropped before it is measured.
 - `Voice` owns presence: who is in which room, muted, deafened or force-muted, and the socket for each session. It keeps the
   latest copy of each room for visibility checks. It does not touch media.
 - A session ends on ICE timeout, an error, an offer unanswered for `answer_timeout` (10 s), `leave`, or a new join by the same user

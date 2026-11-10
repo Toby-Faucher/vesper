@@ -9,6 +9,7 @@
 //! [`SfuHandle::answer`].
 
 mod client;
+mod meter;
 mod room;
 #[cfg(feature = "test-support")]
 pub mod testing;
@@ -30,15 +31,22 @@ pub struct SfuConfig {
     pub advertised: Vec<SocketAddr>,
     /// How long a client may take to answer an [`SfuEvent::Offer`] before its session is closed.
     pub answer_timeout: Duration,
+    /// A share whose incoming video stays above this many bits per second for
+    /// `share_ceiling_secs` one-second windows in a row is cut ([`SfuEvent::ShareCut`]).
+    pub share_ceiling_bps: u64,
+    pub share_ceiling_secs: u32,
 }
 
 impl Default for SfuConfig {
-    /// Binds `0.0.0.0:0` with no advertised addresses (set them!) and a 10 s answer timeout.
+    /// Binds `0.0.0.0:0` with no advertised addresses (set them!), a 10 s answer timeout and a
+    /// share ceiling of 35 Mbps for 5 s (above the client's 30 Mbps maximum).
     fn default() -> Self {
         SfuConfig {
             bind: (Ipv4Addr::UNSPECIFIED, 0).into(),
             advertised: vec![],
             answer_timeout: Duration::from_secs(10),
+            share_ceiling_bps: 35_000_000,
+            share_ceiling_secs: 5,
         }
     }
 }
@@ -101,6 +109,10 @@ pub enum SfuEvent {
     /// The session ended: ICE timeout, error, an offer left unanswered for
     /// [`SfuConfig::answer_timeout`], [`SfuHandle::leave`], or a new join by the same user.
     Closed,
+    /// The SFU stopped forwarding this session's share: its video stayed over
+    /// [`SfuConfig::share_ceiling_bps`]. Sent once; the session is no longer sharing, as after
+    /// [`SfuHandle::set_sharing`] with `false`.
+    ShareCut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,7 +230,8 @@ impl SfuHandle {
     }
 
     /// Start or stop sending `sharer`'s video to `viewer`, while `sharer` is sharing. Keyed by the
-    /// viewer's session: a new join by `viewer` starts watching nobody.
+    /// viewer's session: a new join by `viewer` starts watching nobody. Starting asks the sharer
+    /// for a keyframe, so the viewer has a picture right away.
     pub fn watch(&self, viewer: &str, sharer: &str, on: bool) {
         self.send(Command::Watch {
             viewer: viewer.into(),

@@ -9,13 +9,13 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use str0m::change::SdpOffer;
-use str0m::media::MediaKind;
+use str0m::media::{KeyframeRequestKind, MediaKind, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Input, Rtc};
 use tokio::sync::mpsc as tmpsc;
 use tracing::{debug, warn};
 
-use crate::client::{Client, Propagated};
+use crate::client::{Client, ClientId, Propagated};
 use crate::{Command, JoinError, JoinOk, SfuConfig, SfuEvent};
 
 /// Upper bound on one loop iteration's socket wait, so commands (joins, answers) are picked up
@@ -24,7 +24,7 @@ const MAX_WAIT: Duration = Duration::from_millis(10);
 
 pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
     let socket_addr = socket.local_addr().expect("bound socket has an address");
-    let mut advertised = cfg.advertised;
+    let mut advertised = cfg.advertised.clone();
     let mut clients: Vec<Client> = vec![];
     let mut to_propagate: VecDeque<Propagated> = VecDeque::new();
     // Force-muted users: their audio is dropped at the forward point, whatever the client sends.
@@ -49,7 +49,7 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
                     &mut muted,
                     &mut advertised,
                     socket_addr,
-                    cfg.answer_timeout,
+                    &cfg,
                 ),
                 Err(TryRecvError::Empty) => break,
                 // Every SfuHandle is gone: shut down, telling clients their sessions ended.
@@ -143,7 +143,7 @@ fn handle_command(
     muted: &mut HashSet<String>,
     advertised: &mut Vec<SocketAddr>,
     socket_addr: SocketAddr,
-    answer_timeout: Duration,
+    cfg: &SfuConfig,
 ) {
     match cmd {
         Command::Join {
@@ -152,20 +152,14 @@ fn handle_command(
             offer,
             reply,
         } => {
-            let (mut client, answer_sdp, events) = match new_client(
-                &room,
-                &user,
-                &offer,
-                advertised,
-                socket_addr,
-                answer_timeout,
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    let _ = reply.send(Err(e));
-                    return;
-                }
-            };
+            let (mut client, answer_sdp, events) =
+                match new_client(&room, &user, &offer, advertised, socket_addr, cfg) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                };
             if let Some(old) = clients.iter_mut().find(|c| c.user == user) {
                 // Superseded: the retain at the top of the loop closes and removes it.
                 old.rtc.disconnect();
@@ -203,6 +197,13 @@ fn handle_command(
             }
         }
         Command::Watch { viewer, sharer, on } => {
+            // A new viewer needs a keyframe to show anything.
+            if on && let Some(s) = live(clients, &sharer) {
+                let video = s.tracks_in.iter().find(|t| t.kind == MediaKind::Video);
+                if let Some(mid) = video.map(|t| t.mid) {
+                    s.request_keyframe(mid, KeyframeRequestKind::Pli);
+                }
+            }
             if let Some(c) = live(clients, &viewer) {
                 if on {
                     c.watching.insert(sharer);
@@ -252,7 +253,7 @@ fn new_client(
     offer: &str,
     advertised: &[SocketAddr],
     socket_addr: SocketAddr,
-    answer_timeout: Duration,
+    cfg: &SfuConfig,
 ) -> Result<(Client, String, tmpsc::UnboundedReceiver<SfuEvent>), JoinError> {
     let bad = |e: &dyn std::fmt::Display| JoinError::BadOffer(e.to_string());
     let (offer, video) = parse_offer(offer)?;
@@ -278,7 +279,7 @@ fn new_client(
         tx,
         advertised.to_vec(),
         socket_addr.is_ipv6(),
-        answer_timeout,
+        cfg,
     );
     client.video = video;
     Ok((client, answer.to_sdp_string(), events))
@@ -302,10 +303,14 @@ fn poll_until_timeout(
 }
 
 /// Deliver one client's output to the other clients of its room. Video media goes only from a
-/// sharing sender to the clients watching it; a force-mute drops only audio.
+/// sharing sender to the clients watching it; a force-mute drops only audio. A keyframe request
+/// goes to the sender of the track it is about.
 fn propagate(propagated: &Propagated, clients: &mut [Client], muted: &HashSet<String>) {
     let origin = match propagated {
         Propagated::TrackOpen(c, _) | Propagated::MediaData(c, _) => *c,
+        Propagated::KeyframeRequest(viewer, mid, kind) => {
+            return forward_keyframe_request(clients, *viewer, *mid, *kind);
+        }
         Propagated::Noop | Propagated::Timeout(_) => return,
     };
     let Some(sender) = clients.iter().find(|c| c.id == origin) else {
@@ -333,10 +338,31 @@ fn propagate(propagated: &Propagated, clients: &mut [Client], muted: &HashSet<St
     {
         match propagated {
             Propagated::TrackOpen(_, track) => client.handle_track_open(track.clone()),
-            Propagated::MediaData(_, data) if !video || client.watching.contains(&user) => {
-                client.handle_media_data_out(origin, data);
+            Propagated::MediaData(_, data) => {
+                if !video || client.watching.contains(&user) {
+                    client.handle_media_data_out(origin, data);
+                }
             }
-            _ => {}
+            Propagated::KeyframeRequest(..) | Propagated::Noop | Propagated::Timeout(_) => {}
         }
+    }
+}
+
+/// Pass `viewer`'s keyframe request on its outgoing m-line `mid` to the client sending that track.
+fn forward_keyframe_request(
+    clients: &mut [Client],
+    viewer: ClientId,
+    mid: Mid,
+    kind: KeyframeRequestKind,
+) {
+    let Some(track) = clients
+        .iter()
+        .find(|c| c.id == viewer)
+        .and_then(|c| c.track_in_of(mid))
+    else {
+        return;
+    };
+    if let Some(origin) = clients.iter_mut().find(|c| c.id == track.origin) {
+        origin.request_keyframe(track.mid, kind);
     }
 }

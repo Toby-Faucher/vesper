@@ -8,12 +8,13 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use str0m::change::{SdpAnswer, SdpPendingOffer};
-use str0m::media::{Direction, MediaData, MediaKind, Mid};
+use str0m::media::{Direction, KeyframeRequestKind, MediaData, MediaKind, Mid};
 use str0m::{Event, IceConnectionState, Input, Output, Rtc};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, warn};
 
-use crate::SfuEvent;
+use crate::meter::RateMeter;
+use crate::{SfuConfig, SfuEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ClientId(u64);
@@ -63,6 +64,8 @@ pub(crate) enum Propagated {
     Timeout(std::time::Instant),
     TrackOpen(ClientId, Weak<TrackIn>),
     MediaData(ClientId, MediaData),
+    /// A viewer asked for a keyframe on one of its outgoing (forwarded) m-lines.
+    KeyframeRequest(ClientId, Mid, KeyframeRequestKind),
 }
 
 pub(crate) struct Client {
@@ -82,6 +85,11 @@ pub(crate) struct Client {
     /// Our outstanding offer and when it was sent.
     pending: Option<(SdpPendingOffer, Instant)>,
     answer_timeout: Duration,
+    share_ceiling_bps: u64,
+    share_ceiling_secs: u32,
+    /// Rate of the incoming video while sharing, and how many windows in a row were over the ceiling.
+    share_rate: RateMeter,
+    over_ceiling: u32,
     /// The shared socket is IPv6 (dual-stack), so IPv4 peers need v4-mapped destinations.
     socket_v6: bool,
     /// The client owns the strong refs to its incoming tracks; others hold weak ones.
@@ -97,7 +105,7 @@ impl Client {
         events: UnboundedSender<SfuEvent>,
         advertised: Vec<SocketAddr>,
         socket_v6: bool,
-        answer_timeout: Duration,
+        cfg: &SfuConfig,
     ) -> Client {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
         Client {
@@ -111,7 +119,11 @@ impl Client {
             events,
             advertised,
             pending: None,
-            answer_timeout,
+            answer_timeout: cfg.answer_timeout,
+            share_ceiling_bps: cfg.share_ceiling_bps,
+            share_ceiling_secs: cfg.share_ceiling_secs,
+            share_rate: RateMeter::new(),
+            over_ceiling: 0,
             socket_v6,
             tracks_in: vec![],
             tracks_out: vec![],
@@ -206,10 +218,61 @@ impl Client {
                     self.tracks_in.push(track);
                     Propagated::TrackOpen(self.id, weak)
                 }
-                Event::MediaData(data) => Propagated::MediaData(self.id, data),
+                Event::MediaData(data) => {
+                    let video = self
+                        .tracks_in
+                        .iter()
+                        .any(|t| t.mid == data.mid && t.kind == MediaKind::Video);
+                    if video && !self.share_within_ceiling(data.data.len(), data.network_time) {
+                        return Propagated::Noop;
+                    }
+                    Propagated::MediaData(self.id, data)
+                }
+                Event::KeyframeRequest(r) => Propagated::KeyframeRequest(self.id, r.mid, r.kind),
                 _ => Propagated::Noop,
             },
         }
+    }
+
+    /// Meter `bytes` of incoming video. False while not sharing, and from the moment the share
+    /// stays over the ceiling, which ends it and tells the client with `SfuEvent::ShareCut`.
+    fn share_within_ceiling(&mut self, bytes: usize, now: Instant) -> bool {
+        if !self.sharing {
+            return false;
+        }
+        let Some(bps) = self.share_rate.add(bytes, now) else {
+            return true;
+        };
+        if bps <= self.share_ceiling_bps {
+            self.over_ceiling = 0;
+            return true;
+        }
+        self.over_ceiling += 1;
+        if self.over_ceiling < self.share_ceiling_secs {
+            return true;
+        }
+        warn!("client {} share cut at {bps} bit/s", self.user);
+        self.sharing = false;
+        self.over_ceiling = 0;
+        let _ = self.events.send(SfuEvent::ShareCut);
+        false
+    }
+
+    /// Ask this client for a keyframe on its incoming m-line `mid`.
+    pub fn request_keyframe(&mut self, mid: Mid, kind: KeyframeRequestKind) {
+        if let Some(mut writer) = self.rtc.writer(mid)
+            && let Err(e) = writer.request_keyframe(None, kind)
+        {
+            debug!("client {} keyframe request failed: {e:?}", self.user);
+        }
+    }
+
+    /// The incoming track this client gets on its outgoing m-line `mid`.
+    pub fn track_in_of(&self, mid: Mid) -> Option<Arc<TrackIn>> {
+        self.tracks_out
+            .iter()
+            .find(|t| t.mid() == Some(mid))
+            .and_then(|t| t.track_in.upgrade())
     }
 
     fn negotiate_if_needed(&mut self) -> bool {
@@ -352,15 +415,11 @@ mod tests {
     fn client() -> Client {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let rtc = Rtc::builder().build(Instant::now());
-        Client::new(
-            rtc,
-            "r".into(),
-            "b".into(),
-            tx,
-            vec![],
-            false,
-            Duration::MAX,
-        )
+        let cfg = SfuConfig {
+            answer_timeout: Duration::MAX,
+            ..Default::default()
+        };
+        Client::new(rtc, "r".into(), "b".into(), tx, vec![], false, &cfg)
     }
 
     fn track(mid: &str, kind: MediaKind) -> Arc<TrackIn> {

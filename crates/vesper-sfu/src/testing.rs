@@ -5,7 +5,7 @@
 //! [`FakeClient::accept_answer`], and answer each SFU renegotiation offer with
 //! [`FakeClient::accept_offer`]. Then [`FakeClient::send_audio`] and inspect
 //! [`FakeClient::received`]. [`FakeClient::with_video`] adds a VP8 track
-//! ([`FakeClient::send_video`], [`FakeClient::received_video`]).
+//! ([`FakeClient::send_video`], [`FakeClient::received_video`], keyframe requests both ways).
 
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::format::Codec;
-use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid};
+use str0m::media::{Direction, Frequency, KeyframeRequestKind, MediaKind, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
@@ -49,6 +49,8 @@ struct State {
     received: Vec<Vec<u8>>,
     received_video: Vec<Vec<u8>>,
     video: Option<VideoOut>,
+    /// Keyframe requests (PLI or FIR) that arrived for the video we send.
+    keyframe_requests: usize,
 }
 
 /// The send side of [`FakeClient::with_video`].
@@ -106,6 +108,7 @@ impl FakeClient {
             received: vec![],
             received_video: vec![],
             video,
+            keyframe_requests: 0,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
@@ -176,6 +179,24 @@ impl FakeClient {
     /// Video frames received so far (from any video track), in arrival order.
     pub fn received_video(&self) -> Vec<Vec<u8>> {
         self.state().received_video.clone()
+    }
+
+    /// Keyframe requests received so far for this client's video (as a sharer).
+    pub fn keyframe_requests(&self) -> usize {
+        self.state().keyframe_requests
+    }
+
+    /// Send a PLI on every incoming video m-line, as a viewer whose decoder lost the picture.
+    pub fn request_keyframes(&self) {
+        let mut guard = self.state();
+        let s = &mut *guard;
+        for (mid, kind) in &s.remote_tracks {
+            if *kind == MediaKind::Video
+                && let Some(mut writer) = s.rtc.writer(*mid)
+            {
+                let _ = writer.request_keyframe(None, KeyframeRequestKind::Pli);
+            }
+        }
     }
 
     /// Whether ICE and DTLS are up, so media can flow.
@@ -271,6 +292,11 @@ impl State {
                     }
                     Event::MediaAdded(m) if m.direction == Direction::RecvOnly => {
                         self.remote_tracks.push((m.mid, m.kind));
+                    }
+                    Event::KeyframeRequest(r)
+                        if self.video.as_ref().is_some_and(|v| v.mid == r.mid) =>
+                    {
+                        self.keyframe_requests += 1;
                     }
                     Event::MediaData(d) => {
                         // Latest entry for the mid: a stopped m-line can be recycled.
