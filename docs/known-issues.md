@@ -72,7 +72,7 @@ Last updated 2026-11-10. Nothing here was run in a headed browser or a real depl
 - **Screen share carries no sound.** Game audio and tab audio are not sent. Firefox's `getDisplayMedia` captures no audio at all (from docs: Mozilla bug 1541425).
 - **An exclusive fullscreen game can capture as a black picture.** Use borderless windowed mode. Not tried with a real game.
 - **Screen share is VP8 only, and a client that joined without a video m-line cannot watch.** The video m-lines are fixed at join, so an audio-only client gets none and must rejoin to watch.
-- **A share past 35 Mbps for 5 s is cut.** The SFU counts a second at or above 35 Mbps; one second under resets the count. Then it sends `ShareCut` and the share ends.
+- **A share past 35 Mbps for 5 s is cut.** The SFU counts a second above 35 Mbps; one second at or under resets the count. Then it sends `ShareCut` and the share ends.
 - **A viewer's watch list belongs to the viewer.** It survives the sharer stopping, restarting or leaving, so a new share from the same person is watched again without a click. `watch off` always applies.
 - **Pointer messages use the per-socket budget** (5 messages a second shared with everything else the socket sends), not a limit of their own.
 - **Firefox caps the share bitrate by video size** (10, 5 or 2.5 Mbps) and a page can only lower it. See the [design](superpowers/specs/2026-11-09-screen-share-design.md#firefox-zen-is-firefox).
