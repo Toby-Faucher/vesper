@@ -18,3 +18,12 @@ export async function measureUploadKbps(
     return null;
   }
 }
+
+let once: Promise<number | null> | undefined;
+/** The upload, measured once per page load, so reopening the share dialog does not post 4 MiB again. A failure is measured again next time. */
+export function uploadOnce(measure: () => Promise<number | null> = measureUploadKbps): Promise<number | null> {
+  return (once ??= measure().then((u) => {
+    if (u === null) once = undefined;
+    return u;
+  }));
+}

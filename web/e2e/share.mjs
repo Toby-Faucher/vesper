@@ -1,7 +1,7 @@
-// Two-browser screen share test. Alice and bob join `general`; alice shares a fake 1280x720 screen. Checks that bob gets
+// Screen share test with three browsers. Alice and bob join `general`; alice shares a fake 1280x720 screen. Checks that bob gets
 // video, that the SFU's transport-cc feedback lets alice's bandwidth estimate pass 2 Mbps, that hiding the tile stops the
-// encoder (0 watching, no bytes sent), that showing it again resumes, that Stop removes bob's panel, and that a DM call has
-// no "Share screen" button.
+// encoder (0 watching, no bytes sent), that showing it again resumes, that carol, who joins after the share started, gets
+// alice's video, that Stop removes bob's panel, and that a DM call has no "Share screen" button.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: node e2e/share.mjs
 import assert from 'node:assert/strict';
 import { ORIGIN, browser, cli, openRoom, signup, sleep, startServer } from './lib.mjs';
@@ -75,9 +75,10 @@ try {
   const ownerLink = await cli(['create-owner']);
   const alice = await browser('alice');
   const bob = await browser('bob');
+  const carol = await browser('carol');
   for (const p of [alice.page, bob.page]) await p.addInitScript(fakeScreen);
   await signup(alice.page, ownerLink, 'alice');
-  const bobLink = await alice.page.evaluate(async () => {
+  const invite = () => alice.page.evaluate(async () => {
     const r = await fetch('/api/invites', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -86,7 +87,8 @@ try {
     if (!r.ok) throw new Error(`POST /api/invites: ${r.status}`);
     return (await r.json()).url;
   });
-  await signup(bob.page, bobLink, 'bob');
+  await signup(bob.page, await invite(), 'bob');
+  await signup(carol.page, await invite(), 'carol');
   await join(alice.page);
   await join(bob.page);
 
@@ -152,8 +154,13 @@ try {
   console.log(`video resumed after ${ms} ms`);
   await alice.page.getByText('1 watching').waitFor({ timeout: 5000 });
 
+  // Carol joins while alice shares and gets her video.
+  await join(carol.page);
+  ms = await until('carol tile video', 10000, async () => (await tileVideoWidth(carol.page)) > 0);
+  console.log(`late viewer: video after ${ms} ms, ${await tileVideoWidth(carol.page)} px wide`);
+
   // Alice stops; bob's panel goes away.
-  await alice.page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await alice.page.getByRole('button', { name: 'Stop sharing', exact: true }).click();
   await bob.page.getByLabel("alice's screen").waitFor({ state: 'detached', timeout: 5000 });
   await bob.page.getByText('1 screen', { exact: true }).waitFor({ state: 'detached', timeout: 5000 });
 
@@ -172,7 +179,7 @@ try {
   assert.equal(await bob.page.getByRole('button', { name: 'Share screen' }).count(), 0, 'a DM call shows "Share screen"');
   console.log('dm_no_share: ok');
 
-  for (const [n, e] of [['alice', alice.errors], ['bob', bob.errors]]) assert.deepEqual(e, [], `${n} page errors`);
+  for (const [n, e] of [['alice', alice.errors], ['bob', bob.errors], ['carol', carol.errors]]) assert.deepEqual(e, [], `${n} page errors`);
   console.log('share: ok');
 } finally {
   await stop();

@@ -37,5 +37,5 @@
   <video bind:this={video} class="h-8 w-14 shrink-0 rounded-sm bg-element object-contain" muted autoplay playsinline aria-hidden="true"></video>
   <span class="truncate text-xs text-fg-2 tabular-nums">{shareLine({ ...stats, watchers: shares.mine?.watchers ?? 0 })}</span>
   <IconButton icon={I.settings} label="Share settings" tip="up" onclick={onsettings} />
-  <Button variant="danger-ghost" onclick={stopShare}>Stop</Button>
+  <Button variant="danger-ghost" aria-label="Stop sharing" onclick={stopShare}>Stop</Button>
 </div>

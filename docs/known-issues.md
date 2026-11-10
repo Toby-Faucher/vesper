@@ -77,7 +77,7 @@ Last updated 2026-11-10. Nothing here was run in a headed browser or a real depl
 - **Pointer messages use the per-socket budget** (5 messages a second shared with everything else the socket sends), not a limit of their own.
 - **Firefox caps the share bitrate by video size** (10, 5 or 2.5 Mbps) and a page can only lower it. See the [design](superpowers/specs/2026-11-09-screen-share-design.md#firefox-zen-is-firefox).
 - **Firefox has no pop-out button in the share panel.** `requestPictureInPicture` is missing there, so the button is hidden. Firefox's own pop-out on a video works but the page cannot see it. Where ours is missing, a hidden tab still counts as watching, so a sharer keeps encoding for a Firefox viewer who is not looking. Firefox's own pop-out closes when the viewer leaves the room page.
-- **Not verified:** Firefox or Zen in a real share, a real network, a real call, the Dockge VM and Windows browsers. The e2e (`web/e2e/share.mjs`) runs two headless Chromium pages with a stubbed canvas screen.
+- **Not verified:** Firefox or Zen in a real share, a real network, a real call, the Dockge VM and Windows browsers. The e2e (`web/e2e/share.mjs`) runs three headless Chromium pages with a stubbed canvas screen; one joins after the share started.
 
 ## Web client
 

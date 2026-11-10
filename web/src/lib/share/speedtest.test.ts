@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { measureUploadKbps, SPEEDTEST_BYTES } from './speedtest';
+import { describe, expect, it, vi } from 'vitest';
+import { measureUploadKbps, SPEEDTEST_BYTES, uploadOnce } from './speedtest';
 
 const clock = (...t: number[]) => () => t.shift() ?? 0;
 
@@ -16,5 +16,15 @@ describe('measureUploadKbps', () => {
   });
   it('is null when the post throws', async () => {
     expect(await measureUploadKbps(async () => { throw new Error('offline'); }, clock(0, 2000))).toBeNull();
+  });
+});
+
+describe('uploadOnce', () => {
+  it('measures once per page; a failure is measured again', async () => {
+    const measure = vi.fn<() => Promise<number | null>>().mockResolvedValueOnce(null).mockResolvedValue(9_000);
+    expect(await uploadOnce(measure)).toBeNull();
+    expect(await uploadOnce(measure)).toBe(9_000);
+    expect(await uploadOnce(measure)).toBe(9_000);
+    expect(measure).toHaveBeenCalledTimes(2);
   });
 });
