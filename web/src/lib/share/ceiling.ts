@@ -1,5 +1,7 @@
 export type Engine = 'firefox' | 'other';
 export const MIN_KBPS = 500, MAX_KBPS = 30_000;
+/** The most Vesper suggests: four shares at this rate fit the server's room cap, and it is the load the test measured. */
+export const SUGGEST_MAX_KBPS = 10_000;
 
 export const engineOf = (userAgent: string): Engine => (/Firefox\/\d/.test(userAgent) ? 'firefox' : 'other');
 
@@ -15,8 +17,8 @@ export function ceilingKbps(engine: Engine, width: number, height: number): numb
   return 2_000;
 }
 
-/** About half the measured upload, rounded to 500. Unmeasured: 8 Mbps. Never above the ceiling. */
+/** About half the measured upload, rounded to 500. Unmeasured: 8 Mbps. Never above 10 Mbps or the ceiling. */
 export function suggestKbps(uploadKbps: number | null, ceiling: number): number {
   const want = uploadKbps === null ? 8_000 : Math.round(uploadKbps / 2 / 500) * 500;
-  return Math.min(ceiling, Math.max(MIN_KBPS, want));
+  return Math.min(ceiling, SUGGEST_MAX_KBPS, Math.max(MIN_KBPS, want));
 }

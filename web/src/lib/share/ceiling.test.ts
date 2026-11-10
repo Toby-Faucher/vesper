@@ -20,6 +20,7 @@ describe('suggestKbps', () => {
   it('is half the upload, rounded to 500, within the limits', () => {
     expect(suggestKbps(20_000, 30_000)).toBe(10_000);
     expect(suggestKbps(500_000, 5_000)).toBe(5_000);
+    expect(suggestKbps(500_000, 30_000)).toBe(10_000); // four 10 Mbps shares fit the room cap
     expect(suggestKbps(700, 30_000)).toBe(500);
     expect(suggestKbps(9_300, 30_000)).toBe(4_500);
   });
