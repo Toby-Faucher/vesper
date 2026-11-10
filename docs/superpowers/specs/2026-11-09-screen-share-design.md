@@ -1,6 +1,6 @@
 # Screen share
 
-Status: design, not built. Written 2026-11-09 against `release/1.6.1` at `f8a9136`.
+Status: built on this branch; "Built, and where it differs" at the end lists the changes. Was: design, not built. Written 2026-11-09 against `release/1.6.1` at `f8a9136`.
 
 How each fact below is known:
 - **verified**: read in the code on that commit, or in the browser's source where it says so.
@@ -292,3 +292,26 @@ Results so far (Toby, Zen 154, Arch, 2026-11-09):
 
 Both runs captured at 1728x1080 because the page then asked for 1080 lines. It now captures at the screen's own size (Toby's is 1920x1200). Still to
 run: Toby at 1920x1200, and the three friends.
+
+## Built, and where it differs
+
+Built in `ccaef6f` through `0d6dc5d` on `feat/screen-share`. The differences, all my calls:
+
+- **SFU.** VP8 only. Video m-lines are fixed at join: a client whose offer had a video m-line gets one recv-only video m-line per other video-capable member; an audio-only client gets none. Forwarding needs the server's `set_sharing` and the viewer's `watch`. A watch and a viewer keyframe request send a PLI, with no throttle. A share over 35 Mbps for 5 s is cut with `ShareCut`; one second under resets the count.
+- **Server.** Messages `share_start`, `share_stop`, `watch`, `point` in and `peer_share`, `watchers`, `point` out. A share in a DM is refused (`Forbidden`). A viewer's watch entry belongs to the viewer: it survives the sharer stopping, restarting or leaving, and `watch off` always applies.
+- **The pointer uses the per-socket message budget** (5 a second), not a new kind in `limits.rs`.
+- **`POST /api/speedtest`** serves the upload test for share settings.
+- **A per-room cap** (Task 11): `MAX_ROOM_SHARE_KBPS = 120_000`, the sum of bitrate times viewers, checked only when a share starts. This was parked as "not handled now"; the cap is a small first step, not the full design under "Large calls". See [known-issues.md](../../known-issues.md#server-behaviour).
+- **Web.** A share button and dialog (speed test, Firefox ceiling note), a share card in the call bar, a share panel with Grid, Focus and Dock, and tiles with 1:1, zoom, pop-out, pointer and hide. "Struggling" is loss above 2% or a new freeze over 6 s. The watch gate has a 10 s grace. Share icons are in `lib/share/icons.ts`.
+- **Firefox ruling.** Where our pop-out is missing (Firefox), a hidden tab still counts as watching, because Firefox's own pop-out is invisible to the page. Sharers keep encoding for Firefox viewers who are not looking. Firefox's own pop-out closes when the viewer leaves the room page.
+- **The syncWatches effect and tab tracking live in CallBar** (mounted while joined), not in Shell.
+- **The chat drawer pushes screens aside** instead of covering them, which the mockup did.
+- **Tile chips are opaque.** The mockup used an 84% mix.
+- **The first-load JS ratchet was raised twice**: 58.9 to 59.8 kB, then to 60.4 kB.
+
+### What was checked, and how
+
+- **Verified by tests:** SFU and server tests with fake clients; web unit tests with fakes.
+- **Measured in the e2e** (`web/e2e/share.mjs`, two headless Chromium pages, stubbed canvas screen, not a real screen): video arrived in 257 ms; the sender's bandwidth estimate peaked at about 5.85 Mbps; watchers dropped to 0 at 10.2 s after the viewer's tab went away; encoder `framesEncoded` was 0 per second while unwatched, over 7 runs. A burst of about 10 kB every 5 s was seen while unwatched; its cause is unknown.
+- **Measured in the load test** (Core i7-12700, server pinned to two E-cores; see [latency.md](../../testing/latency.md#video-load)): the usual load passes with 100% voice. 4 x 20 Mbps failed before the cap existed. The cause is unclear, since server CPU stayed under 50%.
+- **Not verified:** Firefox or Zen in a real share, a real network, a real call, the Dockge VM and Windows browsers. The "Test page" results above are the only real-browser numbers (Zen 154, one person).
