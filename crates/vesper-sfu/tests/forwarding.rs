@@ -590,7 +590,7 @@ async fn late_viewer_gets_video() {
     let a = t.join_video("r", "a").await;
     t.ready(&a, 0).await;
     t.h.set_sharing("a", true);
-    a.client.send_video(500, 1200); // 10 s at 50 frames a second
+    a.client.send_video(500, 1200); // 10 s at 60 frames a second
     tokio::time::sleep(Duration::from_secs(1)).await;
     let c = t.join_video("r", "c").await;
     t.ready(&c, 2).await;
@@ -677,7 +677,7 @@ async fn viewer_keyframe_request_reaches_the_sharer() {
     t.ready(&b, 2).await;
     t.h.set_sharing("a", true);
     t.h.watch("b", "a", true);
-    a.client.send_video(500, 1200); // 10 s at 50 frames a second
+    a.client.send_video(500, 1200); // 10 s at 60 frames a second
     t.wait_until("b got video", CONNECT, || {
         !b.client.received_video().is_empty()
     })
@@ -710,7 +710,7 @@ async fn share_over_the_ceiling_is_cut() {
     t.ready(&b, 2).await;
     t.h.set_sharing("a", true);
     t.h.watch("b", "a", true);
-    a.client.send_video(150, 2_000); // 3 s at 50 frames a second: 800 kbit/s
+    a.client.send_video(150, 2_000); // 3 s at 60 frames a second: 800 kbit/s
     t.wait_until("a's share cut", CONNECT, || a.share_cuts() == 1)
         .await;
     assert!(

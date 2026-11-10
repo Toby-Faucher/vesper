@@ -125,7 +125,7 @@ These make the feature a failure even if the picture looks good:
 - **One SFU thread.** Every room's media runs on the single SFU thread (`room.rs`), so video and voice share it. The only load test is 12 voice speakers:
   17.5% of one i7-12700 core over loopback, release build (`docs/testing/latency.md`). Video at the worst case below (about 80 Mbps in and 240 Mbps out,
   all SRTP) is far more packets than that.
-- **Host** (verified over SSH, 2026-11-09). The `vesper` container runs on the Dockge VM at 10.0.0.163: 2 vCPU (KVM on a Ryzen 7 3700X),
+- **Host** (verified over SSH, 2026-11-09). The `vesper` container runs on the Dockge VM: 2 vCPU (KVM on a Ryzen 7 3700X),
   3.6 GiB RAM with about 800 MiB of swap in use, shared with about 20 other containers. The container has no CPU or memory limit, is on the `proxy`
   network, and publishes UDP 40000 through Docker's NAT. Vesper used 75 MiB and almost no CPU at rest. HTTP reaches it through Cloudflare,
   `cloudflared` and Caddy (`docs/deploy.md`). Media goes direct over UDP.

@@ -112,8 +112,10 @@ fn parse_args() -> Result<Args, String> {
     if sharers > speakers {
         return Err("--sharers cannot exceed --speakers".into());
     }
-    if !(1..35).contains(&share_mbps) {
-        return Err("--share-mbps must be 1 to 34 (the SFU cuts a share above 35 Mbps)".into());
+    if !(1..=30).contains(&share_mbps) {
+        return Err(
+            "--share-mbps must be 1 to 30 (the most the server accepts for a share)".into(),
+        );
     }
     let file = get("--tokens")?;
     let tokens: Vec<String> = std::fs::read_to_string(&file)
@@ -250,6 +252,10 @@ async fn join(a: &Args, n: usize, video: bool) -> Result<Speaker, String> {
                     ServerMsg::Error { code, message } => {
                         if let Some(tx) = joined_tx.take() {
                             let _ = tx.send(Err(format!("{code:?}: {message}")));
+                        } else {
+                            // After the join, e.g. a refused ShareStart: a setup error.
+                            eprintln!("vesper-loadtest: server error: {code:?}: {message}");
+                            std::process::exit(2);
                         }
                     }
                     _ => {}

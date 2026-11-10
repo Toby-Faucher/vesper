@@ -2246,6 +2246,8 @@ async fn share_over_the_room_total_is_refused() {
     }
     // 30 Mbps to three viewers is 90 000 kbps; a second one would pass the 120 000 cap.
     share_start(&conns[0], 60, 30_000);
+    // Wait until the first share is in place, so the order is fixed.
+    conns[2].until("PeerShare", is_share).await;
     share_start(&conns[1], 60, 30_000);
     let m = conns[1]
         .until("RateLimited", |m| matches!(m, ServerMsg::Error { .. }))

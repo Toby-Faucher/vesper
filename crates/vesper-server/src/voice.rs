@@ -138,7 +138,7 @@ impl State {
 }
 
 /// Most the shares of one room may add up to, counting each one once per viewer who could watch
-/// it (kbps). The video load test held voice at 95% up to this total on two cores, and not above.
+/// it (kbps). The highest total the video load test passed (4 people, two cores); higher totals were not tested.
 const MAX_ROOM_SHARE_KBPS: u64 = 120_000;
 
 /// The frame rates and bitrates a share may ask for.
