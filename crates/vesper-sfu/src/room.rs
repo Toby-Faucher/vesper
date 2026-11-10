@@ -9,6 +9,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use str0m::change::SdpOffer;
+use str0m::media::MediaKind;
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Input, Rtc};
 use tokio::sync::mpsc as tmpsc;
@@ -181,21 +182,12 @@ fn handle_command(
                 clients.push(client);
             }
         }
-        Command::Answer { user, sdp } => {
-            match clients
-                .iter_mut()
-                .find(|c| c.user == user && c.rtc.is_alive())
-            {
-                Some(c) => c.handle_answer(&sdp),
-                None => debug!("answer for unknown user {user}"),
-            }
-        }
+        Command::Answer { user, sdp } => match live(clients, &user) {
+            Some(c) => c.handle_answer(&sdp),
+            None => debug!("answer for unknown user {user}"),
+        },
         Command::Leave { user } => {
-            // Live only: after a re-join the dead old session may still be in the list.
-            if let Some(c) = clients
-                .iter_mut()
-                .find(|c| c.user == user && c.rtc.is_alive())
-            {
+            if let Some(c) = live(clients, &user) {
                 c.rtc.disconnect();
             }
         }
@@ -204,6 +196,20 @@ fn handle_command(
         }
         Command::SetMuted { user, muted: false } => {
             muted.remove(&user);
+        }
+        Command::SetSharing { user, on } => {
+            if let Some(c) = live(clients, &user) {
+                c.sharing = on;
+            }
+        }
+        Command::Watch { viewer, sharer, on } => {
+            if let Some(c) = live(clients, &viewer) {
+                if on {
+                    c.watching.insert(sharer);
+                } else {
+                    c.watching.remove(&sharer);
+                }
+            }
         }
         Command::SetAdvertised(addrs) => {
             check_advertised(socket_addr, &addrs);
@@ -214,19 +220,30 @@ fn handle_command(
     }
 }
 
-/// Untrusted input: a voice client needs exactly one audio m-line. More would let one client
-/// make the SFU hold (and offer others) arbitrarily many tracks.
-pub(crate) fn parse_offer(offer: &str) -> Result<SdpOffer, JoinError> {
+/// The live session of `user`: after a re-join the dead old session may still be in the list.
+fn live<'a>(clients: &'a mut [Client], user: &str) -> Option<&'a mut Client> {
+    clients
+        .iter_mut()
+        .find(|c| c.user == user && c.rtc.is_alive())
+}
+
+/// Untrusted input: a client needs exactly one audio m-line (its voice) and may have one video
+/// m-line (its screen). More would let one client make the SFU hold (and offer others)
+/// arbitrarily many tracks. Returns the offer and whether it had the video m-line.
+pub(crate) fn parse_offer(offer: &str) -> Result<(SdpOffer, bool), JoinError> {
     let bad = |e: &dyn std::fmt::Display| JoinError::BadOffer(e.to_string());
     let m_lines: Vec<&str> = offer.lines().filter(|l| l.starts_with("m=")).collect();
-    if m_lines.len() != 1 || !m_lines[0].starts_with("m=audio ") {
+    let count = |kind: &str| m_lines.iter().filter(|l| l.starts_with(kind)).count();
+    let (audio, video) = (count("m=audio "), count("m=video "));
+    if audio != 1 || video > 1 || m_lines.len() != audio + video {
         return Err(bad(&format!(
-            "expected exactly one audio m-line, got {} (first: {:?})",
+            "expected one audio and at most one video m-line, got {audio} audio and {video} video of {} (first: {:?})",
             m_lines.len(),
             m_lines.first()
         )));
     }
-    SdpOffer::from_sdp_string(offer).map_err(|e| bad(&e))
+    let offer = SdpOffer::from_sdp_string(offer).map_err(|e| bad(&e))?;
+    Ok((offer, video == 1))
 }
 
 fn new_client(
@@ -238,10 +255,11 @@ fn new_client(
     answer_timeout: Duration,
 ) -> Result<(Client, String, tmpsc::UnboundedReceiver<SfuEvent>), JoinError> {
     let bad = |e: &dyn std::fmt::Display| JoinError::BadOffer(e.to_string());
-    let offer = parse_offer(offer)?;
+    let (offer, video) = parse_offer(offer)?;
     let mut rtc = Rtc::builder()
         .clear_codecs()
         .enable_opus(true, false)
+        .enable_vp8(true)
         .build(Instant::now());
     for addr in advertised {
         match Candidate::host(*addr, "udp") {
@@ -253,7 +271,7 @@ fn new_client(
     }
     let answer = rtc.sdp_api().accept_offer(offer).map_err(|e| bad(&e))?;
     let (tx, events) = tmpsc::unbounded_channel();
-    let client = Client::new(
+    let mut client = Client::new(
         rtc,
         room.into(),
         user.into(),
@@ -262,6 +280,7 @@ fn new_client(
         socket_addr.is_ipv6(),
         answer_timeout,
     );
+    client.video = video;
     Ok((client, answer.to_sdp_string(), events))
 }
 
@@ -282,7 +301,8 @@ fn poll_until_timeout(
     }
 }
 
-/// Deliver one client's output to the other clients of its room.
+/// Deliver one client's output to the other clients of its room. Video media goes only from a
+/// sharing sender to the clients watching it; a force-mute drops only audio.
 fn propagate(propagated: &Propagated, clients: &mut [Client], muted: &HashSet<String>) {
     let origin = match propagated {
         Propagated::TrackOpen(c, _) | Propagated::MediaData(c, _) => *c,
@@ -291,18 +311,32 @@ fn propagate(propagated: &Propagated, clients: &mut [Client], muted: &HashSet<St
     let Some(sender) = clients.iter().find(|c| c.id == origin) else {
         return;
     };
-    if matches!(propagated, Propagated::MediaData(..)) && muted.contains(&sender.user) {
-        return;
+    let mut video = false;
+    if let Propagated::MediaData(_, data) = propagated {
+        let Some(track) = sender.tracks_in.iter().find(|t| t.mid == data.mid) else {
+            return;
+        };
+        video = track.kind == MediaKind::Video;
+        let dropped = if video {
+            !sender.sharing
+        } else {
+            muted.contains(&sender.user)
+        };
+        if dropped {
+            return;
+        }
     }
-    let room = sender.room.clone();
+    let (room, user) = (sender.room.clone(), sender.user.clone());
     for client in clients
         .iter_mut()
         .filter(|c| c.id != origin && c.room == room)
     {
         match propagated {
             Propagated::TrackOpen(_, track) => client.handle_track_open(track.clone()),
-            Propagated::MediaData(_, data) => client.handle_media_data_out(origin, data),
-            Propagated::Noop | Propagated::Timeout(_) => {}
+            Propagated::MediaData(_, data) if !video || client.watching.contains(&user) => {
+                client.handle_media_data_out(origin, data);
+            }
+            _ => {}
         }
     }
 }

@@ -1,6 +1,7 @@
 //! One SFU session: a str0m `Rtc` plus the track bookkeeping for forwarding.
-//! Adapted from str0m's `examples/chat.rs`, audio only; renegotiation goes over `SfuEvent`.
+//! Adapted from str0m's `examples/chat.rs`; renegotiation goes over `SfuEvent`.
 
+use std::collections::HashSet;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
@@ -24,6 +25,7 @@ pub(crate) struct TrackIn {
     /// expose as `MediaStream.id` in `ontrack`.
     pub user: String,
     pub mid: Mid,
+    pub kind: MediaKind,
 }
 
 #[derive(Debug)]
@@ -68,6 +70,12 @@ pub(crate) struct Client {
     pub user: String,
     pub room: String,
     pub rtc: Rtc,
+    /// The client's offer had a video m-line, so it can be offered others' video.
+    pub video: bool,
+    /// The server says this client is sharing: its video is forwarded to its watchers.
+    pub sharing: bool,
+    /// User ids of the sharers whose video this client gets.
+    pub watching: HashSet<String>,
     events: UnboundedSender<SfuEvent>,
     /// Candidates this session was created with (see `local_addr_for`).
     advertised: Vec<SocketAddr>,
@@ -97,6 +105,9 @@ impl Client {
             user,
             room,
             rtc,
+            video: false,
+            sharing: false,
+            watching: HashSet::new(),
             events,
             advertised,
             pending: None,
@@ -181,14 +192,15 @@ impl Client {
                     self.rtc.disconnect();
                     Propagated::Noop
                 }
+                // The offer check allows one audio and one video m-line, so at most two of these.
                 Event::MediaAdded(m)
-                    if m.kind == MediaKind::Audio
-                        && matches!(m.direction, Direction::RecvOnly | Direction::SendRecv) =>
+                    if matches!(m.direction, Direction::RecvOnly | Direction::SendRecv) =>
                 {
                     let track = Arc::new(TrackIn {
                         origin: self.id,
                         user: self.user.clone(),
                         mid: m.mid,
+                        kind: m.kind,
                     });
                     let weak = Arc::downgrade(&track);
                     self.tracks_in.push(track);
@@ -225,7 +237,7 @@ impl Client {
                         // str0m drops non-token chars (RFC 8830) and truncates to 64; user ids
                         // must stay within that to round-trip. Track id: str0m picks a random one.
                         let mid = change.add_media(
-                            MediaKind::Audio,
+                            track_in.kind,
                             Direction::SendOnly,
                             Some(track_in.user.clone()),
                             None,
@@ -284,6 +296,14 @@ impl Client {
     }
 
     pub fn handle_track_open(&mut self, track_in: Weak<TrackIn>) {
+        // Video only for a client whose offer had video: an older build has none.
+        if !self.video
+            && track_in
+                .upgrade()
+                .is_some_and(|t| t.kind == MediaKind::Video)
+        {
+            return;
+        }
         // A client joining while a TrackOpen is still queued subscribes from `tracks_in` at join
         // and then gets the TrackOpen too; a second m-line would be a silent duplicate stream.
         if self
@@ -329,11 +349,10 @@ impl Client {
 mod tests {
     use super::*;
 
-    #[test]
-    fn track_open_is_idempotent() {
+    fn client() -> Client {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let rtc = Rtc::builder().build(Instant::now());
-        let mut c = Client::new(
+        Client::new(
             rtc,
             "r".into(),
             "b".into(),
@@ -341,15 +360,37 @@ mod tests {
             vec![],
             false,
             Duration::MAX,
-        );
-        let track = Arc::new(TrackIn {
+        )
+    }
+
+    fn track(mid: &str, kind: MediaKind) -> Arc<TrackIn> {
+        Arc::new(TrackIn {
             origin: ClientId(u64::MAX),
             user: "a".into(),
-            mid: Mid::from("0"),
-        });
+            mid: Mid::from(mid),
+            kind,
+        })
+    }
+
+    #[test]
+    fn track_open_is_idempotent() {
+        let mut c = client();
+        let track = track("0", MediaKind::Audio);
         // The join-time subscription and the queued TrackOpen deliver the same track.
         c.handle_track_open(Arc::downgrade(&track));
         c.handle_track_open(Arc::downgrade(&track));
         assert_eq!(c.tracks_out.len(), 1);
+    }
+
+    #[test]
+    fn video_only_for_a_client_with_video() {
+        let mut c = client();
+        let (audio, video) = (track("0", MediaKind::Audio), track("1", MediaKind::Video));
+        c.handle_track_open(Arc::downgrade(&audio));
+        c.handle_track_open(Arc::downgrade(&video));
+        assert_eq!(c.tracks_out.len(), 1, "an audio-only client got video");
+        c.video = true;
+        c.handle_track_open(Arc::downgrade(&video));
+        assert_eq!(c.tracks_out.len(), 2);
     }
 }
