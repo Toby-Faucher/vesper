@@ -24,7 +24,7 @@ import { api } from './api';
 import type { CallTally } from './call-summary';
 import type { ServerMsg } from './gen/ServerMsg';
 import type { ShareSettings } from './share/prefs';
-import { clearShares, shares } from './share/state.svelte';
+import { clearShares, shares, type Mine } from './share/state.svelte';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();
@@ -429,7 +429,7 @@ export async function join(roomId: number): Promise<boolean> {
     asked = true;
     const r = await code.joinRoom(sig, {
       roomId: room, stream, bitrateKbps: voice.settings.bitrateKbps, dtx: voice.settings.dtx,
-      onError: (err) => (voice.error = shareLimited(err) ? SHARE_CUT : err.message),
+      onError: (err) => (voice.error = shareRefused(err) ?? (shareLimited(err) ? SHARE_CUT : err.message)),
       onRemoteStream: (id, s, kind) => {
         if (kind === 'video') return void (shares.streams = new Map(shares.streams).set(id, s)); // never to playback
         tracks.forEach((u, t) => u === id && tracks.delete(t));
@@ -496,8 +496,10 @@ export async function join(roomId: number): Promise<boolean> {
 // Screen share. Mine starts with the encoder off; the server's watcher count turns it on and off.
 const SHARE_FAILED = 'Could not share your screen.';
 const SHARE_CUT = 'Your screen share sent more than 35 Mbps and was stopped.';
+const SHARE_DM = 'Screen share is only in group rooms.';
 const MARKER_MS = 3000;
 let cutAt = 0; // when the server last cut my share
+let asked: Mine | null | undefined; // my share before my last share_start (null: it started one), for a refusal
 
 /** The bitrate to send: the setting, or the suggestion when none is set, never above the browser's ceiling for this size. */
 function shareKbps(code: NonNullable<typeof stack>, kbps: number | null, track: MediaStreamTrack): number {
@@ -522,8 +524,23 @@ function endShare(): boolean {
   void video?.replaceTrack(null).catch(() => {});
   return true;
 }
-/** The server sends rate_limited when it cuts a share; while sharing, or just after a cut, that is what it means. */
-const shareLimited = (e: Error & { code?: string }) => e.code === 'rate_limited' && (!!shares.mine || Date.now() - cutAt < 5000);
+/** The server sends rate_limited when it cuts a share, after telling me the share ended. */
+const shareLimited = (e: Error & { code?: string }) => e.code === 'rate_limited' && Date.now() - cutAt < 5000;
+/** The server refused my last share_start: a new share ends here (the server has none to stop), new settings go back.
+ * Returns the text to show, or null if it was not that. */
+function shareRefused(e: Error & { code?: string }): string | null {
+  const m = shares.mine;
+  if ((e.code !== 'share_cap' && e.code !== 'forbidden') || !m || asked === undefined) return null;
+  const prev = asked;
+  asked = undefined;
+  if (!prev) endShare();
+  else {
+    if (prev.fps !== m.fps) void m.track.applyConstraints({ frameRate: prev.fps }).catch(() => {});
+    shares.mine = { ...prev, watchers: m.watchers };
+    void applyMine();
+  }
+  return e.code === 'forbidden' ? SHARE_DM : e.message;
+}
 function onShareMsg(m: ServerMsg) {
   if (m.type === 'watchers' && shares.mine) {
     shares.mine = { ...shares.mine, watchers: m.count };
@@ -561,7 +578,9 @@ export async function startShare(s: ShareSettings): Promise<void> {
     return;
   }
   const m = shares.mine;
-  if (m?.track === track) session.sig?.send({ type: 'share_start', fps: m.fps, bitrate_kbps: m.kbps });
+  if (m?.track !== track) return;
+  asked = null;
+  session.sig?.send({ type: 'share_start', fps: m.fps, bitrate_kbps: m.kbps });
 }
 /** New settings for my running share. */
 export async function updateShare(s: ShareSettings): Promise<void> {
@@ -569,6 +588,7 @@ export async function updateShare(s: ShareSettings): Promise<void> {
   if (!m) return;
   if (s.fps !== m.fps) void m.track.applyConstraints({ frameRate: s.fps }).catch(() => {});
   shares.mine = { ...m, fps: s.fps, kbps: shareKbps(stack!, s.kbps, m.track), prefer: s.prefer };
+  asked = m;
   session.sig?.send({ type: 'share_start', fps: s.fps, bitrate_kbps: shares.mine.kbps });
   await applyMine();
 }

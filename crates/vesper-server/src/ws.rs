@@ -352,8 +352,8 @@ impl Calls {
                         ErrorCode::Forbidden,
                         "Screen share is only in group rooms.".into(),
                     )),
-                    Err(ErrorCode::RateLimited) => Some((
-                        ErrorCode::RateLimited,
+                    Err(ErrorCode::ShareCap) => Some((
+                        ErrorCode::ShareCap,
                         "Too many screens are being shared right now.".into(),
                     )),
                     Err(code) => Some((code, "Bad share settings.".into())),
@@ -504,6 +504,7 @@ fn describe(code: ErrorCode) -> &'static str {
         ErrorCode::BadMessage => "invalid offer",
         ErrorCode::Forbidden => "not allowed",
         ErrorCode::RateLimited => "too many requests",
+        ErrorCode::ShareCap => "too many screens shared",
         ErrorCode::Internal => "server error",
     }
 }

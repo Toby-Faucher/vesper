@@ -2250,12 +2250,12 @@ async fn share_over_the_room_total_is_refused() {
     conns[2].until("PeerShare", is_share).await;
     share_start(&conns[1], 60, 30_000);
     let m = conns[1]
-        .until("RateLimited", |m| matches!(m, ServerMsg::Error { .. }))
+        .until("ShareCap", |m| matches!(m, ServerMsg::Error { .. }))
         .await;
     assert!(matches!(
         m,
         ServerMsg::Error {
-            code: ErrorCode::RateLimited,
+            code: ErrorCode::ShareCap,
             ..
         }
     ));

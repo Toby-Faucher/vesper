@@ -537,13 +537,13 @@ describe('screen share', () => {
     expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
   });
 
-  it('rate_limited_while_sharing_or_just_cut_says_the_share_was_stopped', async () => {
+  it('rate_limited_just_after_a_cut_says_the_share_was_stopped', async () => {
     const cut = 'Your screen share sent more than 35 Mbps and was stopped.';
     const limited = Object.assign(new Error('Too many tries. Wait a moment and try again.'), { code: 'rate_limited' });
     await sharing();
     const { onError } = joinRoom.mock.calls.at(-1)![1];
-    onError(limited);
-    expect(voice.error).toBe(cut);
+    onError(limited); // the message budget while sharing, not a cut
+    expect(voice.error).toBe('Too many tries. Wait a moment and try again.');
     voice.error = '';
     sig.emit({ type: 'peer_share', user_id: me, share: null });
     onError(limited);
@@ -551,6 +551,43 @@ describe('screen share', () => {
     voice.error = '';
     onError(new Error('Something else.'));
     expect(voice.error).toBe('Something else.');
+  });
+
+  const capped = () => Object.assign(new Error('Too many screens are being shared right now.'), { code: 'share_cap' });
+
+  it('refused_start_ends_the_local_share', async () => {
+    const { video, track } = await sharing();
+    const { onError } = joinRoom.mock.calls.at(-1)![1];
+    onError(capped());
+    expect(track.stop).toHaveBeenCalled();
+    expect(shares.mine).toBeNull();
+    expect(video.replaceTrack).toHaveBeenLastCalledWith(null);
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]); // no share_stop: the server has no share
+    expect(voice.error).toBe('Too many screens are being shared right now.');
+    onError(Object.assign(new Error('Too many tries. Wait a moment and try again.'), { code: 'rate_limited' }));
+    expect(voice.error).toBe('Too many tries. Wait a moment and try again.'); // not a cut
+    // A DM refuses with forbidden.
+    const again = screen();
+    send.capture.mockResolvedValue(again);
+    await v.startShare({ fps: 60, kbps: 8000, prefer: 'sharp' });
+    onError(Object.assign(new Error('You cannot join this room.'), { code: 'forbidden' }));
+    expect(again.stop).toHaveBeenCalled();
+    expect(shares.mine).toBeNull();
+    expect(voice.error).toBe('Screen share is only in group rooms.');
+  });
+
+  it('refused_update_restores_the_previous_settings', async () => {
+    const { video, track } = await sharing();
+    sig.emit({ type: 'watchers', count: 2 });
+    await v.updateShare({ fps: 30, kbps: 20000, prefer: 'smooth' });
+    joinRoom.mock.calls.at(-1)![1].onError(capped());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shares.mine).toMatchObject({ track, fps: 60, kbps: 8000, prefer: 'sharp', watchers: 2 });
+    expect(send.applyShare).toHaveBeenLastCalledWith(video, expect.objectContaining({ fps: 60, kbps: 8000, prefer: 'sharp' }), true);
+    expect(track.applyConstraints).toHaveBeenLastCalledWith({ frameRate: 60 });
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(shareMsgs().at(-1)).toEqual({ type: 'share_start', fps: 30, bitrate_kbps: 20000 }); // nothing more sent
+    expect(voice.error).toBe('Too many screens are being shared right now.');
   });
 
   describe('share cue', () => {

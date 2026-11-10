@@ -8,6 +8,7 @@ export const SIGNAL_MESSAGES: Record<ErrorCode, string> = {
   forbidden: 'You cannot join this room.',
   bad_message: 'The server did not accept that. Reload the page and try again.',
   rate_limited: 'Too many tries. Wait a moment and try again.',
+  share_cap: 'Too many screens are being shared right now.',
   internal: 'Something went wrong on the server. Try again in a moment.',
 };
 

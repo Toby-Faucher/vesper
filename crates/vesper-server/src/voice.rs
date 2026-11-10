@@ -402,7 +402,7 @@ impl Voice {
             .map(|sh| u64::from(sh.bitrate_kbps) * viewers)
             .sum();
         if others + u64::from(info.bitrate_kbps) * viewers > MAX_ROOM_SHARE_KBPS {
-            return Err(ErrorCode::RateLimited);
+            return Err(ErrorCode::ShareCap);
         }
         let m = st.members.get_mut(user_id).expect("checked above");
         let began = m.share.replace(info).is_none();

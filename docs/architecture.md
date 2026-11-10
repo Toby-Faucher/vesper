@@ -128,7 +128,7 @@ Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is th
 `user_created { user }`,
 `force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
 `read { room_id, last_read_id }`, `ring_start { room_id, user_id }`, `ring_stop { room_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
-Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `internal`.
+Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `share_cap`, `internal`.
 
 1. The client opens `/ws` with its session cookie. The upgrade gets 403 unless `Origin` equals `VESPER_ORIGIN`, 401 unless the
    cookie names a live session, and 503 past `VESPER_MAX_SOCKETS` (`ws.rs` `upgrade`).
@@ -148,7 +148,8 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `internal`
 6. When tracks are added or stopped, the SFU makes a new offer. It arrives as `offer`; the client answers with `answer`, one at a time.
 7. `set_voice_state` updates presence. `leave`, a closed socket, a kick, a lost room or the SFU ending the session removes the user.
    `share_start` (group rooms only; also changes the settings of a running share) and `share_stop` set `Peer.share`, which is `null` when
-   nobody shares, and tell the room with `peer_share`. A share ends with the call.
+   nobody shares, and tell the room with `peer_share`. A share ends with the call. A share in a DM gets `forbidden`, and one that would take
+   the room's shares over their total gets `share_cap`. The client then ends a new share, or puts back the settings a change replaced.
    `watch` (not for yourself) asks the SFU to forward a sharer's video to the viewer (or stops it). The sharer gets `watchers { count }` when a share
    starts and whenever the count of watchers in the call changes, also when a watcher leaves.
    `point` (x and y from 0 to 1, else `bad_message`) goes as a server `point { user_id, from, x, y }` to everyone else in the call

@@ -48,6 +48,8 @@ pub enum ErrorCode {
     BadMessage,
     Forbidden,
     RateLimited,
+    /// A screen share would take the room's shares over the server's total.
+    ShareCap,
     /// The server failed (a store error). The cause is in the server log.
     Internal,
 }
