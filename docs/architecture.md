@@ -121,10 +121,10 @@ transaction. Messages, reactions, reads, uploads, search, typing and voice use t
 
 All messages are JSON on one WebSocket per tab, tagged by `type` (`vesper-protocol/src/lib.rs`).
 
-Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `leave`, `check { offer }`,
+Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `share_start { fps, bitrate_kbps }`, `share_stop`, `leave`, `check { offer }`,
 `typing { room_id }`, `decline_ring { room_id }`.
 Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is the server's `version` and `build` id), `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
-`peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `rooms_changed { rooms }`, `user_updated { user }`,
+`peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `peer_share { user_id, share }`, `rooms_changed { rooms }`, `user_updated { user }`,
 `user_created { user }`,
 `force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
 `read { room_id, last_read_id }`, `ring_start { room_id, user_id }`, `ring_stop { room_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
@@ -147,13 +147,15 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `internal`
    lock, so every later presence message for that room follows it.
 6. When tracks are added or stopped, the SFU makes a new offer. It arrives as `offer`; the client answers with `answer`, one at a time.
 7. `set_voice_state` updates presence. `leave`, a closed socket, a kick, a lost room or the SFU ending the session removes the user.
+   `share_start` (group rooms only; also changes the settings of a running share) and `share_stop` set `Peer.share`, which is `null` when
+   nobody shares, and tell the room with `peer_share`. A share ends with the call.
 8. The server pings every 25 s and drops a socket silent for two periods (`ws.rs`).
 
 Each socket may send a burst of 20 messages, then 5 a second (`answer` does not count, since the server asks for it). A message
 over the limit is dropped with `error { code: rate_limited }`. Past 20 such refusals (then 1 a second) the socket closes with 1008.
 
 Presence goes to every socket whose user can see the room (`Hub::broadcast_room`), in voice or not, so the room list shows who
-is talking. `peer_joined` and `peer_state` skip the session's own socket. `peer_left` also reaches the session's own socket: that
+is talking. `peer_joined`, `peer_state` and `peer_share` skip the session's own socket. `peer_left` also reaches the session's own socket: that
 is how a tab learns its call ended (kick, another tab took over, lost access, SFU). The socket stays open for the rest.
 A restricted room's presence reaches only sockets that can see it. When a room's member list or a role changes, or the room is archived, everyone in
 voice who can no longer see their room is taken out (`Voice::refresh`, called from `api_rooms::rooms_changed`). A socket that

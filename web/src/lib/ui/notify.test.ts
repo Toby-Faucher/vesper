@@ -43,7 +43,7 @@ describe('shouldNotify', () => {
 });
 
 describe('shouldChime', () => {
-  const peer = (user_id: string, room_id: number) => ({ user_id, name: user_id, room_id, muted: false, deafened: false, force_muted: false });
+  const peer = (user_id: string, room_id: number) => ({ user_id, name: user_id, room_id, muted: false, deafened: false, force_muted: false, share: null });
   const joined = (id: string, room: number): ServerMsg => ({ type: 'peer_joined', peer: peer(id, room) });
   const left: ServerMsg = { type: 'peer_left', user_id: 'b' };
   const c = { joinedRoom: 3, myId: 'a', online: true, sinceHelloMs: 60000, prefs: on, leftRoom: 3 };

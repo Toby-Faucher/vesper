@@ -4,10 +4,11 @@ import type { Me } from "./Me";
 import type { Message } from "./Message";
 import type { Peer } from "./Peer";
 import type { RoomInfo } from "./RoomInfo";
+import type { ShareInfo } from "./ShareInfo";
 import type { Unread } from "./Unread";
 import type { UserInfo } from "./UserInfo";
 
-export type ServerMsg = { "type": "hello", me: Me, users: Array<UserInfo>, rooms: Array<RoomInfo>, voice: Array<Peer>, unread: Array<Unread>, } | { "type": "joined", user_id: string, answer: string, peers: Array<Peer>, } | { "type": "offer", sdp: string, } | { "type": "peer_joined", peer: Peer, } | { "type": "peer_left", user_id: string, } | { "type": "peer_state", user_id: string, muted: boolean, deafened: boolean, force_muted: boolean, } | { "type": "rooms_changed", rooms: Array<RoomInfo>, } | { "type": "user_updated", user: UserInfo, } | { "type": "user_created", user: UserInfo, } | { "type": "force_muted", muted: boolean, } | { "type": "message_new", message: Message, } | { "type": "message_updated", message: Message, } | { "type": "typing", room_id: number, user_id: string, } | { "type": "read", room_id: number, last_read_id: number, } | { "type": "error", code: ErrorCode, message: string, } | { "type": "ring_start", room_id: number, 
+export type ServerMsg = { "type": "hello", me: Me, users: Array<UserInfo>, rooms: Array<RoomInfo>, voice: Array<Peer>, unread: Array<Unread>, } | { "type": "joined", user_id: string, answer: string, peers: Array<Peer>, } | { "type": "offer", sdp: string, } | { "type": "peer_joined", peer: Peer, } | { "type": "peer_left", user_id: string, } | { "type": "peer_state", user_id: string, muted: boolean, deafened: boolean, force_muted: boolean, } | { "type": "peer_share", user_id: string, share: ShareInfo | null, } | { "type": "rooms_changed", rooms: Array<RoomInfo>, } | { "type": "user_updated", user: UserInfo, } | { "type": "user_created", user: UserInfo, } | { "type": "force_muted", muted: boolean, } | { "type": "message_new", message: Message, } | { "type": "message_updated", message: Message, } | { "type": "typing", room_id: number, user_id: string, } | { "type": "read", room_id: number, last_read_id: number, } | { "type": "error", code: ErrorCode, message: string, } | { "type": "ring_start", room_id: number, 
 /**
  * The caller's account id.
  */

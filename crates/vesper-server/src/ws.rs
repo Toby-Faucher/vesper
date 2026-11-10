@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Instant;
 use vesper_protocol::{
-    CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Me, ServerMsg, UserInfo,
+    CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Me, ServerMsg, ShareInfo, UserInfo,
 };
 use vesper_store::{StoreError, now_ms};
 
@@ -342,6 +342,21 @@ impl Calls {
             }
             (Ok(ClientMsg::SetVoiceState { muted, deafened }), Some(j)) => {
                 voice.set_state(&j.user_id, j.session, muted, deafened);
+                None
+            }
+            (Ok(ClientMsg::ShareStart { fps, bitrate_kbps }), Some(j)) => {
+                let info = ShareInfo { fps, bitrate_kbps };
+                match voice.share_start(&j.user_id, j.session, info) {
+                    Ok(()) => None,
+                    Err(ErrorCode::Forbidden) => Some((
+                        ErrorCode::Forbidden,
+                        "Screen share is only in group rooms.".into(),
+                    )),
+                    Err(code) => Some((code, "Bad share settings.".into())),
+                }
+            }
+            (Ok(ClientMsg::ShareStop), Some(j)) => {
+                voice.share_stop(&j.user_id, j.session);
                 None
             }
             // Ends the call and the connection check, whichever runs.

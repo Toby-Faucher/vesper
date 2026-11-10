@@ -36,7 +36,7 @@
   const me = $derived(session.state.me?.user);
   const people = $derived.by<Peer[]>(() => {
     const others = voice.joinedRoom === null ? [] : inRoom(session.state.voice, voice.joinedRoom).filter((p) => p.user_id !== me?.user_id);
-    return me ? [{ user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom ?? 0, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted }, ...others] : others;
+    return me ? [{ user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom ?? 0, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted, share: null }, ...others] : others;
   });
   const user = (p: Peer) => session.state.users[p.user_id] ?? { user_id: p.user_id, display_name: p.name, accent: '' };
   const LEVEL = { good: 3, fair: 2, poor: 1, unknown: 0 } as const;

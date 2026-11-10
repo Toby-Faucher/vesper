@@ -29,7 +29,7 @@
   // The server tells everyone else about your join, not you: your own row comes from the call itself.
   const self = $derived<Peer | null>(
     me && voice.joined && voice.joinedRoom !== null
-      ? { user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted }
+      ? { user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted, share: null }
       : null,
   );
   const peersIn = (id: number) => {

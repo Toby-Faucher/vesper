@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
-use vesper_protocol::{ErrorCode, Peer, RoomInfo, RoomKind, ServerMsg, UserInfo};
+use vesper_protocol::{ErrorCode, Peer, RoomInfo, RoomKind, ServerMsg, ShareInfo, UserInfo};
 use vesper_sfu::{JoinError, SfuEvent, SfuHandle};
 use vesper_store::random_hex;
 
@@ -79,6 +79,7 @@ struct Member {
     muted: bool,
     deafened: bool,
     force_muted: bool,
+    share: Option<ShareInfo>,
     session: u64,
     tx: Outbox,
     /// Fires once the SFU reports this session closed.
@@ -94,6 +95,7 @@ impl Member {
             muted: self.muted,
             deafened: self.deafened,
             force_muted: self.force_muted,
+            share: self.share,
         }
     }
 
@@ -114,6 +116,11 @@ impl State {
             hub.broadcast_room_except(room, msg, skip);
         }
     }
+}
+
+/// The frame rates and bitrates a share may ask for.
+fn valid_share(info: &ShareInfo) -> bool {
+    matches!(info.fps, 30 | 60) && (500..=30_000).contains(&info.bitrate_kbps)
 }
 
 fn sfu_error(who: &str, e: JoinError) -> ErrorCode {
@@ -206,6 +213,7 @@ impl Voice {
                 muted: force_muted,
                 deafened: false,
                 force_muted,
+                share: None,
                 session,
                 tx: tx.clone(),
                 sfu_closed: Some(closed_rx),
@@ -294,10 +302,16 @@ impl Voice {
         tx: Outbox,
         closed_tx: oneshot::Sender<()>,
     ) {
-        while let Some(SfuEvent::Offer(sdp)) = events.recv().await {
-            // A replaced or left session's offers must not reach a socket that rejoined.
-            if self.is_current(&user_id, session) {
-                tx.send(ServerMsg::Offer { sdp });
+        while let Some(ev) = events.recv().await {
+            match ev {
+                // A replaced or left session's offers must not reach a socket that rejoined.
+                SfuEvent::Offer(sdp) if self.is_current(&user_id, session) => {
+                    tx.send(ServerMsg::Offer { sdp });
+                }
+                SfuEvent::Offer(_) => {}
+                // Task 4 handles ShareCut.
+                SfuEvent::ShareCut => {}
+                SfuEvent::Closed => break,
             }
         }
         // SfuEvent::Closed (or the SFU went away). If the session was still current the SFU
@@ -331,6 +345,59 @@ impl Voice {
         }
         (m.muted, m.deafened) = (muted, deafened);
         let (room, msg, tx) = (m.room, m.state_msg(user_id), m.tx.clone());
+        st.tell(&self.0.hub, room, msg, &[&tx]);
+    }
+
+    /// Start `user_id`'s screen share, or change its settings. Group rooms only. Ignored if
+    /// `session` was replaced.
+    pub fn share_start(
+        &self,
+        user_id: &str,
+        session: u64,
+        info: ShareInfo,
+    ) -> Result<(), ErrorCode> {
+        let mut st = self.lock();
+        let Some(m) = st.members.get_mut(user_id) else {
+            return Ok(());
+        };
+        if m.session != session {
+            return Ok(());
+        }
+        let room = m.room;
+        if st.rooms.get(&room).is_some_and(|r| r.kind == RoomKind::Dm) {
+            return Err(ErrorCode::Forbidden);
+        }
+        if !valid_share(&info) {
+            return Err(ErrorCode::BadMessage);
+        }
+        let m = st.members.get_mut(user_id).expect("checked above");
+        if m.share.replace(info).is_none() {
+            self.0.sfu.set_sharing(user_id, true);
+        }
+        let tx = m.tx.clone();
+        let msg = ServerMsg::PeerShare {
+            user_id: user_id.into(),
+            share: Some(info),
+        };
+        st.tell(&self.0.hub, room, msg, &[&tx]);
+        Ok(())
+    }
+
+    /// End `user_id`'s screen share, if one runs. Ignored if `session` was replaced.
+    pub fn share_stop(&self, user_id: &str, session: u64) {
+        let mut st = self.lock();
+        let Some(m) = st.members.get_mut(user_id) else {
+            return;
+        };
+        if m.session != session || m.share.take().is_none() {
+            return;
+        }
+        self.0.sfu.set_sharing(user_id, false);
+        let (room, tx) = (m.room, m.tx.clone());
+        let msg = ServerMsg::PeerShare {
+            user_id: user_id.into(),
+            share: None,
+        };
         st.tell(&self.0.hub, room, msg, &[&tx]);
     }
 
@@ -523,5 +590,12 @@ mod tests {
         closed_rx.await.expect("closed signal fires");
         assert!(rx.queue.try_recv().is_err(), "nothing forwarded");
         assert_eq!(*rx.close.borrow(), None, "no close");
+    }
+
+    #[test]
+    fn share_settings_are_checked() {
+        let ok = |fps, bitrate_kbps| valid_share(&ShareInfo { fps, bitrate_kbps });
+        assert!(ok(30, 500) && ok(60, 30000));
+        assert!(!ok(45, 8000) && !ok(60, 499) && !ok(60, 30001) && !ok(0, 8000));
     }
 }

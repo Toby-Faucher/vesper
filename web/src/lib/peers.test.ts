@@ -3,7 +3,7 @@ import { applyPeerMsg, inRoom } from './peers';
 import type { Peer } from './gen/Peer';
 
 const peer = (user_id: string, room_id = 1): Peer => ({
-  user_id, name: user_id.toUpperCase(), room_id, muted: false, deafened: false, force_muted: false,
+  user_id, name: user_id.toUpperCase(), room_id, muted: false, deafened: false, force_muted: false, share: null,
 });
 const a = peer('a');
 const b = peer('b');
