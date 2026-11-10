@@ -30,6 +30,8 @@ pub enum Kind {
     Push,
     /// A call summary at leave. Key: user id.
     Calls,
+    /// The share dialog's upload speed test. Key: user id.
+    Speedtest,
 }
 
 impl Kind {
@@ -49,6 +51,7 @@ impl Kind {
             Kind::Change => (20.0, s(1)),
             Kind::Push => (20.0, s(10)),
             Kind::Calls => (10.0, s(60)),
+            Kind::Speedtest => (3.0, s(20)),
         }
     }
 }
