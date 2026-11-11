@@ -7,12 +7,13 @@ let ctx: AudioContext | null = null;
 let idle: ReturnType<typeof setTimeout> | undefined;
 let sinkNow: string | null = null; // the sink a new context starts on
 
-type Tone = { hz: number[]; step: number; wave: OscillatorType; gap?: number };
+type Tone = { hz: number[]; step: number; wave: OscillatorType; gap?: number; gain?: number };
 // One family: rising = on (unmute, connected, someone joined), falling = off, a soft same-pitch double for deafen,
 // a low pair for a lost connection. Mute cues are high and quick, connection cues use a warmer triangle wave.
 export const TONES: Record<Cue, Tone> = {
-  join: { hz: [523.25, 783.99], step: 0.09, wave: 'sine' }, // C5 G5
-  leave: { hz: [783.99, 523.25], step: 0.09, wave: 'sine' },
+  // Others joining or leaving: 2.5 times the peak (+8 dB), longer and brighter, so they carry over game audio.
+  join: { hz: [523.25, 783.99], step: 0.12, wave: 'triangle', gain: 2.5 }, // C5 G5
+  leave: { hz: [783.99, 523.25], step: 0.12, wave: 'triangle', gain: 2.5 },
   unmute: { hz: [880, 1318.5], step: 0.06, wave: 'sine' }, // A5 E6
   mute: { hz: [1318.5, 880], step: 0.06, wave: 'sine' },
   deafen: { hz: [440, 440], step: 0.06, wave: 'sine', gap: 0.03 }, // A4 twice
@@ -28,8 +29,8 @@ export const toneMs = (t: Tone) => Math.round(1000 * (t.hz.length * t.step + (t.
 
 /** `volume` is 0 to 100. */
 export function chime(kind: Cue, sinkId: string | null, volume = 50): void {
-  const peak = (MAX_GAIN * Math.min(100, Math.max(0, volume))) / 100;
-  if (!peak) return;
+  const level = (MAX_GAIN * Math.min(100, Math.max(0, volume))) / 100;
+  if (!level) return;
   try {
     if (ctx?.state === 'closed') [ctx, sinkNow] = [null, null]; // closed under us: start a new one
     ctx ??= new AudioContext();
@@ -40,6 +41,7 @@ export function chime(kind: Cue, sinkId: string | null, volume = 50): void {
       sink.setSinkId?.(sinkId ?? '').catch(() => {}); // '' is the default speaker; a failure keeps the current one
     }
     const tone = TONES[kind];
+    const peak = level * (tone.gain ?? 1);
     const t0 = ctx.currentTime + 0.01;
     tone.hz.forEach((hz, i) => {
       const osc = ctx!.createOscillator();

@@ -24,7 +24,9 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 170, cssFirst: 12, css
 // the dev machine, so CI is expected near 57.8.
 // 2026-11-03: 57.9 to 58.9 for the color scheme and styles (scheme.ts, the style loader, the light accent roles); measured 58.4
 // on the dev machine, so CI is expected near 58.6. The light block adds 0.3 kB to the first load CSS (8.3 to 8.6).
-export const RATCHET_GZIP_KB = { first: 58.9 };
+// 2026-11-10: 58.9 to 59.3 for staying in a call after a dropped socket (the rejoin in voice.svelte.ts and its notice in
+// RoomView); measured 58.8 on the dev machine and 59.0 in CI.
+export const RATCHET_GZIP_KB = { first: 59.3 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.

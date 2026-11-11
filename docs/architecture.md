@@ -36,7 +36,10 @@ The "Not verified" list at the end says what was only read.
   page and the state it pushes (`state.ts`). After a close it reconnects after a random wait that doubles from 1 to 2 s up to 15 to 30 s, asking `/api/me` first; the wait
   starts over only after a socket stayed up for 10 s.
   It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). Nor after a server build change: the page keeps the build id (`Me.server.build`) of its first `hello`; when a later `hello` or a reconnect's `/api/me` names another, it closes the socket for good without applying that `hello`, so it never acts on messages of a newer protocol, the composer stays blocked like offline, and `ConnectionBanner.svelte` shows "Vesper was updated. Reload to continue." with a Reload button. It compares build ids, not versions, and never reloads by itself, so it can not loop. A `peer_left` with your
-  own `user_id` ends the call in that tab; the socket stays open.
+  own `user_id` ends the call in that tab; the socket stays open. A socket that drops mid-call ends the call's media in that tab,
+  but not the call: once the next socket's `hello` is in, the tab joins the same room again by itself (`voice.rejoin` in
+  `voice.svelte.ts`), so the others hear a leave and a join. If no socket is back within 60 s it gives up and says
+  "Disconnected from the server.". Joining any room yourself, or signing out, cancels it.
 - **The chat panel** (`web/src/routes/Chat.svelte`, store in `web/src/lib/chat.svelte.ts`) fills the open room's page (`RoomView.svelte`) under its
   header. History, sends, edits, deletes, reactions, pins, read markers, uploads and search go over REST; new and changed messages and
   typing come over the socket. A `message_updated` copy with a smaller `updated_at` than the one held is dropped, and after
@@ -180,7 +183,8 @@ takes them out of voice. A moderator disconnect closes all of that user's socket
 client may reconnect. Each socket has a queue of 256 messages and every send is non-blocking: a send to a full queue closes that
 socket with 1013, through a signal outside the queue, so a client that stopped reading cannot hold memory or the task. A closing
 socket leaves the hub and voice first, then waits up to 1 s for the client's close reply. Ending a voice session never closes
-the socket.
+the socket. Each socket's end is logged at info, with why and the close code it sent (`socket of <user_id> ended: no pong in
+time (close code None)`), and the SFU warns `client <user_id> ice disconnected` when a session's media connection times out.
 
 Tests: `crates/vesper-server/tests/signaling.rs` (a real server and sockets, `FakeClient` as the browser's WebRTC side) and the
 unit tests in `hub.rs` and `voice.rs`.
