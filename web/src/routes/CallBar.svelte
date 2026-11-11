@@ -1,18 +1,27 @@
 <script lang="ts">
   import * as I from '../lib/ui/icons';
   import type { Peer } from '../lib/gen/Peer';
-  import { inRoom } from '../lib/peers';
-  import { href } from '../lib/route';
-  import { session } from '../lib/session.svelte';
+  import { inRoom, sharersIn } from '../lib/peers';
+  import { href, parse } from '../lib/route';
+  import { route, session } from '../lib/session.svelte';
   import { findRoom } from '../lib/state';
-  import { dismissOffered, leave, retryMic, toggleDeafen, toggleMute, useOfferedMic, voice } from '../lib/voice.svelte';
+  import { onDestroy, onMount } from 'svelte';
+  import { dismissOffered, leave, retryMic, toggleDeafen, toggleMute, useOfferedMic, voice, watchShare } from '../lib/voice.svelte';
   import { enter, exit } from '../lib/ui/motion';
   import { togglePerson } from '../lib/ui/person.svelte';
   import { qualityText } from '../lib/ui/quality';
   import { keyName } from '../lib/ui/keys';
+  import { UI_MESSAGES as M } from '../lib/ui/messages';
   import Avatar from '../lib/ui/c/Avatar.svelte';
+  import Icon from '../lib/ui/c/Icon.svelte';
   import Button from '../lib/ui/c/Button.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
+  import ShareCard from './ShareCard.svelte';
+  import ShareDialog from './ShareDialog.svelte';
+  import { monitorUp } from '../lib/share/icons';
+  import { canPopOut, closePopOut } from '../lib/share/pip';
+  import { shares } from '../lib/share/state.svelte';
+  import { syncWatches, tabCounts } from '../lib/share/watch';
   import Status from '../lib/ui/c/Status.svelte';
   // The call, floating at the bottom of the main pane while you are in voice. Everything here is read from the voice
   // store; nothing animates while the call runs (the speaking ring is an instant toggle from the store's 100 ms poll).
@@ -31,12 +40,13 @@
     };
   }
 
+  let sharing = $state(false); // the share dialog is open
   const AVATARS = 5; // drawn; the rest is "+n"
   const room = $derived(findRoom(session.state, voice.joinedRoom));
   const me = $derived(session.state.me?.user);
   const people = $derived.by<Peer[]>(() => {
     const others = voice.joinedRoom === null ? [] : inRoom(session.state.voice, voice.joinedRoom).filter((p) => p.user_id !== me?.user_id);
-    return me ? [{ user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom ?? 0, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted }, ...others] : others;
+    return me ? [{ user_id: me.user_id, name: me.display_name, room_id: voice.joinedRoom ?? 0, muted: voice.muted, deafened: voice.deafened, force_muted: voice.forceMuted, share: shares.mine && { fps: shares.mine.fps, bitrate_kbps: shares.mine.kbps } }, ...others] : others;
   });
   const user = (p: Peer) => session.state.users[p.user_id] ?? { user_id: p.user_id, display_name: p.name, accent: '' };
   const LEVEL = { good: 3, fair: 2, poor: 1, unknown: 0 } as const;
@@ -50,6 +60,26 @@
   const noise = $derived(`Noise suppression: ${voice.mode}${voice.modeReason ? ` (${voice.modeReason})` : ''}`);
   const notice = $derived((voice.retrying ? 'Getting the microphone again.' : voice.deviceError) || (voice.forceMuted ? 'A moderator muted you.' : '') || warning || voice.notice);
   const micLost = $derived(voice.modeReason.startsWith('microphone lost'));
+
+  // Watching (design: "What counts as watching"): a tile in the open panel while the tab is visible, or the pop-out. The bar
+  // is mounted exactly while joined, so it runs again after a rejoin, which forgot every watch (resetWatches). Here, not in
+  // the shell, to keep it out of the first load.
+  const sharers = $derived(voice.joined ? sharersIn(session.state.voice, voice.joinedRoom, voice.userId) : []);
+  let had = false;
+  $effect(() => {
+    if (sharers.length && !had) shares.panelOpen = true; // the first share in the call opens the panel
+    had = sharers.length > 0;
+    if (shares.popped && !sharers.includes(shares.popped)) closePopOut(); // that share ended
+    syncWatches(sharers, watchShare);
+  });
+  const visible = () => (shares.tabVisible = tabCounts(document.visibilityState, canPopOut()));
+  onMount(visible);
+  onDestroy(closePopOut); // a popped-out share outlives the room page, not the call
+  // Away from the call room, the shares there are one link back (the panel lives on that room's page).
+  const away = $derived.by(() => {
+    const r = parse(route.path);
+    return r.name === 'room' && r.id === voice.joinedRoom ? 0 : sharers.length;
+  });
 </script>
 
 <div class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-4" bind:clientHeight={height} {@attach motion}>
@@ -71,6 +101,13 @@
            bar there is only the screen edge. -->
       <IconButton icon={voice.muted ? I.micOff : I.mic} label={voice.muted ? 'Unmute' : 'Mute'} tip="up" danger={voice.muted} disabled={voice.forceMuted} onclick={toggleMute} />
       <IconButton icon={voice.deafened ? I.headphonesOff : I.headphones} label={voice.deafened ? 'Undeafen' : 'Deafen'} tip="up" danger={voice.deafened} onclick={toggleDeafen} />
+      {#if room?.kind !== 'dm'}
+        {#if shares.mine}
+          <ShareCard onsettings={() => (sharing = true)} />
+        {:else}
+          <IconButton icon={monitorUp} label="Share screen" tip="up" onclick={() => (sharing = true)} />
+        {/if}
+      {/if}
       {#if voice.settings.pushToTalk.enabled}
         <!-- Both texts share one grid cell, so the pill keeps its width while the key goes down and up. Not a live region:
              it changes on every press, and the Mute state already speaks. -->
@@ -96,6 +133,9 @@
       </ul>
       <span class="mx-2 h-6 w-px shrink-0 bg-subtle" aria-hidden="true"></span>
 
+      {#if away}
+        <a class="details flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm text-fg-2" href={href({ name: 'room', id: voice.joinedRoom ?? 0 })}><Icon d={I.monitor} />{M.sharing(away)}</a>
+      {/if}
       <a class="details flex h-8 shrink-0 items-center rounded-md px-2 text-sm text-fg-2" href={href({ name: 'settings', section: 'diagnostics' })}>Call details</a>
       <Button variant="danger-ghost" onclick={leave}>Leave</Button>
     </div>
@@ -117,6 +157,8 @@
     </div>
   </section>
 </div>
+<svelte:document onvisibilitychange={visible} />
+{#if sharing}<ShareDialog edit={!!shares.mine} onclose={() => (sharing = false)} />{/if}
 
 <style>
   /* The speaking ring's gap is drawn in the sidebar colour; on the bar it takes the bar's own. */

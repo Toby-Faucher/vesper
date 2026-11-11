@@ -16,6 +16,7 @@ pub mod hub;
 pub mod limits;
 pub mod public_addr;
 pub mod push;
+pub mod speedtest;
 pub mod uploads;
 pub mod voice;
 pub mod ws;
@@ -96,6 +97,7 @@ pub fn router(state: AppState) -> Router {
         .layer(RequestBodyDeadlineLayer::new(uploads::READ_TOTAL));
     let api = json
         .merge(uploads::routes())
+        .merge(speedtest::routes())
         .merge(pictures)
         .layer(middleware::from_fn_with_state(
             state.clone(),

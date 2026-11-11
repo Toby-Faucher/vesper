@@ -4,7 +4,8 @@
 //! Join flow: send [`FakeClient::offer`] to the SFU, pass the answer to
 //! [`FakeClient::accept_answer`], and answer each SFU renegotiation offer with
 //! [`FakeClient::accept_offer`]. Then [`FakeClient::send_audio`] and inspect
-//! [`FakeClient::received`].
+//! [`FakeClient::received`]. [`FakeClient::with_video`] adds a VP8 track
+//! ([`FakeClient::send_video`], [`FakeClient::received_video`], keyframe requests both ways).
 
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
@@ -15,7 +16,8 @@ use std::time::{Duration, Instant};
 
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::format::Codec;
-use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid};
+pub use str0m::media::MediaKind;
+use str0m::media::{Direction, Frequency, KeyframeRequestKind, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
@@ -24,6 +26,9 @@ const FRAME: Duration = Duration::from_millis(20);
 const FRAME_TICKS: u64 = 960;
 /// 64 kbps * 20 ms.
 const PAYLOAD_LEN: usize = 160;
+/// Video frames go at 60 a second, on the 90 kHz video clock.
+const VIDEO_FRAME: Duration = Duration::from_micros(16_667);
+const VIDEO_FRAME_TICKS: u64 = 1500;
 
 pub struct FakeClient {
     shared: Arc<Mutex<State>>,
@@ -38,27 +43,58 @@ struct State {
     send_mid: Mid,
     pending: Option<SdpPendingOffer>,
     connected: bool,
-    remote_tracks: usize,
+    /// Every incoming m-line negotiated so far, in order (a recycled mid appears again).
+    remote_tracks: Vec<(Mid, MediaKind)>,
     to_send: usize,
     next_send: Instant,
     sent: Vec<Vec<u8>>,
     received: Vec<Vec<u8>>,
+    received_video: Vec<Vec<u8>>,
+    video: Option<VideoOut>,
+    /// Keyframe requests (PLI or FIR) that arrived for the video we send.
+    keyframe_requests: usize,
+}
+
+/// The send side of [`FakeClient::with_video`].
+struct VideoOut {
+    mid: Mid,
+    to_send: usize,
+    bytes: usize,
+    next_send: Instant,
+    sent: u64,
 }
 
 impl FakeClient {
     /// Bind a loopback UDP socket and prepare an offer for one send-only Opus track.
     pub fn new() -> std::io::Result<Self> {
+        Self::build(false)
+    }
+
+    /// Like [`new`](Self::new), plus a send-only VP8 video track.
+    pub fn with_video() -> std::io::Result<Self> {
+        Self::build(true)
+    }
+
+    fn build(video: bool) -> std::io::Result<Self> {
         static TAG: AtomicU64 = AtomicU64::new(1);
         let socket = UdpSocket::bind("127.0.0.1:0")?;
         let addr = socket.local_addr()?;
         let mut rtc = Rtc::builder()
             .clear_codecs()
             .enable_opus(true, false)
+            .enable_vp8(video)
             .build(Instant::now());
         let candidate = Candidate::host(addr, "udp").map_err(std::io::Error::other)?;
         rtc.add_local_candidate(candidate);
         let mut change = rtc.sdp_api();
         let send_mid = change.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
+        let video = video.then(|| VideoOut {
+            mid: change.add_media(MediaKind::Video, Direction::SendOnly, None, None, None),
+            to_send: 0,
+            bytes: 0,
+            next_send: Instant::now(),
+            sent: 0,
+        });
         let (offer, pending) = change.apply().expect("adding media is a change");
 
         let shared = Arc::new(Mutex::new(State {
@@ -67,11 +103,14 @@ impl FakeClient {
             send_mid,
             pending: Some(pending),
             connected: false,
-            remote_tracks: 0,
+            remote_tracks: vec![],
             to_send: 0,
             next_send: Instant::now(),
             sent: vec![],
             received: vec![],
+            received_video: vec![],
+            video,
+            keyframe_requests: 0,
         }));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
@@ -86,7 +125,7 @@ impl FakeClient {
         })
     }
 
-    /// The initial SDP offer (one send-only Opus track, loopback host candidate).
+    /// The initial SDP offer (one send-only Opus track, a VP8 one with video, loopback host candidate).
     pub fn offer(&self) -> &str {
         &self.offer
     }
@@ -120,14 +159,46 @@ impl FakeClient {
         self.state().to_send += n;
     }
 
-    /// Payloads sent so far, in order.
+    /// Queue `frames` video frames of `bytes` bytes, sent at 60 frames a second once ICE is connected.
+    /// Every frame is unique to this client and frame. Panics without [`with_video`](Self::with_video).
+    pub fn send_video(&self, frames: usize, bytes: usize) {
+        let mut s = self.state();
+        let video = s.video.as_mut().expect("client built with_video");
+        video.to_send += frames;
+        video.bytes = bytes;
+    }
+
+    /// Audio payloads sent so far, in order.
     pub fn sent(&self) -> Vec<Vec<u8>> {
         self.state().sent.clone()
     }
 
-    /// Media payloads received so far (from any track), in arrival order.
+    /// Audio payloads received so far (from any audio track), in arrival order.
     pub fn received(&self) -> Vec<Vec<u8>> {
         self.state().received.clone()
+    }
+
+    /// Video frames received so far (from any video track), in arrival order.
+    pub fn received_video(&self) -> Vec<Vec<u8>> {
+        self.state().received_video.clone()
+    }
+
+    /// Keyframe requests received so far for this client's video (as a sharer).
+    pub fn keyframe_requests(&self) -> usize {
+        self.state().keyframe_requests
+    }
+
+    /// Send a PLI on every incoming video m-line, as a viewer whose decoder lost the picture.
+    pub fn request_keyframes(&self) {
+        let mut guard = self.state();
+        let s = &mut *guard;
+        for (mid, kind) in &s.remote_tracks {
+            if *kind == MediaKind::Video
+                && let Some(mut writer) = s.rtc.writer(*mid)
+            {
+                let _ = writer.request_keyframe(None, KeyframeRequestKind::Pli);
+            }
+        }
     }
 
     /// Whether ICE and DTLS are up, so media can flow.
@@ -135,9 +206,15 @@ impl FakeClient {
         self.state().connected
     }
 
-    /// Number of incoming audio tracks negotiated by the SFU (other users' voices).
+    /// Number of incoming tracks of any kind negotiated by the SFU (other users' voices and screens).
     pub fn remote_tracks(&self) -> usize {
-        self.state().remote_tracks
+        self.state().remote_tracks.len()
+    }
+
+    /// Number of incoming tracks of `kind` negotiated by the SFU.
+    pub fn remote_tracks_of(&self, kind: MediaKind) -> usize {
+        let s = self.state();
+        s.remote_tracks.iter().filter(|(_, k)| *k == kind).count()
     }
 
     /// Vanish abruptly: stop the driver thread, so no more packets (not even STUN) are sent.
@@ -216,9 +293,23 @@ impl State {
                         self.connected = false;
                     }
                     Event::MediaAdded(m) if m.direction == Direction::RecvOnly => {
-                        self.remote_tracks += 1;
+                        self.remote_tracks.push((m.mid, m.kind));
                     }
-                    Event::MediaData(d) => self.received.push(d.data.to_vec()),
+                    Event::KeyframeRequest(r)
+                        if self.video.as_ref().is_some_and(|v| v.mid == r.mid) =>
+                    {
+                        self.keyframe_requests += 1;
+                    }
+                    Event::MediaData(d) => {
+                        // Latest entry for the mid: a stopped m-line can be recycled.
+                        let track = self.remote_tracks.iter().rev().find(|(m, _)| *m == d.mid);
+                        match track {
+                            Some((_, MediaKind::Video)) => {
+                                self.received_video.push(d.data.to_vec())
+                            }
+                            _ => self.received.push(d.data.to_vec()),
+                        }
+                    }
                     _ => {}
                 },
                 Err(_) => return Instant::now() + Duration::from_millis(5),
@@ -227,6 +318,43 @@ impl State {
     }
 
     fn maybe_send(&mut self) {
+        self.maybe_send_audio();
+        self.maybe_send_video();
+    }
+
+    fn maybe_send_video(&mut self) {
+        let now = Instant::now();
+        let Some(video) = self.video.as_mut() else {
+            return;
+        };
+        if !self.connected || video.to_send == 0 || now < video.next_send {
+            return;
+        }
+        let Some(writer) = self.rtc.writer(video.mid) else {
+            return;
+        };
+        let Some(pt) = writer
+            .payload_params()
+            .find(|p| p.spec().codec == Codec::Vp8)
+            .map(|p| p.pt())
+        else {
+            return;
+        };
+        let seq = video.sent;
+        // Same tag layout as audio: a fixed first byte, then a tag unique to client + frame.
+        let mut payload = vec![0xF8];
+        payload.extend_from_slice(&self.tag.to_be_bytes());
+        payload.extend_from_slice(&seq.to_be_bytes());
+        payload.resize(video.bytes.max(payload.len()), (seq % 251) as u8);
+        let time = MediaTime::new(seq * VIDEO_FRAME_TICKS, Frequency::NINETY_KHZ);
+        if writer.write(pt, now, time, payload).is_ok() {
+            video.sent += 1;
+            video.to_send -= 1;
+            video.next_send = now + VIDEO_FRAME;
+        }
+    }
+
+    fn maybe_send_audio(&mut self) {
         let now = Instant::now();
         if !self.connected || self.to_send == 0 || now < self.next_send {
             return;

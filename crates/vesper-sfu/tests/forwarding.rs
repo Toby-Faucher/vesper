@@ -25,6 +25,7 @@ fn spawn_sfu(advertised: Vec<SocketAddr>) -> SfuHandle {
 enum Logged {
     Offer(String),
     Closed,
+    ShareCut,
 }
 
 struct Peer {
@@ -41,6 +42,15 @@ impl Peer {
             .any(|l| matches!(l, Logged::Closed))
     }
 
+    fn share_cuts(&self) -> usize {
+        self.log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| matches!(l, Logged::ShareCut))
+            .count()
+    }
+
     fn offers(&self) -> Vec<String> {
         self.log
             .lock()
@@ -48,7 +58,7 @@ impl Peer {
             .iter()
             .filter_map(|l| match l {
                 Logged::Offer(s) => Some(s.clone()),
-                Logged::Closed => None,
+                Logged::Closed | Logged::ShareCut => None,
             })
             .collect()
     }
@@ -81,16 +91,26 @@ impl Ctx {
 
     /// Join like the server will: send the offer, apply the answer, then answer every SFU offer.
     async fn join(&self, room: &str, user: &str) -> Peer {
-        self.join_with(room, user, true).await
+        self.join_with(room, user, true, false).await
+    }
+
+    /// Like `join`, with a send-only VP8 video m-line next to the audio one.
+    async fn join_video(&self, room: &str, user: &str) -> Peer {
+        self.join_with(room, user, true, true).await
     }
 
     /// Like `join`, but never answers SFU offers (they are still logged).
     async fn join_silent(&self, room: &str, user: &str) -> Peer {
-        self.join_with(room, user, false).await
+        self.join_with(room, user, false, false).await
     }
 
-    async fn join_with(&self, room: &str, user: &str, answer: bool) -> Peer {
-        let client = Arc::new(FakeClient::new().expect("fake client"));
+    async fn join_with(&self, room: &str, user: &str, answer: bool, video: bool) -> Peer {
+        let client = if video {
+            FakeClient::with_video()
+        } else {
+            FakeClient::new()
+        };
+        let client = Arc::new(client.expect("fake client"));
         let ok = self
             .h
             .join(room.into(), user.into(), client.offer().to_string())
@@ -128,6 +148,7 @@ impl Ctx {
                         l.lock().unwrap().push(Logged::Offer(sdp));
                     }
                     SfuEvent::Closed => l.lock().unwrap().push(Logged::Closed),
+                    SfuEvent::ShareCut => l.lock().unwrap().push(Logged::ShareCut),
                 }
             }
         });
@@ -377,20 +398,32 @@ async fn hostile_offers_are_rejected() {
     use str0m::media::{Direction, MediaKind};
 
     let t = Ctx::loopback();
-    let offer = |media: &[MediaKind]| {
+    let offer = |media: &[MediaKind], channel: bool| {
         let mut rtc = Rtc::builder().build(Instant::now());
         let mut change = rtc.sdp_api();
         for kind in media {
             change.add_media(*kind, Direction::RecvOnly, None, None, None);
         }
+        if channel {
+            change.add_channel("x".into());
+        }
         change.apply().unwrap().0.to_sdp_string()
     };
+    let (audio, video) = (MediaKind::Audio, MediaKind::Video);
 
-    let many_audio = offer(&[MediaKind::Audio; 50]);
-    let with_video = offer(&[MediaKind::Audio, MediaKind::Video]);
     for (name, sdp) in [
-        ("50 audio m-lines", many_audio),
-        ("audio + video", with_video),
+        ("audio + video", offer(&[audio, video], false)),
+        ("video + audio", offer(&[video, audio], false)),
+    ] {
+        t.h.join("r".into(), "fine".into(), sdp)
+            .await
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+    for (name, sdp) in [
+        ("50 audio m-lines", offer(&[audio; 50], false)),
+        ("audio + two video", offer(&[audio, video, video], false)),
+        ("video only", offer(&[video], false)),
+        ("audio + data channel", offer(&[audio], true)),
     ] {
         let err = t.h.join("r".into(), "evil".into(), sdp).await.unwrap_err();
         assert!(
@@ -516,4 +549,182 @@ async fn force_muted_audio_is_not_forwarded() {
         0,
         "b heard rejoined a"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn video_reaches_only_watchers() {
+    let t = Ctx::loopback();
+    let a = t.join_video("r", "a").await;
+    let b = t.join_video("r", "b").await;
+    let c = t.join_video("r", "c").await;
+    for p in [&a, &b, &c] {
+        t.ready(p, 4).await; // 2 audio + 2 video each
+    }
+    t.h.set_sharing("a", true);
+    t.h.watch("b", "a", true);
+    a.client.send_video(60, 1200);
+    t.wait_until("b got video", CONNECT, || {
+        b.client.received_video().len() >= 50
+    })
+    .await;
+    assert!(c.client.received_video().is_empty());
+    assert!(a.client.received_video().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn video_needs_a_share() {
+    let t = Ctx::loopback();
+    let a = t.join_video("r", "a").await;
+    let b = t.join_video("r", "b").await;
+    t.ready(&a, 2).await;
+    t.ready(&b, 2).await;
+    t.h.watch("b", "a", true);
+    a.client.send_video(60, 1200);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(b.client.received_video().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn late_viewer_gets_video() {
+    let t = Ctx::loopback();
+    let a = t.join_video("r", "a").await;
+    t.ready(&a, 0).await;
+    t.h.set_sharing("a", true);
+    a.client.send_video(500, 1200); // 10 s at 60 frames a second
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let c = t.join_video("r", "c").await;
+    t.ready(&c, 2).await;
+    t.h.watch("c", "a", true);
+    t.wait_until("c got video", CONNECT, || {
+        c.client.received_video().len() >= 20
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn audio_only_client_gets_no_video() {
+    use str0m::media::MediaKind;
+
+    let t = Ctx::loopback();
+    // Old builds with no video m-line, one joining before the sharer and one after.
+    let before = t.join("r", "before").await;
+    let a = t.join_video("r", "a").await;
+    let after = t.join("r", "after").await;
+    t.ready(&a, 2).await;
+    t.ready(&before, 2).await;
+    t.ready(&after, 2).await;
+    t.h.set_sharing("a", true);
+    t.h.watch("before", "a", true);
+    t.h.watch("after", "a", true);
+    a.client.send_video(30, 1200);
+    a.client.send_audio(30);
+    for p in [&before, &after] {
+        t.wait_until("heard a", CONNECT, || {
+            heard(&p.client.received(), &a.client) >= 25
+        })
+        .await;
+        // A real browser would accept a VP8 m-line, so none may be offered.
+        assert!(p.offers().iter().all(|sdp| !sdp.contains("m=video")));
+        assert_eq!(p.client.remote_tracks(), 2);
+        assert_eq!(p.client.remote_tracks_of(MediaKind::Video), 0);
+        assert!(p.client.received_video().is_empty());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn force_mute_keeps_video() {
+    let t = Ctx::loopback();
+    let a = t.join_video("r", "a").await;
+    let b = t.join_video("r", "b").await;
+    t.ready(&a, 2).await;
+    t.ready(&b, 2).await;
+    t.h.set_sharing("a", true);
+    t.h.watch("b", "a", true);
+    t.h.set_muted("a", true);
+    a.client.send_audio(30);
+    a.client.send_video(30, 1200);
+    t.wait_until("a sent 30", CONNECT, || a.client.sent().len() == 30)
+        .await;
+    t.wait_until("b got video", CONNECT, || {
+        b.client.received_video().len() >= 25
+    })
+    .await;
+    assert_eq!(heard(&b.client.received(), &a.client), 0, "b heard muted a");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watching_asks_the_sharer_for_a_keyframe() {
+    let t = Ctx::loopback();
+    let a = t.join_video("r", "a").await;
+    let b = t.join_video("r", "b").await;
+    t.ready(&a, 2).await;
+    t.ready(&b, 2).await;
+    t.h.set_sharing("a", true);
+    assert_eq!(a.client.keyframe_requests(), 0);
+    t.h.watch("b", "a", true);
+    t.wait_until("a asked for a keyframe", CONNECT, || {
+        a.client.keyframe_requests() >= 1
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn viewer_keyframe_request_reaches_the_sharer() {
+    let t = Ctx::loopback();
+    let a = t.join_video("r", "a").await;
+    let b = t.join_video("r", "b").await;
+    t.ready(&a, 2).await;
+    t.ready(&b, 2).await;
+    t.h.set_sharing("a", true);
+    t.h.watch("b", "a", true);
+    a.client.send_video(500, 1200); // 10 s at 60 frames a second
+    t.wait_until("b got video", CONNECT, || {
+        !b.client.received_video().is_empty()
+    })
+    .await;
+    // The request the watch made comes first, so it is not counted as b's.
+    t.wait_until("watch keyframe", CONNECT, || {
+        a.client.keyframe_requests() >= 1
+    })
+    .await;
+    let n = a.client.keyframe_requests();
+    b.client.request_keyframes();
+    t.wait_until("b's request reached a", CONNECT, || {
+        a.client.keyframe_requests() > n
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn share_over_the_ceiling_is_cut() {
+    let t = Ctx::new(SfuConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        share_ceiling_bps: 400_000,
+        share_ceiling_secs: 1,
+        ..Default::default()
+    });
+    t.h.set_advertised(vec![t.h.local_addr()]);
+    let a = t.join_video("r", "a").await;
+    let b = t.join_video("r", "b").await;
+    t.ready(&a, 2).await;
+    t.ready(&b, 2).await;
+    t.h.set_sharing("a", true);
+    t.h.watch("b", "a", true);
+    a.client.send_video(150, 2_000); // 3 s at 60 frames a second: 800 kbit/s
+    t.wait_until("a's share cut", CONNECT, || a.share_cuts() == 1)
+        .await;
+    assert!(
+        !b.client.received_video().is_empty(),
+        "b got nothing before the cut"
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let got = b.client.received_video().len();
+    // A sends for about 2 s more.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        b.client.received_video().len(),
+        got,
+        "b still gets video after the cut"
+    );
+    assert_eq!(a.share_cuts(), 1);
 }

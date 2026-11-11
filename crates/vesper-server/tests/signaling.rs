@@ -21,7 +21,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use vesper_protocol::{
     CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Peer, Role,
-    RoomInfo, ServerMsg,
+    RoomInfo, ServerMsg, ShareInfo,
 };
 use vesper_server::hub::QUEUE;
 use vesper_sfu::testing::FakeClient;
@@ -304,6 +304,7 @@ fn peer(s: &Session, room_id: i64) -> Peer {
         muted: false,
         deafened: false,
         force_muted: false,
+        share: None,
     }
 }
 
@@ -2160,4 +2161,330 @@ async fn ring_times_out() {
             .any(|p| p.user_id == a_id),
         "the caller stays"
     );
+}
+
+fn share_start(c: &Conn, fps: u8, bitrate_kbps: u32) {
+    c.send(&ClientMsg::ShareStart { fps, bitrate_kbps });
+}
+
+fn is_share(m: &ServerMsg) -> bool {
+    matches!(m, ServerMsg::PeerShare { .. })
+}
+
+#[tokio::test]
+async fn share_reaches_the_room() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (mut b, _, _) = Conn::joined(&server, &bob, room).await;
+    share_start(&a, 60, 8000);
+    let m = b.until("PeerShare", is_share).await;
+    assert_eq!(
+        m,
+        ServerMsg::PeerShare {
+            user_id: a_id,
+            share: Some(ShareInfo {
+                fps: 60,
+                bitrate_kbps: 8000
+            })
+        }
+    );
+}
+
+#[tokio::test]
+async fn share_stop_reaches_the_room() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (mut b, _, _) = Conn::joined(&server, &bob, room).await;
+    share_start(&a, 30, 2000);
+    b.until("PeerShare", is_share).await;
+    a.send(&ClientMsg::ShareStop);
+    let m = b.until("PeerShare", is_share).await;
+    assert_eq!(
+        m,
+        ServerMsg::PeerShare {
+            user_id: a_id,
+            share: None
+        }
+    );
+}
+
+#[tokio::test]
+async fn share_in_a_dm_is_refused() {
+    let server = TestServer::new().await;
+    let alice = server.member("alice").await;
+    let bob = server.member("bob").await;
+    let dm = dm_room(&server, &alice, &bob).await;
+    let (mut a, _, _) = Conn::joined(&server, &alice, dm).await;
+    share_start(&a, 30, 2000);
+    a.expect_error(ErrorCode::Forbidden).await;
+}
+
+#[tokio::test]
+async fn bad_share_settings_are_refused() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let (mut a, _, _) = Conn::joined(&server, &alice, room).await;
+    share_start(&a, 45, 8000);
+    a.expect_error(ErrorCode::BadMessage).await;
+}
+
+#[tokio::test]
+async fn share_over_the_room_total_is_refused() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let mut conns = vec![];
+    for name in ["alice", "bob", "carol", "dave"] {
+        let acct = server.account(name, Role::Member).await;
+        conns.push(Conn::joined(&server, &acct, room).await.0);
+    }
+    // 30 Mbps to three viewers is 90 000 kbps; a second one would pass the 120 000 cap.
+    share_start(&conns[0], 60, 30_000);
+    // Wait until the first share is in place, so the order is fixed.
+    conns[2].until("PeerShare", is_share).await;
+    share_start(&conns[1], 60, 30_000);
+    let m = conns[1]
+        .until("ShareCap", |m| matches!(m, ServerMsg::Error { .. }))
+        .await;
+    assert!(matches!(
+        m,
+        ServerMsg::Error {
+            code: ErrorCode::ShareCap,
+            ..
+        }
+    ));
+    // A smaller second share still fits.
+    share_start(&conns[1], 60, 5_000);
+    conns[0]
+        .until(
+            "PeerShare",
+            |m| matches!(m, ServerMsg::PeerShare { share: Some(s), .. } if s.bitrate_kbps == 5_000),
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn share_needs_a_call() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let mut a = Conn::open(&server, &alice).await;
+    share_start(&a, 30, 2000);
+    a.expect_error(ErrorCode::BadMessage).await;
+}
+
+#[tokio::test]
+async fn hello_lists_the_share() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (mut b, _, _) = Conn::joined(&server, &bob, room).await;
+    share_start(&a, 60, 8000);
+    b.until("PeerShare", is_share).await;
+    let carol = server.account("carol", Role::Member).await;
+    let ServerMsg::Hello { voice, .. } = Conn::open(&server, &carol).await.hello else {
+        unreachable!()
+    };
+    let p = voice.iter().find(|p| p.user_id == a_id).unwrap();
+    assert_eq!(
+        p.share,
+        Some(ShareInfo {
+            fps: 60,
+            bitrate_kbps: 8000
+        })
+    );
+}
+
+#[tokio::test]
+async fn rejoin_ends_the_share() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (mut b, _, _) = Conn::joined(&server, &bob, room).await;
+    share_start(&a, 60, 8000);
+    b.until("PeerShare", is_share).await;
+    let (_a2, _, _) = Conn::joined(&server, &alice, room).await;
+    let m = b
+        .until(
+            "PeerJoined of the rejoin",
+            |m| matches!(m, ServerMsg::PeerJoined { peer } if peer.user_id == a_id),
+        )
+        .await;
+    let ServerMsg::PeerJoined { peer } = m else {
+        unreachable!()
+    };
+    assert_eq!(peer.share, None);
+}
+
+fn is_watchers(m: &ServerMsg) -> bool {
+    matches!(m, ServerMsg::Watchers { .. })
+}
+
+async fn watchers(c: &mut Conn) -> u32 {
+    match c.until("Watchers", is_watchers).await {
+        ServerMsg::Watchers { count } => count,
+        _ => unreachable!(),
+    }
+}
+
+#[tokio::test]
+async fn watch_count_reaches_the_sharer() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (mut a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (b, _, _) = Conn::joined(&server, &bob, room).await;
+    let watch = |on| ClientMsg::Watch {
+        user_id: a_id.clone(),
+        on,
+    };
+    share_start(&a, 30, 2000);
+    assert_eq!(watchers(&mut a).await, 0);
+    b.send(&watch(true));
+    assert_eq!(watchers(&mut a).await, 1);
+    b.send(&watch(false));
+    assert_eq!(watchers(&mut a).await, 0);
+    b.send(&watch(true));
+    assert_eq!(watchers(&mut a).await, 1);
+    b.send(&ClientMsg::Leave);
+    assert_eq!(watchers(&mut a).await, 0);
+}
+
+#[tokio::test]
+async fn watch_outside_the_room_is_ignored() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let other = open_room(&server, &server.account("owner", Role::Owner).await).await;
+    let alice = server.account("alice", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let (mut a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (c, _, _) = Conn::joined(&server, &carol, other).await;
+    share_start(&a, 30, 2000);
+    assert_eq!(watchers(&mut a).await, 0);
+    c.send(&ClientMsg::Watch {
+        user_id: a_id,
+        on: true,
+    });
+    // A later message from the same socket proves the watch was handled first.
+    c.send(&ClientMsg::ShareStop);
+    a.send(&ClientMsg::ShareStop);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    while let Ok(m) = a.msgs.try_recv() {
+        assert!(!is_watchers(&m), "no count change: {m:?}");
+    }
+}
+
+#[tokio::test]
+async fn point_reaches_the_others_in_the_call() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (b, b_id, _) = Conn::joined(&server, &bob, room).await;
+    let (mut c, _, _) = Conn::joined(&server, &carol, room).await;
+    let mut a = a;
+    share_start(&a, 30, 2000);
+    c.until("PeerShare", is_share).await;
+    b.send(&ClientMsg::Point {
+        user_id: a_id.clone(),
+        x: 0.25,
+        y: 0.5,
+    });
+    let want = ServerMsg::Point {
+        user_id: a_id,
+        from: b_id,
+        x: 0.25,
+        y: 0.5,
+    };
+    let is_point = |m: &ServerMsg| matches!(m, ServerMsg::Point { .. });
+    assert_eq!(c.until("Point", is_point).await, want);
+    assert_eq!(a.until("Point", is_point).await, want);
+}
+
+#[tokio::test]
+async fn bad_point_is_refused() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (mut b, _, _) = Conn::joined(&server, &bob, room).await;
+    share_start(&a, 30, 2000);
+    b.until("PeerShare", is_share).await;
+    b.send(&ClientMsg::Point {
+        user_id: a_id,
+        x: 1.5,
+        y: 0.5,
+    });
+    b.expect_error(ErrorCode::BadMessage).await;
+}
+
+#[tokio::test]
+async fn watchers_survive_a_restart() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (mut a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (b, _, _) = Conn::joined(&server, &bob, room).await;
+    b.send(&ClientMsg::Watch {
+        user_id: a_id,
+        on: true,
+    });
+    share_start(&a, 30, 2000);
+    // Bob's watch and Alice's start come in on two sockets, so the first count may still be 0;
+    // the watch then sends 1 as well.
+    while watchers(&mut a).await != 1 {}
+    a.send(&ClientMsg::ShareStop);
+    share_start(&a, 30, 2000);
+    assert_eq!(watchers(&mut a).await, 1);
+}
+
+#[tokio::test]
+async fn watch_off_after_the_sharer_left_is_applied() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (b, _, _) = Conn::joined(&server, &bob, room).await;
+    b.send(&ClientMsg::Watch {
+        user_id: a_id.clone(),
+        on: true,
+    });
+    a.send(&ClientMsg::Leave);
+    b.send(&ClientMsg::Watch {
+        user_id: a_id,
+        on: false,
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (mut a2, _, _) = Conn::joined(&server, &alice, room).await;
+    share_start(&a2, 30, 2000);
+    assert_eq!(watchers(&mut a2).await, 0);
+}
+
+#[tokio::test]
+async fn self_watch_is_ignored() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let (mut a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    a.send(&ClientMsg::Watch {
+        user_id: a_id,
+        on: true,
+    });
+    share_start(&a, 30, 2000);
+    assert_eq!(watchers(&mut a).await, 0);
 }

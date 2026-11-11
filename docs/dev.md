@@ -101,7 +101,8 @@ First load JS also has a ratchet (`RATCHET_GZIP_KB` in `size-check.mjs`): the me
 What is in the first load (measured 2026-11-02, gzip): the Svelte runtime chunk (21.2 kB) and `index` (the shell, the sidebar,
 the room view, the socket, the call store and sign in). Out of it, loaded on use: anime.js (`motion.ts` imports it right
 after start; until it arrives every preset is instant), the call chunk (`lib/call-stack.ts`: playback, capture, `join.ts`,
-the stats and the call bar, one chunk by a `codeSplitting` group in `vite.config.ts`; a hover, focus or press of Join voice
+the stats, the call bar and the screen share panel with its tiles and icons (`lib/share/icons.ts`), one chunk by a
+`codeSplitting` group in `vite.config.ts`; a hover, focus or press of Join voice
 loads it, `join()` at the latest, and the AudioContexts are still made inside the click), the search parser (with the
 search dialog) and the page texts (`messages.ts`; the first load uses `messages-first.ts`). To see what a chunk holds, build
 with `npx vite build --sourcemap` and add up the mapped bytes per source.

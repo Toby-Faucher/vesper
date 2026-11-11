@@ -4,6 +4,8 @@ import type { ServerMsg } from './gen/ServerMsg';
 
 // Fakes for everything that touches audio, WebRTC and the browser. `calls` records the order of the join's steps.
 const calls: string[] = [];
+const chime = vi.hoisted(() => vi.fn());
+vi.mock('./ui/chime', () => ({ chime }));
 const h = vi.hoisted(() => ({
   capture: null as null | { resolve: (c: unknown) => void; reject: (e: unknown) => void },
   playbacks: [] as { close: ReturnType<typeof vi.fn>; setSink: ReturnType<typeof vi.fn>; setLevelling: ReturnType<typeof vi.fn> }[],
@@ -35,8 +37,11 @@ vi.mock('./audio/capture', () => ({
   }),
 }));
 vi.mock('../routes/CallBar.svelte', () => ({ default: {} })); // in the call chunk; its styles need a real document
+vi.mock('../routes/SharePanel.svelte', () => ({ default: {} })); // the same
 const joinRoom = vi.fn();
 vi.mock('./join', () => ({ joinRoom: (...a: unknown[]) => joinRoom(...a) }));
+const send = vi.hoisted(() => ({ capture: vi.fn(), applyShare: vi.fn() }));
+vi.mock('./share/send', () => send);
 
 // Counts listeners on window, document and mediaDevices.
 class Target {
@@ -66,6 +71,7 @@ const { DISCONNECTED, REJOIN_MS } = v;
 const { SETTINGS_KEY } = await import('./audio/settings');
 const { createCapture } = await import('./audio/capture');
 const { MIC_FALLBACK, SPEAKER_FALLBACK } = await import('./devices');
+const { shares } = await import('./share/state.svelte');
 
 class FakeSig {
   msg = new Set<(m: ServerMsg) => void>();
@@ -111,12 +117,13 @@ async function joined() {
   const cap = fakeCapture();
   const pc = fakePc();
   const off = vi.fn();
-  joinRoom.mockResolvedValue({ pc, userId: me, off, peers: [] });
+  const video = { replaceTrack: vi.fn(async (_t: unknown) => {}) };
+  joinRoom.mockResolvedValue({ pc, userId: me, off, peers: [], video });
   const p = v.join(1);
   h.capture!.resolve(cap);
   expect(await p).toBe(false);
   expect(voice.joined).toBe(true);
-  return { cap, pc, off };
+  return { cap, pc, off, video };
 }
 
 // Must stay the first test: it needs the call chunk not loaded yet.
@@ -475,6 +482,247 @@ describe('in a call', () => {
     expect(voice.rejoin).toBe(null);
     regain();
     expect(joinRoom).not.toHaveBeenCalled();
+  });
+});
+
+describe('screen share', () => {
+  const bob = 'b'.repeat(32);
+  // A captured screen track: `fire('ended')` is the browser's own Stop sharing.
+  const screen = (width = 1920, height = 1080) => {
+    const on = new Map<string, () => void>();
+    return {
+      stop: vi.fn(),
+      applyConstraints: vi.fn(async () => {}),
+      getSettings: () => ({ width, height }),
+      addEventListener: (t: string, f: () => void) => on.set(t, f),
+      fire: (t: string) => on.get(t)?.(),
+    };
+  };
+  const shareMsgs = () => sig.sent.filter((m) => (m as { type: string }).type.startsWith('share_'));
+  beforeEach(() => {
+    send.capture.mockReset();
+    send.applyShare.mockReset().mockResolvedValue(undefined);
+  });
+  async function sharing(s = { fps: 60 as const, kbps: 8000, prefer: 'sharp' as const }) {
+    const call = await joined();
+    const track = screen();
+    send.capture.mockResolvedValue(track);
+    await v.startShare(s);
+    return { ...call, track };
+  }
+
+  it('starts_a_share', async () => {
+    const { video, track } = await sharing();
+    expect(send.capture).toHaveBeenCalledWith(60, 'sharp');
+    expect(video.replaceTrack).toHaveBeenCalledWith(track);
+    expect(send.applyShare).toHaveBeenCalledWith(video, expect.objectContaining({ fps: 60, kbps: 8000, prefer: 'sharp' }), false); // on once someone watches
+    expect(send.applyShare.mock.invocationCallOrder[0]).toBeLessThan(video.replaceTrack.mock.invocationCallOrder[0]); // never sends before that
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
+    expect(shares.mine).toMatchObject({ track, fps: 60, kbps: 8000, prefer: 'sharp', watchers: 0 });
+  });
+
+  it('no bitrate set: the suggestion, capped by the browser ceiling for the captured size', async () => {
+    const nav = navigator as unknown as { userAgent?: string };
+    nav.userAgent = 'Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0';
+    try {
+      await joined();
+      send.capture.mockResolvedValue(screen(1280, 720));
+      await v.startShare({ fps: 30, kbps: null, prefer: 'smooth' });
+      expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 30, bitrate_kbps: 5000 }]);
+      await v.updateShare({ fps: 30, kbps: 9000, prefer: 'smooth' });
+      expect(shareMsgs().at(-1)).toEqual({ type: 'share_start', fps: 30, bitrate_kbps: 5000 });
+    } finally {
+      delete nav.userAgent;
+    }
+  });
+
+  it('cancelled_picker_sends_nothing', async () => {
+    await joined();
+    send.capture.mockResolvedValue(null);
+    await v.startShare({ fps: 60, kbps: 8000, prefer: 'sharp' });
+    expect(shareMsgs()).toEqual([]);
+    expect(voice.error).toBe('');
+    expect(shares.mine).toBeNull();
+  });
+
+  it('browser_stop_ends_the_share', async () => {
+    const { video, track } = await sharing();
+    track.fire('ended');
+    expect(shareMsgs().at(-1)).toEqual({ type: 'share_stop' });
+    expect(shares.mine).toBeNull();
+    expect(video.replaceTrack).toHaveBeenLastCalledWith(null);
+  });
+
+  it('Stop ends the share and tells the server once', async () => {
+    const { track } = await sharing();
+    v.stopShare();
+    v.stopShare();
+    expect(track.stop).toHaveBeenCalled();
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }, { type: 'share_stop' }]);
+  });
+
+  it('watchers_turn_the_encoder_on_and_off', async () => {
+    const { video } = await sharing();
+    sig.emit({ type: 'watchers', count: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send.applyShare).toHaveBeenLastCalledWith(video, expect.objectContaining({ fps: 60, kbps: 8000, prefer: 'sharp' }), true);
+    expect(shares.mine?.watchers).toBe(1);
+    sig.emit({ type: 'watchers', count: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send.applyShare).toHaveBeenLastCalledWith(video, expect.objectContaining({ fps: 60 }), false);
+  });
+
+  it('new settings while sharing: applied with the encoder still on, and sent', async () => {
+    const { video, track } = await sharing();
+    sig.emit({ type: 'watchers', count: 2 });
+    await v.updateShare({ fps: 30, kbps: 4000, prefer: 'smooth' });
+    expect(track.applyConstraints).toHaveBeenCalledWith({ frameRate: 30 });
+    expect(send.applyShare).toHaveBeenLastCalledWith(video, expect.objectContaining({ fps: 30, kbps: 4000, prefer: 'smooth' }), true);
+    expect(shareMsgs().at(-1)).toEqual({ type: 'share_start', fps: 30, bitrate_kbps: 4000 });
+    expect(shares.mine).toMatchObject({ fps: 30, kbps: 4000, prefer: 'smooth', watchers: 2 });
+  });
+
+  it('server_cut_stops_locally', async () => {
+    const { track } = await sharing();
+    sig.emit({ type: 'peer_share', user_id: me, share: null });
+    expect(track.stop).toHaveBeenCalled();
+    expect(shares.mine).toBeNull();
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
+  });
+
+  it('rate_limited_just_after_a_cut_says_the_share_was_stopped', async () => {
+    const cut = 'Your screen share sent more than 35 Mbps and was stopped.';
+    const limited = Object.assign(new Error('Too many tries. Wait a moment and try again.'), { code: 'rate_limited' });
+    await sharing();
+    const { onError } = joinRoom.mock.calls.at(-1)![1];
+    onError(limited); // the message budget while sharing, not a cut
+    expect(voice.error).toBe('Too many tries. Wait a moment and try again.');
+    voice.error = '';
+    sig.emit({ type: 'peer_share', user_id: me, share: null });
+    onError(limited);
+    expect(voice.error).toBe(cut);
+    voice.error = '';
+    onError(new Error('Something else.'));
+    expect(voice.error).toBe('Something else.');
+  });
+
+  const capped = () => Object.assign(new Error('Too many screens are being shared right now.'), { code: 'share_cap' });
+
+  it('refused_start_ends_the_local_share', async () => {
+    const { video, track } = await sharing();
+    const { onError } = joinRoom.mock.calls.at(-1)![1];
+    onError(capped());
+    expect(track.stop).toHaveBeenCalled();
+    expect(shares.mine).toBeNull();
+    expect(video.replaceTrack).toHaveBeenLastCalledWith(null);
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]); // no share_stop: the server has no share
+    expect(voice.error).toBe('Too many screens are being shared right now.');
+    onError(Object.assign(new Error('Too many tries. Wait a moment and try again.'), { code: 'rate_limited' }));
+    expect(voice.error).toBe('Too many tries. Wait a moment and try again.'); // not a cut
+    // A DM refuses with forbidden.
+    const again = screen();
+    send.capture.mockResolvedValue(again);
+    await v.startShare({ fps: 60, kbps: 8000, prefer: 'sharp' });
+    onError(Object.assign(new Error('You cannot join this room.'), { code: 'forbidden' }));
+    expect(again.stop).toHaveBeenCalled();
+    expect(shares.mine).toBeNull();
+    expect(voice.error).toBe('Screen share is only in group rooms.');
+  });
+
+  it('refused_update_restores_the_previous_settings', async () => {
+    const { video, track } = await sharing();
+    sig.emit({ type: 'watchers', count: 2 });
+    await v.updateShare({ fps: 30, kbps: 20000, prefer: 'smooth' });
+    joinRoom.mock.calls.at(-1)![1].onError(capped());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shares.mine).toMatchObject({ track, fps: 60, kbps: 8000, prefer: 'sharp', watchers: 2 });
+    expect(send.applyShare).toHaveBeenLastCalledWith(video, expect.objectContaining({ fps: 60, kbps: 8000, prefer: 'sharp' }), true);
+    expect(track.applyConstraints).toHaveBeenLastCalledWith({ frameRate: 60 });
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(shareMsgs().at(-1)).toEqual({ type: 'share_start', fps: 30, bitrate_kbps: 20000 }); // nothing more sent
+    expect(voice.error).toBe('Too many screens are being shared right now.');
+  });
+
+  describe('share cue', () => {
+    const peer = (share: { fps: number; bitrate_kbps: number } | null) => ({ user_id: bob, name: 'bob', room_id: 1, muted: false, deafened: false, force_muted: false, share });
+    const setPeers = (voiceList: ReturnType<typeof peer>[]) => { session.state = { ...session.state, voice: voiceList }; flushSync(); };
+    it('a_peer_in_my_call_starting_a_share_plays_share_start', async () => {
+      await joined();
+      setPeers([peer(null)]);
+      chime.mockClear();
+      setPeers([peer({ fps: 60, bitrate_kbps: 8000 })]);
+      expect(chime).toHaveBeenCalledWith('share-start', null, expect.any(Number));
+      setPeers([peer(null)]);
+      expect(chime).toHaveBeenLastCalledWith('share-stop', null, expect.any(Number));
+    });
+    it('call_cues_off_plays_nothing', async () => {
+      await joined();
+      stored.set('vesper.notify', JSON.stringify({ call: false }));
+      setPeers([peer(null)]);
+      chime.mockClear();
+      setPeers([peer({ fps: 60, bitrate_kbps: 8000 })]);
+      expect(chime).not.toHaveBeenCalled();
+    });
+  });
+
+  it('rate_limited_without_a_share_keeps_its_text', async () => {
+    await joined();
+    joinRoom.mock.calls.at(-1)![1].onError(Object.assign(new Error('Too many tries. Wait a moment and try again.'), { code: 'rate_limited' }));
+    expect(voice.error).toBe('Too many tries. Wait a moment and try again.');
+  });
+
+  it('leaving the call ends the share locally and clears the shares', async () => {
+    const { track } = await sharing();
+    joinRoom.mock.calls.at(-1)![1].onRemoteStream(bob, { id: bob }, 'video');
+    v.leave();
+    expect(track.stop).toHaveBeenCalled();
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
+    expect(shares.mine).toBeNull();
+    expect(shares.streams.size).toBe(0);
+  });
+
+  it('remote_video_never_reaches_playback', async () => {
+    await joined();
+    const { onRemoteStream, onRemoteStreamEnd } = joinRoom.mock.calls.at(-1)![1];
+    const s = { id: bob, getAudioTracks: () => [] };
+    onRemoteStream(bob, s, 'video');
+    expect(shares.streams.get(bob)).toBe(s);
+    const pb = h.playbacks[0] as unknown as { addRemote: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> };
+    expect(pb.addRemote).not.toHaveBeenCalled();
+    onRemoteStreamEnd(bob, 'video');
+    expect(shares.streams.has(bob)).toBe(false);
+    expect(pb.remove).not.toHaveBeenCalled();
+  });
+
+  it('watch and point go to the server', async () => {
+    await joined();
+    v.watchShare(bob, true);
+    v.pointAt(bob, 0.5, 0.25);
+    expect(sig.sent.slice(-2)).toEqual([{ type: 'watch', user_id: bob, on: true }, { type: 'point', user_id: bob, x: 0.5, y: 0.25 }]);
+  });
+
+  it('a rejoin sends watch on again: the server forgot the watches, so the gates start over', async () => {
+    const { syncWatches } = await import('./share/watch');
+    const watches = () => sig.sent.filter((m) => (m as { type: string }).type === 'watch');
+    await joined();
+    shares.shown = new Set([bob]);
+    syncWatches([bob], v.watchShare);
+    v.leave();
+    await joined();
+    shares.shown = new Set([bob]);
+    syncWatches([bob], v.watchShare);
+    expect(watches()).toEqual([{ type: 'watch', user_id: bob, on: true }, { type: 'watch', user_id: bob, on: true }]);
+  });
+
+  it('point_adds_a_marker', async () => {
+    await joined();
+    const from = 'c'.repeat(32);
+    sig.emit({ type: 'point', user_id: bob, from, x: 0.5, y: 0.25 });
+    expect(shares.markers).toEqual([{ share: bob, from, x: 0.5, y: 0.25, until: Date.now() + 3000 }]);
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(shares.markers).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(shares.markers).toEqual([]);
   });
 });
 

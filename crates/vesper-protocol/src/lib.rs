@@ -16,6 +16,14 @@ pub const CLOSE_SESSION_ENDED: u16 = 4001;
 /// WebSocket close code: a moderator disconnected this user.
 pub const CLOSE_DISCONNECTED: u16 = 4003;
 
+/// A running screen share: the frame rate and video bitrate its sender chose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ShareInfo {
+    pub fps: u8,
+    pub bitrate_kbps: u32,
+}
+
 /// Someone in a voice room. `user_id` is the account id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -27,6 +35,9 @@ pub struct Peer {
     pub muted: bool,
     pub deafened: bool,
     pub force_muted: bool,
+    /// Set while this person shares their screen.
+    #[serde(default)]
+    pub share: Option<ShareInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -37,11 +48,13 @@ pub enum ErrorCode {
     BadMessage,
     Forbidden,
     RateLimited,
+    /// A screen share would take the room's shares over the server's total.
+    ShareCap,
     /// The server failed (a store error). The cause is in the server log.
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ClientMsg {
@@ -56,6 +69,23 @@ pub enum ClientMsg {
     SetVoiceState {
         muted: bool,
         deafened: bool,
+    },
+    /// Start sharing the screen, or change the settings of a share that runs.
+    ShareStart {
+        fps: u8,
+        bitrate_kbps: u32,
+    },
+    ShareStop,
+    /// Start or stop receiving `user_id`'s screen share.
+    Watch {
+        user_id: String,
+        on: bool,
+    },
+    /// Point at a spot on `user_id`'s shared screen. `x` and `y` run from 0 to 1.
+    Point {
+        user_id: String,
+        x: f32,
+        y: f32,
     },
     Leave,
     /// Connectivity check: a voice session that is not shown to anyone.
@@ -73,7 +103,7 @@ pub enum ClientMsg {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ServerMsg {
@@ -104,6 +134,22 @@ pub enum ServerMsg {
         muted: bool,
         deafened: bool,
         force_muted: bool,
+    },
+    /// Someone started, changed or stopped (`None`) a screen share.
+    PeerShare {
+        user_id: String,
+        share: Option<ShareInfo>,
+    },
+    /// To a sharer: how many people watch the share.
+    Watchers {
+        count: u32,
+    },
+    /// Someone pointed at `user_id`'s shared screen.
+    Point {
+        user_id: String,
+        from: String,
+        x: f32,
+        y: f32,
     },
     /// The rooms this user can see, after any change.
     RoomsChanged {

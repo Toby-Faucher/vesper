@@ -96,6 +96,7 @@ describe('Signaling', () => {
 class FakePC {
   getSenders() { return []; }
   addTrack() {}
+  addTransceiver() { return { sender: {} }; }
   close() {}
   async createOffer() { return { type: 'offer', sdp: 'v=0' }; }
   async setLocalDescription() {}

@@ -89,8 +89,8 @@ The "Not verified" list at the end says what was only read.
 |---|---|
 | `vesper-protocol` | Wire types only: `ClientMsg`, `ServerMsg`, `Peer`, `ErrorCode`, the limit `MAX_MSG_BYTES` (64 KiB) and the close codes `CLOSE_SESSION_ENDED` (4001) and `CLOSE_DISCONNECTED` (4003). `api.rs` holds REST bodies and shared structs (`Role`, `UserInfo`, `Device`, `InviteInfo`, `RoomInfo`, `Unread`). `ts-rs` generates `web/src/lib/gen/*.ts` from them. `lib.rs` |
 | `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. The UI accent from Settings > Appearance (`0006_ui_accent.sql`): `accounts.ui_accent`, a preset key or `#rrggbb`, NULL for amber. Password resets (`0007_password_resets.sql`, `resets.rs`): every reset row is kept as an audit (who made it, used when and from the LAN or the internet, shown to the person); at most one live code per account (a partial unique index), cancelled by a new one, a role change, a ban or unban and a password change; a role change or ban of the maker cancels the live links they made. Archived rooms (`0008_room_archive.sql`): `rooms.archived_at`, NULL while not archived. `Store::backup_into` writes a consistent copy with `VACUUM INTO` (for `vesper-server backup` and the automatic backups). `Store::schema_versions` reads the newest applied and the newest embedded migration without changing the file, so the server can back up before `Store::open` migrates. Passkeys (`0013_passkeys.sql`, `passkeys.rs`): one row per WebAuthn credential, the credential id unique and the `webauthn-rs` credential kept as JSON (public key and counter), deleted with the account. It stores only hashes of session tokens, invite codes and reset codes. |
-| `vesper-sfu` | Audio-only SFU on str0m. One UDP socket, rooms keyed by name, Opus forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
-| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_passkeys.rs` (passkeys, WebAuthn through `webauthn-rs`), `api_admin.rs` (users, invites, reset links, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`, `listed`, `visible_room`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands, `backup`, the automatic `pre-*` and `auto-*` backups and their keep rule), `build.rs` (the build id), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
+| `vesper-sfu` | SFU on str0m. One UDP socket, rooms keyed by name, Opus voice and one VP8 screen per client forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
+| `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_passkeys.rs` (passkeys, WebAuthn through `webauthn-rs`), `api_admin.rs` (users, invites, reset links, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`, `listed`, `visible_room`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `speedtest.rs` (upload speed test), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands, `backup`, the automatic `pre-*` and `auto-*` backups and their keep rule), `build.rs` (the build id), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
@@ -124,14 +124,14 @@ transaction. Messages, reactions, reads, uploads, search, typing and voice use t
 
 All messages are JSON on one WebSocket per tab, tagged by `type` (`vesper-protocol/src/lib.rs`).
 
-Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `leave`, `check { offer }`,
+Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `share_start { fps, bitrate_kbps }`, `share_stop`, `watch { user_id, on }`, `point { user_id, x, y }`, `leave`, `check { offer }`,
 `typing { room_id }`, `decline_ring { room_id }`.
 Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is the server's `version` and `build` id), `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
-`peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `rooms_changed { rooms }`, `user_updated { user }`,
+`peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `peer_share { user_id, share }`, `watchers { count }`, `point { user_id, from, x, y }`, `rooms_changed { rooms }`, `user_updated { user }`,
 `user_created { user }`,
 `force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
 `read { room_id, last_read_id }`, `ring_start { room_id, user_id }`, `ring_stop { room_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
-Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `internal`.
+Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `share_cap`, `internal`.
 
 1. The client opens `/ws` with its session cookie. The upgrade gets 403 unless `Origin` equals `VESPER_ORIGIN`, 401 unless the
    cookie names a live session, and 503 past `VESPER_MAX_SOCKETS` (`ws.rs` `upgrade`).
@@ -150,13 +150,21 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `internal`
    lock, so every later presence message for that room follows it.
 6. When tracks are added or stopped, the SFU makes a new offer. It arrives as `offer`; the client answers with `answer`, one at a time.
 7. `set_voice_state` updates presence. `leave`, a closed socket, a kick, a lost room or the SFU ending the session removes the user.
+   `share_start` (group rooms only; also changes the settings of a running share) and `share_stop` set `Peer.share`, which is `null` when
+   nobody shares, and tell the room with `peer_share`. A share ends with the call. A share in a DM gets `forbidden`, and one that would take
+   the room's shares over their total gets `share_cap`. The client then ends a new share, or puts back the settings a change replaced.
+   `watch` (not for yourself) asks the SFU to forward a sharer's video to the viewer (or stops it). The sharer gets `watchers { count }` when a share
+   starts and whenever the count of watchers in the call changes, also when a watcher leaves.
+   `point` (x and y from 0 to 1, else `bad_message`) goes as a server `point { user_id, from, x, y }` to everyone else in the call
+   while `user_id` shares. The socket budget below is its rate limit. If the SFU cuts a share for going over its rate ceiling,
+   the server sends `peer_share` with `null` to the whole room and `error { code: rate_limited }` to the sharer.
 8. The server pings every 25 s and drops a socket silent for two periods (`ws.rs`).
 
 Each socket may send a burst of 20 messages, then 5 a second (`answer` does not count, since the server asks for it). A message
 over the limit is dropped with `error { code: rate_limited }`. Past 20 such refusals (then 1 a second) the socket closes with 1008.
 
 Presence goes to every socket whose user can see the room (`Hub::broadcast_room`), in voice or not, so the room list shows who
-is talking. `peer_joined` and `peer_state` skip the session's own socket. `peer_left` also reaches the session's own socket: that
+is talking. `peer_joined`, `peer_state` and `peer_share` skip the session's own socket (a cut share is the exception: the sharer gets `peer_share` with `null` too). `peer_left` also reaches the session's own socket: that
 is how a tab learns its call ended (kick, another tab took over, lost access, SFU). The socket stays open for the rest.
 A restricted room's presence reaches only sockets that can see it. When a room's member list or a role changes, or the room is archived, everyone in
 voice who can no longer see their room is taken out (`Voice::refresh`, called from `api_rooms::rooms_changed`). A socket that
@@ -194,7 +202,9 @@ unit tests in `hub.rs` and `voice.rs`.
 - A user is an account. The WebSocket takes the session cookie on the upgrade; no message carries a name or a key.
 - `user_id` is `accounts.id`: 16 random bytes as 32 lowercase hex characters. Hex keeps it a valid MSID stream id (RFC 8830).
 - The SFU labels each forwarded track with the sender's `user_id` as its MSID stream id (`vesper-sfu/src/client.rs`, `TrackIn.user`). In the
-  browser, `ontrack` gives `MediaStream.id` equal to that `user_id`, and the client keys remote streams on it (`signaling.ts`).
+  browser, `ontrack` gives `MediaStream.id` equal to that `user_id`, and the client keys remote streams on it and the track kind (`join.ts`):
+  audio goes to playback, a screen share's video to `shares.streams` (`share/state.svelte.ts`). The join offer always has a send-only video
+  transceiver with no track. Starting a share is `replaceTrack`, so the sharer never renegotiates.
 - A second voice join by the same account (another tab) takes the call over. The first tab's socket stays open and gets
   `peer_left` for itself; it may join again, which takes the call back. Each join gets a fresh `session` number
   (`next_session`, `voice.rs`). `answer`, `set_voice_state` and `leave` carry the socket's session and are
@@ -205,7 +215,16 @@ unit tests in `hub.rs` and `voice.rs`.
 ## SFU ownership
 
 - The SFU thread owns the UDP socket, every str0m `Rtc` client and all media state. Nothing else touches them. The server sends it commands
-  (`join`, `answer`, `leave`, `set_muted`, `set_advertised`) over a channel and gets `SfuEvent::Offer` and `SfuEvent::Closed` back per session.
+  (`join`, `answer`, `leave`, `set_muted`, `set_sharing`, `watch`, `set_advertised`) over a channel and gets `SfuEvent::Offer`,
+  `SfuEvent::ShareCut` and `SfuEvent::Closed` back per session.
+- Video ([ADR 0009](decisions/0009-video-in-the-sfu.md)): a join offer has one audio m-line and at most one VP8 video m-line. A client with
+  video is offered every other video track at join. Packets flow only while `set_sharing(user, true)` holds for the sender and
+  `watch(viewer, sharer, true)` for the receiver. Both are per session, so a rejoin starts with neither.
+- Keyframes: `watch(viewer, sharer, true)` sends the sharer a PLI, so the new viewer gets a picture right away. A viewer's own PLI or FIR on a
+  forwarded video goes to the sharer as the same kind. Covered by `tests/forwarding.rs` with str0m test clients, not a browser.
+- Share ceiling: the SFU measures each sharer's incoming video in windows of at least a second. When it stays above `share_ceiling_bps`
+  (35 Mbps) for `share_ceiling_secs` (5) windows in a row, the SFU stops forwarding it, sets the sender to not sharing, and sends
+  `SfuEvent::ShareCut` once to that session. Video from a client that is not sharing is dropped before it is measured.
 - `Voice` owns presence: who is in which room, muted, deafened or force-muted, and the socket for each session. It keeps the
   latest copy of each room for visibility checks. It does not touch media.
 - A session ends on ICE timeout, an error, an offer unanswered for `answer_timeout` (10 s), `leave`, or a new join by the same user
@@ -342,6 +361,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `GET /api/search?q=&room_id=&author_id=&from=&to=&before=` (`SearchQuery`) | a session, Search limit by user | `SearchPage`, 20 hits, newest first, only rooms you can see; a `room_id` you cannot see is 404 |
 | `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past 25 MiB, 507 `quota_full` |
 | `GET /api/uploads/{id}` | sees the room; an upload not attached yet needs the uploader | the file (Range works), else 404 |
+| `POST /api/speedtest` (the raw body, up to 25 MiB; `speedtest.rs`) | a session, Speedtest limit by user (3, one back per 20 s) | 204; the body is read and thrown away, nothing is stored. The share dialog times a 4 MiB post to suggest a bitrate |
 | `GET /api/admin/disk` | owner | `DiskUse` |
 | `GET /api/admin/server` | owner | `ServerStatus`: version and build, uptime, the `DiskUse` numbers, people in voice, failed pushes in the last 24 h (in memory, since start if shorter), the newest `*.db` in `<data>/backups` (name and time). No secrets and no one's address. The advertised public address is not in it: the server does not record when it changed |
 

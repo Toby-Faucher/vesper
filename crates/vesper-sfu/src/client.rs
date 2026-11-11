@@ -1,18 +1,20 @@
 //! One SFU session: a str0m `Rtc` plus the track bookkeeping for forwarding.
-//! Adapted from str0m's `examples/chat.rs`, audio only; renegotiation goes over `SfuEvent`.
+//! Adapted from str0m's `examples/chat.rs`; renegotiation goes over `SfuEvent`.
 
+use std::collections::HashSet;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use str0m::change::{SdpAnswer, SdpPendingOffer};
-use str0m::media::{Direction, MediaData, MediaKind, Mid};
+use str0m::media::{Direction, KeyframeRequestKind, MediaData, MediaKind, Mid};
 use str0m::{Event, IceConnectionState, Input, Output, Rtc};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, warn};
 
-use crate::SfuEvent;
+use crate::meter::RateMeter;
+use crate::{SfuConfig, SfuEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ClientId(u64);
@@ -24,6 +26,7 @@ pub(crate) struct TrackIn {
     /// expose as `MediaStream.id` in `ontrack`.
     pub user: String,
     pub mid: Mid,
+    pub kind: MediaKind,
 }
 
 #[derive(Debug)]
@@ -61,6 +64,8 @@ pub(crate) enum Propagated {
     Timeout(std::time::Instant),
     TrackOpen(ClientId, Weak<TrackIn>),
     MediaData(ClientId, MediaData),
+    /// A viewer asked for a keyframe on one of its outgoing (forwarded) m-lines.
+    KeyframeRequest(ClientId, Mid, KeyframeRequestKind),
 }
 
 pub(crate) struct Client {
@@ -68,12 +73,23 @@ pub(crate) struct Client {
     pub user: String,
     pub room: String,
     pub rtc: Rtc,
+    /// The client's offer had a video m-line, so it can be offered others' video.
+    pub video: bool,
+    /// The server says this client is sharing: its video is forwarded to its watchers.
+    pub sharing: bool,
+    /// User ids of the sharers whose video this client gets.
+    pub watching: HashSet<String>,
     events: UnboundedSender<SfuEvent>,
     /// Candidates this session was created with (see `local_addr_for`).
     advertised: Vec<SocketAddr>,
     /// Our outstanding offer and when it was sent.
     pending: Option<(SdpPendingOffer, Instant)>,
     answer_timeout: Duration,
+    share_ceiling_bps: u64,
+    share_ceiling_secs: u32,
+    /// Rate of the incoming video while sharing, and how many windows in a row were over the ceiling.
+    share_rate: RateMeter,
+    over_ceiling: u32,
     /// The shared socket is IPv6 (dual-stack), so IPv4 peers need v4-mapped destinations.
     socket_v6: bool,
     /// The client owns the strong refs to its incoming tracks; others hold weak ones.
@@ -89,7 +105,7 @@ impl Client {
         events: UnboundedSender<SfuEvent>,
         advertised: Vec<SocketAddr>,
         socket_v6: bool,
-        answer_timeout: Duration,
+        cfg: &SfuConfig,
     ) -> Client {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
         Client {
@@ -97,10 +113,17 @@ impl Client {
             user,
             room,
             rtc,
+            video: false,
+            sharing: false,
+            watching: HashSet::new(),
             events,
             advertised,
             pending: None,
-            answer_timeout,
+            answer_timeout: cfg.answer_timeout,
+            share_ceiling_bps: cfg.share_ceiling_bps,
+            share_ceiling_secs: cfg.share_ceiling_secs,
+            share_rate: RateMeter::new(),
+            over_ceiling: 0,
             socket_v6,
             tracks_in: vec![],
             tracks_out: vec![],
@@ -182,23 +205,75 @@ impl Client {
                     self.rtc.disconnect();
                     Propagated::Noop
                 }
+                // The offer check allows one audio and one video m-line, so at most two of these.
                 Event::MediaAdded(m)
-                    if m.kind == MediaKind::Audio
-                        && matches!(m.direction, Direction::RecvOnly | Direction::SendRecv) =>
+                    if matches!(m.direction, Direction::RecvOnly | Direction::SendRecv) =>
                 {
                     let track = Arc::new(TrackIn {
                         origin: self.id,
                         user: self.user.clone(),
                         mid: m.mid,
+                        kind: m.kind,
                     });
                     let weak = Arc::downgrade(&track);
                     self.tracks_in.push(track);
                     Propagated::TrackOpen(self.id, weak)
                 }
-                Event::MediaData(data) => Propagated::MediaData(self.id, data),
+                Event::MediaData(data) => {
+                    let video = self
+                        .tracks_in
+                        .iter()
+                        .any(|t| t.mid == data.mid && t.kind == MediaKind::Video);
+                    if video && !self.share_within_ceiling(data.data.len(), data.network_time) {
+                        return Propagated::Noop;
+                    }
+                    Propagated::MediaData(self.id, data)
+                }
+                Event::KeyframeRequest(r) => Propagated::KeyframeRequest(self.id, r.mid, r.kind),
                 _ => Propagated::Noop,
             },
         }
+    }
+
+    /// Meter `bytes` of incoming video. False while not sharing, and from the moment the share
+    /// stays over the ceiling, which ends it and tells the client with `SfuEvent::ShareCut`.
+    fn share_within_ceiling(&mut self, bytes: usize, now: Instant) -> bool {
+        if !self.sharing {
+            return false;
+        }
+        let Some(bps) = self.share_rate.add(bytes, now) else {
+            return true;
+        };
+        if bps <= self.share_ceiling_bps {
+            self.over_ceiling = 0;
+            return true;
+        }
+        self.over_ceiling += 1;
+        if self.over_ceiling < self.share_ceiling_secs {
+            return true;
+        }
+        warn!("client {} share cut at {bps} bit/s", self.user);
+        self.sharing = false;
+        self.over_ceiling = 0;
+        let _ = self.events.send(SfuEvent::ShareCut);
+        false
+    }
+
+    /// Ask this client for a keyframe on its incoming m-line `mid`.
+    pub fn request_keyframe(&mut self, mid: Mid, kind: KeyframeRequestKind) {
+        if let Some(mut writer) = self.rtc.writer(mid)
+            && let Err(e) = writer.request_keyframe(None, kind)
+        {
+            debug!("client {} keyframe request failed: {e:?}", self.user);
+        }
+    }
+
+    /// The incoming track this client gets on its outgoing m-line `mid`.
+    pub fn track_in_of(&self, mid: Mid) -> Option<Arc<TrackIn>> {
+        self.tracks_out
+            .iter()
+            .find(|t| t.mid() == Some(mid))
+            .and_then(|t| t.track_in.upgrade())
     }
 
     fn negotiate_if_needed(&mut self) -> bool {
@@ -226,7 +301,7 @@ impl Client {
                         // str0m drops non-token chars (RFC 8830) and truncates to 64; user ids
                         // must stay within that to round-trip. Track id: str0m picks a random one.
                         let mid = change.add_media(
-                            MediaKind::Audio,
+                            track_in.kind,
                             Direction::SendOnly,
                             Some(track_in.user.clone()),
                             None,
@@ -285,6 +360,14 @@ impl Client {
     }
 
     pub fn handle_track_open(&mut self, track_in: Weak<TrackIn>) {
+        // Video only for a client whose offer had video: an older build has none.
+        if !self.video
+            && track_in
+                .upgrade()
+                .is_some_and(|t| t.kind == MediaKind::Video)
+        {
+            return;
+        }
         // A client joining while a TrackOpen is still queued subscribes from `tracks_in` at join
         // and then gets the TrackOpen too; a second m-line would be a silent duplicate stream.
         if self
@@ -330,27 +413,70 @@ impl Client {
 mod tests {
     use super::*;
 
-    #[test]
-    fn track_open_is_idempotent() {
+    fn client() -> Client {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let rtc = Rtc::builder().build(Instant::now());
-        let mut c = Client::new(
-            rtc,
-            "r".into(),
-            "b".into(),
-            tx,
-            vec![],
-            false,
-            Duration::MAX,
-        );
-        let track = Arc::new(TrackIn {
+        let cfg = SfuConfig {
+            answer_timeout: Duration::MAX,
+            ..Default::default()
+        };
+        Client::new(rtc, "r".into(), "b".into(), tx, vec![], false, &cfg)
+    }
+
+    fn track(mid: &str, kind: MediaKind) -> Arc<TrackIn> {
+        Arc::new(TrackIn {
             origin: ClientId(u64::MAX),
             user: "a".into(),
-            mid: Mid::from("0"),
-        });
+            mid: Mid::from(mid),
+            kind,
+        })
+    }
+
+    #[test]
+    fn track_open_is_idempotent() {
+        let mut c = client();
+        let track = track("0", MediaKind::Audio);
         // The join-time subscription and the queued TrackOpen deliver the same track.
         c.handle_track_open(Arc::downgrade(&track));
         c.handle_track_open(Arc::downgrade(&track));
         assert_eq!(c.tracks_out.len(), 1);
+    }
+
+    #[test]
+    fn video_only_for_a_client_with_video() {
+        let mut c = client();
+        let (audio, video) = (track("0", MediaKind::Audio), track("1", MediaKind::Video));
+        c.handle_track_open(Arc::downgrade(&audio));
+        c.handle_track_open(Arc::downgrade(&video));
+        assert_eq!(c.tracks_out.len(), 1, "an audio-only client got video");
+        c.video = true;
+        c.handle_track_open(Arc::downgrade(&video));
+        assert_eq!(c.tracks_out.len(), 2);
+    }
+
+    #[test]
+    fn share_is_cut_only_after_windows_over_the_ceiling_in_a_row() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let cfg = SfuConfig {
+            answer_timeout: Duration::MAX,
+            share_ceiling_bps: 8_000_000,
+            share_ceiling_secs: 2,
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let (over, under) = (2_000_000, 500_000); // bytes in one window: 16 and 4 Mbit/s
+        let rtc = Rtc::builder().build(t0);
+        let mut c = Client::new(rtc, "r".into(), "b".into(), tx, vec![], false, &cfg);
+        c.sharing = true;
+        // The first call opens the first window. Over, under, over: the count starts again.
+        for (bytes, s) in [(0, 0), (over, 1), (under, 2), (over, 3)] {
+            assert!(c.share_within_ceiling(bytes, at(s)), "cut at {s} s");
+        }
+        assert!(c.sharing && rx.try_recv().is_err());
+        // A second window over in a row cuts the share.
+        assert!(!c.share_within_ceiling(over, at(4)));
+        assert!(!c.sharing);
+        assert!(matches!(rx.try_recv(), Ok(SfuEvent::ShareCut)));
     }
 }

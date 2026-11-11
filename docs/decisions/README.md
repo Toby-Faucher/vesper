@@ -13,5 +13,6 @@ To change a decision, add a new record that supersedes the old one and set the o
 | [0006](0006-quality-checkpoint-gate.md) | Later plans wait for the manual quality checkpoint | accepted |
 | [0007](0007-accounts-and-sessions.md) | Accounts, invites and session cookies | accepted |
 | [0008](0008-csp.md) | A strict Content-Security-Policy sent by the server | accepted |
+| [0009](0009-video-in-the-sfu.md) | The SFU forwards one VP8 screen per person | accepted |
 
 The design itself is in [the spec](../superpowers/specs/2026-10-30-vesper-design.md).

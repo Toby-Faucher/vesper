@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 use tracing::warn;
-use vesper_protocol::{ErrorCode, Peer, RoomInfo, RoomKind, ServerMsg, UserInfo};
+use vesper_protocol::{ErrorCode, Peer, RoomInfo, RoomKind, ServerMsg, ShareInfo, UserInfo};
 use vesper_sfu::{JoinError, SfuEvent, SfuHandle};
 use vesper_store::random_hex;
 
@@ -79,6 +79,9 @@ struct Member {
     muted: bool,
     deafened: bool,
     force_muted: bool,
+    share: Option<ShareInfo>,
+    /// Sharers whose screen this member receives.
+    watching: HashSet<String>,
     session: u64,
     tx: Outbox,
     /// Fires once the SFU reports this session closed.
@@ -94,6 +97,7 @@ impl Member {
             muted: self.muted,
             deafened: self.deafened,
             force_muted: self.force_muted,
+            share: self.share,
         }
     }
 
@@ -114,6 +118,32 @@ impl State {
             hub.broadcast_room_except(room, msg, skip);
         }
     }
+}
+
+impl State {
+    /// Tell `sharer` how many people in their call watch the share. Nothing if none runs.
+    fn send_watchers(&self, sharer: &str) {
+        let Some(s) = self.members.get(sharer).filter(|s| s.share.is_some()) else {
+            return;
+        };
+        let count = self
+            .members
+            .values()
+            .filter(|m| m.room == s.room && m.watching.contains(sharer))
+            .count();
+        s.tx.send(ServerMsg::Watchers {
+            count: count as u32,
+        });
+    }
+}
+
+/// Most the shares of one room may add up to, counting each one once per viewer who could watch
+/// it (kbps). The highest total the video load test passed (4 people, two cores); higher totals were not tested.
+const MAX_ROOM_SHARE_KBPS: u64 = 120_000;
+
+/// The frame rates and bitrates a share may ask for.
+fn valid_share(info: &ShareInfo) -> bool {
+    matches!(info.fps, 30 | 60) && (500..=30_000).contains(&info.bitrate_kbps)
 }
 
 fn sfu_error(who: &str, e: JoinError) -> ErrorCode {
@@ -206,6 +236,8 @@ impl Voice {
                 muted: force_muted,
                 deafened: false,
                 force_muted,
+                share: None,
+                watching: HashSet::new(),
                 session,
                 tx: tx.clone(),
                 sfu_closed: Some(closed_rx),
@@ -294,10 +326,15 @@ impl Voice {
         tx: Outbox,
         closed_tx: oneshot::Sender<()>,
     ) {
-        while let Some(SfuEvent::Offer(sdp)) = events.recv().await {
-            // A replaced or left session's offers must not reach a socket that rejoined.
-            if self.is_current(&user_id, session) {
-                tx.send(ServerMsg::Offer { sdp });
+        while let Some(ev) = events.recv().await {
+            match ev {
+                // A replaced or left session's offers must not reach a socket that rejoined.
+                SfuEvent::Offer(sdp) if self.is_current(&user_id, session) => {
+                    tx.send(ServerMsg::Offer { sdp });
+                }
+                SfuEvent::Offer(_) => {}
+                SfuEvent::ShareCut => self.cut_share(&user_id, session),
+                SfuEvent::Closed => break,
             }
         }
         // SfuEvent::Closed (or the SFU went away). If the session was still current the SFU
@@ -332,6 +369,157 @@ impl Voice {
         (m.muted, m.deafened) = (muted, deafened);
         let (room, msg, tx) = (m.room, m.state_msg(user_id), m.tx.clone());
         st.tell(&self.0.hub, room, msg, &[&tx]);
+    }
+
+    /// Start `user_id`'s screen share, or change its settings. Group rooms only. Ignored if
+    /// `session` was replaced.
+    pub fn share_start(
+        &self,
+        user_id: &str,
+        session: u64,
+        info: ShareInfo,
+    ) -> Result<(), ErrorCode> {
+        let mut st = self.lock();
+        let Some(m) = st.members.get_mut(user_id) else {
+            return Ok(());
+        };
+        if m.session != session {
+            return Ok(());
+        }
+        let room = m.room;
+        if st.rooms.get(&room).is_none_or(|r| r.kind == RoomKind::Dm) {
+            return Err(ErrorCode::Forbidden);
+        }
+        if !valid_share(&info) {
+            return Err(ErrorCode::BadMessage);
+        }
+        let viewers = st.members.values().filter(|o| o.room == room).count() as u64 - 1;
+        let others: u64 = st
+            .members
+            .iter()
+            .filter(|(id, o)| o.room == room && id.as_str() != user_id)
+            .filter_map(|(_, o)| o.share)
+            .map(|sh| u64::from(sh.bitrate_kbps) * viewers)
+            .sum();
+        if others + u64::from(info.bitrate_kbps) * viewers > MAX_ROOM_SHARE_KBPS {
+            return Err(ErrorCode::ShareCap);
+        }
+        let m = st.members.get_mut(user_id).expect("checked above");
+        let began = m.share.replace(info).is_none();
+        if began {
+            self.0.sfu.set_sharing(user_id, true);
+        }
+        let tx = m.tx.clone();
+        let msg = ServerMsg::PeerShare {
+            user_id: user_id.into(),
+            share: Some(info),
+        };
+        st.tell(&self.0.hub, room, msg, &[&tx]);
+        if began {
+            st.send_watchers(user_id);
+        }
+        Ok(())
+    }
+
+    /// End `user_id`'s screen share, if one runs. Ignored if `session` was replaced.
+    pub fn share_stop(&self, user_id: &str, session: u64) {
+        self.end_share(user_id, session, false);
+    }
+
+    /// The SFU cut `user_id`'s share for going over the rate ceiling: end it for everyone and
+    /// tell the sharer why. Ignored if `session` was replaced.
+    pub fn cut_share(&self, user_id: &str, session: u64) {
+        self.end_share(user_id, session, true);
+    }
+
+    fn end_share(&self, user_id: &str, session: u64, cut: bool) {
+        let mut st = self.lock();
+        let Some(m) = st.members.get_mut(user_id) else {
+            return;
+        };
+        if m.session != session || m.share.take().is_none() {
+            return;
+        }
+        self.0.sfu.set_sharing(user_id, false);
+        let (room, tx) = (m.room, m.tx.clone());
+        let msg = ServerMsg::PeerShare {
+            user_id: user_id.into(),
+            share: None,
+        };
+        // A cut share also reaches the sharer, who did not ask for the stop.
+        st.tell(&self.0.hub, room, msg.clone(), &[&tx]);
+        if cut {
+            tx.send(msg);
+            tx.send(ServerMsg::Error {
+                code: ErrorCode::RateLimited,
+                message: "Your screen share sent more than 35 Mbps and was stopped.".into(),
+            });
+        }
+    }
+
+    /// `user_id` starts or stops receiving `sharer`'s screen. Ignored if `session` was replaced
+    /// or `user_id` is `sharer`. Starting also needs `sharer` in the same call; stopping always
+    /// applies, so a viewer's watch is theirs to end even after the sharer left.
+    pub fn watch(&self, user_id: &str, session: u64, sharer: &str, on: bool) {
+        let mut st = self.lock();
+        let Some(m) = st.members.get(user_id) else {
+            return;
+        };
+        if m.session != session
+            || user_id == sharer
+            || (on && st.members.get(sharer).is_none_or(|s| s.room != m.room))
+        {
+            return;
+        }
+        let m = st.members.get_mut(user_id).expect("checked above");
+        let changed = if on {
+            m.watching.insert(sharer.into())
+        } else {
+            m.watching.remove(sharer)
+        };
+        self.0.sfu.watch(user_id, sharer, on);
+        if changed {
+            st.send_watchers(sharer);
+        }
+    }
+
+    /// `user_id` points at a spot on `sharer`'s screen: everyone else in the call sees it.
+    pub fn point(
+        &self,
+        user_id: &str,
+        session: u64,
+        sharer: &str,
+        x: f32,
+        y: f32,
+    ) -> Result<(), ErrorCode> {
+        let unit = 0.0..=1.0;
+        if !unit.contains(&x) || !unit.contains(&y) {
+            return Err(ErrorCode::BadMessage);
+        }
+        let st = self.lock();
+        let Some(m) = st.members.get(user_id) else {
+            return Ok(());
+        };
+        if m.session != session
+            || !st
+                .members
+                .get(sharer)
+                .is_some_and(|s| s.room == m.room && s.share.is_some())
+        {
+            return Ok(());
+        }
+        let msg = ServerMsg::Point {
+            user_id: sharer.into(),
+            from: user_id.into(),
+            x,
+            y,
+        };
+        for (id, o) in &st.members {
+            if o.room == m.room && id != user_id {
+                o.tx.send(msg.clone());
+            }
+        }
+        Ok(())
     }
 
     /// Everyone in voice in a room for which `visible(room_id)` is true.
@@ -430,6 +618,9 @@ impl Voice {
         let skip: Vec<&Outbox> = [Some(&m.tx), joining].into_iter().flatten().collect();
         st.tell(&self.0.hub, m.room, left.clone(), &skip);
         m.tx.send(left);
+        for sharer in &m.watching {
+            st.send_watchers(sharer);
+        }
         Some(m)
     }
 
@@ -523,5 +714,79 @@ mod tests {
         closed_rx.await.expect("closed signal fires");
         assert!(rx.queue.try_recv().is_err(), "nothing forwarded");
         assert_eq!(*rx.close.borrow(), None, "no close");
+    }
+
+    #[tokio::test]
+    async fn cut_share_tells_everyone() {
+        let sfu = Sfu::spawn(SfuConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .unwrap();
+        let hub = Hub::default();
+        let voice = Voice::new(sfu, hub.clone(), 12, Duration::from_secs(30));
+        let (a_tx, mut a_rx) = crate::hub::outbox();
+        let (b_tx, mut b_rx) = crate::hub::outbox();
+        let bob = UserInfo {
+            user_id: "b".repeat(32),
+            username: "bob".into(),
+            display_name: "bob".into(),
+            accent: String::new(),
+            role: vesper_protocol::Role::Member,
+            banned: false,
+            bio: String::new(),
+            avatar: None,
+            ui_accent: None,
+        };
+        hub.add(bob, 1, b_tx.clone());
+        let member = |tx, share| Member {
+            room: 1,
+            name: "n".into(),
+            muted: false,
+            deafened: false,
+            force_muted: false,
+            share,
+            watching: HashSet::new(),
+            session: 5,
+            tx,
+            sfu_closed: None,
+        };
+        let info = ShareInfo {
+            fps: 30,
+            bitrate_kbps: 2000,
+        };
+        {
+            let mut st = voice.lock();
+            st.rooms.insert(
+                1,
+                RoomInfo {
+                    id: 1,
+                    ..RoomInfo::default()
+                },
+            );
+            st.members.insert("alice".into(), member(a_tx, Some(info)));
+            st.members.insert("bob".into(), member(b_tx, None));
+        }
+        voice.cut_share("alice", 5);
+        let gone = ServerMsg::PeerShare {
+            user_id: "alice".into(),
+            share: None,
+        };
+        assert_eq!(b_rx.queue.try_recv().unwrap(), gone);
+        assert_eq!(a_rx.queue.try_recv().unwrap(), gone);
+        assert!(matches!(
+            a_rx.queue.try_recv().unwrap(),
+            ServerMsg::Error {
+                code: ErrorCode::RateLimited,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn share_settings_are_checked() {
+        let ok = |fps, bitrate_kbps| valid_share(&ShareInfo { fps, bitrate_kbps });
+        assert!(ok(30, 500) && ok(60, 30000));
+        assert!(!ok(45, 8000) && !ok(60, 499) && !ok(60, 30001) && !ok(0, 8000));
     }
 }

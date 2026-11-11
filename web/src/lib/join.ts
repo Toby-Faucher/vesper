@@ -5,6 +5,8 @@ import { tuneOpus } from './audio/opus';
 import { applyBitrate } from './devices';
 import { SIGNAL_MESSAGES, type Signaling } from './signaling';
 
+type Kind = 'audio' | 'video';
+
 export async function joinRoom(
   sig: Signaling,
   opts: {
@@ -15,11 +17,11 @@ export async function joinRoom(
     bitrateKbps: number;
     dtx?: boolean;
     onError?: (e: Error) => void;
-    /** `id` is the sender's user_id. */
-    onRemoteStream?: (id: string, s: MediaStream) => void;
-    onRemoteStreamEnd?: (id: string) => void;
+    /** `id` is the sender's user_id: their voice and their screen share it, told apart by kind. */
+    onRemoteStream?: (id: string, s: MediaStream, kind: Kind) => void;
+    onRemoteStreamEnd?: (id: string, kind: Kind) => void;
   },
-): Promise<{ pc: RTCPeerConnection; peers: Peer[]; userId: string; off: () => void }> {
+): Promise<{ pc: RTCPeerConnection; peers: Peer[]; userId: string; off: () => void; video: RTCRtpSender }> {
   // Browsers configure their Opus encoder from the REMOTE description, and str0m's carries only
   // minptime/useinbandfec, so remote SDP is tuned before it is applied. The local offer is tuned too
   // (cheap; it states what we want to receive).
@@ -27,17 +29,24 @@ export async function joinRoom(
   const report = (e: unknown) => opts.onError?.(e instanceof Error ? e : new Error(String(e)));
   const pc = new RTCPeerConnection();
   opts.stream.getAudioTracks().forEach((t) => pc.addTrack(t, opts.stream));
+  // The screen share's sender, with no track: a share is replaceTrack, so it never renegotiates.
+  const video = pc.addTransceiver('video', { direction: 'sendonly' }).sender;
 
-  // Each sender's current track, keyed on its user_id (the SFU labels MSID with it). Every new track gets a stream of
-  // its own: after a rejoin Firefox reuses the MediaStream with that id and keeps the old, ended track in it.
+  // Each sender's current track per kind, keyed `kind:user_id` (the SFU labels MSID with the user_id). Every new track gets
+  // a stream of its own: after a rejoin Firefox reuses the MediaStream with that id and keeps the old, ended track in it.
   const live = new Map<string, MediaStreamTrack>();
-  const drop = (id: string) => live.delete(id) && opts.onRemoteStreamEnd?.(id);
+  const drop = (key: string) => {
+    const i = key.indexOf(':');
+    if (live.delete(key)) opts.onRemoteStreamEnd?.(key.slice(i + 1), key.slice(0, i) as Kind);
+  };
   pc.ontrack = (e) => {
-    const id = e.streams[0]?.id ?? e.track.id;
     const t = e.track;
-    live.set(id, t);
-    opts.onRemoteStream?.(id, new MediaStream([t]));
-    t.addEventListener('ended', () => live.get(id) === t && drop(id)); // a late end of the old track keeps the new one
+    const id = e.streams[0]?.id ?? t.id;
+    const kind = t.kind as Kind;
+    const key = `${kind}:${id}`;
+    live.set(key, t);
+    opts.onRemoteStream?.(id, new MediaStream([t]), kind);
+    t.addEventListener('ended', () => live.get(key) === t && drop(key)); // a late end of the old track keeps the new one
   };
 
   let chain = Promise.resolve(); // renegotiation offers must run one at a time
@@ -65,7 +74,7 @@ export async function joinRoom(
         settled = true;
         resolve(m);
       } else if (m.type === 'error') {
-        const err = new Error(SIGNAL_MESSAGES[m.code] ?? 'The server refused that. Try again.');
+        const err = Object.assign(new Error(SIGNAL_MESSAGES[m.code] ?? 'The server refused that. Try again.'), { code: m.code });
         if (settled) report(err);
         else {
           settled = true;
@@ -87,8 +96,14 @@ export async function joinRoom(
     const { answer, peers, user_id } = await joined;
     await pc.setRemoteDescription({ type: 'answer', sdp: tune(answer) });
     const audio = pc.getSenders().find((x) => x.track?.kind === 'audio');
-    if (audio) await applyBitrate(audio, opts.bitrateKbps).catch(report); // the SDP value is only a hint
-    return { pc, peers, userId: user_id, off };
+    if (audio) {
+      await applyBitrate(audio, opts.bitrateKbps).catch(report); // the SDP value is only a hint
+      // Voice before a screen share on a busy link. Best effort: not every browser takes it.
+      const p = audio.getParameters();
+      p.encodings?.forEach((e) => (e.priority = e.networkPriority = 'high'));
+      await audio.setParameters(p).catch(() => {});
+    }
+    return { pc, peers, userId: user_id, off, video };
   } catch (e) {
     off();
     pc.close();

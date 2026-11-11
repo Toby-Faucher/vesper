@@ -11,7 +11,7 @@ const user = (user_id: string, display_name = user_id): UserInfo => ({
 const room = (id: number): RoomInfo => ({ id, kind: 'room', name: `room${id}`, position: id, restricted: false, members: [], archived: false });
 const dm = (id: number, a: string, b: string): RoomInfo => ({ id, kind: 'dm', name: `dm-${a}-${b}`, position: 0, restricted: true, members: [a, b], archived: false });
 const peer = (user_id: string, room_id: number): Peer => ({
-  user_id, name: user_id, room_id, muted: false, deafened: false, force_muted: false,
+  user_id, name: user_id, room_id, muted: false, deafened: false, force_muted: false, share: null,
 });
 const server = { version: '1.4.0', build: 'b1' };
 const me = { user: user('a'), session_id: 1, server };

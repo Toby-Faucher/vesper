@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
-//! Audio-only SFU on str0m: one UDP socket, rooms keyed by name, Opus forwarded as-is
-//! (no decoding, mixing or transcoding).
+//! SFU on str0m: one UDP socket, rooms keyed by name, Opus voice and one VP8 screen per client
+//! forwarded as-is (no decoding, mixing or transcoding). Video goes only from a client the server
+//! marked as sharing ([`SfuHandle::set_sharing`]) to the clients watching it ([`SfuHandle::watch`]).
 //!
 //! The str0m loop runs on its own OS thread; [`SfuHandle`] is a cloneable async facade over it.
 //! Signaling is the caller's job: the client's offer goes into [`SfuHandle::join`], the SFU's
@@ -8,6 +9,7 @@
 //! [`SfuHandle::answer`].
 
 mod client;
+mod meter;
 mod room;
 #[cfg(feature = "test-support")]
 pub mod testing;
@@ -29,15 +31,22 @@ pub struct SfuConfig {
     pub advertised: Vec<SocketAddr>,
     /// How long a client may take to answer an [`SfuEvent::Offer`] before its session is closed.
     pub answer_timeout: Duration,
+    /// A share whose incoming video stays above this many bits per second for
+    /// `share_ceiling_secs` one-second windows in a row is cut ([`SfuEvent::ShareCut`]).
+    pub share_ceiling_bps: u64,
+    pub share_ceiling_secs: u32,
 }
 
 impl Default for SfuConfig {
-    /// Binds `0.0.0.0:0` with no advertised addresses (set them!) and a 10 s answer timeout.
+    /// Binds `0.0.0.0:0` with no advertised addresses (set them!), a 10 s answer timeout and a
+    /// share ceiling of 35 Mbps for 5 s (above the client's 30 Mbps maximum).
     fn default() -> Self {
         SfuConfig {
             bind: (Ipv4Addr::UNSPECIFIED, 0).into(),
             advertised: vec![],
             answer_timeout: Duration::from_secs(10),
+            share_ceiling_bps: 35_000_000,
+            share_ceiling_secs: 5,
         }
     }
 }
@@ -100,6 +109,10 @@ pub enum SfuEvent {
     /// The session ended: ICE timeout, error, an offer left unanswered for
     /// [`SfuConfig::answer_timeout`], [`SfuHandle::leave`], or a new join by the same user.
     Closed,
+    /// The SFU stopped forwarding this session's share: its video stayed over
+    /// [`SfuConfig::share_ceiling_bps`]. Sent once; the session is no longer sharing, as after
+    /// [`SfuHandle::set_sharing`] with `false`.
+    ShareCut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +156,15 @@ pub(crate) enum Command {
         user: String,
         muted: bool,
     },
+    SetSharing {
+        user: String,
+        on: bool,
+    },
+    Watch {
+        viewer: String,
+        sharer: String,
+        on: bool,
+    },
     SetAdvertised(Vec<SocketAddr>),
     #[cfg(feature = "test-support")]
     Panic,
@@ -151,7 +173,8 @@ pub(crate) enum Command {
 impl SfuHandle {
     /// Start a session for `user` in `room` from the client's SDP offer. A second join by the
     /// same user replaces (and closes) the first session. The offer must carry exactly one audio
-    /// m-line (no video, no data channel); anything else is [`JoinError::BadOffer`].
+    /// m-line and at most one video m-line (no data channel); anything else is
+    /// [`JoinError::BadOffer`]. Only a client whose offer had a video m-line is offered others' video.
     pub async fn join(
         &self,
         room: String,
@@ -194,6 +217,26 @@ impl SfuHandle {
         self.send(Command::SetMuted {
             user: user.into(),
             muted,
+        });
+    }
+
+    /// Start or stop forwarding `user`'s video to the clients watching them. Keyed by session:
+    /// a new join by `user` starts not sharing.
+    pub fn set_sharing(&self, user: &str, on: bool) {
+        self.send(Command::SetSharing {
+            user: user.into(),
+            on,
+        });
+    }
+
+    /// Start or stop sending `sharer`'s video to `viewer`, while `sharer` is sharing. Keyed by the
+    /// viewer's session: a new join by `viewer` starts watching nobody. Starting asks the sharer
+    /// for a keyframe, so the viewer has a picture right away.
+    pub fn watch(&self, viewer: &str, sharer: &str, on: bool) {
+        self.send(Command::Watch {
+            viewer: viewer.into(),
+            sharer: sharer.into(),
+            on,
         });
     }
 

@@ -1,6 +1,7 @@
 import { RING_EVERY_MS } from '../ring.svelte';
 import { describe, expect, it } from 'vitest';
-import { callCue, type CallSnap, type Cue } from './cues';
+import { callCue, shareCue, type CallSnap, type Cue } from './cues';
+import type { Peer } from '../gen/Peer';
 import { TONES, MAX_GAIN, toneMs } from './chime';
 
 const all = { call: true, muteCues: true, connectCues: true };
@@ -64,6 +65,19 @@ describe('callCue', () => {
     expect(run(states, { ...all, connectCues: false })).toEqual(['mute', 'deafen']);
     expect(run(states, { ...all, call: false })).toEqual([]);
   });
+});
+
+describe('shareCue', () => {
+  const peer = (room_id: number, share: Peer['share'], user_id = 'a'): Peer => ({ user_id, name: user_id, room_id, muted: false, deafened: false, force_muted: false, share });
+  const on = { fps: 60, bitrate_kbps: 8000 };
+  it.each<[string, Peer[], Peer[], Cue | null]>([
+    ['start', [peer(1, null)], [peer(1, on)], 'share-start'],
+    ['stop', [peer(1, on)], [peer(1, null)], 'share-stop'],
+    ['another room', [peer(2, null)], [peer(2, on)], null],
+    ['a settings change', [peer(1, on)], [peer(1, { fps: 30, bitrate_kbps: 4000 })], null],
+    ['a person who joins already sharing', [], [peer(1, on)], null],
+    ['a sharer who leaves', [peer(1, on)], [], null],
+  ])('%s', (_, prev, next, cue) => expect(shareCue(prev, next, 1)).toBe(cue));
 });
 
 describe('the tones', () => {

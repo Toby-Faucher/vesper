@@ -51,6 +51,7 @@
               <Icon d={st === 'deafened' ? I.headphonesOff : I.micOff} /><span class="sr-only">{st}</span>
             </span>
           {/if}
+          {#if p.share}<span class="flex shrink-0 items-center text-fg-3" role="img" aria-label="Sharing screen" title="Sharing screen"><Icon d={I.monitor} /></span>{/if}
           {#if link(p)}<span class="ml-auto flex"><LinkIcon link={link(p)!} name={p.user_id === voice.userId ? null : p.name} /></span>{/if}
         </button>
       </li>

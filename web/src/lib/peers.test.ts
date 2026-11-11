@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { applyPeerMsg, inRoom } from './peers';
+import { applyPeerMsg, inRoom, sharersIn } from './peers';
 import type { Peer } from './gen/Peer';
 
 const peer = (user_id: string, room_id = 1): Peer => ({
-  user_id, name: user_id.toUpperCase(), room_id, muted: false, deafened: false, force_muted: false,
+  user_id, name: user_id.toUpperCase(), room_id, muted: false, deafened: false, force_muted: false, share: null,
 });
 const a = peer('a');
 const b = peer('b');
@@ -21,6 +21,12 @@ describe('applyPeerMsg', () => {
     const m = { type: 'peer_state', user_id: 'b', muted: true, deafened: true, force_muted: true } as const;
     expect(applyPeerMsg([a, b], m)).toEqual([a, { ...b, muted: true, deafened: true, force_muted: true }]);
   });
+  it('peer_share sets the share; null clears it', () => {
+    const share = { fps: 60, bitrate_kbps: 8000 };
+    const on = applyPeerMsg([a, b], { type: 'peer_share', user_id: 'b', share });
+    expect(on).toEqual([a, { ...b, share }]);
+    expect(applyPeerMsg(on, { type: 'peer_share', user_id: 'b', share: null })).toEqual([a, b]);
+  });
   it('ignores other messages', () => {
     const l = [a];
     expect(applyPeerMsg(l, { type: 'offer', sdp: 'x' })).toBe(l);
@@ -33,5 +39,14 @@ describe('inRoom', () => {
     expect(inRoom([a, c, b], 1)).toEqual([a, b]);
     expect(inRoom([a, c, b], 2)).toEqual([c]);
     expect(inRoom([a], 9)).toEqual([]);
+  });
+});
+
+describe('sharersIn', () => {
+  it('lists the sharers in my call room, not me and not other rooms', () => {
+    const share = { fps: 60, bitrate_kbps: 8000 };
+    const peers = [{ ...a, share }, b, { ...peer('c', 2), share }, { ...peer('me'), share }];
+    expect(sharersIn(peers, 1, 'me')).toEqual(['a']);
+    expect(sharersIn(peers, null, 'me')).toEqual([]);
   });
 });

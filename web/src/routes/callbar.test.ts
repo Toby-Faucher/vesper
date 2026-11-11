@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest';
 import { parse } from 'svelte/compiler';
 import src from './CallBar.svelte?raw';
+import card from './ShareCard.svelte?raw';
+import { shareLine } from "../lib/share/line";
 
 // The bar's live regions may only hold words that change on a state change. The connection figure (changes every 2 s
 // poll) and the push-to-talk pill (changes on every key press) would be read out over and over.
@@ -32,4 +34,19 @@ it('live_regions_hold_words_only', () => {
   const inside: Node[] = [];
   walk(ptt[0].fragment, inside);
   for (const n of [ptt[0], ...inside]) expect(attr(n, 'role')).toBeUndefined();
+});
+
+// No DOM in the tests, so the share controls are checked in the markup.
+it('share_button_is_in_group_calls_only_and_the_card_replaces_it_while_sharing', () => {
+  expect(src).toMatch(/\{#if room\?\.kind !== 'dm'\}\s*\{#if shares\.mine\}\s*<ShareCard/);
+  expect(src).toMatch(/<IconButton icon=\{monitorUp\} label="Share screen" tip="up"/);
+  expect(src).toContain('<ShareDialog');
+});
+it('share_card_shows_stop_and_the_watchers_outside_any_live_region', () => {
+  const parts: Node[] = [];
+  walk(parse(card, { modern: true }).fragment, parts);
+  expect(card).toContain('>Stop<');
+  expect(card).toContain('shareLine(');
+  for (const n of parts) expect(attr(n, 'role')).toBeUndefined();
+  expect(shareLine({ width: 1920, height: 1080, fps: 60, kbps: 8000, watchers: 2 })).toBe('1920x1080 · 60 fps · 8 Mbps · 2 watching');
 });

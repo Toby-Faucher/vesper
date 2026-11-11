@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Instant;
 use vesper_protocol::{
-    CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Me, ServerMsg, UserInfo,
+    CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Me, ServerMsg, ShareInfo, UserInfo,
 };
 use vesper_store::{StoreError, now_ms};
 
@@ -349,6 +349,46 @@ impl Calls {
                 voice.set_state(&j.user_id, j.session, muted, deafened);
                 None
             }
+            (Ok(ClientMsg::ShareStart { fps, bitrate_kbps }), Some(j)) => {
+                let info = ShareInfo { fps, bitrate_kbps };
+                match voice.share_start(&j.user_id, j.session, info) {
+                    Ok(()) => None,
+                    Err(ErrorCode::Forbidden) => Some((
+                        ErrorCode::Forbidden,
+                        "Screen share is only in group rooms.".into(),
+                    )),
+                    Err(ErrorCode::ShareCap) => Some((
+                        ErrorCode::ShareCap,
+                        "Too many screens are being shared right now.".into(),
+                    )),
+                    Err(code) => Some((code, "Bad share settings.".into())),
+                }
+            }
+            (Ok(ClientMsg::ShareStop), Some(j)) => {
+                voice.share_stop(&j.user_id, j.session);
+                None
+            }
+            (
+                Ok(ClientMsg::Watch {
+                    user_id: sharer,
+                    on,
+                }),
+                Some(j),
+            ) => {
+                voice.watch(&j.user_id, j.session, &sharer, on);
+                None
+            }
+            (
+                Ok(ClientMsg::Point {
+                    user_id: sharer,
+                    x,
+                    y,
+                }),
+                Some(j),
+            ) => voice
+                .point(&j.user_id, j.session, &sharer, x, y)
+                .err()
+                .map(|code| (code, "Bad pointer position.".into())),
             // Ends the call and the connection check, whichever runs.
             (Ok(ClientMsg::Leave), j) if j.is_some() || self.check.is_some() => {
                 self.end(st);
@@ -469,6 +509,7 @@ fn describe(code: ErrorCode) -> &'static str {
         ErrorCode::BadMessage => "invalid offer",
         ErrorCode::Forbidden => "not allowed",
         ErrorCode::RateLimited => "too many requests",
+        ErrorCode::ShareCap => "too many screens shared",
         ErrorCode::Internal => "server error",
     }
 }

@@ -63,7 +63,7 @@ Last updated 2026-10-30. This is a personal project and the voice foundation is 
 - Built and covered by tests: the SFU, the server, the web client, the load test (12 speakers for 30 s, no loss on a local run), the deploy files.
 - **Not tried yet in a real browser:** Chrome and Firefox behaviour, the encoder bitrate after the Opus fix, the Docker build, a real deploy, the router forward.
 - **Not measured yet:** the delay DeepFilterNet adds, and how the audio sounds next to Discord. [docs/testing/checkpoint.md](docs/testing/checkpoint.md) is the listening test.
-- **Next:** text chat, accounts and rooms, a real design pass. Screen share is v2.
+- **Next:** text chat, accounts and rooms, a real design pass. Screen share with watch controls exists; it is not yet tried in a real call.
 
 ## Layout
 
