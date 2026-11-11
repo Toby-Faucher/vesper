@@ -56,6 +56,8 @@ class Voice {
   links = $state.raw<Record<string, Link>>({});
   /** True while Retry microphone runs. */
   retrying = $state(false);
+  /** The room of a call whose socket dropped: joined again on the next socket, for up to REJOIN_MS. */
+  rejoin = $state<number | null>(null);
   /** "Even out voices" (Settings > Voice), saved in this browser. */
   levelling = $state(loadLevelling());
 }
@@ -71,6 +73,15 @@ let releaseLock: (() => void) | undefined;
 let silence = MIC_QUIET;
 let tally: CallTally | undefined; // this call's summary for Your recent calls, sent when it ends
 let posted: Promise<unknown> = Promise.resolve(); // the last summary post, which sign out waits for
+let rejoinTimer: ReturnType<typeof setTimeout> | undefined;
+export const DISCONNECTED = 'Disconnected from the server.';
+export const REJOINING = 'Connection lost. You rejoin the call as soon as it is back.';
+/** How long a call whose socket dropped waits for the socket to come back before it gives up. */
+export const REJOIN_MS = 60_000;
+function cancelRejoin() {
+  clearTimeout(rejoinTimer);
+  voice.rejoin = null;
+}
 const tracks = new Map<string, string>(); // remote track id to user_id, for the per-person stats
 
 // The call code (call-stack.ts) is a chunk of its own: loaded at idle after start (startVoice), on a hover, focus or press
@@ -203,6 +214,12 @@ export function startVoice(): () => void {
       was = now;
       if (cue) untrack(() => chime(cue, voice.settings.speakerId, prefs.volume));
     });
+    // A new socket is up (its hello arrived) after a drop mid-call: join that room again.
+    $effect(() => {
+      const room = voice.rejoin;
+      if (room === null || !session.online || voice.joined || voice.joining) return;
+      untrack(() => void join(room));
+    });
     // Call events on the shared socket. It is replaced after a reconnect, so this re-subscribes.
     $effect(() => {
       const s = session.sig;
@@ -225,10 +242,16 @@ export function startVoice(): () => void {
           }
         }
       });
+      // The socket dropped: the media goes with it, but the call is joined again as soon as a new socket is up.
       const offClose = s.onClose(() => {
         if (!voice.joined) return;
+        const room = voice.joinedRoom;
         teardown();
-        voice.error = 'Disconnected from the server.';
+        voice.rejoin = room;
+        rejoinTimer = setTimeout(() => {
+          voice.rejoin = null;
+          voice.error = DISCONNECTED;
+        }, REJOIN_MS);
       });
       return () => {
         offMsg();
@@ -240,6 +263,7 @@ export function startVoice(): () => void {
     if (ric) window.cancelIdleCallback(idle);
     else clearTimeout(idle);
     teardown();
+    cancelRejoin();
     // Nothing from this call may reach the next sign-in (the 4001 close handler can run just before this).
     voice.error = '';
     voice.mode = 'deepfilter';
@@ -354,6 +378,7 @@ export async function join(roomId: number): Promise<boolean> {
     voice.error = 'Not connected to the server. Wait a moment and try again.';
     return false;
   }
+  cancelRejoin(); // this join is the rejoin, or replaces it
   const room = roomId;
   voice.joining = true;
   ({ muted: voice.muted, deafened: voice.deafened, forceMuted: voice.forceMuted } = idleCall()); // before the join: the server re-sends force_muted after it

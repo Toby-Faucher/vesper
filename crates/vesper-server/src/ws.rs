@@ -207,28 +207,32 @@ async fn handle(
     let mut budget = Budget::new(std::time::Instant::now());
     let mut ping = tokio::time::interval(st.ping_interval);
     let mut last_seen = Instant::now();
-    loop {
+    // Why the socket ended, for the log: a dropped call is otherwise silent here.
+    let why = loop {
         tokio::select! {
             biased;
-            _ = close.changed() => break,
+            _ = close.changed() => break "closed by the server",
             Some(m) = queue.recv() => {
                 let text = serde_json::to_string(&m).expect("ServerMsg serialises");
                 if !send(&mut socket, &mut close, Message::text(text)).await {
-                    break;
+                    break "write failed";
                 }
             }
             _ = ping.tick() => {
                 // Catches clients that vanished without a FIN (NAT drop, power loss).
-                if last_seen.elapsed() > st.ping_interval * 2
-                    || !send(&mut socket, &mut close, Message::Ping(Default::default())).await
-                {
-                    break;
+                if last_seen.elapsed() > st.ping_interval * 2 {
+                    break "no pong in time";
+                }
+                if !send(&mut socket, &mut close, Message::Ping(Default::default())).await {
+                    break "ping write failed";
                 }
             }
             msg = socket.recv() => {
                 let text = match msg {
                     Some(Ok(Message::Text(t))) => t,
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(Message::Close(_))) => break "closed by the client",
+                    Some(Err(_)) => break "read failed",
+                    None => break "connection ended",
                     Some(Ok(_)) => {
                         last_seen = Instant::now();
                         continue;
@@ -254,11 +258,12 @@ async fn handle(
                 }
             }
         }
-    }
+    };
     // Leave first, so the room sees PeerLeft now, not after the close handshake below.
     st.app.hub.remove(conn);
     calls.end(&st);
     let code = *close.borrow();
+    tracing::info!("socket of {user_id} ended: {why} (close code {code:?})");
     if let Some(code) = code {
         close_handshake(&mut socket, code).await;
     }
