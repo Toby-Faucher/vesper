@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { RoomInfo } from '../lib/gen/RoomInfo';
-  import { join, leave, loadCall, voice } from '../lib/voice.svelte';
+  import { REJOINING, join, leave, loadCall, voice } from '../lib/voice.svelte';
   import { session } from '../lib/session.svelte';
   import { sharersIn } from '../lib/peers';
   import Status from '../lib/ui/c/Status.svelte';
@@ -27,6 +27,8 @@
 <!-- A join that failed or a call that ended. While in a call, the call bar shows its own errors. -->
 {#if voice.error && !voice.joined}
   <div class="shrink-0 px-4 pt-3" tabindex="-1" bind:this={errorEl}><Status kind="error">{voice.error}</Status></div>
+{:else if voice.rejoin !== null}
+  <div class="shrink-0 px-4 pt-3"><Status kind="warn">{REJOINING}</Status></div>
 {/if}
 
 <!-- An open share panel sets this row's layout (SharePanel.svelte): chat beside the screens, as a drawer or a column. -->

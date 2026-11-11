@@ -29,7 +29,10 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 170, cssFirst: 12, css
 // 2026-11-09: 59.8 to 60.4 for the sharer UI (the share cue and its two tones, the cut notice, the sidebar share icon and the
 // two new icons the first chunk keeps); measured 60.0 on the dev machine against 59.3 before,
 // so CI is expected near 60.2. The dialog and card are lazy.
-export const RATCHET_GZIP_KB = { first: 60.4 };
+// 2026-11-10: 58.9 to 59.3 on main for staying in a call after a dropped socket (the rejoin in voice.svelte.ts and its
+// notice in RoomView); measured 58.8 on the dev machine and 59.0 in CI. Merged here, 60.4 to 60.8: measured 60.4 on the
+// dev machine, so CI is expected near 60.6.
+export const RATCHET_GZIP_KB = { first: 60.8 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.

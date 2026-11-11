@@ -201,6 +201,7 @@ impl Client {
             Output::Event(e) => match e {
                 Event::IceConnectionStateChange(IceConnectionState::Disconnected) => {
                     // As in the spike: no ICE restart, a lost connection ends the session.
+                    warn!("client {} ice disconnected", self.user);
                     self.rtc.disconnect();
                     Propagated::Noop
                 }

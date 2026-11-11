@@ -67,6 +67,7 @@ const { session, runBeforeLogout } = await import('./session.svelte');
 const v = await import('./voice.svelte');
 const { voice } = v;
 const { CALL_ENDED, ROOM_GONE } = await import('./call');
+const { DISCONNECTED, REJOIN_MS } = v;
 const { SETTINGS_KEY } = await import('./audio/settings');
 const { createCapture } = await import('./audio/capture');
 const { MIC_FALLBACK, SPEAKER_FALLBACK } = await import('./devices');
@@ -415,20 +416,72 @@ describe('in a call', () => {
     expect(sig.leaves).toBe(1);
   });
 
-  it('a dropped socket ends the call; the new socket after a reconnect is subscribed and the old one is not', async () => {
+  // What session.svelte does on a drop and on the next hello.
+  const lose = () => { sig.drop(); session.online = false; session.sig = null; flushSync(); };
+  const regain = () => { sig = new FakeSig(); session.sig = sig as never; flushSync(); session.online = true; flushSync(); };
+
+  it('a dropped socket ends the media but not the call: it joins the same room again on the next socket', async () => {
     await joined();
     const old = sig;
-    old.drop();
+    lose();
     expect(voice.joined).toBe(false);
-    expect(voice.error).toBe('Disconnected from the server.');
-    sig = new FakeSig();
-    session.sig = sig as never;
-    flushSync();
+    expect(voice.error).toBe('');
+    expect(voice.rejoin).toBe(1);
+    expect(joinRoom).toHaveBeenCalledTimes(1);
+    regain();
     expect(old.msg.size + old.close.size).toBe(0);
     expect(sig.msg.size).toBe(1);
     expect(sig.close.size).toBe(1);
-    await joined();
+    expect(voice.rejoin).toBe(null);
+    h.capture!.resolve(fakeCapture());
+    await vi.waitFor(() => expect(voice.joined).toBe(true));
+    expect(joinRoom).toHaveBeenCalledTimes(2);
     expect(joinRoom.mock.calls.at(-1)![0]).toBe(sig);
+    expect(joinRoom.mock.calls.at(-1)![1]).toMatchObject({ roomId: 1 });
+    vi.advanceTimersByTime(REJOIN_MS); // the give-up timer went with the rejoin
+    expect(voice.error).toBe('');
+    expect(voice.joined).toBe(true);
+  });
+
+  it('no socket back within a minute: it gives up and says so', async () => {
+    await joined();
+    lose();
+    vi.advanceTimersByTime(REJOIN_MS);
+    expect(voice.rejoin).toBe(null);
+    expect(voice.error).toBe(DISCONNECTED);
+    regain();
+    expect(joinRoom).toHaveBeenCalledTimes(1);
+  });
+
+  it('joining another room yourself as the socket comes back replaces the rejoin', async () => {
+    await joined();
+    lose();
+    sig = new FakeSig();
+    session.sig = sig as never;
+    session.online = true; // the hello is in, and the rejoin effect has not run yet
+    void v.join(2);
+    expect(voice.rejoin).toBe(null);
+    flushSync();
+    h.capture!.resolve(fakeCapture());
+    await vi.waitFor(() => expect(voice.joined).toBe(true));
+    expect(joinRoom).toHaveBeenCalledTimes(2);
+    expect(joinRoom.mock.calls.at(-1)![1]).toMatchObject({ roomId: 2 });
+    vi.advanceTimersByTime(REJOIN_MS);
+    expect(voice.error).toBe('');
+  });
+
+  it('a click on Join while still offline keeps the rejoin', async () => {
+    await joined();
+    lose();
+    expect(await v.join(2)).toBe(false);
+    expect(voice.rejoin).toBe(1);
+  });
+
+  it('a drop while not in a call rejoins nothing', async () => {
+    lose();
+    expect(voice.rejoin).toBe(null);
+    regain();
+    expect(joinRoom).not.toHaveBeenCalled();
   });
 });
 
@@ -691,11 +744,14 @@ describe('a new session starts fresh', () => {
   });
 
   it('a 4001 close in a call leaves no "Disconnected from the server." whichever close handler runs first', async () => {
-    // The session's handler (logout, stop) ran after the call's handler: the call already wrote its text.
+    // The session's handler (logout, stop) ran after the call's handler: the call already set its rejoin.
     await joined();
     sig.drop();
-    expect(voice.error).toBe('Disconnected from the server.');
+    expect(voice.rejoin).toBe(1);
     restart();
+    expect(voice.error).toBe('');
+    expect(voice.rejoin).toBe(null);
+    vi.advanceTimersByTime(REJOIN_MS); // the give-up timer went with the session
     expect(voice.error).toBe('');
     // The session's handler ran first: the call's handler still runs in the same loop, after stop.
     stop();
