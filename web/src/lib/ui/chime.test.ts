@@ -95,7 +95,7 @@ it.each(Object.keys(TONES) as Cue[])('%s_plays_its_pitches_lengths_and_gain', (c
   expect(ctx.oscs.map((o) => o.frequency.value)).toEqual(t.hz);
   expect(ctx.oscs.every((o) => o.type === t.wave)).toBe(true);
   for (const o of ctx.oscs) expect(o.stop! - o.start!).toBeCloseTo(t.step);
-  expect(ctx.peaks).toEqual(t.hz.map(() => MAX_GAIN)); // volume 100 is the full peak
+  expect(ctx.peaks).toEqual(t.hz.map(() => MAX_GAIN * (t.gain ?? 1))); // volume 100 is the full peak
   expect(ctx.sinks).toEqual(['spk-1']);
 });
 
@@ -106,4 +106,15 @@ it('the_default_volume_is_half_the_peak_and_the_default_speaker_needs_no_switch'
   const ctx = (globalThis as unknown as { lastCtx: { peaks: number[]; sinks: string[] } }).lastCtx;
   expect(ctx.peaks).toEqual([0.08, 0.08]);
   expect(ctx.sinks).toEqual([]); // a new context already plays on the default speaker
+});
+
+it('others_joining_and_leaving_are_louder_and_longer_than_my_own_cues', () => {
+  vi.useFakeTimers(); // the shared afterEach runs pending timers
+  // Someone else joining or leaving is news; it must carry over game audio, so it is 8 dB up and longer.
+  for (const c of ['join', 'leave'] as const) {
+    expect(MAX_GAIN * TONES[c].gain! * 0.5).toBeCloseTo(0.2); // at the default volume 50: about -14 dBFS
+    expect(TONES[c].step).toBeGreaterThanOrEqual(TONES.mute.step * 2);
+    expect(TONES[c].wave).toBe('triangle');
+  }
+  expect(TONES.mute.gain).toBeUndefined();
 });
