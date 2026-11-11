@@ -2444,7 +2444,9 @@ async fn watchers_survive_a_restart() {
         on: true,
     });
     share_start(&a, 30, 2000);
-    assert_eq!(watchers(&mut a).await, 1);
+    // Bob's watch and Alice's start come in on two sockets, so the first count may still be 0;
+    // the watch then sends 1 as well.
+    while watchers(&mut a).await != 1 {}
     a.send(&ClientMsg::ShareStop);
     share_start(&a, 30, 2000);
     assert_eq!(watchers(&mut a).await, 1);
