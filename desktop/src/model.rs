@@ -966,9 +966,14 @@ impl Model {
         v
     }
 
-    /// When the soonest "is typing" line ends, for the view's timer.
-    pub fn typing_deadline(&self) -> Option<Instant> {
-        self.typing.values().flat_map(|t| t.values()).min().copied()
+    /// When the soonest "is typing" line still shown ends, for the view's timer.
+    pub fn typing_deadline(&self, now: Instant) -> Option<Instant> {
+        self.typing
+            .values()
+            .flat_map(|t| t.values())
+            .filter(|t| **t > now)
+            .min()
+            .copied()
     }
 
     pub fn is_mod(&self) -> bool {
@@ -1832,7 +1837,11 @@ mod tests {
             m.typers(1, now + TYPING_FOR + Duration::from_millis(10)),
             Vec::<String>::new()
         );
-        assert!(m.typing_deadline().is_some());
+        assert!(m.typing_deadline(now).is_some());
+        assert!(
+            m.typing_deadline(now + TYPING_FOR + Duration::from_millis(10))
+                .is_none()
+        );
         server(
             &mut m,
             ServerMsg::MessageNew {

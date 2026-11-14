@@ -2,6 +2,8 @@
 //! the network thread come in through `listen`; what the model asks for goes out on `cmds`.
 
 mod call;
+mod chat;
+mod md;
 mod room;
 pub mod settings;
 mod share;
@@ -9,7 +11,7 @@ mod sign_in;
 pub mod theme;
 mod tray;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,19 +35,47 @@ use crate::store::Keyring;
 use crate::voice::Cpal;
 use crate::voice::ptt::{self, KeyMsg};
 
-actions!(vesper, [SendMessage, NewLine]);
+actions!(
+    vesper,
+    [
+        SendMessage,
+        NewLine,
+        SaveEdit,
+        CancelEdit,
+        ComposerUp,
+        ComposerDown,
+        ComposerTab,
+        ComposerEscape,
+        PasteFile
+    ]
+);
 
 /// The key context of the composer.
 const COMPOSER: &str = "Composer";
+/// The key context of a message's edit box.
+const EDIT_BOX: &str = "EditBox";
 
 /// Keys for the app, bound after gpui-component's so they win over its multi-line input.
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     theme::apply(cx);
     let input = Some("Composer > Input");
+    let edit = Some("EditBox > Input");
+    // A handler that does not use its key (Up with text in the box) lets it through to the input.
     cx.bind_keys([
         KeyBinding::new("enter", SendMessage, input),
         KeyBinding::new("shift-enter", NewLine, input),
+        KeyBinding::new("up", ComposerUp, input),
+        KeyBinding::new("down", ComposerDown, input),
+        KeyBinding::new("tab", ComposerTab, input),
+        KeyBinding::new("escape", ComposerEscape, input),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-v", PasteFile, input),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-v", PasteFile, input),
+        KeyBinding::new("enter", SaveEdit, edit),
+        KeyBinding::new("shift-enter", NewLine, edit),
+        KeyBinding::new("escape", CancelEdit, edit),
     ]);
 }
 
@@ -123,9 +153,24 @@ pub struct Vesper {
     username: Entity<InputState>,
     password: Entity<InputState>,
     composer: Entity<InputState>,
+    /// The edit box of the message being edited.
+    edit: Entity<InputState>,
     list: ListState,
-    /// What the list shows: the room and each row's (id, updated_at), to tell the list which rows changed.
-    shown: (Option<i64>, Vec<(i64, i64)>),
+    /// What the list shows: the room and each row's id and what its look depends on, to tell the list which rows
+    /// changed.
+    shown: (Option<i64>, Vec<(i64, RowKey)>),
+    /// Each shown message's day row and grouping, made before the list draws.
+    heads: Vec<crate::timeline::RowHead>,
+    /// Inline pictures by upload id, and the order they came in.
+    images: HashMap<String, chat::Img>,
+    image_order: VecDeque<String>,
+    /// The `@` being typed (its byte offset and the text after it), the highlighted person, and an `@` whose list
+    /// Esc closed.
+    mention: Option<(usize, String)>,
+    mention_ix: usize,
+    mention_dismissed: Option<usize>,
+    /// Draws again when the soonest "is typing" line ends.
+    typing_timer: Option<(Instant, Task<()>)>,
     /// Volume sliders of the people in calls, by user id.
     sliders: HashMap<String, (Entity<SliderState>, Subscription)>,
     /// The Settings view is shown instead of the room.
@@ -165,6 +210,8 @@ impl Vesper {
                 .auto_grow(1, 8)
                 .placeholder("Write a message")
         });
+        // A fixed height, so the row in the list keeps its size while the text changes.
+        let edit = cx.new(|cx| InputState::new(window, cx).multi_line(true).rows(3));
         let enter = |this: &mut Self,
                      _: &Entity<InputState>,
                      e: &InputEvent,
@@ -178,6 +225,11 @@ impl Vesper {
             cx.subscribe_in(&server, window, enter),
             cx.subscribe_in(&username, window, enter),
             cx.subscribe_in(&password, window, enter),
+            cx.subscribe_in(&composer, window, |this, _, e: &InputEvent, _, cx| {
+                if matches!(e, InputEvent::Change) {
+                    this.composer_changed(cx);
+                }
+            }),
             cx.observe_window_activation(window, |this, window, cx| {
                 let active = window.is_window_active();
                 if !active {
@@ -208,8 +260,16 @@ impl Vesper {
             username,
             password,
             composer,
+            edit,
             list,
             shown: (None, vec![]),
+            heads: vec![],
+            images: HashMap::new(),
+            image_order: VecDeque::new(),
+            mention: None,
+            mention_ix: 0,
+            mention_dismissed: None,
+            typing_timer: None,
             sliders: HashMap::new(),
             settings_open: false,
             settings_file: None,
@@ -284,8 +344,18 @@ impl Vesper {
     /// One event into the model; what it asks for goes to the network.
     pub fn apply(&mut self, ev: Event, window: &mut Window, cx: &mut Context<Self>) {
         let signed_out = matches!(ev, Event::SignedOut { .. });
+        match &ev {
+            Event::Image { id, picture } => self.image_loaded(id, picture.clone(), window),
+            Event::Downloaded { path, open: true } => cx.open_with_system(path),
+            _ => {}
+        }
+        let editing = self.model.editing;
         let cmds = self.model.apply(ev);
         self.run(cmds);
+        if editing.is_some() && self.model.editing.is_none() {
+            // The edit was saved: back to the composer.
+            self.composer.update(cx, |i, cx| i.focus(window, cx));
+        }
         if signed_out && self.server.read(cx).value().is_empty() && !self.model.server.is_empty() {
             let s = self.model.server.clone();
             self.server.update(cx, |i, cx| i.set_value(s, window, cx));
@@ -324,6 +394,12 @@ impl Vesper {
     fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let cmds = self.model.sign_out();
         self.run(cmds);
+        for (_, i) in self.images.drain() {
+            if let chat::Img::Ready(i) = i {
+                let _ = window.drop_image(i);
+            }
+        }
+        self.image_order.clear();
         self.composer
             .update(cx, |i, cx| i.set_value("", window, cx));
         cx.notify();
@@ -337,6 +413,9 @@ impl Vesper {
     }
 
     fn send(&mut self, _: &SendMessage, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pick_active(window, cx) {
+            return;
+        }
         let cmds = self.model.send(&self.composer.read(cx).value());
         if !cmds.is_empty() {
             self.composer
@@ -350,14 +429,32 @@ impl Vesper {
         self.composer.update(cx, |i, cx| i.insert("\n", window, cx));
     }
 
-    /// Tells the list which rows were added or changed since the last render, so it keeps its scroll position.
+    /// Tells the list which rows were added or changed since the last render, so it keeps its scroll position, and
+    /// scrolls to a message asked for (a reply's quote, a pin).
     fn sync_list(&mut self) {
         let room = self.model.active;
-        let rows: Vec<(i64, i64)> = self
-            .model
-            .log()
-            .map(|l| l.messages.iter().map(|m| (m.id, m.updated_at)).collect())
-            .unwrap_or_default();
+        let m = &self.model;
+        let msgs = m.log().map_or(&[][..], |l| &l.messages[..]);
+        self.heads =
+            crate::timeline::heads(msgs, chrono::Utc::now().timestamp_millis(), &chrono::Local);
+        let images = &self.images;
+        let rows: Vec<(i64, RowKey)> = msgs
+            .iter()
+            .zip(&self.heads)
+            .map(|(x, h)| {
+                let shown = x
+                    .attachments
+                    .iter()
+                    .filter(|a| !matches!(images.get(&a.id), None | Some(chat::Img::Loading)))
+                    .count();
+                let open = [m.editing, m.confirm_delete, m.picking].map(|v| v == Some(x.id));
+                (x.id, (x.updated_at, h.head, h.day.is_some(), open, shown))
+            })
+            .collect();
+        if let Some(ix) = m.jump.and_then(|id| msgs.iter().position(|x| x.id == id)) {
+            self.list.scroll_to_reveal_item(ix);
+        }
+        self.model.jump = None;
         if room != self.shown.0 {
             self.list.reset(rows.len());
         } else {
@@ -367,12 +464,34 @@ impl Vesper {
         }
         self.shown = (room, rows);
     }
+
+    /// Draws again when the soonest "is typing" line ends.
+    fn sync_typing(&mut self, cx: &mut Context<Self>) {
+        let due = self.model.typing_deadline(Instant::now());
+        if due != self.typing_timer.as_ref().map(|t| t.0) {
+            self.typing_timer = due.map(|at| {
+                let wait = at.saturating_duration_since(Instant::now());
+                let task = cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(wait).await;
+                    let _ = this.update(cx, |v, cx| {
+                        v.typing_timer = None;
+                        cx.notify();
+                    });
+                });
+                (at, task)
+            });
+        }
+    }
 }
 
-/// The list splices that turn rows `old` into `new` (each `(id, updated_at)`, ids ascending): rows put in front
-/// (an older page), rows changed in place (an edit or delete), rows added at the end (new messages). Anything else
-/// replaces every row.
-pub fn splices(old: &[(i64, i64)], new: &[(i64, i64)]) -> Vec<(Range<usize>, usize)> {
+/// What a row's look depends on: `updated_at`, heads a group, starts a day, (editing, confirming a delete, picking
+/// a reaction), pictures loaded.
+type RowKey = (i64, bool, bool, [bool; 3], usize);
+
+/// The list splices that turn rows `old` into `new` (each `(id, look)`, ids ascending): rows put in front (an older
+/// page), rows changed in place (an edit or delete), rows added at the end (new messages). Anything else replaces
+/// every row.
+pub fn splices<T: PartialEq>(old: &[(i64, T)], new: &[(i64, T)]) -> Vec<(Range<usize>, usize)> {
     let all = vec![(0..old.len(), new.len())];
     let Some(first) = old.first() else { return all };
     let Some(front) = new.iter().position(|r| r.0 == first.0) else {

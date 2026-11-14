@@ -34,7 +34,14 @@ pub fn decode_picture(bytes: &[u8]) -> Option<Picture> {
     limits.max_alloc = Some(256 << 20);
     r.limits(limits);
     let img = r.decode().ok()?;
-    let img = img.thumbnail(BOX.0 * 2, BOX.1 * 2).into_rgba8();
+    // `thumbnail` also scales up: only a large picture is made smaller.
+    let (w, h) = (BOX.0 * 2, BOX.1 * 2);
+    let img = if img.width() > w || img.height() > h {
+        img.thumbnail(w, h)
+    } else {
+        img
+    };
+    let img = img.into_rgba8();
     let (width, height) = img.dimensions();
     let mut bgra = img.into_raw();
     for px in bgra.as_chunks_mut::<4>().0 {
@@ -156,6 +163,15 @@ mod tests {
         assert_eq!((p.width, p.height), (720, 360));
         assert_eq!(&p.bgra[..4], [0, 0, 255, 255], "red as BGRA");
         assert!(decode_picture(b"not a picture").is_none());
+        let mut small = vec![];
+        image::RgbaImage::from_pixel(30, 20, image::Rgba([0, 0, 0, 255]))
+            .write_to(
+                &mut std::io::Cursor::new(&mut small),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let p = decode_picture(&small).unwrap();
+        assert_eq!((p.width, p.height), (30, 20), "never scaled up");
         assert!(valid_id("0123456789abcdef0123456789abcdef"));
         assert!(!valid_id("../../api/me"));
         assert_eq!(media_ext("video/mp4"), Some("mp4"));

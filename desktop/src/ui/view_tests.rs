@@ -180,7 +180,8 @@ fn the_room_view_shows_rooms_and_messages_and_sends(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let cmds = drain(&mut rx);
     assert!(
-        matches!(cmds.as_slice(), [Cmd::Send { room: 1, body, .. }] if body == "hello\nworld"),
+        matches!(cmds.as_slice(), [Cmd::Signal(ClientMsg::Typing { room_id: 1 }), Cmd::Send { room: 1, body, .. }]
+            if body == "hello\nworld"),
         "{cmds:?}"
     );
     view.read_with(cx, |v, cx| assert_eq!(v.composer.read(cx).value(), ""));
@@ -571,4 +572,293 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
         drain(&mut rx).as_slice(),
         [Cmd::Voice(VoiceCmd::Muted(false))]
     ));
+}
+
+// GPUI 0.2.2 never clears `debug_bounds` between frames, so whether something went away is checked in the model.
+
+/// A room with Markdown, a reaction of mine, a link alone, a file and a message of mine to edit.
+fn chat_room(view: &Entity<Vesper>, cx: &mut VisualTestContext) {
+    signed_in(view, cx);
+    let mut md = msg(
+        20,
+        "b",
+        "**bold** and `code` @ann\n- one\n  - two\n> quoted\n```rust\nfn x() {}\n```",
+    );
+    md["mentions"] = json!(["a"]);
+    md["reactions"] = json!([{ "emoji": "\u{1f44d}", "user_ids": ["a", "b"] }]);
+    let mut file = msg(22, "b", "notes.txt");
+    file["attachments"] = json!([{ "id": "0123456789abcdef0123456789abcdef", "name": "notes.txt",
+        "mime": "application/octet-stream", "size": 2048, "kind": "file" }]);
+    let mut pic = msg(23, "b", "a picture");
+    pic["attachments"] = json!([{ "id": IMAGE_ID, "name": "p.png", "mime": "image/png", "size": 100, "kind": "image" }]);
+    let page: MessagePage = serde_json::from_value(json!({ "messages": [msg(10, "b", "first"),
+        msg(11, "a", "mine"), md, msg(21, "b", "https://a.test/x"), file, pic],
+        "more_before": false, "more_after": false }))
+    .unwrap();
+    apply(view, cx, Event::Latest { room: 1, page });
+}
+
+const IMAGE_ID: &str = "fedcba9876543210fedcba9876543210";
+
+fn tagged(s: String) -> &'static str {
+    s.leak()
+}
+
+fn focus_composer(view: &Entity<Vesper>, cx: &mut VisualTestContext) {
+    view.update_in(cx, |v, window, cx| {
+        v.composer.update(cx, |i, cx| i.focus(window, cx))
+    });
+}
+
+#[gpui::test]
+fn markdown_reactions_links_and_files(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    chat_room(&view, cx);
+    // An image is fetched once it is drawn, and shows when it comes.
+    let cmds = drain(&mut rx);
+    let fetches = cmds
+        .iter()
+        .filter(|c| matches!(c, Cmd::FetchImage(id) if id == IMAGE_ID))
+        .count();
+    assert_eq!(fetches, 1, "{cmds:?}");
+    let picture = crate::files::Picture {
+        width: 2,
+        height: 2,
+        bgra: vec![255; 16],
+    };
+    apply(
+        &view,
+        cx,
+        Event::Image {
+            id: IMAGE_ID.into(),
+            picture: Some(picture),
+        },
+    );
+    assert!(
+        cx.debug_bounds(tagged(format!("image-{IMAGE_ID}")))
+            .is_some()
+    );
+    view.read_with(cx, |v, _| {
+        assert!(matches!(
+            v.images.get(IMAGE_ID),
+            Some(super::chat::Img::Ready(_))
+        ))
+    });
+    assert!(
+        drain(&mut rx)
+            .iter()
+            .all(|c| !matches!(c, Cmd::FetchImage(_))),
+        "fetched once"
+    );
+    // The Markdown message draws its blocks; the day row heads the first message.
+    for s in [
+        "message-20",
+        "md-20-1",
+        "day-10",
+        "reactions-20",
+        "reaction-20-0",
+        "file-0123456789abcdef0123456789abcdef",
+    ] {
+        assert!(cx.debug_bounds(s).is_some(), "{s} is drawn");
+    }
+    let blocks = (1..10)
+        .filter(|n| cx.debug_bounds(tagged(format!("md-20-{n}"))).is_some())
+        .count();
+    assert!(blocks >= 4, "paragraph, list items, quote: {blocks}");
+    assert!(cx.debug_bounds("day-11").is_none(), "same day");
+
+    // My reaction comes off on a click.
+    click(cx, "reaction-20-0");
+    assert!(
+        matches!(drain(&mut rx).as_slice(), [Cmd::React { id: 20, on: false, emoji }] if emoji == "\u{1f44d}")
+    );
+    // The picker adds another.
+    click(cx, "react-21");
+    assert!(cx.debug_bounds("picker-21").is_some());
+    click(cx, "pick-21-1");
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [Cmd::React {
+            id: 21,
+            on: true,
+            ..
+        }]
+    ));
+    view.read_with(cx, |v, _| assert_eq!(v.model.picking, None));
+
+    // A link opens in the browser.
+    let link = cx.debug_bounds("md-21-1").unwrap();
+    cx.simulate_click(
+        link.origin + gpui::point(gpui::px(4.), gpui::px(4.)),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert_eq!(cx.opened_url().as_deref(), Some("https://a.test/x"));
+
+    // Save asks where, then downloads there.
+    click(cx, "save-0123456789abcdef0123456789abcdef");
+    assert!(cx.did_prompt_for_new_path());
+    let to = std::env::temp_dir().join("vesper-test-notes.txt");
+    cx.simulate_new_path_selection(|_| Some(to.clone()));
+    cx.run_until_parked();
+    assert!(
+        matches!(drain(&mut rx).as_slice(), [Cmd::Download { to: t, open: false, .. }] if *t == to)
+    );
+
+    // A pin, then the pins panel.
+    click(cx, "pin-21");
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [Cmd::Pin { id: 21, on: true }]
+    ));
+    click(cx, "pins-button");
+    assert!(matches!(drain(&mut rx).as_slice(), [Cmd::LoadPins(1)]));
+    let pinned: vesper_protocol::Message =
+        serde_json::from_value(msg(21, "b", "https://a.test/x")).unwrap();
+    apply(
+        &view,
+        cx,
+        Event::Pins {
+            room: 1,
+            pins: Ok(vec![pinned]),
+        },
+    );
+    assert!(cx.debug_bounds("pinned-21").is_some());
+}
+
+#[gpui::test]
+fn the_upload_tray_shows_progress_cancels_and_sends(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    chat_room(&view, cx);
+    drain(&mut rx);
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.txt"), dir.path().join("b.txt"));
+    std::fs::write(&a, "aaa").unwrap();
+    std::fs::write(&b, "bbbb").unwrap();
+    view.update(cx, |v, cx| {
+        v.model.state.me.as_mut().unwrap().upload_max = 1 << 20;
+        v.attach_paths(vec![a.clone(), b.clone(), dir.path().to_path_buf()], cx)
+    });
+    cx.run_until_parked();
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(cmds.as_slice(), [Cmd::Upload { key: 1, path, .. }, Cmd::Upload { key: 2, .. }] if *path == a),
+        "the folder is left out: {cmds:?}"
+    );
+    for s in ["upload-tray", "upload-1", "upload-2", "upload-remove-1"] {
+        assert!(cx.debug_bounds(s).is_some(), "{s} is drawn");
+    }
+    apply(
+        &view,
+        cx,
+        Event::UploadProgress {
+            key: 1,
+            progress: 0.5,
+        },
+    );
+    view.read_with(cx, |v, _| assert_eq!(v.model.tray.items[0].progress, 0.5));
+
+    // Cancel stops the running upload and the row goes.
+    click(cx, "upload-remove-2");
+    assert!(matches!(drain(&mut rx).as_slice(), [Cmd::CancelUpload(2)]));
+    view.read_with(cx, |v, _| assert_eq!(v.model.tray.items.len(), 1));
+
+    // Sending waits for the file, then takes it.
+    focus_composer(&view, cx);
+    cx.simulate_keystrokes("enter");
+    assert!(cx.debug_bounds("room-error").is_some(), "still uploading");
+    let att = serde_json::from_value(json!({ "id": "u1", "name": "a.txt",
+        "mime": "application/octet-stream", "size": 3, "kind": "file" }))
+    .unwrap();
+    apply(
+        &view,
+        cx,
+        Event::Uploaded {
+            key: 1,
+            attachment: att,
+        },
+    );
+    drain(&mut rx);
+    cx.simulate_keystrokes("enter");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body == "a.txt" && attachments.len() == 1),
+        "{cmds:?}"
+    );
+}
+
+#[gpui::test]
+fn edit_reply_delete_mentions_and_typing(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    chat_room(&view, cx);
+    drain(&mut rx);
+
+    // Up in the empty composer edits my last message; Enter saves.
+    focus_composer(&view, cx);
+    cx.simulate_keystrokes("up");
+    assert!(cx.debug_bounds("edit-box").is_some());
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.model.editing, Some(11));
+        assert_eq!(v.edit.read(cx).value(), "mine");
+    });
+    cx.simulate_input(" again");
+    cx.simulate_keystrokes("enter");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(cmds.as_slice(), [Cmd::Edit { id: 11, body }] if body == "mine again"),
+        "{cmds:?}"
+    );
+    let mut edited = msg(11, "a", "mine again");
+    (edited["updated_at"], edited["edited_at"]) = (json!(99), json!(99));
+    apply(
+        &view,
+        cx,
+        Event::Edited(Box::new(serde_json::from_value(edited).unwrap())),
+    );
+    view.read_with(cx, |v, _| assert_eq!(v.model.editing, None));
+    // Esc leaves an edit without saving.
+    cx.simulate_keystrokes("up");
+    view.read_with(cx, |v, _| assert_eq!(v.model.editing, Some(11)));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert_eq!(v.model.editing, None));
+    assert!(drain(&mut rx).is_empty());
+
+    // Delete asks first.
+    click(cx, "delete-11");
+    assert!(cx.debug_bounds("confirm-11").is_some());
+    assert!(drain(&mut rx).is_empty());
+    click(cx, "confirm-delete");
+    assert!(matches!(drain(&mut rx).as_slice(), [Cmd::Delete(11)]));
+    assert!(
+        cx.debug_bounds("delete-10").is_none(),
+        "not someone else's, for a member"
+    );
+
+    // Reply, with the @ list on the way.
+    click(cx, "reply-10");
+    assert!(cx.debug_bounds("reply-bar").is_some());
+    focus_composer(&view, cx);
+    cx.simulate_input("hi @b");
+    assert!(cx.debug_bounds("mention-bob").is_some());
+    cx.simulate_keystrokes("tab");
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.composer.read(cx).value(), "hi @bob ")
+    });
+    view.read_with(cx, |v, _| assert!(v.mention.is_none()));
+    drain(&mut rx);
+    cx.simulate_keystrokes("enter");
+    assert!(
+        matches!(drain(&mut rx).as_slice(), [Cmd::Send { body, reply_to: Some(10), .. }] if body == "hi @bob")
+    );
+
+    // Someone typing shows under the list.
+    apply(
+        &view,
+        cx,
+        Event::Server(Box::new(ServerMsg::Typing {
+            room_id: 1,
+            user_id: "b".into(),
+        })),
+    );
+    assert!(cx.debug_bounds("typing").is_some());
 }

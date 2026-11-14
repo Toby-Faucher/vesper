@@ -3,7 +3,7 @@
 use chrono::{Local, TimeZone};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, Context, Div, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    Context, Div, ExternalPaths, FontWeight, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, Window, div, list, px, rgb,
 };
 use gpui_component::button::{Button, ButtonVariants};
@@ -45,79 +45,6 @@ fn heading(text: &'static str) -> Div {
         .text_size(px(12.))
         .text_color(rgb(theme::FG_3))
         .child(text)
-}
-
-/// One message: author and time, the quoted reply, the body as plain text, attachment names.
-fn message_row(m: &Model, ix: usize) -> AnyElement {
-    let Some(msg) = m.log().and_then(|l| l.messages.get(ix)) else {
-        return div().into_any_element();
-    };
-    let s = &m.state;
-    let mut row = v_flex()
-        .debug_selector(|| format!("message-{}", msg.id))
-        .px_4()
-        .py_1p5()
-        .gap_0p5()
-        .child(
-            h_flex()
-                .gap_2()
-                .items_baseline()
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(s.name_of(&msg.author_id)),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(theme::FG_3))
-                        .child(time_label(msg.created_at)),
-                )
-                .when_some_text(
-                    if msg.edited_at.is_some() && !msg.deleted {
-                        "(edited)"
-                    } else {
-                        ""
-                    },
-                    theme::FG_3,
-                    "",
-                ),
-        );
-    if let Some(r) = &msg.reply_to {
-        let excerpt = if r.excerpt.is_empty() {
-            "a deleted message".to_string()
-        } else {
-            r.excerpt.clone()
-        };
-        row = row.child(
-            div()
-                .pl_2()
-                .border_l_2()
-                .border_color(rgb(theme::LINE))
-                .text_size(px(13.))
-                .text_color(rgb(theme::FG_3))
-                .child(format!("{}: {excerpt}", s.name_of(&r.author_id))),
-        );
-    }
-    row = if msg.deleted {
-        row.child(
-            div()
-                .italic()
-                .text_color(rgb(theme::FG_3))
-                .child("Message deleted"),
-        )
-    } else {
-        row.when_some_text(&msg.body, theme::FG_2, "")
-    };
-    for a in &msg.attachments {
-        row = row.child(
-            div()
-                .text_size(px(13.))
-                .text_color(rgb(theme::ACCENT_FG))
-                .child(format!("Attachment: {}", a.name)),
-        );
-    }
-    row.into_any_element()
 }
 
 /// The room's title: `# general`, or the other person's name for a DM.
@@ -265,6 +192,7 @@ impl Vesper {
                 );
         }
         self.sync_list();
+        self.sync_typing(cx);
         let m = &self.model;
         let room = m.active.and_then(|id| m.state.find_room(id));
         let status = if !m.notice.is_empty() {
@@ -306,6 +234,15 @@ impl Vesper {
             )
             .when_some_text(status, theme::WARN_FG, "status")
             .child(div().flex_1())
+            .children(m.can_pin().then(|| {
+                div().debug_selector(|| "pins-button".into()).child(
+                    Button::new("pins-button")
+                        .ghost()
+                        .label("Pins")
+                        .selected(m.pins.is_some())
+                        .on_click(cx.listener(|this, _, _, cx| this.act(Model::toggle_pins, cx))),
+                )
+            }))
             .children(voice);
         let keyring = m.not_remembered.then(|| {
             h_flex()
@@ -327,19 +264,41 @@ impl Vesper {
         });
         let timeline = list(
             self.list.clone(),
-            cx.processor(|this, ix: usize, _, _| message_row(&this.model, ix)),
+            cx.processor(|this, ix: usize, _, cx| this.message_row(ix, cx)),
         )
         .flex_1();
+        let error = m.error.clone();
+        let pins = self.render_pins(cx);
+        let above = self.above_composer(cx);
         let composer = v_flex()
             .key_context(COMPOSER)
             .on_action(cx.listener(Self::send))
             .on_action(cx.listener(Self::new_line))
+            .on_action(cx.listener(Self::composer_up))
+            .on_action(cx.listener(Self::composer_down))
+            .on_action(cx.listener(Self::composer_tab))
+            .on_action(cx.listener(Self::composer_escape))
+            .on_action(cx.listener(Self::paste_file))
             .flex_none()
             .p_3()
             .gap_1()
             .debug_selector(|| "composer".into())
-            .when_some_text(&m.error, theme::DANGER_FG, "room-error")
-            .child(Input::new(&self.composer));
+            .when_some_text(&error, theme::DANGER_FG, "room-error")
+            .children(above)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_end()
+                    .child(
+                        div().debug_selector(|| "attach".into()).child(
+                            Button::new("attach")
+                                .ghost()
+                                .label("Attach")
+                                .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))),
+                        ),
+                    )
+                    .child(div().flex_1().child(Input::new(&self.composer))),
+            );
         let call = self.render_call(cx);
         let share = self.render_share(cx);
         let m = &self.model;
@@ -348,6 +307,7 @@ impl Vesper {
             .h_full()
             .min_w_0()
             .child(header)
+            .children(pins)
             .children(keyring)
             .children(share)
             .when_some_text(
@@ -370,7 +330,12 @@ impl Vesper {
             )
             .child(timeline)
             .children(call)
-            .child(composer);
+            .child(composer)
+            // Files dropped anywhere on the room go to the tray.
+            .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgb(theme::ACCENT_SUBTLE)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                this.attach_paths(paths.paths().to_vec(), cx)
+            }));
         div()
             .size_full()
             .flex()
