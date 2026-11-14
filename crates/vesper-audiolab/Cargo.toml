@@ -17,8 +17,8 @@ clap = { version = "4", features = ["derive"] }
 hound = "3"
 # Bundles and builds libopus 1.5 with cmake (opusic-sys), so results do not depend on the system library.
 opus = "=0.4.0"
-rand = { version = "0.9", default-features = false }
-rand_chacha = { version = "0.9", default-features = false }
+rand = { version = "0.10", default-features = false }
+rand_chacha = { version = "0.10", default-features = false }
 rayon = "1"
 realfft = "3"
 serde = { workspace = true }

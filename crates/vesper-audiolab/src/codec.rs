@@ -8,7 +8,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use opus::{Application, Bitrate, Channels, Decoder, Encoder};
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 

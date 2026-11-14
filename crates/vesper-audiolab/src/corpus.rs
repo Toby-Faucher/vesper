@@ -10,7 +10,7 @@ use std::f64::consts::PI;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
