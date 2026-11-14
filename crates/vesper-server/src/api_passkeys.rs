@@ -139,7 +139,11 @@ async fn register_start(
         .passkey_credentials(&a.user.user_id)
         .await?
         .iter()
-        .filter_map(|j| serde_json::from_str::<Passkey>(j).ok())
+        .filter_map(|j| {
+            serde_json::from_str::<Passkey>(j)
+                .inspect_err(|e| tracing::warn!("a stored passkey does not parse, skipped: {e}"))
+                .ok()
+        })
         .map(|p| p.cred_id().clone())
         .collect();
     let (options, state) = web
