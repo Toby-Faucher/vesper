@@ -16,9 +16,10 @@ use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
+use super::denoise::{Capture, Late, Loaded, deep_filter};
 use super::jitter::{Jitter, Pop};
 use super::mix::{Limiter, Speaking, mix_into, rms, volume_to_gain};
-use super::{AudioDevices, AudioInput, AudioOutput, FRAME, RATE, VoiceCmd, VoiceEvent};
+use super::{AudioDevices, AudioInput, AudioOutput, FRAME, RATE, Setup, VoiceCmd, VoiceEvent};
 
 const TICK: Duration = Duration::from_millis(20);
 /// Captured audio held at most, so a stalled engine does not send old sound later (100 ms).
@@ -49,6 +50,8 @@ struct Engine<'a> {
     input: Box<dyn AudioInput>,
     output: Box<dyn AudioOutput>,
     encoder: Encoder,
+    /// The noise filter between the microphone and Opus.
+    capture: Capture,
     captured: Vec<f32>,
     /// Frames captured so far, sent or not: the RTP clock keeps running while muted.
     frames: u64,
@@ -63,12 +66,12 @@ struct Engine<'a> {
 
 pub fn run(
     devices: &dyn AudioDevices,
-    bitrate_kbps: u32,
-    volumes: HashMap<String, f32>,
+    setup: Setup,
+    denoiser: Receiver<Loaded>,
     cmds: Receiver<VoiceCmd>,
     emit: &dyn Fn(VoiceEvent),
 ) {
-    let mut e = match Engine::new(devices, bitrate_kbps, volumes, emit) {
+    let mut e = match Engine::new(devices, setup, denoiser, emit) {
         Ok(e) => e,
         Err(text) => return emit(VoiceEvent::Failed(text)),
     };
@@ -80,17 +83,17 @@ pub fn run(
 impl<'a> Engine<'a> {
     fn new(
         devices: &dyn AudioDevices,
-        bitrate_kbps: u32,
-        volumes: HashMap<String, f32>,
+        setup: Setup,
+        denoiser: Receiver<Loaded>,
         emit: &'a dyn Fn(VoiceEvent),
     ) -> Result<Self, String> {
-        let input = devices.input()?;
-        let output = devices.output()?;
+        let input = devices.input(setup.input.as_deref())?;
+        let output = devices.output(setup.output.as_deref())?;
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
             .map_err(|e| format!("Could not open a network socket for the call: {e}"))?;
         let mut encoder = Encoder::new(RATE, Channels::Mono, Application::Voip)
             .map_err(|e| format!("Could not start the Opus encoder: {e}"))?;
-        let bits = bitrate_kbps.clamp(32, 510) as i32 * 1000;
+        let bits = setup.bitrate_kbps.clamp(32, 510) as i32 * 1000;
         encoder
             .set_bitrate(Bitrate::Bits(bits))
             .map_err(|e| format!("Could not set the bitrate: {e}"))?;
@@ -117,10 +120,11 @@ impl<'a> Engine<'a> {
             input,
             output,
             encoder,
+            capture: Capture::new(setup.denoise, denoiser, deep_filter, Late::default()),
             captured: vec![],
             frames: 0,
             peers: HashMap::new(),
-            volumes,
+            volumes: setup.volumes,
             me: Speaking::default(),
             limiter: Limiter::default(),
             shown: (false, vec![]),
@@ -311,7 +315,12 @@ impl<'a> Engine<'a> {
         }
         let mut me = self.shown.0 && !self.muted;
         while self.captured.len() >= FRAME {
-            let frame: Vec<f32> = self.captured.drain(..FRAME).collect();
+            let mut frame: Vec<f32> = self.captured.drain(..FRAME).collect();
+            // Mic, then the noise filter, then Opus. The filter skips the work while muted: nothing is sent.
+            // shortcut: no echo cancellation and no input gain yet (the web has both).
+            if let Some(status) = self.capture.process(&mut frame, !self.muted) {
+                (self.emit)(VoiceEvent::Filter(status));
+            }
             let level = if self.muted { 0.0 } else { rms(&frame) };
             me = self.me.update(level);
             self.send(&frame);

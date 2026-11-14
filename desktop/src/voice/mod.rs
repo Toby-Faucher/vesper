@@ -5,16 +5,20 @@
 //! socket, as the web app's `join.ts` does. Audio comes in through `AudioInput` and goes out through `AudioOutput`, so
 //! tests run a call with no devices; the real ones are cpal (`device.rs`).
 
+pub mod denoise;
 mod device;
 mod engine;
 pub mod jitter;
 pub mod mix;
+pub mod ptt;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 
-pub use device::{Cpal, Resampler};
+pub use device::{Cpal, Resampler, device_names};
+
+use crate::settings::Denoise;
 
 /// Opus at 48 kHz, mono, 20 ms frames.
 pub const RATE: u32 = 48_000;
@@ -34,24 +38,36 @@ pub trait AudioOutput {
 
 /// Opens the devices for a call. Called on the call's thread, so a device that must stay on one thread can.
 pub trait AudioDevices: Send + Sync {
+    /// `name` is the device chosen in the settings; `None`, or a name that is not there, is the system default.
     /// The error is a sentence for the user.
-    fn input(&self) -> Result<Box<dyn AudioInput>, String>;
-    fn output(&self) -> Result<Box<dyn AudioOutput>, String>;
+    fn input(&self, name: Option<&str>) -> Result<Box<dyn AudioInput>, String>;
+    fn output(&self, name: Option<&str>) -> Result<Box<dyn AudioOutput>, String>;
+}
+
+/// How a call starts, from the settings.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Setup {
+    pub bitrate_kbps: u32,
+    /// Percent by user id.
+    pub volumes: HashMap<String, f32>,
+    pub denoise: Denoise,
+    pub input: Option<String>,
+    pub output: Option<String>,
 }
 
 /// From the model to the call engine (through the network thread).
 #[derive(Debug, Clone, PartialEq)]
 pub enum VoiceCmd {
-    /// Open the devices and make an offer. `call` tags this call's events; `volumes` are percent by user id.
+    /// Open the devices and make an offer. `call` tags this call's events.
     Start {
         call: u64,
-        bitrate_kbps: u32,
-        volumes: HashMap<String, f32>,
+        setup: Setup,
     },
     /// The SFU's answer to the offer.
     Answer(String),
     /// A renegotiation offer from the SFU; the engine answers with `VoiceEvent::Answer`.
     Offer(String),
+    /// Not sending: muted, or push to talk not held.
     Muted(bool),
     Deafened(bool),
     /// 0 to 400 percent.
@@ -73,6 +89,8 @@ pub enum VoiceEvent {
     Connected,
     /// Who speaks now: me, and the user ids of the others. Sent when it changes.
     Speaking { me: bool, peers: Vec<String> },
+    /// What the noise filter is doing, for the call bar. Sent when it changes.
+    Filter(String),
     /// The call cannot go on. The text is for the user.
     Failed(String),
 }
@@ -83,16 +101,17 @@ pub struct Call {
 }
 
 impl Call {
+    /// `denoiser` brings DeepFilterNet when it has loaded (see `denoise::load`); the call starts without it.
     pub fn start(
         devices: Arc<dyn AudioDevices>,
-        bitrate_kbps: u32,
-        volumes: HashMap<String, f32>,
+        setup: Setup,
+        denoiser: Receiver<denoise::Loaded>,
         emit: impl Fn(VoiceEvent) + Send + 'static,
     ) -> Call {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
             .name("vesper-voice".into())
-            .spawn(move || engine::run(&*devices, bitrate_kbps, volumes, rx, &emit))
+            .spawn(move || engine::run(&*devices, setup, denoiser, rx, &emit))
             .expect("the call thread starts");
         Call { tx }
     }

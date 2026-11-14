@@ -21,7 +21,9 @@ use vesper_protocol::{
     Message, MessagePage, ReadReq, Secret, SendMessage, ServerMsg,
 };
 
+use crate::settings::Denoise;
 use crate::store::{Saved, SessionStore};
+use crate::voice::denoise::{self, MODEL_MAX, MODEL_URL};
 use crate::voice::{AudioDevices, Call, VoiceCmd, VoiceEvent};
 
 /// From the UI to the network thread.
@@ -307,6 +309,34 @@ impl Api {
             .await
     }
 
+    /// The DeepFilterNet model the web app loads, from `/dsp/`. It is checked by the caller. The error says why in a
+    /// few words, for "DeepFilterNet is not available (...)".
+    pub async fn model(&self) -> Result<Vec<u8>, String> {
+        let url = self.base.join(MODEL_URL).map_err(|e| e.to_string())?;
+        let mut res = self
+            .http
+            .get(url)
+            .timeout(Duration::from_secs(300)) // 8 MB on a slow link
+            .send()
+            .await
+            .map_err(|_| "the server did not answer".to_string())?;
+        if !res.status().is_success() {
+            return Err(format!("the server has no model: {}", res.status()));
+        }
+        let mut bytes = vec![];
+        while let Some(chunk) = res
+            .chunk()
+            .await
+            .map_err(|_| "the download broke off".to_string())?
+        {
+            if bytes.len() + chunk.len() > MODEL_MAX {
+                return Err("the server sent something too large".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
     /// Opens `/ws` with the cookie and the `Origin` header.
     pub async fn connect(
         &self,
@@ -502,20 +532,25 @@ impl Net {
                     let _ = c.out.send(m);
                 }
             }
-            Cmd::Voice(VoiceCmd::Start {
-                call,
-                bitrate_kbps,
-                volumes,
-            }) => {
+            Cmd::Voice(VoiceCmd::Start { call, setup }) => {
                 self.call = None; // the old call's thread ends first
+                let (loaded, denoiser) = std::sync::mpsc::channel();
+                if setup.denoise == Denoise::DeepFilter {
+                    // The call starts now, with the noise gate; DeepFilterNet joins it once loaded.
+                    let api = self.conn.as_ref().map(|c| c.api.clone());
+                    tokio::spawn(async move {
+                        let fetch = async {
+                            match api {
+                                Some(api) => api.model().await,
+                                None => Err("not signed in".into()),
+                            }
+                        };
+                        let _ = loaded.send(denoise::load(denoise::cache_path(), fetch).await);
+                    });
+                }
                 let tx = self.tx.clone();
                 let emit = move |ev| drop(tx.send(Event::Voice { call, ev }));
-                self.call = Some(Call::start(
-                    self.devices.clone(),
-                    bitrate_kbps,
-                    volumes,
-                    emit,
-                ));
+                self.call = Some(Call::start(self.devices.clone(), setup, denoiser, emit));
             }
             Cmd::Voice(VoiceCmd::Stop) => self.call = None,
             Cmd::Voice(c) => {

@@ -3,6 +3,7 @@
 
 pub mod model;
 pub mod net;
+pub mod settings;
 pub mod state;
 pub mod store;
 pub mod ui;

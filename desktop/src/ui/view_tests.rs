@@ -369,3 +369,98 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
         assert_eq!(v.model.call.error, "No microphone was found.")
     });
 }
+
+/// Settings from the sidebar: each choice lands in the model, push to talk shows its key and takes a new one from a
+/// key press, a missing device says so, and nothing is saved without a settings file (the real app's only).
+#[gpui::test]
+fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
+    use crate::settings::Denoise;
+    use crate::voice::ptt::KeyMsg;
+
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    let (keys, watched) = std::sync::mpsc::channel();
+    view.update(cx, |v, _| {
+        v.ptt_tx = Some(keys);
+        v.devices = (vec!["USB mic".into()], vec!["Speakers".into()]);
+        v.model.settings.output_device = Some("Old headset".into());
+    });
+    click(cx, "open-settings");
+    for s in [
+        "settings",
+        "settings-bitrate",
+        "settings-mic-0",
+        "settings-speakers",
+    ] {
+        assert!(cx.debug_bounds(s).is_some(), "{s} is drawn");
+    }
+    assert!(
+        cx.debug_bounds("settings-ptt-key").is_none(),
+        "voice activity: no key"
+    );
+
+    click(cx, "settings-gate");
+    click(cx, "settings-mic-0");
+    click(cx, "settings-speakers");
+    view.read_with(cx, |v, _| {
+        let s = &v.model.settings;
+        assert_eq!(s.denoise, Denoise::Gate);
+        assert_eq!(s.input_device.as_deref(), Some("USB mic"));
+        assert_eq!(s.output_device, None, "back to the default");
+    });
+
+    click(cx, "settings-ptt");
+    assert_eq!(
+        watched.try_iter().last(),
+        Some(KeyMsg::Watch(Some(device_query::Keycode::Grave)))
+    );
+    click(cx, "settings-ptt-key");
+    assert!(cx.debug_bounds("settings-capturing").is_some());
+    cx.simulate_keystrokes("backspace");
+    assert!(cx.debug_bounds("settings-key-problem").is_some());
+    cx.simulate_keystrokes("ctrl-v");
+    view.read_with(cx, |v, _| {
+        assert!(v.capturing_key, "a key with Ctrl is refused")
+    });
+    cx.simulate_keystrokes("v");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.settings.ptt_key, "V");
+        assert!(v.model.settings.push_to_talk && !v.capturing_key);
+    });
+    assert_eq!(
+        watched.try_iter().last(),
+        Some(KeyMsg::Watch(Some(device_query::Keycode::V)))
+    );
+
+    // Out of the settings, the window's own V presses and releases push to talk (Wayland has only these).
+    click(cx, "settings-close");
+    cx.simulate_keystrokes("v");
+    // GPUI's test keystrokes are key downs only.
+    cx.simulate_event(gpui::KeyUpEvent {
+        keystroke: gpui::Keystroke::parse("v").unwrap(),
+    });
+    let got: Vec<KeyMsg> = watched.try_iter().collect();
+    assert_eq!(got, [KeyMsg::Window(true), KeyMsg::Window(false)]);
+    cx.simulate_keystrokes("b");
+    assert!(watched.try_iter().next().is_none(), "another key");
+
+    // The call starts with these settings, closed until the key.
+    drain(&mut rx);
+    click(cx, "join-voice");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(
+            cmds.as_slice(),
+            [Cmd::Voice(VoiceCmd::Start { setup, .. }), Cmd::Voice(VoiceCmd::Muted(true))]
+                if setup.denoise == Denoise::Gate && setup.input.as_deref() == Some("USB mic")
+        ),
+        "{cmds:?}"
+    );
+    view.update(cx, |v, cx| v.act(|m| m.set_ptt(true), cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("call-ptt").is_some());
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [Cmd::Voice(VoiceCmd::Muted(false))]
+    ));
+}

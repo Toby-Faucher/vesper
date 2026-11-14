@@ -157,6 +157,16 @@ impl Vesper {
         } else {
             "Connecting..."
         };
+        let set = &self.model.settings;
+        let ptt = set.push_to_talk.then(|| {
+            let key = crate::voice::ptt::key_label(&set.ptt_key);
+            if self.model.ptt_open {
+                format!("Talking ({key})")
+            } else {
+                format!("Push to talk: {key}")
+            }
+        });
+        let talking = self.model.ptt_open;
         let (muted, deafened, forced) = (c.muted, c.deafened, c.force_muted);
         let mute = Button::new("call-mute")
             .label(if forced {
@@ -217,6 +227,7 @@ impl Vesper {
             })
             .collect();
         let error = self.model.call.error.clone();
+        let filter = self.model.call.filter.clone();
 
         Some(
             v_flex()
@@ -244,11 +255,23 @@ impl Vesper {
                                 .text_color(rgb(theme::FG_3))
                                 .child(status),
                         )
+                        .children(ptt.map(|t| {
+                            div()
+                                .debug_selector(|| "call-ptt".into())
+                                .text_size(px(12.))
+                                .text_color(rgb(if talking {
+                                    theme::ACCENT_FG
+                                } else {
+                                    theme::FG_3
+                                }))
+                                .child(t)
+                        }))
                         .child(div().debug_selector(|| "call-mute".into()).child(mute))
                         .child(div().debug_selector(|| "call-deafen".into()).child(deafen))
                         .child(div().debug_selector(|| "call-leave".into()).child(leave)),
                 )
                 .when_some_text(&error, theme::DANGER_FG, "call-error")
+                .when_some_text(&filter, theme::FG_3, "call-filter")
                 .child(h_flex().flex_wrap().gap_4().child(mine).children(people)),
         )
     }

@@ -3,27 +3,33 @@
 
 mod call;
 mod room;
+pub mod settings;
 mod sign_in;
 pub mod theme;
+mod tray;
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
 use gpui::{
-    App, AppContext, Application, Context, Entity, IntoElement, KeyBinding, ListAlignment,
-    ListState, ParentElement, Render, Styled, Subscription, Task, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, actions, div, px, rgb, size,
+    App, AppContext, Application, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement, Render, Styled,
+    Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, div, px,
+    rgb, size,
 };
 use gpui_component::Root;
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::slider::SliderState;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use crate::model::{Model, Screen};
+use crate::model::{Model, Phase, Screen};
 use crate::net::{self, Cmd, Event};
 use crate::store::Keyring;
 use crate::voice::Cpal;
+use crate::voice::ptt::{self, KeyMsg};
 
 actions!(vesper, [SendMessage, NewLine]);
 
@@ -41,9 +47,18 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-/// Starts the network thread and opens the window. Returns when the app quits.
+/// Starts the network and key threads and opens the window. Returns when the app quits.
 pub fn run() {
     let (cmds, events) = net::start(Arc::new(Keyring), Arc::new(Cpal));
+    let file = crate::settings::path();
+    let saved = file
+        .as_deref()
+        .map(crate::settings::Settings::load)
+        .unwrap_or_default();
+    let (open_tx, open_rx) = tokio::sync::mpsc::unbounded_channel();
+    let keys = ptt::spawn(ptt::global_source, move |open| {
+        let _ = open_tx.send(open);
+    });
     Application::new().run(move |cx: &mut App| {
         init(cx);
         let options = WindowOptions {
@@ -54,15 +69,41 @@ pub fn run() {
             }),
             ..Default::default()
         };
-        cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| {
-                let mut v = Vesper::new(cmds, window, cx);
-                v.listen(events, window, cx);
-                v
-            });
-            cx.new(|cx| Root::new(view, window, cx))
-        })
-        .expect("the window opens");
+        let handle = cx
+            .open_window(options, |window, cx| {
+                let view = cx.new(|cx| {
+                    let mut v = Vesper::new(cmds, window, cx);
+                    v.listen(events, window, cx);
+                    v.listen_ptt(open_rx, window, cx);
+                    v.model.settings = saved;
+                    (v.settings_file, v.ptt_tx) = (file, Some(keys));
+                    v.ptt_note = ptt::global_note();
+                    v.watch_key();
+                    v
+                });
+                // Closing the window during a call keeps the call: the window goes to the tray (minimised: GPUI
+                // 0.2.2 cannot hide a window on Windows). Leave, or Quit in the tray, ends it.
+                let weak = view.downgrade();
+                window.on_window_should_close(cx, move |window, cx| {
+                    let in_call = weak
+                        .upgrade()
+                        .is_some_and(|v| v.read(cx).model.call.phase != Phase::Idle);
+                    if in_call {
+                        window.minimize_window();
+                    }
+                    !in_call
+                });
+                cx.new(|cx| Root::new(view, window, cx))
+            })
+            .expect("the window opens");
+        if let Some(view) = handle
+            .read(cx)
+            .ok()
+            .and_then(|r| r.view().clone().downcast::<Vesper>().ok())
+        {
+            let tray = tray::start(cx, view.downgrade(), handle.into());
+            view.update(cx, |v, _| v._tray = tray);
+        }
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -85,6 +126,24 @@ pub struct Vesper {
     shown: (Option<i64>, Vec<(i64, i64)>),
     /// Volume sliders of the people in calls, by user id.
     sliders: HashMap<String, (Entity<SliderState>, Subscription)>,
+    /// The Settings view is shown instead of the room.
+    pub settings_open: bool,
+    /// The settings file. Set in the real app only: then changes are saved, devices are listed and start with the
+    /// computer is set. Tests leave it empty.
+    pub settings_file: Option<PathBuf>,
+    /// Input and output device names for the Settings view.
+    pub devices: (Vec<String>, Vec<String>),
+    /// Choosing the push-to-talk key: the next key pressed is it.
+    pub capturing_key: bool,
+    key_problem: &'static str,
+    key_focus: FocusHandle,
+    settings_error: String,
+    bitrate: Option<(Entity<SliderState>, Subscription)>,
+    /// To the key thread (none in tests).
+    pub ptt_tx: Option<Sender<KeyMsg>>,
+    /// Why push to talk works only while the window has focus.
+    pub ptt_note: Option<&'static str>,
+    _tray: Option<tray_icon::TrayIcon>,
     _subs: Vec<Subscription>,
     _pump: Option<Task<()>>,
 }
@@ -114,7 +173,12 @@ impl Vesper {
             cx.subscribe_in(&username, window, enter),
             cx.subscribe_in(&password, window, enter),
             cx.observe_window_activation(window, |this, window, cx| {
-                let cmds = this.model.set_focused(window.is_window_active());
+                let active = window.is_window_active();
+                if !active {
+                    // The key-up never comes once focus is gone: a window-held key would leave the mic open.
+                    this.window_key(None, false);
+                }
+                let cmds = this.model.set_focused(active);
                 this.run(cmds);
                 cx.notify();
             }),
@@ -141,6 +205,17 @@ impl Vesper {
             list,
             shown: (None, vec![]),
             sliders: HashMap::new(),
+            settings_open: false,
+            settings_file: None,
+            devices: (vec![], vec![]),
+            capturing_key: false,
+            key_problem: "",
+            key_focus: cx.focus_handle(),
+            settings_error: String::new(),
+            bitrate: None,
+            ptt_tx: None,
+            ptt_note: None,
+            _tray: None,
             _subs: subs,
             _pump: None,
         }
@@ -163,6 +238,39 @@ impl Vesper {
                 }
             }
         }));
+    }
+
+    /// The key thread's push to talk, as it opens and closes.
+    pub fn listen_ptt(
+        &mut self,
+        mut open: UnboundedReceiver<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(o) = open.recv().await {
+                if this
+                    .update(cx, |v, cx| v.act(|m| m.set_ptt(o), cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// A key down or up in the window: the push-to-talk key goes to the key thread (all there is on Wayland).
+    /// `None` releases it whatever it was.
+    fn window_key(&self, key: Option<&str>, down: bool) {
+        let s = &self.model.settings;
+        let ours = key.is_none_or(|k| ptt::key_from_window(k).is_ok_and(|n| n == s.ptt_key));
+        if s.push_to_talk
+            && ours
+            && let Some(tx) = &self.ptt_tx
+        {
+            let _ = tx.send(KeyMsg::Window(down));
+        }
     }
 
     /// One event into the model; what it asks for goes to the network.
@@ -302,6 +410,12 @@ impl Render for Vesper {
             .bg(rgb(theme::BG_APP))
             .text_color(rgb(theme::FG))
             .text_size(px(14.))
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, _| {
+                this.window_key(Some(&e.keystroke.key), true);
+            }))
+            .on_key_up(cx.listener(|this, e: &KeyUpEvent, _, _| {
+                this.window_key(Some(&e.keystroke.key), false);
+            }))
             .child(body)
     }
 }

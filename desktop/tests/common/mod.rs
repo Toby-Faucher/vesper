@@ -11,6 +11,7 @@ use tempfile::TempDir;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use vesper_desktop::model::{Model, Screen};
 use vesper_desktop::net::{self, Cmd, Event};
+use vesper_desktop::settings::Denoise;
 use vesper_desktop::store::MemStore;
 use vesper_desktop::voice::{AudioDevices, AudioInput, AudioOutput, RATE};
 use vesper_protocol::Me;
@@ -191,7 +192,7 @@ impl AudioOutput for Speakers {
 }
 
 impl AudioDevices for FakeAudio {
-    fn input(&self) -> Result<Box<dyn AudioInput>, String> {
+    fn input(&self, _: Option<&str>) -> Result<Box<dyn AudioInput>, String> {
         Ok(Box::new(Mic {
             tone: self.tone.clone(),
             start: Instant::now(),
@@ -200,7 +201,7 @@ impl AudioDevices for FakeAudio {
         }))
     }
 
-    fn output(&self) -> Result<Box<dyn AudioOutput>, String> {
+    fn output(&self, _: Option<&str>) -> Result<Box<dyn AudioOutput>, String> {
         Ok(Box::new(Speakers(self.played.clone())))
     }
 }
@@ -226,6 +227,8 @@ impl Client {
             store,
             audio,
         };
+        // The tones must reach the other side as they are, and the test server has no `/dsp/` model.
+        c.model.settings.denoise = Denoise::Off;
         c.run(vec![Cmd::Restore]);
         c.until("start", |m| m.screen != Screen::Starting).await;
         c

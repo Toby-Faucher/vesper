@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 use vesper_protocol::{ClientMsg, ErrorCode, ServerMsg};
 
 use crate::net::{Cmd, Event};
+use crate::settings::Settings;
 use crate::state::{AppState, Chat, RoomLog, merge_latest, merge_older};
-use crate::voice::{VoiceCmd, VoiceEvent};
+use crate::voice::{Setup, VoiceCmd, VoiceEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -77,8 +78,8 @@ pub struct Call {
     pub rejoin: Option<(i64, Instant)>,
     /// Why the last call ended or what went wrong in this one.
     pub error: String,
-    /// Opus bitrate, like the web's `bitrateKbps` setting (32 to 510).
-    pub bitrate_kbps: u32,
+    /// What the noise filter does, or why DeepFilterNet is not running.
+    pub filter: String,
     /// The headphones note is shown.
     pub headphones: bool,
     headphones_seen: bool,
@@ -99,7 +100,7 @@ impl Default for Call {
             volumes: HashMap::new(),
             rejoin: None,
             error: String::new(),
-            bitrate_kbps: 64,
+            filter: String::new(),
             headphones: false,
             headphones_seen: false,
         }
@@ -116,7 +117,6 @@ impl Call {
         *self = Call {
             id: self.id,
             volumes: std::mem::take(&mut self.volumes),
-            bitrate_kbps: self.bitrate_kbps,
             headphones: self.headphones,
             headphones_seen: self.headphones_seen,
             error: error.into(),
@@ -154,6 +154,10 @@ pub struct Model {
     /// The read marker sent per room, so it is sent once.
     read_sent: HashMap<i64, i64>,
     pub call: Call,
+    /// Loaded at start and saved by the view; the model reads them when a call starts.
+    pub settings: Settings,
+    /// The push-to-talk key is held (or its release delay runs).
+    pub ptt_open: bool,
 }
 
 impl Default for Model {
@@ -175,6 +179,8 @@ impl Default for Model {
             draft_back: None,
             read_sent: HashMap::new(),
             call: Call::default(),
+            settings: Settings::default(),
+            ptt_open: false,
         }
     }
 }
@@ -193,6 +199,8 @@ impl Model {
             server: std::mem::take(&mut self.server),
             not_remembered: self.not_remembered,
             focused: self.focused,
+            settings: std::mem::take(&mut self.settings),
+            ptt_open: self.ptt_open,
             ..Model::default()
         };
     }
@@ -357,7 +365,7 @@ impl Model {
                 if c.phase == Phase::Idle {
                     return vec![];
                 }
-                vec![Cmd::Voice(VoiceCmd::Muted(c.muted))]
+                vec![self.sending()]
             }
             ServerMsg::RoomsChanged { rooms }
                 if c.room
@@ -399,6 +407,10 @@ impl Model {
                 (c.me_speaking, c.speaking) = (me, peers);
                 vec![]
             }
+            VoiceEvent::Filter(text) => {
+                c.filter = text;
+                vec![]
+            }
             VoiceEvent::Failed(e) => self.end_call(&e, true),
             _ => vec![],
         }
@@ -428,6 +440,39 @@ impl Model {
         })
     }
 
+    /// Whether the mic sends: not muted, and with push to talk on, the key held. Like the web's `trackLive`.
+    pub fn live(&self) -> bool {
+        !self.call.muted && (!self.settings.push_to_talk || self.ptt_open)
+    }
+
+    /// The engine's side of `live`.
+    fn sending(&self) -> Cmd {
+        Cmd::Voice(VoiceCmd::Muted(!self.live()))
+    }
+
+    /// The push-to-talk key opened or closed the mic.
+    pub fn set_ptt(&mut self, open: bool) -> Vec<Cmd> {
+        let was = self.live();
+        self.ptt_open = open;
+        if self.call.phase == Phase::Idle || was == self.live() {
+            return vec![];
+        }
+        vec![self.sending()]
+    }
+
+    /// New settings. Push to talk applies at once; the rest at the next call.
+    pub fn set_settings(&mut self, s: Settings) -> Vec<Cmd> {
+        let was = self.live();
+        if !s.push_to_talk {
+            self.ptt_open = false;
+        }
+        self.settings = s.clamped();
+        if self.call.phase == Phase::Idle || was == self.live() {
+            return vec![];
+        }
+        vec![self.sending()]
+    }
+
     /// Join voice in `room`. A call in another room ends first.
     pub fn join_voice(&mut self, room: i64) -> Vec<Cmd> {
         if !self.online {
@@ -444,11 +489,20 @@ impl Model {
         if !c.headphones_seen {
             (c.headphones, c.headphones_seen) = (true, true);
         }
+        let s = &self.settings;
         cmds.push(Cmd::Voice(VoiceCmd::Start {
             call: c.id,
-            bitrate_kbps: c.bitrate_kbps.clamp(32, 510),
-            volumes: c.volumes.clone(),
+            setup: Setup {
+                bitrate_kbps: s.bitrate_kbps.clamp(32, 510),
+                volumes: c.volumes.clone(),
+                denoise: s.denoise,
+                input: s.input_device.clone(),
+                output: s.output_device.clone(),
+            },
         }));
+        if !self.live() {
+            cmds.push(self.sending()); // push to talk: silent until the key
+        }
         cmds
     }
 
@@ -463,7 +517,7 @@ impl Model {
             return vec![];
         }
         c.muted = !c.muted;
-        vec![Cmd::Voice(VoiceCmd::Muted(c.muted)), self.voice_state()]
+        vec![self.sending(), self.voice_state()]
     }
 
     /// Deafen silences everyone; it does not mute the microphone, as in the web app.
@@ -751,7 +805,10 @@ mod tests {
         assert!(matches!(
             m.join_voice(1).as_slice(),
             [Cmd::Voice(VoiceCmd::Start {
-                bitrate_kbps: 64,
+                setup: Setup {
+                    bitrate_kbps: 64,
+                    ..
+                },
                 ..
             })]
         ));
@@ -853,11 +910,95 @@ mod tests {
         assert!(m.toggle_mute().is_empty());
         let cmds = m.join_voice(1);
         assert!(
-            matches!(&cmds[..], [Cmd::Voice(VoiceCmd::Start { volumes, .. })] if volumes["b"] == 400.0)
+            matches!(&cmds[..], [Cmd::Voice(VoiceCmd::Start { setup, .. })] if setup.volumes["b"] == 400.0)
         );
         assert!(
             !m.call.muted && !m.call.deafened,
             "a new call starts unmuted"
+        );
+    }
+
+    #[test]
+    fn push_to_talk_opens_the_mic_only_while_held_and_never_when_muted() {
+        let muted = |cmds: &[Cmd]| match cmds {
+            [Cmd::Voice(VoiceCmd::Muted(m))] => Some(*m),
+            [] => None,
+            other => panic!("{other:?}"),
+        };
+        let mut m = in_call();
+        assert!(m.live(), "voice activity: open while not muted");
+        let ptt = Settings {
+            push_to_talk: true,
+            ..Settings::default()
+        };
+        assert_eq!(
+            muted(&m.set_settings(ptt.clone())),
+            Some(true),
+            "push to talk on closes it"
+        );
+        assert_eq!(muted(&m.set_ptt(true)), Some(false), "press");
+        assert_eq!(muted(&m.set_ptt(true)), None);
+        assert_eq!(muted(&m.set_ptt(false)), Some(true), "release");
+
+        // Mute wins over the key, and the key does not unmute.
+        m.set_ptt(true);
+        assert!(matches!(
+            m.toggle_mute().as_slice(),
+            [Cmd::Voice(VoiceCmd::Muted(true)), _]
+        ));
+        assert_eq!(muted(&m.set_ptt(false)), None);
+        assert_eq!(muted(&m.set_ptt(true)), None);
+        assert!(!m.live());
+        assert!(matches!(
+            m.toggle_mute().as_slice(),
+            [Cmd::Voice(VoiceCmd::Muted(false)), _]
+        ));
+        // A force mute closes it while the key is held.
+        assert_eq!(
+            muted(&server(&mut m, ServerMsg::ForceMuted { muted: true })),
+            Some(true)
+        );
+        server(&mut m, ServerMsg::ForceMuted { muted: false });
+        m.toggle_mute();
+        assert!(m.live());
+
+        // Turning push to talk off opens the mic again; a new call with it on starts closed.
+        let off = Settings::default();
+        m.set_ptt(false);
+        assert_eq!(muted(&m.set_settings(off)), Some(false));
+        m.set_settings(ptt);
+        m.leave_voice();
+        let cmds = m.join_voice(1);
+        assert!(matches!(
+            cmds.as_slice(),
+            [
+                Cmd::Voice(VoiceCmd::Start { .. }),
+                Cmd::Voice(VoiceCmd::Muted(true))
+            ]
+        ));
+        assert!(m.set_ptt(true).len() == 1 && m.live());
+    }
+
+    #[test]
+    fn the_call_starts_with_the_settings_and_shows_the_filter() {
+        let mut m = in_call();
+        voice(&mut m, VoiceEvent::Filter("Noise filter: off.".into()));
+        assert_eq!(m.call.filter, "Noise filter: off.");
+        m.set_settings(Settings {
+            denoise: crate::settings::Denoise::Gate,
+            bitrate_kbps: 1000,
+            input_device: Some("USB".into()),
+            ..Settings::default()
+        });
+        m.leave_voice();
+        assert!(m.call.filter.is_empty(), "cleared with the call");
+        let cmds = m.join_voice(1);
+        let [Cmd::Voice(VoiceCmd::Start { setup, .. })] = cmds.as_slice() else {
+            panic!("{cmds:?}")
+        };
+        assert_eq!(
+            (setup.bitrate_kbps, setup.denoise, setup.input.as_deref()),
+            (510, crate::settings::Denoise::Gate, Some("USB"))
         );
     }
 

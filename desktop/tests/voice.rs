@@ -227,3 +227,40 @@ async fn force_mute_a_lost_socket_and_another_device() {
     assert_eq!(a.model.call.error, CALL_ENDED);
     assert!(b.model.state.voice.iter().any(|p| p.user_id == ann));
 }
+
+/// DeepFilterNet chosen, but this test server has no `/dsp/model.tar.gz`: the call goes on with the noise gate, says
+/// why, and the tone still reaches the other side.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_missing_model_falls_back_to_the_gate_and_says_so() {
+    use vesper_desktop::settings::Denoise;
+    use vesper_desktop::voice::denoise::DEEPFILTER;
+
+    let (_s, mut a, mut b) = two().await;
+    let room = a.room("general");
+    a.model.settings.denoise = Denoise::DeepFilter;
+    a.audio.set_tone(Some(440.0));
+    join(&mut a, room);
+    join(&mut b, room);
+    until_all(&mut [&mut a, &mut b], "ann's filter settles", |c| {
+        c[0].model.call.filter != vesper_desktop::voice::denoise::LOADING
+            && !c[0].model.call.filter.is_empty()
+    })
+    .await;
+    let filter = a.model.call.filter.clone();
+    println!("ann's filter: {filter}");
+    if filter == DEEPFILTER {
+        // A model cached in this machine's data dir from a real run: DeepFilterNet takes a steady tone for noise.
+        println!("NOTE: a cached model was found, so the fallback was not exercised");
+        return;
+    }
+    assert!(
+        filter.starts_with("DeepFilterNet is not available"),
+        "{filter}"
+    );
+    until_all(
+        &mut [&mut a, &mut b],
+        "bob hears ann through the gate",
+        |c| hears(c[1], 440.0),
+    )
+    .await;
+}

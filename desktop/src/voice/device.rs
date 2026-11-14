@@ -1,8 +1,7 @@
-//! The default microphone and speakers through cpal. Capture becomes 48 kHz mono; playback goes from 48 kHz mono to the
-//! device's own rate and channels.
+//! The microphone and speakers through cpal: the ones chosen in the settings by name, else the system defaults.
+//! Capture becomes 48 kHz mono; playback goes from 48 kHz mono to the device's own rate and channels.
 //!
-//! shortcut: the default devices only, linear resampling, and a device lost mid-call goes silent without a message;
-//! upgrade with device choice in settings.
+//! shortcut: linear resampling, and a device lost mid-call goes silent without a message; upgrade when people hear it.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -14,14 +13,36 @@ use super::{AudioDevices, AudioInput, AudioOutput, RATE};
 
 type Queue = Arc<Mutex<VecDeque<f32>>>;
 
-/// The system's default input and output.
+/// The input and output device names, for the settings. Empty when there are none or the system cannot list them.
+pub fn device_names() -> (Vec<String>, Vec<String>) {
+    let host = cpal::default_host();
+    let input = host
+        .input_devices()
+        .map(|d| d.map(|d| d.to_string()).collect());
+    let output = host
+        .output_devices()
+        .map(|d| d.map(|d| d.to_string()).collect());
+    (input.unwrap_or_default(), output.unwrap_or_default())
+}
+
+/// The device called `name`, else the default.
+fn pick(
+    list: Result<impl Iterator<Item = cpal::Device>, cpal::Error>,
+    name: Option<&str>,
+    default: Option<cpal::Device>,
+) -> Option<cpal::Device> {
+    name.and_then(|n| list.ok()?.find(|d| d.to_string() == n))
+        .or(default)
+}
+
+/// cpal's devices.
 pub struct Cpal;
 
 impl AudioDevices for Cpal {
-    fn input(&self) -> Result<Box<dyn AudioInput>, String> {
+    fn input(&self, name: Option<&str>) -> Result<Box<dyn AudioInput>, String> {
         let fail = |e: &dyn std::fmt::Display| format!("Could not open the microphone: {e}");
-        let dev = cpal::default_host()
-            .default_input_device()
+        let host = cpal::default_host();
+        let dev = pick(host.input_devices(), name, host.default_input_device())
             .ok_or("No microphone was found.")?;
         let supported = dev.default_input_config().map_err(|e| fail(&e))?;
         let cfg = supported.config();
@@ -41,10 +62,10 @@ impl AudioDevices for Cpal {
         }))
     }
 
-    fn output(&self) -> Result<Box<dyn AudioOutput>, String> {
+    fn output(&self, name: Option<&str>) -> Result<Box<dyn AudioOutput>, String> {
         let fail = |e: &dyn std::fmt::Display| format!("Could not open the speakers: {e}");
-        let dev = cpal::default_host()
-            .default_output_device()
+        let host = cpal::default_host();
+        let dev = pick(host.output_devices(), name, host.default_output_device())
             .ok_or("No speakers or headphones were found.")?;
         let supported = dev.default_output_config().map_err(|e| fail(&e))?;
         let cfg = supported.config();

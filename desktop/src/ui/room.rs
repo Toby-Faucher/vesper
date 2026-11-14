@@ -8,7 +8,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::Input;
-use gpui_component::{h_flex, v_flex};
+use gpui_component::{Selectable, h_flex, v_flex};
 use vesper_protocol::{RoomInfo, RoomKind};
 
 use super::sign_in::TextLine;
@@ -227,6 +227,17 @@ impl Vesper {
                             .child(me),
                     )
                     .child(
+                        div().debug_selector(|| "open-settings".into()).child(
+                            Button::new("open-settings")
+                                .ghost()
+                                .label("Settings")
+                                .selected(self.settings_open)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_settings(window, cx)
+                                })),
+                        ),
+                    )
+                    .child(
                         Button::new("sign-out")
                             .ghost()
                             .label("Sign out")
@@ -236,6 +247,22 @@ impl Vesper {
     }
 
     pub(super) fn render_main(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Div {
+        if self.settings_open {
+            let settings = self.render_settings(cx);
+            let call = self.render_call(cx);
+            return div()
+                .size_full()
+                .flex()
+                .child(self.render_sidebar(cx))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .h_full()
+                        .min_w_0()
+                        .child(settings)
+                        .children(call),
+                );
+        }
         self.sync_list();
         let m = &self.model;
         let room = m.active.and_then(|id| m.state.find_room(id));
