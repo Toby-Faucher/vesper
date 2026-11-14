@@ -35,9 +35,10 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 200, cssFirst: 12, css
 // 2026-11-10: 58.9 to 59.3 on main for staying in a call after a dropped socket (the rejoin in voice.svelte.ts and its
 // notice in RoomView); measured 58.8 on the dev machine and 59.0 in CI. Merged here, 60.4 to 60.8: measured 60.4 on the
 // dev machine, so CI is expected near 60.6.
-// 2026-11-14: 60.8 to 61.2 for v1.8.0 prefetch on intent (intent.ts with its pointer velocity listener, and the hooks on
-// the sidebar rows, the cog and the account button, which are in the first chunk); measured 61.1 on the dev machine.
-export const RATCHET_GZIP_KB = { first: 61.2 };
+// 2026-11-14: 60.8 to 61.4 for v1.8.0 prefetch on intent (intent.ts with its pointer velocity listener, and the hooks on
+// the sidebar rows, the cog and the account button, which are in the first chunk); measured 61.1 on the dev machine and
+// just over 61.2 in CI.
+export const RATCHET_GZIP_KB = { first: 61.4 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.
