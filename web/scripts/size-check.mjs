@@ -15,7 +15,10 @@ import { pathToFileURL } from 'node:url';
 // ceiling. On 2026-11-01 (Task 6 fix round) it became first load / lazy chunk / sum / CSS, because with lazy chunks
 // the sum is not what a user waits for. Measured then: first load 52.9, largest lazy 6.0, sum 73.7, css 8.1 kB.
 // Ruling #2 (2026-11-01, UI Task 9 fix round): CSS is judged like JS, first load 12 and sum 20 (measured 11.1 then).
-export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 170, cssFirst: 12, css: 20 };
+// 2026-11-14 (v1.8.0, Toby): all JS 170 to 200 and all CSS 20 to 24. Both sums began as estimates, not measurements; only
+// lazy code adds to them and the first-load ratchet guards what people wait for. Measured 170.2 kB JS and 20.0 kB CSS
+// with inline media and prefetch on intent. The sums stay as a backstop against a large library landing by accident.
+export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 200, cssFirst: 12, css: 24 };
 // The ratchet: first load may not grow back. Trimmed on 2026-11-01 (#88) from 68.8 to 55.9 kB; the limit is that plus
 // 1 kB. Lower it when the first load shrinks; raise it only on purpose, in the commit that needs it, and say why.
 // 2026-11-03: 56.9 to 57.5 for direct messages (the DM list in state.ts, the sidebar section and row, findRoom); measured
@@ -32,7 +35,9 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 170, cssFirst: 12, css
 // 2026-11-10: 58.9 to 59.3 on main for staying in a call after a dropped socket (the rejoin in voice.svelte.ts and its
 // notice in RoomView); measured 58.8 on the dev machine and 59.0 in CI. Merged here, 60.4 to 60.8: measured 60.4 on the
 // dev machine, so CI is expected near 60.6.
-export const RATCHET_GZIP_KB = { first: 60.8 };
+// 2026-11-14: 60.8 to 61.2 for v1.8.0 prefetch on intent (intent.ts with its pointer velocity listener, and the hooks on
+// the sidebar rows, the cog and the account button, which are in the first chunk); measured 61.1 on the dev machine.
+export const RATCHET_GZIP_KB = { first: 61.2 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.

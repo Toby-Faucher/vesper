@@ -92,8 +92,8 @@ output matches the Rust types), `deny`, `secrets`, `wording`, `scripts` (every `
 `deny` needs network for the advisory database. `web` runs `npm ci`, then `npm run ci` in `web/`: svelte-check, vitest, the build and gzip size budgets
 (`web/scripts/size-check.mjs`, files in `dist/assets` only; the wasm and the model are not counted). It prints five numbers and
 fails above each budget: first load JS 70 kB (the entry chunk in `dist/index.html`, its modulepreloads and every chunk they import
-statically), the largest lazy JS chunk 35 kB (`import()` chunks and the workers), all JS 170 kB, first load CSS 12 kB (the stylesheets `dist/index.html`
-links; a lazy chunk's CSS loads with the chunk) and all CSS 20 kB. Sizes are
+statically), the largest lazy JS chunk 35 kB (`import()` chunks and the workers), all JS 200 kB, first load CSS 12 kB (the stylesheets `dist/index.html`
+links; a lazy chunk's CSS loads with the chunk) and all CSS 24 kB. Sizes are
 KiB of Node's gzip, so they read a little lower than the kB figures Vite prints.
 First load JS also has a ratchet (`RATCHET_GZIP_KB` in `size-check.mjs`): the measured value after the 2026-11-02 trim plus
 1 kB. Lower it when first load shrinks.
