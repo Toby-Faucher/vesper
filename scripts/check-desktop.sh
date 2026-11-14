@@ -4,6 +4,8 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root/desktop"
+# Linking the desktop test binaries in parallel can pass the 8 GB cap on the dev machine: two jobs unless set or uncapped (CI).
+[ -z "${VESPER_NO_CAP:-}" ] && export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 cap() { if [ -n "${VESPER_NO_CAP:-}" ]; then "$@"; else "$root/scripts/capped.sh" "$@"; fi; }
 steps=("$@")
 [ ${#steps[@]} -eq 0 ] && steps=(fmt clippy test)
