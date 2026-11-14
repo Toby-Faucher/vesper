@@ -90,8 +90,8 @@ describe('title count', () => {
 
 describe('prefs', () => {
   beforeEach(() => localStorage.clear());
-  it('defaults: mentions and join/leave off, my call cues on at volume 50; saved', () => {
-    expect(loadPrefs()).toEqual({ mentions: false, dms: false, sounds: false, call: true, muteCues: true, connectCues: true, volume: 50, ring: true });
+  it('defaults: mentions off, every call sound on at volume 50; saved', () => {
+    expect(loadPrefs()).toEqual({ mentions: false, dms: false, sounds: true, call: true, muteCues: true, connectCues: true, volume: 50, ring: true });
     savePrefs({ ...DEFAULTS, mentions: true, connectCues: false, volume: 20 });
     expect(loadPrefs()).toEqual({ ...DEFAULTS, mentions: true, connectCues: false, volume: 20 });
     localStorage.setItem(NOTIFY_KEY, 'not json');
@@ -105,8 +105,10 @@ describe('prefs', () => {
     expect(loadPrefs()).toMatchObject({ ring: true, call: false });
   });
   it('an old saved value keeps its join and leave choice', () => {
-    localStorage.setItem(NOTIFY_KEY, JSON.stringify({ mentions: true, sounds: true }));
-    expect(loadPrefs()).toEqual({ ...DEFAULTS, mentions: true, dms: true, sounds: true });
+    localStorage.setItem(NOTIFY_KEY, JSON.stringify({ mentions: true, sounds: false }));
+    expect(loadPrefs()).toEqual({ ...DEFAULTS, mentions: true, dms: true, sounds: false }); // a saved off stays off
+    localStorage.setItem(NOTIFY_KEY, JSON.stringify({ mentions: true }));
+    expect(loadPrefs().sounds).toBe(true); // never set: on
     localStorage.setItem(NOTIFY_KEY, JSON.stringify({ mentions: true, dms: false }));
     expect(loadPrefs().dms).toBe(false); // once set, dms stands alone
   });

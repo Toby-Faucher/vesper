@@ -9,7 +9,7 @@
   import { loadPrefs, permission, requestMentions, savePrefs, testNotification, type NotifyPrefs } from '../../lib/ui/notify';
   import { voice } from '../../lib/voice.svelte';
   // Settings > Notifications: mention notifications (the browser asks only when the switch is turned on) and the call
-  // sounds. Mentions and the join and leave of others are off until turned on, my own call cues are on. Saved to vesper.notify.
+  // sounds. Mentions are off until turned on, the call sounds are on. Saved to vesper.notify.
   let prefs = $state(loadPrefs());
   let perm = $state(permission());
   const on = $derived(prefs.mentions && perm === 'granted');

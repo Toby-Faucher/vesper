@@ -313,6 +313,16 @@ describe('in a call', () => {
     expect(voice).toMatchObject({ joined: false, joinedRoom: null, capture: undefined, pc: undefined, quality: 'unknown', error: '' });
   });
 
+  it('my own join and leave play connect and disconnect', async () => {
+    chime.mockClear();
+    await joined();
+    flushSync();
+    expect(chime).toHaveBeenLastCalledWith('connect', null, expect.any(Number));
+    v.leave();
+    flushSync();
+    expect(chime).toHaveBeenLastCalledWith('disconnect', null, expect.any(Number));
+  });
+
   it('the end of a call sends one summary to your own list; a failed join sends none', async () => {
     const fetch = vi.fn(async () => ({ ok: true, status: 204 }));
     vi.stubGlobal('fetch', fetch);
@@ -588,6 +598,17 @@ describe('screen share', () => {
     expect(track.stop).toHaveBeenCalled();
     expect(shares.mine).toBeNull();
     expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
+  });
+
+  it('a_moderator_stop_ends_the_share_with_a_notice', async () => {
+    const { track } = await sharing();
+    sig.emit({ type: 'peer_share', user_id: me, share: null });
+    sig.emit({ type: 'share_stopped' });
+    expect(track.stop).toHaveBeenCalled();
+    expect(shares.mine).toBeNull();
+    expect(voice.notice).toBe('A moderator stopped your screen share.');
+    expect(voice.error).toBe('');
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]); // no share_stop: the server ended it
   });
 
   it('rate_limited_just_after_a_cut_says_the_share_was_stopped', async () => {

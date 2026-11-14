@@ -129,7 +129,7 @@ Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state 
 Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is the server's `version` and `build` id), `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
 `peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `peer_share { user_id, share }`, `watchers { count }`, `point { user_id, from, x, y }`, `rooms_changed { rooms }`, `user_updated { user }`,
 `user_created { user }`,
-`force_muted { muted }`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
+`force_muted { muted }`, `share_stopped`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
 `read { room_id, last_read_id }`, `ring_start { room_id, user_id }`, `ring_stop { room_id }`, `error { code, message }`. `unread` in `hello` has one `Unread` per room the user can see.
 Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `share_cap`, `internal`.
 
@@ -158,13 +158,16 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `share_cap
    `point` (x and y from 0 to 1, else `bad_message`) goes as a server `point { user_id, from, x, y }` to everyone else in the call
    while `user_id` shares. The socket budget below is its rate limit. If the SFU cuts a share for going over its rate ceiling,
    the server sends `peer_share` with `null` to the whole room and `error { code: rate_limited }` to the sharer.
+   A moderator's `POST /api/users/{id}/stop-share` ends a share through the same path as `share_stop` (`Voice::moderator_stop_share`):
+   the room and the sharer get `peer_share` with `null`, the SFU stops forwarding the video, and the sharer then gets `share_stopped`,
+   which the client shows as "A moderator stopped your screen share." Nothing holds afterwards: the sharer may share again.
 8. The server pings every 25 s and drops a socket silent for two periods (`ws.rs`).
 
 Each socket may send a burst of 20 messages, then 5 a second (`answer` does not count, since the server asks for it). A message
 over the limit is dropped with `error { code: rate_limited }`. Past 20 such refusals (then 1 a second) the socket closes with 1008.
 
 Presence goes to every socket whose user can see the room (`Hub::broadcast_room`), in voice or not, so the room list shows who
-is talking. `peer_joined`, `peer_state` and `peer_share` skip the session's own socket (a cut share is the exception: the sharer gets `peer_share` with `null` too). `peer_left` also reaches the session's own socket: that
+is talking. `peer_joined`, `peer_state` and `peer_share` skip the session's own socket (a cut or moderator-stopped share is the exception: the sharer gets `peer_share` with `null` too). `peer_left` also reaches the session's own socket: that
 is how a tab learns its call ended (kick, another tab took over, lost access, SFU). The socket stays open for the rest.
 A restricted room's presence reaches only sockets that can see it. When a room's member list or a role changes, or the room is archived, everyone in
 voice who can no longer see their room is taken out (`Voice::refresh`, called from `api_rooms::rooms_changed`). A socket that
@@ -344,6 +347,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/users/{id}/unban` | owner | the new `UserInfo` |
 | `POST /api/users/{id}/kick` | moderator or owner, on a lower role | 204, the user leaves voice; 404 if not in voice |
 | `POST /api/users/{id}/force-mute` (`ForceMute`) | moderator or owner, on a lower role | 204; `muted: false` lifts it; works when not in voice too |
+| `POST /api/users/{id}/stop-share` | moderator or owner, on a lower role | 204, the share ends as if the sharer stopped it; 404 if they share in no group room the caller can see |
 | `POST /api/users/{id}/disconnect` | moderator or owner, on a lower role | 204, every socket of the user closes with 4003 |
 | `GET /api/rooms` | a session | `RoomInfo[]` by position, only the rooms you can see. A DM (`kind: "dm"`) is listed to its two members only |
 | `POST /api/dms` (`DmCreate`) | a session, Change limit by user | `RoomInfo` of the DM with that person, made if needed; yourself and a banned account are 400, an unknown one 404 |
@@ -496,7 +500,7 @@ Roles (`require`, `api_admin.rs`; owner > moderator > member):
 | Mint or grant the owner role | no | no | no, only `vesper-server create-owner` |
 | See a restricted room | only when listed | yes | yes |
 | Create, rename, reorder, restrict, archive a room or set its members | no | no | yes |
-| Kick from voice, force-mute, disconnect | no | on members only | yes, not on themselves |
+| Kick from voice, force-mute, stop a screen share, disconnect | no | on members only | yes, not on themselves |
 
 A refused role is 403. An `owner` role in `InviteCreate` or `RolePatch`, the owner acting on their own account, `max_uses` outside
 1 to 50 and `expires_hours` outside 1 to 720 are 400. The voice actions on yourself, a fellow moderator or the owner are 403. A role change counts from the user's next request and their next voice join. A banned user's cookie

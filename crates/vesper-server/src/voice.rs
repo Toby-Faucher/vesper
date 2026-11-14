@@ -427,22 +427,45 @@ impl Voice {
 
     /// End `user_id`'s screen share, if one runs. Ignored if `session` was replaced.
     pub fn share_stop(&self, user_id: &str, session: u64) {
-        self.end_share(user_id, session, false);
+        self.end_share(user_id, session, None);
     }
 
     /// The SFU cut `user_id`'s share for going over the rate ceiling: end it for everyone and
     /// tell the sharer why. Ignored if `session` was replaced.
     pub fn cut_share(&self, user_id: &str, session: u64) {
-        self.end_share(user_id, session, true);
+        let why = ServerMsg::Error {
+            code: ErrorCode::RateLimited,
+            message: "Your screen share sent more than 35 Mbps and was stopped.".into(),
+        };
+        self.end_share(user_id, session, Some(why));
     }
 
-    fn end_share(&self, user_id: &str, session: u64, cut: bool) {
+    /// A moderator (`by`) ends `user_id`'s share as if they had stopped it, and the sharer is
+    /// told with `ShareStopped`. Only in a group room `by` can see. False if no such share runs.
+    /// Nothing holds afterwards: they may share again.
+    pub fn moderator_stop_share(&self, user_id: &str, by: &UserInfo) -> bool {
+        let session = {
+            let st = self.lock();
+            let Some(m) = st.members.get(user_id).filter(|m| m.share.is_some()) else {
+                return false;
+            };
+            match st.rooms.get(&m.room) {
+                Some(r) if r.kind != RoomKind::Dm && can_see(by, r) => m.session,
+                _ => return false,
+            }
+        };
+        self.end_share(user_id, session, Some(ServerMsg::ShareStopped))
+    }
+
+    /// `why` goes to the sharer after the share's end, when they did not ask for the stop.
+    /// False if no share ran for this session.
+    fn end_share(&self, user_id: &str, session: u64, why: Option<ServerMsg>) -> bool {
         let mut st = self.lock();
         let Some(m) = st.current_mut(user_id, session) else {
-            return;
+            return false;
         };
         if m.share.take().is_none() {
-            return;
+            return false;
         }
         self.0.sfu.set_sharing(user_id, false);
         let (room, tx) = (m.room, m.tx.clone());
@@ -450,15 +473,12 @@ impl Voice {
             user_id: user_id.into(),
             share: None,
         };
-        // A cut share also reaches the sharer, who did not ask for the stop.
         st.tell(&self.0.hub, room, msg.clone(), &[&tx]);
-        if cut {
+        if let Some(why) = why {
             tx.send(msg);
-            tx.send(ServerMsg::Error {
-                code: ErrorCode::RateLimited,
-                message: "Your screen share sent more than 35 Mbps and was stopped.".into(),
-            });
+            tx.send(why);
         }
+        true
     }
 
     /// `user_id` starts or stops receiving `sharer`'s screen. Ignored if `session` was replaced

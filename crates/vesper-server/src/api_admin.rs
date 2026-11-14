@@ -1,8 +1,9 @@
 //! Admin routes: the user list, invites, roles, bans, reset links and the voice actions.
 //! Owner > moderator > member. Moderators mint and revoke member invites; only the owner mints
 //! moderator invites, changes roles and bans. The owner role only comes from the CLI, so it can
-//! never be granted, taken away or banned here. Kick from voice, force-mute and disconnect need
-//! moderator, and only work on a lower role (a moderator on members, the owner on anyone else).
+//! never be granted, taken away or banned here. Kick from voice, force-mute, stop share and
+//! disconnect need moderator, and only work on a lower role (a moderator on members, the owner
+//! on anyone else).
 
 use axum::extract::rejection::{JsonRejection, PathRejection};
 use std::net::SocketAddr;
@@ -63,6 +64,7 @@ pub fn routes() -> Router<AppState> {
         .route("/users/{id}/unban", post(unban))
         .route("/users/{id}/kick", post(kick))
         .route("/users/{id}/force-mute", post(force_mute))
+        .route("/users/{id}/stop-share", post(stop_share))
         .route("/users/{id}/disconnect", post(disconnect))
         .route("/admin/server", get(server))
 }
@@ -326,6 +328,21 @@ async fn force_mute(
     let id = path(id)?;
     voice_target(&st, &a, &id).await?;
     st.voice.force_mute(&id, body(req)?.muted);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// End the user's screen share, as if they had stopped it. 404 if they share in no group room
+/// the caller can see. Nothing holds afterwards: they may share again.
+async fn stop_share(
+    State(st): State<AppState>,
+    a: Authed,
+    id: Result<Path<String>, PathRejection>,
+) -> Result<StatusCode, ApiError> {
+    let id = path(id)?;
+    voice_target(&st, &a, &id).await?;
+    if !st.voice.moderator_stop_share(&id, &a.user) {
+        return Err(ApiError::new(ApiErrorCode::NotFound, "not sharing"));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
