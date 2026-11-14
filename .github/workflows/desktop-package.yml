@@ -1,6 +1,6 @@
 name: desktop-package
-# A Windows build of the desktop client that friends can download: a release Vesper.exe in a zip, kept as a
-# workflow artifact for 30 days. Runs on pushes to the v2 branch and on desktop tags, or by hand.
+# Builds of the desktop client people can download, kept as workflow artifacts for 30 days: Windows (a release
+# Vesper.exe in a zip) and Linux (a tarball). Runs on pushes to the v2 branch and on desktop tags, or by hand.
 on:
   push:
     branches: [v2/desktop]
@@ -42,4 +42,35 @@ jobs:
         with:
           name: vesper-desktop-windows-x64-${{ github.sha }}
           path: dist/Vesper
+          retention-days: 30
+
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - run: >-
+          sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+          libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libssl-dev
+          libopus-dev pkg-config
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: desktop
+          key: release
+      - run: cargo build --release --locked
+        working-directory: desktop
+      - name: Package
+        run: |
+          mkdir -p dist/Vesper
+          cp desktop/target/release/vesper-desktop dist/Vesper/vesper-desktop
+          cp desktop/package/README-linux.txt dist/Vesper/README.txt
+          cp desktop/package/THIRD-PARTY.txt dist/Vesper/THIRD-PARTY.txt
+          cp LICENSE dist/Vesper/LICENSE.txt
+          tar -C dist -czf dist/vesper-desktop-linux-x64.tar.gz Vesper
+          ls -la dist dist/Vesper
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: vesper-desktop-linux-x64-${{ github.sha }}
+          path: dist/vesper-desktop-linux-x64.tar.gz
           retention-days: 30
