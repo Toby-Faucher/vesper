@@ -43,6 +43,10 @@ Vesper uses `vMAJOR.MINOR.PATCH`. One number covers the whole app: the server, t
 5. Deploy from the tag, never from a branch: `git archive vX.Y.Z` into the stack, then follow [deploy.md](deploy.md). Before it, tag the running image (`docker tag vesper:latest vesper:previous`). If the release adds a migration, the server backs the database up to `data/backups/pre-schema-<NNNN>-<UTC time>.db` (`<NNNN>`: the schema the copy holds) before it migrates (from v1.4); a manual `vesper-server backup` as well does no harm.
 6. Check `/health`, sign in, and join a call from a second device. Say in the release notes what was not verified.
 
+The desktop client (`desktop/`, v2) has its own lockfile that records the server crates' versions. A version bump must also run
+`cd desktop && cargo update -p vesper-protocol -p vesper-server -p vesper-sfu -p vesper-store -p vesper-dsp` (only those, never a
+blanket update), or the desktop CI jobs fail with `--locked`.
+
 Each release with a change people can see adds an entry to `web/src/lib/release-notes.ts` in its release pull request: the version and one short line per change, written for the people who use Vesper (no wire, migration or code detail). The "What's new" popup shows those lines once, on the first load after the update. A release without an entry shows no popup.
 
 ## Rolling back
