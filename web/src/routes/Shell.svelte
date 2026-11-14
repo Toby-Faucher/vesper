@@ -11,7 +11,7 @@
   import { settle } from '../lib/ui/motion';
   import { chat } from '../lib/chat.svelte';
   import { ring } from '../lib/ring.svelte';
-  import { isMac, isTyping, nextUnread, shortcut, stepRoom } from '../lib/ui/keys';
+  import { isMac, isTyping, nextUnread, roomOrder, shortcut, stepRoom } from '../lib/ui/keys';
   import { loadRecent, pushRecent } from '../lib/ui/recent';
   import { UI_MESSAGES } from '../lib/ui/messages-first';
   import { mentionCount, titleFor } from '../lib/ui/notify';
@@ -120,7 +120,7 @@
       return;
     }
     if (e.repeat && s !== 'prev-room' && s !== 'next-room') return e.preventDefault(); // a held key toggles once
-    const ids = [...rooms, ...session.state.dms].map((x) => x.id);
+    const ids = roomOrder(session.state);
     const to = (id: number | null) => id !== null && navigate(href({ name: 'room', id }));
     if (s === 'search') openSearch();
     else if (s === 'switcher') {

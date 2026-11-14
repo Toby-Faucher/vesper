@@ -5,6 +5,7 @@
 
 export type Shortcut = 'switcher' | 'help' | 'mute' | 'deafen' | 'prev-room' | 'next-room' | 'next-unread' | 'search' | 'sidebar' | 'escape';
 import type { Unread } from '../gen/Unread';
+import type { RoomInfo } from '../gen/RoomInfo';
 
 type KeyEvent = Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'> &
   Partial<Pick<KeyboardEvent, 'getModifierState'>>;
@@ -71,6 +72,9 @@ export function isTyping(el: Element | null): boolean {
 }
 
 // Alt+Up/Down and Alt+Shift+Down. Here, not in switcher.ts, so the switcher's code stays out of the first load.
+/** The room ids in sidebar order: rooms by position, then DMs. */
+export const roomOrder = (s: { rooms: RoomInfo[]; dms: RoomInfo[] }) =>
+  [...[...s.rooms].sort((a, b) => a.position - b.position), ...s.dms].map((x) => x.id);
 /** The room `dir` steps from `current` in the sidebar order (no wrap), or null at either end. */
 export function stepRoom(ids: number[], current: number | null, dir: 1 | -1): number | null {
   const i = current === null ? -1 : ids.indexOf(current);

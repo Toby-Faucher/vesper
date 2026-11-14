@@ -6,7 +6,7 @@
   import { onMount, tick, untrack } from 'svelte';
   import MessageItem from './MessageItem.svelte';
   import { errorText } from '../lib/api';
-  import { anchorTop, chat, jumpTo, loadLatest, loadNewer, loadOlder, markRead, openRoom, trimRooms } from '../lib/chat.svelte';
+  import { anchorTop, chat, jumpTo, loadLatest, loadNewer, loadOlder, markRead, openRoom, prefetchRoom, trimRooms } from '../lib/chat.svelte';
   import type { Message } from '../lib/gen/Message';
   import { parse } from '../lib/markdown';
   import { session } from '../lib/session.svelte';
@@ -16,6 +16,7 @@
   import { arrivals, firstUnreadInPage, follows, plain, rows } from '../lib/ui/timeline';
   import { lazy } from '../lib/ui/lazy';
   import { viewable } from '../lib/ui/attachments';
+  import { roomOrder, stepRoom } from '../lib/ui/keys';
   import type { Attachment } from '../lib/gen/Attachment';
   import Button from '../lib/ui/c/Button.svelte';
   import EmptyState from '../lib/ui/c/EmptyState.svelte';
@@ -110,6 +111,11 @@
         loading = false;
         await tick();
         place();
+        // After the room's own load: warm the rooms Alt+Up and Alt+Down go to next (skipped when held or on save-data).
+        for (const d of [-1, 1] as const) {
+          const n = stepRoom(roomOrder(session.state), room, d);
+          if (n !== null) prefetchRoom(n);
+        }
       },
       (e) => {
         if (room !== roomId) return;
