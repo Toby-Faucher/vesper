@@ -67,7 +67,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.88.1
         with:
           tool: cargo-nextest@0.9.148
       # bindings reruns the vesper-protocol export tests and diffs web/src/lib/gen against the commit.
@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install --no-self-update
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.88.1
         with:
           tool: cargo-deny@0.20.2
       - run: scripts/check.sh deny
@@ -182,7 +182,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.88.1
         with:
           tool: cargo-nextest@0.9.148
       # The CLI must equal the wasm-bindgen crate in Cargo.lock; read it the way scripts/build-dsp.sh does.
