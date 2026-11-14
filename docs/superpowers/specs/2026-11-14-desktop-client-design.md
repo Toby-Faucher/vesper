@@ -61,7 +61,8 @@ against a real `vesper-server` started inside the tests. Anything that needs a s
 | D5 | Watch a screen share (VP8 decode), share notices | Done 2026-11-14. Tests: a fake sharer sends VP8 through a real SFU; a desktop client watches, decodes the right colour, stops watching, and clears the view when the share ends |
 | D6 | Packages. The friends use Windows **[Toby, 2026-11-14]**, so Windows comes first | **D6a done**: `desktop-package.yml` builds a release `Vesper.exe` and uploads a zip (exe, README, licence, third-party notices) as a 30-day artifact on every push to `v2/desktop`. Not signed, so SmartScreen warns. Not verified: running it. Still to do: an installer, signing (Toby's call), Linux and macOS packages |
 | D7 | Echo cancellation, a device lost mid-call, saved per-person volumes | Done 2026-11-14. Tests: AEC3 on a synthetic room takes the echo down 50 dB once converged and keeps the near voice in double talk; the far end is exactly what was played; a fake device that is unplugged says so and is opened again; volumes saved and loaded |
-| Later | Uploads, reactions, edits, search, settings parity, sharing a screen, input gain | |
+| D8 | Chat parity with the web: Markdown, day rows and grouping, replies, edits, deletes, reactions, mentions, typing, uploads and files, pins | Done 2026-11-14. Tests: the web's Markdown cases ported; two clients against a real server see each other's edits, deletes, reactions, replies, typing and files; an image is fetched with the cookie and decoded; headless views for Markdown, reactions, the upload tray and the edit flow |
+| Later | Search, settings parity, sharing a screen, input gain, inline audio and video players | |
 
 ## D1 and D2: what was built and how it was checked
 
@@ -365,6 +366,84 @@ Verified, by `scripts/check-desktop.sh` on the dev machine (no display, no audio
 Not verified: a real room, real speakers and microphones (how well AEC3 does with a laptop's speakers and mic, clock drift
 between two devices, a Bluetooth headset's long delay), unplugging a real device on Windows or Linux (which errors cpal's
 WASAPI and ALSA backends really give), and the CPU cost on a slow Windows laptop.
+
+## D8: what was built and how it was checked
+
+- **Markdown** (`src/markdown.rs`) is a port of `web/src/lib/markdown.ts`: the same subset, the same rules and the same tree
+  (bold, italic, strike, inline code, code blocks with a language label, headings, one level of quote, bullet and numbered
+  lists nested up to 4 levels, rules, bare links, mentions). Raw HTML, `[text](url)` links and images stay text. A link is
+  kept only when it parses as http or https with no user name or password, and its text is the parsed URL, so it reads as
+  where it goes. `mailto:` is not a link, as on the web. `src/ui/md.rs` draws each run of inline nodes as one `StyledText` with
+  highlights (bold, italic, strike, code, link, mention) and each block as its own element. A click on a link calls
+  `cx.open_url`, the system browser. Code blocks are not coloured by language (the web's highlighter is not ported) **[call]**.
+- **Timeline** (`src/timeline.rs`): a day row ("Today", "Yesterday", "Thu 12 Nov", "Fri 19 Dec 2025" for another year, in
+  local time) before the first message of each day, and grouping as `timeline.ts`: a message heads a group unless the one
+  before has the same author, is less than 5 minutes older, and neither is deleted; a reply and a new day always head one.
+  The labels are English, not the system locale **[call]**. There is no "New" row.
+- **Messages.** A row shows the name and time on a group's head, "(edited)" and "Pinned", the reply's quote (a click scrolls
+  to the original when it is loaded; the web also loads it from the server, the desktop app does not yet), the body as
+  Markdown, files, and reactions. A message that mentions me has an amber bar, as on the web. On hover a bar shows React, Reply,
+  Pin or Unpin (rooms only: a DM has no pins), Edit (my own) and Delete (my own, or anyone's for a moderator or the owner, as
+  the server allows). Delete asks first with the web's text. React opens the web's three quick reactions; a reaction under a
+  message toggles mine and shows who reacted on hover. The web's "any symbol" box is not there **[call]**.
+- **Editing.** Up in an empty composer with no files waiting edits my newest loaded message, as on the web; Edit does the same
+  for any of mine. The edit box sits in the row, Enter saves, Shift+Enter is a new line, Esc cancels, and a failed save shows
+  why and stays open. Focus goes back to the composer after.
+- **Composer.** Above the box: "X is typing" (the web's lines for one, two and more), the reply bar ("Replying to X: ...",
+  Esc or Cancel reply), the `@` list, and the upload tray. Typing is sent at most every 3 s and only for real text; a typing
+  line lasts 5 s or until that person's message comes. The `@` list follows `mentionQuery` and `mentionable` from the web
+  (the switcher's scorer, only people who can see the room, not banned, not me, at most 8): Up and Down move, Enter or Tab
+  picks, Esc closes it for that `@`. Up, Down, Tab and Esc fall through to the text box when the list is shut.
+- **Uploads** (`src/uploads.rs`, the web's `tray.svelte.ts`): the Attach button (the system's file dialog), files dropped on
+  the room (GPUI's `ExternalPaths`), and a picture pasted with Ctrl+V (Cmd+V on macOS) when the clipboard holds one, saved as
+  "Pasted image YYYY-MM-DD HH.MM.png" in the temp folder first. Folders are left out. A file over `Me.upload_max` fails at
+  once with "Files can be up to N MB." and is never sent. Each file is its own `POST /api/rooms/{id}/uploads?name=`, the file
+  streamed as the raw body with its `Content-Length`, at most 3 at a time; the tray shows the progress, Waiting, Ready, or why
+  it failed (the web's texts) with Retry, and Cancel or Remove. Cancel drops the request. Send waits while a file of the room
+  is still going ("Wait for the files to finish uploading."), then sends the finished ones with the text (or their names,
+  as the web does when there is no text); a 409 says "That file could not be attached. Upload it again.".
+- **Files in messages.** An image (png, jpeg, gif first frame, webp, at most 20 MB) is fetched from `/api/uploads/{id}` with
+  the session cookie once its row is drawn, decoded off the UI thread with limits (16384 a side, 256 MB), made at most
+  720 x 560 and drawn at the web's box (at most 360 x 280); the last 64 are kept. A click opens it in the system's viewer.
+  Any other file is a card with the name, kind and size. Save opens the system's save dialog in Downloads (straight to
+  Downloads with a free name if there is no dialog) and then says where it went, with Show in folder. Audio and video
+  cards also have Open, which hands the file to the system's player; inline players are later. Open is only for images,
+  audio and video, saved under the temp folder as `<id>.<ext>` with the extension from the type the server found in the
+  bytes, never from the name; a plain file can only be saved, so nothing sent in chat runs with a click **[call]**. A saved
+  name is made safe for Windows (no separators or reserved characters, no device names). An upload id must be 32 hex
+  characters before it goes in a URL or a path.
+- **Pins.** A Pins button in a room's header opens a panel of its pins (`GET /api/rooms/{id}/pins`), loaded again when a pin
+  changes; a click scrolls to the message when it is loaded. Pinning and unpinning is in the hover bar.
+- **Dependencies.** No new crate. Features: `reqwest` `stream` (for the upload body; it adds `wasm-streams` 0.5.0 to the
+  lockfile, used only on wasm), `tokio` `fs` and `io-util`, and `image` `png`, `jpeg`, `gif` and `webp` (already on through
+  GPUI). `libc` 0.2.189 and `mio` 1.2.4 still hold.
+
+Verified, by `scripts/check-desktop.sh` on the dev machine (no display):
+
+- Unit tests: the web's Markdown cases (`markdown_is_inert`, the link rules, bidi and IDN hosts, fences, basic, unclosed,
+  depth 4, blocks, nested lists, hostile blocks) and the linear time cases (28 hostile 100k-character inputs, each under 2 s
+  in a debug build); day labels and grouping; `mentionQuery` and `mentionable`; the typing throttle and the 5 s line; the tray
+  (3 at a time, cancel, retry, too large, send takes the finished ones); safe names, picture decoding and the id check; the
+  model's reply, edit, delete, reaction and pin flows, with a member and a moderator.
+- Against a real `vesper-server` (`desktop/tests/chat.rs`): ann edits and bob sees the new text marked edited; bob reacts and
+  ann sees who, then it comes off; bob cannot delete ann's message (the app offers no Delete, and the server answers 403 to
+  one sent anyway); ann deletes hers and bob sees it deleted. A reply round trip with the right quote. A mention in a room not
+  shown counts. Typing from ann reaches bob, and a second keystroke within 3 s sends nothing. A small text file uploaded,
+  attached and seen by bob as a `file` with its name and size, then saved by bob to disk with the same bytes. A png is seen
+  as an `image`, fetched by bob's client with his cookie and decoded (BGRA, 800 x 400 made 720 x 360), and the same route
+  without the cookie is refused (401). A cancelled upload leaves the tray.
+- GPUI's headless window (`ui/view_tests.rs`): a Markdown message draws its blocks; a day row heads the first message; a
+  click on my reaction takes it off; the picker adds one; a click on a link opens it (`opened_url`); Save asks for a path
+  and downloads there; Pin and the pins panel; an image is fetched once and drawn when it comes; the upload tray shows
+  each file, takes progress, cancels, and Send waits and then sends with the file; Up edits my last message, Enter saves,
+  Esc cancels; Delete asks first; Reply shows the bar and sends `reply_to`; the `@` list offers bob and Tab puts `@bob `;
+  someone typing shows the line.
+
+Not verified: anything on a screen (how the rows, hover bar, tray and pictures look; that the hover bar shows on hover),
+a real drop of files from Explorer or a file manager, a real paste of a picture (which formats each system's clipboard
+gives GPUI), the save and open dialogs and the system viewer or player on Windows, a large upload over a slow link, and
+emoji drawing with Windows fonts. GPUI 0.2.2 never clears its test `debug_bounds`, so the view tests check that something
+went away in the model, not on screen.
 
 ## Not in v2.0
 

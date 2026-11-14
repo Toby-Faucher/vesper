@@ -169,6 +169,12 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   1:1, zoom, pop-out or pointer. It cannot tell whether its window is visible (GPUI 0.2.2), so an open share view keeps the
   sharer sending even when the window is minimised or behind a game; Stop watching ends it. Not verified with a real browser
   sharing, nor how a real 60 fps share looks or keeps up on a screen.
+- Chat: a reply's quote scrolls to the original only when it is loaded (the web also loads it from the server). No search,
+  no "New" row, no "Show more" for long messages, no drafts kept per room, no person cards from a mention, and no
+  "any symbol" reaction box. Code blocks are not coloured. Day labels are in English.
+- Files: audio and video open in the system's player; there are no inline players and no image viewer. A plain file can only
+  be saved, not opened from the app. Pictures over 20 MB show as a card. A GIF shows its first frame. Not verified: dropping
+  files from Explorer, pasting a picture, the save dialog and the system's viewer on Windows.
 
 ## Build and deploy
 

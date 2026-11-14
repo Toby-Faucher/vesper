@@ -98,6 +98,11 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   The voice tests (`desktop/tests/voice.rs`) run whole calls through that server's SFU with a sine for a microphone and a
   recorder for speakers, so no audio devices are needed either. The share test (`desktop/tests/share.rs`) has a fake sharer
   send VP8 made by `vp8-encoder` (a dev-dependency), so it needs no screen or video file.
+  The chat tests (`desktop/tests/chat.rs`) run two clients through edits, deletes, reactions, replies, typing and files,
+  with the files in a temp folder.
+- Files from chat: Save opens the system's save dialog in the Downloads folder. Open (images, audio and video only) downloads
+  to `vesper-open/<id>.<ext>` in the temp folder and hands it to the system's app. A pasted picture is first written to
+  `vesper-paste/` in the temp folder.
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
   Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
 - Settings (the button next to Sign out) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
