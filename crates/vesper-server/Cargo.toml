@@ -15,7 +15,7 @@ argon2 = "0.6.0"
 # Web Push crypto (VAPID ES256, RFC 8291 ECDH, HKDF, AES-GCM). Already in the tree via str0m.
 aws-lc-rs = { version = "1.19", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 axum = { version = "0.8", features = ["ws"] }
-base64 = "0.22"
+base64 = "0.23"
 http-body-util = "0.1"
 # Served by hand (not `axum::serve`) to set a header read timeout; both are already under axum.
 hyper = { version = "1", features = ["http1", "server"] }
