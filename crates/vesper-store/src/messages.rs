@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use sqlx::{FromRow, SqliteConnection};
-use vesper_protocol::{Attachment, Message, MessagePage, Reaction, ReplyPreview, Unread};
+use vesper_protocol::{
+    Attachment, AttachmentKind, Message, MessagePage, Reaction, ReplyPreview, Unread,
+};
 
 use crate::{Conflict, Result, Store, StoreError, constraint};
 
@@ -90,14 +92,6 @@ fn json_strs(s: &[String]) -> String {
     serde_json::to_string(s).expect("strings serialise")
 }
 
-/// Task 14 must store the sniffed type as `mime` (or `application/octet-stream`) for this to hold.
-fn is_image(mime: &str) -> bool {
-    matches!(
-        mime,
-        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-    )
-}
-
 /// Fills reactions, mentions and attachments with one query each.
 pub(crate) async fn load(c: &mut SqliteConnection, rows: Vec<MsgRow>) -> Result<Vec<Message>> {
     if rows.is_empty() {
@@ -144,7 +138,7 @@ pub(crate) async fn load(c: &mut SqliteConnection, rows: Vec<MsgRow>) -> Result<
     .await?;
     for (msg, id, name, mime, size) in files {
         attachments.entry(msg).or_default().push(Attachment {
-            image: is_image(&mime),
+            kind: AttachmentKind::of(&mime),
             id,
             name,
             mime,

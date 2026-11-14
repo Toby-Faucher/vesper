@@ -3,7 +3,9 @@
   import type { Peer } from '../lib/gen/Peer';
   import type { RoomInfo } from '../lib/gen/RoomInfo';
   import { href } from '../lib/route';
+  import { prefetchRoom } from '../lib/chat.svelte';
   import { session } from '../lib/session.svelte';
+  import { intent } from '../lib/ui/intent';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Badge from '../lib/ui/c/Badge.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
@@ -26,7 +28,7 @@
 <li>
   <div class="row group flex h-7 items-center rounded-sm" class:current class:unread={!!u?.unread}>
     <a href={href({ name: 'room', id: room.id })} aria-current={current ? 'page' : undefined} aria-label={label} title={room.name}
-      class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2">
+      {@attach intent(() => { prefetchRoom(room.id); import('./Chat.svelte').catch(() => {}); })} class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2">
       {#if dmUser}<Avatar user={dmUser} size={20} />{/if}
       <span class="name min-w-0 truncate">{room.name}</span>
       {#if room.kind === 'room' && room.restricted}<span class="meta flex shrink-0"><Icon d={I.shield} /></span>{/if}

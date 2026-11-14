@@ -32,7 +32,9 @@
   const TYPING_EVERY_MS = 3000; // the server takes one typing event per 3 s
   const MAX = 4000; // the server's limit, in characters
   const COUNT_FROM = 3600; // the counter shows from here
-  const PASTE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']; // the types the server shows inline
+  // The types the server shows inline (it decides from the bytes; this only picks what a paste takes). Never SVG.
+  const PASTE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a', 'audio/ogg',
+    'audio/wav', 'audio/x-wav', 'audio/flac', 'audio/webm', 'video/mp4', 'video/quicktime', 'video/webm'];
   const uid = $props.id();
 
   let el = $state<HTMLTextAreaElement>();

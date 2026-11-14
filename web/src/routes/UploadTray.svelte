@@ -1,8 +1,8 @@
 <script lang="ts">
   // The files waiting above the composer's text box: one row each with the name, the size and the state (a progress bar
   // while it uploads, Waiting in the queue, the reason when it failed), Retry for a failure that may pass, and Cancel
-  // (aborts) or Remove. An image picked from this device shows a small preview from an object URL, revoked when the row
-  // goes. The name is text only. "Attached: <name>" (the prefix for screen readers) marks a file that is ready to send.
+  // (aborts) or Remove. An image or video picked from this device shows a small preview from an object URL, revoked when
+  // the row goes; audio shows a speaker. The name is text only. "Attached: <name>" (the prefix for screen readers) marks a file that is ready to send.
   // A failed row swaps the preview for the alert icon, so the state is not colour alone. `items` are this room's files.
   import type { Tray, TrayItem } from '../lib/ui/tray.svelte';
   import * as I from '../lib/ui/icons';
@@ -14,7 +14,7 @@
   const PREVIEW = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']; // never SVG
   const PREFIX = { queued: 'Waiting: ', uploading: 'Uploading: ', done: 'Attached: ', failed: 'Failed: ' };
   const pct = (i: TrayItem) => Math.round(i.progress * 100);
-  const preview = (file: File) => (el: HTMLImageElement) => {
+  const preview = (file: File) => (el: HTMLImageElement | HTMLVideoElement) => {
     const u = URL.createObjectURL(file);
     el.src = u;
     return () => URL.revokeObjectURL(u);
@@ -29,6 +29,11 @@
         <span class="thumb"><Icon d={I.error} size={16} /></span>
       {:else if PREVIEW.includes(i.file.type)}
         <img class="thumb" alt="" {@attach preview(i.file)} />
+      {:else if i.file.type.startsWith('video/')}
+        <!-- The first frame, still and muted. A codec the browser lacks leaves the box blank. -->
+        <video class="thumb" muted playsinline preload="metadata" aria-hidden="true" {@attach preview(i.file)}></video>
+      {:else if i.file.type.startsWith('audio/')}
+        <span class="thumb"><Icon d={I.volume} size={16} /></span>
       {:else}
         <span class="thumb"><Icon d={I.file} size={16} /></span>
       {/if}

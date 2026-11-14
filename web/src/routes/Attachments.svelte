@@ -1,8 +1,10 @@
 <script lang="ts">
   // The files of one message. An image takes the largest box (360 x 280) before it loads, so a late image never pushes
   // the list; once loaded the box takes the image's own shape, and keepView holds the reader's place. A click opens the
-  // viewer. Other files are a card with a Download link. Every file comes from the same-origin route by id; the name
-  // is text only (the alt, the title, the download name) and never part of a URL.
+  // viewer. Other files are a card with a Download link. Audio and video are the same card with the browser's player on
+  // top, in a fixed box (a 16:9 frame or one control bar) so a late load never moves the list; a file the browser cannot
+  // play (a codec it lacks) drops the player and leaves the card. Every file comes from the same-origin route by id; the
+  // name is text only (the alt, the label, the title, the download name) and never part of a URL.
   import { tick } from 'svelte';
   import type { Attachment } from '../lib/gen/Attachment';
   import * as I from '../lib/ui/icons';
@@ -22,10 +24,19 @@
       await tick();
     });
   }
+
+  // Media the browser could not play, by id: shown as a plain file card.
+  let unplayable = $state<Record<string, true>>({});
+  function noPlay(el: Element, id: string) {
+    void keepView(el, async () => {
+      unplayable[id] = true;
+      await tick();
+    });
+  }
 </script>
 
 {#each list as a (a.id)}
-  {#if a.image}
+  {#if a.kind === 'image'}
     {@const s = shown[a.id]}
     <!-- focus() first: Safari does not focus a clicked button, and the viewer gives focus back to the focused element. -->
     <button type="button" class="img" class:failed={s?.failed} aria-label="Open image {a.name}"
@@ -36,7 +47,16 @@
       {#if s?.failed}<span class="err">{UI_MESSAGES.imageFailed}</span>{/if}
     </button>
   {:else}
-    <div class="card">
+    {@const media = (a.kind === 'audio' || a.kind === 'video') && !unplayable[a.id] ? a.kind : null}
+    <div class="card" class:media>
+      {#if media === 'video'}
+        <!-- svelte-ignore a11y_media_has_caption: user uploads come with no captions -->
+        <video src="/api/uploads/{a.id}" controls preload="metadata" playsinline aria-label="Video {a.name}"
+          onerror={(e) => noPlay(e.currentTarget, a.id)}></video>
+      {:else if media === 'audio'}
+        <audio src="/api/uploads/{a.id}" controls preload="metadata" aria-label="Audio {a.name}"
+          onerror={(e) => noPlay(e.currentTarget, a.id)}></audio>
+      {/if}
       <span class="ic"><Icon d={I.file} /></span>
       <div class="min-w-0 flex-1">
         <p class="truncate text-fg" title={a.name}>{a.name}</p>
@@ -73,6 +93,10 @@
     font-size: 13px;
     line-height: 20px;
   }
+  .card.media { flex-wrap: wrap; row-gap: 8px; padding-left: 8px; }
+  .media video, .media audio { display: block; flex: 0 0 100%; width: 100%; border-radius: var(--radius-sm); }
+  .media video { aspect-ratio: 16 / 9; background: var(--bg-element); object-fit: contain; }
+  .media audio { height: 40px; }
   .ic { display: inline-flex; flex-shrink: 0; color: var(--fg-2); }
   .meta { color: var(--fg-2); font-size: 12px; line-height: 16px; }
 </style>

@@ -13,7 +13,7 @@ use common::{ORIGIN, Session, TestServer, get, post, request, spawn_sfu};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
-use vesper_protocol::{Role, UploadDone};
+use vesper_protocol::{AttachmentKind, Role, UploadDone};
 use vesper_server::router;
 use vesper_server::uploads::{self, MAX_UPLOAD, STALE_MS};
 use vesper_store::now_ms;
@@ -194,8 +194,8 @@ async fn png_is_inline_image() {
     assert_eq!(status, StatusCode::CREATED, "{v}");
     let a = serde_json::from_value::<UploadDone>(v).unwrap().attachment;
     assert_eq!(
-        (a.name.as_str(), a.mime.as_str(), a.image),
-        ("cat.png", "image/png", true)
+        (a.name.as_str(), a.mime.as_str(), a.kind),
+        ("cat.png", "image/png", AttachmentKind::Image)
     );
     assert_eq!(a.size, png().len() as i64);
     let (status, headers, body) = download(&server, &a.id, &alice).await;
@@ -250,7 +250,7 @@ async fn html_disguised_as_png_is_attachment() {
         assert_eq!(status, StatusCode::CREATED, "{v}");
         let a = serde_json::from_value::<UploadDone>(v).unwrap().attachment;
         assert_eq!(a.mime, "application/octet-stream", "{name}");
-        assert!(!a.image, "{name}");
+        assert_eq!(a.kind, AttachmentKind::File, "{name}");
         let (status, headers, body) = download(&server, &a.id, &alice).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(&body[..], bytes);
@@ -280,11 +280,49 @@ async fn svg_is_attachment() {
     .await;
     assert_eq!(status, StatusCode::CREATED);
     let a = serde_json::from_value::<UploadDone>(v).unwrap().attachment;
-    assert!(!a.image);
+    assert_eq!(a.kind, AttachmentKind::File);
     let (_, headers, _) = download(&server, &a.id, &alice).await;
     assert_eq!(h(&headers, "content-type"), "application/octet-stream");
     assert!(h(&headers, "content-disposition").starts_with("attachment;"));
     assert_safe_headers(&headers);
+}
+
+/// Audio and video are served inline with their sniffed type, the same safe headers, and ranges
+/// so a player can seek. The name and the claimed type play no part.
+#[tokio::test]
+async fn media_is_inline() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let room = general(&server).await;
+    for (name, head, mime, kind) in [
+        (
+            "clip.txt",
+            &b"\0\0\0\x18ftypisom"[..],
+            "video/mp4",
+            AttachmentKind::Video,
+        ),
+        (
+            "song.png",
+            b"ID3\x04\0\0\0\0",
+            "audio/mpeg",
+            AttachmentKind::Audio,
+        ),
+    ] {
+        let bytes = [head, &[0u8; 64][..]].concat();
+        let (status, v) = upload(&server, &alice, room, name, bytes.clone()).await;
+        assert_eq!(status, StatusCode::CREATED, "{v}");
+        let a = serde_json::from_value::<UploadDone>(v).unwrap().attachment;
+        assert_eq!((a.mime.as_str(), a.kind), (mime, kind), "{name}");
+        let mut req = get(&format!("/api/uploads/{}", a.id), &alice);
+        req.headers_mut()
+            .insert(header::RANGE, "bytes=4-11".parse().unwrap());
+        let (status, headers, body) = raw(&server, req).await;
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT, "{name}");
+        assert_eq!(&body[..], &bytes[4..12], "{name}");
+        assert_eq!(h(&headers, "content-type"), mime);
+        assert!(h(&headers, "content-disposition").starts_with("inline;"));
+        assert_safe_headers(&headers);
+    }
 }
 
 #[tokio::test]

@@ -13,7 +13,7 @@ function fake() {
   return { calls, up };
 }
 const file = (name: string, size = 10) => ({ name, size, type: 'image/png' }) as File;
-const att = (id: string): Attachment => ({ id, name: id, mime: 'image/png', size: 1, image: true });
+const att = (id: string): Attachment => ({ id, name: id, mime: 'image/png', size: 1, kind: 'image' });
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const states = (t: Tray) => t.items.map((i) => i.state);
 

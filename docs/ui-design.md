@@ -13,7 +13,7 @@ Who it is for: a voice room for a few friends on desktop Chrome or Firefox. Dark
 5. **The call screen is cheap.** No animation or effect that costs CPU while audio runs. Motion only on state changes, and none under `prefers-reduced-motion`.
 6. **Keyboard works.** Every control is reachable with Tab and shows a visible focus ring (`:focus-visible` in `web/src/app.css`). Inputs without a visible label get an `aria-label`.
 7. **Copy is plain.** `scripts/check-wording.sh` checks the strings in `web/src`.
-8. **Size is watched.** `web/scripts/size-check.mjs` fails the build when, in gzip, the first load JS passes 70 kB, any lazy chunk 35 kB, all JS 170 kB (raised from 150 on 2026-11-02 by Toby: only lazily loaded code adds to it, and the first-load ratchet protects what people wait for), the first load CSS 12 kB or all CSS 20 kB. What loads before the first click is the number that counts, for JS and for CSS. The wasm and the model are not counted.
+8. **Size is watched.** `web/scripts/size-check.mjs` fails the build when, in gzip, the first load JS passes 70 kB, any lazy chunk 35 kB, all JS 200 kB (raised from 150 on 2026-11-02 and from 170 on 2026-11-14 by Toby: only lazily loaded code adds to it, and the first-load ratchet protects what people wait for), the first load CSS 12 kB or all CSS 24 kB (raised from 20 on 2026-11-14). What loads before the first click is the number that counts, for JS and for CSS. The wasm and the model are not counted.
 
 ## Not goals
 
@@ -132,7 +132,7 @@ Fonts are self-hosted in `web/src/styles/fonts/`, latin subset only, loaded with
    `light`, add the id to the map in `public/scheme-init.js`.
 3. Add the file to `LOOKS` in `tokens.test.ts`: every text pair needs 4.5:1 and every UI pair 3:1 in the style's own colours.
 4. Put motion inside `@media (prefers-reduced-motion: no-preference)`. Fonts are self-hosted (check the licence) or a system stack; never a CDN.
-5. Run `npm run size` and say what it did to the CSS budget. All CSS was 16.3 kB gzip of 20 before the styles and is 19.5 with the four, so the next style needs a justified, dated raise of that budget in `size-check.mjs`. Update this section.
+5. Run `npm run size` and say what it did to the CSS budget. All CSS was 16.3 kB gzip of 20 before the styles and is 19.5 with the four, and was 20.0 at v1.8.0, when the budget went to 24 kB. The next raise needs the same justified, dated note in `size-check.mjs`. Update this section.
 
 ## Tokens
 

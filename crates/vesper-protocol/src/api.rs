@@ -387,7 +387,8 @@ pub struct Reaction {
     pub user_ids: Vec<String>,
 }
 
-/// An uploaded file attached to a message. `image` means it is shown inline.
+/// An uploaded file attached to a message. `kind` says how it is shown: anything but `file` is
+/// inline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Attachment {
@@ -396,7 +397,31 @@ pub struct Attachment {
     pub mime: String,
     #[ts(type = "number")]
     pub size: i64,
-    pub image: bool,
+    pub kind: AttachmentKind,
+}
+
+/// How an attachment is shown, from the type the server sniffed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AttachmentKind {
+    Image,
+    Audio,
+    Video,
+    File,
+}
+
+impl AttachmentKind {
+    /// The kind of a stored `mime`. Only a type the server sniffed or `application/octet-stream`
+    /// is ever stored, so the top-level type is enough.
+    pub fn of(mime: &str) -> Self {
+        match mime.split('/').next() {
+            Some("image") => Self::Image,
+            Some("audio") => Self::Audio,
+            Some("video") => Self::Video,
+            _ => Self::File,
+        }
+    }
 }
 
 /// `POST /api/rooms/{id}/uploads`: the stored file, not attached yet.
