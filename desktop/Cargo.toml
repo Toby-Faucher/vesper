@@ -34,6 +34,10 @@ unsafe_code = "forbid"
 gpui = { version = "=0.2.2", features = ["test-support"] }
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# The real-server tests (tests/server.rs, tests/voice.rs) need the server crates, which use Unix file permissions.
+# Windows CI runs the unit and headless GPUI tests only.
+[target.'cfg(unix)'.dev-dependencies]
 vesper-server = { path = "../crates/vesper-server" }
 vesper-sfu = { path = "../crates/vesper-sfu" }
 vesper-store = { path = "../crates/vesper-store" }

@@ -1,5 +1,6 @@
 //! The desktop client against a real `vesper-server`: sign in, the stored session, live chat, history, reconnect and
 //! sign out. No window: these drive `Model` and the network thread, as the views do.
+#![cfg(unix)] // the server crates use Unix file permissions; Windows CI runs the unit tests
 
 mod common;
 

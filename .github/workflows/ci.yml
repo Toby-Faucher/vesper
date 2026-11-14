@@ -90,6 +90,28 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: scripts/check-desktop.sh
 
+  # The desktop client on Windows, where the friends are. Builds the app and runs the unit and headless GPUI tests;
+  # the real-server tests are Unix only (the server crates use Unix file permissions).
+  desktop-windows:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked
+        working-directory: desktop
+      - run: cargo clippy --all-targets --locked -- -D warnings
+        working-directory: desktop
+      - run: cargo test --locked
+        working-directory: desktop
+
   supply-chain:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

@@ -1,5 +1,6 @@
 //! Calls between desktop clients through a real `vesper-server` and its SFU on loopback: str0m, Opus, the jitter
 //! buffer and the mix, with a sine for a microphone and a recorder for speakers.
+#![cfg(unix)] // the server crates use Unix file permissions; Windows CI runs the unit tests
 
 mod common;
 
