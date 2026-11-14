@@ -1,10 +1,12 @@
 //! The window: one view, `Vesper`, that owns the `Model` and draws the sign in screen or the main screen. Events from
 //! the network thread come in through `listen`; what the model asks for goes out on `cmds`.
 
+mod call;
 mod room;
 mod sign_in;
 pub mod theme;
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -15,11 +17,13 @@ use gpui::{
 };
 use gpui_component::Root;
 use gpui_component::input::{InputEvent, InputState};
+use gpui_component::slider::SliderState;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::model::{Model, Screen};
 use crate::net::{self, Cmd, Event};
 use crate::store::Keyring;
+use crate::voice::Cpal;
 
 actions!(vesper, [SendMessage, NewLine]);
 
@@ -39,7 +43,7 @@ pub fn init(cx: &mut App) {
 
 /// Starts the network thread and opens the window. Returns when the app quits.
 pub fn run() {
-    let (cmds, events) = net::start(Arc::new(Keyring));
+    let (cmds, events) = net::start(Arc::new(Keyring), Arc::new(Cpal));
     Application::new().run(move |cx: &mut App| {
         init(cx);
         let options = WindowOptions {
@@ -79,6 +83,8 @@ pub struct Vesper {
     list: ListState,
     /// What the list shows: the room and each row's (id, updated_at), to tell the list which rows changed.
     shown: (Option<i64>, Vec<(i64, i64)>),
+    /// Volume sliders of the people in calls, by user id.
+    sliders: HashMap<String, (Entity<SliderState>, Subscription)>,
     _subs: Vec<Subscription>,
     _pump: Option<Task<()>>,
 }
@@ -134,6 +140,7 @@ impl Vesper {
             composer,
             list,
             shown: (None, vec![]),
+            sliders: HashMap::new(),
             _subs: subs,
             _pump: None,
         }

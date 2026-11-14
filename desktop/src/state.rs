@@ -63,6 +63,14 @@ impl AppState {
             .collect()
     }
 
+    /// One room at a time: a join elsewhere replaces the old entry.
+    fn peer_joined(&mut self, peer: &Peer) {
+        match self.voice.iter_mut().find(|p| p.user_id == peer.user_id) {
+            Some(p) => *p = peer.clone(),
+            None => self.voice.push(peer.clone()),
+        }
+    }
+
     fn set_rooms(&mut self, list: &[RoomInfo]) {
         let (dms, rooms): (Vec<_>, Vec<_>) =
             list.iter().cloned().partition(|r| r.kind == RoomKind::Dm);
@@ -149,13 +157,9 @@ impl AppState {
                 self.users.insert(user.user_id.clone(), user.clone());
                 self.title_dms();
             }
-            ServerMsg::PeerJoined { peer } => {
-                // One room at a time: a join elsewhere replaces the old entry.
-                match self.voice.iter_mut().find(|p| p.user_id == peer.user_id) {
-                    Some(p) => *p = peer.clone(),
-                    None => self.voice.push(peer.clone()),
-                }
-            }
+            ServerMsg::PeerJoined { peer } => self.peer_joined(peer),
+            // The people already in the call I joined.
+            ServerMsg::Joined { peers, .. } => peers.iter().for_each(|p| self.peer_joined(p)),
             ServerMsg::PeerLeft { user_id } => self.voice.retain(|p| p.user_id != *user_id),
             ServerMsg::PeerState {
                 user_id,

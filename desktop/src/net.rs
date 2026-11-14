@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use reqwest::cookie::{CookieStore, Jar};
 use reqwest::header::{COOKIE, HeaderMap, HeaderValue, ORIGIN};
 use reqwest::{Method, StatusCode};
@@ -17,11 +17,12 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::{self, Message as WsMsg, client::IntoClientRequest};
 use url::Url;
 use vesper_protocol::{
-    ApiError, ApiErrorCode, CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, LoginReq, Me, Message,
-    MessagePage, ReadReq, Secret, SendMessage, ServerMsg,
+    ApiError, ApiErrorCode, CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ClientMsg, LoginReq, Me,
+    Message, MessagePage, ReadReq, Secret, SendMessage, ServerMsg,
 };
 
 use crate::store::{Saved, SessionStore};
+use crate::voice::{AudioDevices, Call, VoiceCmd, VoiceEvent};
 
 /// From the UI to the network thread.
 #[derive(Debug)]
@@ -52,6 +53,10 @@ pub enum Cmd {
         room: i64,
         id: i64,
     },
+    /// To the call engine. `Start` starts a call, ending the one before.
+    Voice(VoiceCmd),
+    /// A message on the socket. Dropped while it is down.
+    Signal(ClientMsg),
 }
 
 /// From the network thread to the UI.
@@ -99,6 +104,11 @@ pub enum Event {
     },
     ReadFailed {
         room: i64,
+    },
+    /// From the call started with `VoiceCmd::Start { call, .. }`.
+    Voice {
+        call: u64,
+        ev: VoiceEvent,
     },
 }
 
@@ -346,8 +356,11 @@ pub fn backoff(n: u32) -> Duration {
     Duration::from_millis(base / 2 + base * r / 2000)
 }
 
-/// Starts the network thread. It stops when every `Cmd` sender is dropped.
-pub fn start(store: Arc<dyn SessionStore>) -> (UnboundedSender<Cmd>, UnboundedReceiver<Event>) {
+/// Starts the network thread. It stops when every `Cmd` sender is dropped. Calls open their audio from `devices`.
+pub fn start(
+    store: Arc<dyn SessionStore>,
+    devices: Arc<dyn AudioDevices>,
+) -> (UnboundedSender<Cmd>, UnboundedReceiver<Event>) {
     let (cmd_tx, cmd_rx) = unbounded_channel();
     let (tx, ev_rx) = unbounded_channel();
     std::thread::Builder::new()
@@ -360,8 +373,10 @@ pub fn start(store: Arc<dyn SessionStore>) -> (UnboundedSender<Cmd>, UnboundedRe
             rt.block_on(
                 Net {
                     store,
+                    devices,
                     tx,
                     conn: None,
+                    call: None,
                     warned: false,
                 }
                 .run(cmd_rx),
@@ -374,12 +389,16 @@ pub fn start(store: Arc<dyn SessionStore>) -> (UnboundedSender<Cmd>, UnboundedRe
 struct Conn {
     api: Api,
     socket: JoinHandle<()>,
+    /// Messages for the socket.
+    out: UnboundedSender<ClientMsg>,
 }
 
 struct Net {
     store: Arc<dyn SessionStore>,
+    devices: Arc<dyn AudioDevices>,
     tx: UnboundedSender<Event>,
     conn: Option<Conn>,
+    call: Option<Call>,
     /// NotRemembered was sent.
     warned: bool,
 }
@@ -398,7 +417,9 @@ impl Net {
         let _ = self.tx.send(ev);
     }
 
+    /// Ends the socket and any call.
     fn drop_conn(&mut self) -> Option<Api> {
+        self.call = None;
         let c = self.conn.take()?;
         c.socket.abort();
         Some(c.api)
@@ -423,9 +444,10 @@ impl Net {
 
     fn signed_in(&mut self, api: Api, me: Me) {
         self.drop_conn();
-        let socket = tokio::spawn(socket(api.clone(), self.tx.clone()));
+        let (out, out_rx) = unbounded_channel();
+        let socket = tokio::spawn(socket(api.clone(), self.tx.clone(), out_rx));
         let server = api.origin.clone();
-        self.conn = Some(Conn { api, socket });
+        self.conn = Some(Conn { api, socket, out });
         self.emit(Event::SignedIn {
             me: Box::new(me),
             server,
@@ -474,6 +496,32 @@ impl Net {
             Cmd::Forget => {
                 self.drop_conn();
                 self.store(|s| s.clear()).await;
+            }
+            Cmd::Signal(m) => {
+                if let Some(c) = &self.conn {
+                    let _ = c.out.send(m);
+                }
+            }
+            Cmd::Voice(VoiceCmd::Start {
+                call,
+                bitrate_kbps,
+                volumes,
+            }) => {
+                self.call = None; // the old call's thread ends first
+                let tx = self.tx.clone();
+                let emit = move |ev| drop(tx.send(Event::Voice { call, ev }));
+                self.call = Some(Call::start(
+                    self.devices.clone(),
+                    bitrate_kbps,
+                    volumes,
+                    emit,
+                ));
+            }
+            Cmd::Voice(VoiceCmd::Stop) => self.call = None,
+            Cmd::Voice(c) => {
+                if let Some(call) = &self.call {
+                    call.send(c);
+                }
             }
             cmd => {
                 if let Some(c) = &self.conn {
@@ -568,15 +616,28 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
     let _ = tx.send(ev);
 }
 
-/// Keeps one socket open while signed in, reconnecting with backoff, like `session.svelte.ts`.
-async fn socket(api: Api, tx: UnboundedSender<Event>) {
+/// Keeps one socket open while signed in, reconnecting with backoff, like `session.svelte.ts`. Sends what comes on `out`.
+async fn socket(api: Api, tx: UnboundedSender<Event>, mut out: UnboundedReceiver<ClientMsg>) {
     let mut tries = 0;
     loop {
         let up = Instant::now();
         let code = match api.connect().await {
             Ok(mut ws) => {
+                // What was asked while the socket was down belonged to the old one's call.
+                while out.try_recv().is_ok() {}
                 let mut code = None;
-                while let Some(frame) = ws.next().await {
+                loop {
+                    let frame = tokio::select! {
+                        f = ws.next() => f,
+                        Some(m) = out.recv() => {
+                            let text = serde_json::to_string(&m).expect("json");
+                            if ws.send(WsMsg::text(text)).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    let Some(frame) = frame else { break };
                     match frame {
                         Ok(WsMsg::Text(t)) => {
                             // shortcut: a message kind this build does not know is skipped; the web app instead stops

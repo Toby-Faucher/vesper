@@ -13,7 +13,7 @@ use vesper_protocol::{RoomInfo, RoomKind};
 
 use super::sign_in::TextLine;
 use super::{COMPOSER, Vesper, theme};
-use crate::model::{Model, NOT_REMEMBERED};
+use crate::model::{Model, NOT_REMEMBERED, Phase};
 
 /// `14:05` today, `2026-11-13 14:05` before.
 pub fn time_label(ms: i64) -> String {
@@ -121,7 +121,7 @@ fn message_row(m: &Model, ix: usize) -> AnyElement {
 }
 
 /// The room's title: `# general`, or the other person's name for a DM.
-fn title(r: &RoomInfo) -> String {
+pub(super) fn title(r: &RoomInfo) -> String {
     match r.kind {
         RoomKind::Room => format!("# {}", r.name),
         RoomKind::Dm => r.name.clone(),
@@ -246,6 +246,21 @@ impl Vesper {
         } else {
             ""
         };
+        let in_call = m.call.phase != Phase::Idle && m.call.room == m.active;
+        let voice = m.active.map(|id| {
+            let button = if in_call {
+                Button::new("leave-voice")
+                    .label("Leave")
+                    .on_click(cx.listener(|this, _, _, cx| this.act(Model::leave_voice, cx)))
+            } else {
+                Button::new("join-voice")
+                    .primary()
+                    .label("Join voice")
+                    .on_click(cx.listener(move |this, _, _, cx| this.act(|m| m.join_voice(id), cx)))
+            };
+            let selector = if in_call { "leave-voice" } else { "join-voice" };
+            div().debug_selector(|| selector.into()).child(button)
+        });
         let start = m
             .log()
             .is_some_and(|l| !l.more_before && !l.messages.is_empty());
@@ -261,7 +276,9 @@ impl Vesper {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(room.map(title).unwrap_or_default()),
             )
-            .when_some_text(status, theme::WARN_FG, "status");
+            .when_some_text(status, theme::WARN_FG, "status")
+            .child(div().flex_1())
+            .children(voice);
         let keyring = m.not_remembered.then(|| {
             h_flex()
                 .gap_3()
@@ -295,6 +312,8 @@ impl Vesper {
             .debug_selector(|| "composer".into())
             .when_some_text(&m.error, theme::DANGER_FG, "room-error")
             .child(Input::new(&self.composer));
+        let call = self.render_call(cx);
+        let m = &self.model;
         let main = v_flex()
             .flex_1()
             .h_full()
@@ -320,6 +339,7 @@ impl Vesper {
                 "",
             )
             .child(timeline)
+            .children(call)
             .child(composer);
         div()
             .size_full()

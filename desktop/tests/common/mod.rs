@@ -3,8 +3,8 @@
 //! server turns `Secure` and the `__Host-` name on only for an https origin (`docs/env.md`).
 #![allow(dead_code)] // each test binary uses a different part
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tempfile::TempDir;
@@ -12,6 +12,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use vesper_desktop::model::{Model, Screen};
 use vesper_desktop::net::{self, Cmd, Event};
 use vesper_desktop::store::MemStore;
+use vesper_desktop::voice::{AudioDevices, AudioInput, AudioOutput, RATE};
 use vesper_protocol::Me;
 use vesper_server::config::Config;
 use vesper_server::{AppState, cli};
@@ -138,23 +139,92 @@ impl Server {
     }
 }
 
+/// Audio for a call without devices: the microphone plays a sine (or silence) in real time, the speakers record.
+#[derive(Clone, Default)]
+pub struct FakeAudio {
+    /// The microphone's tone in Hz; `None` is silence.
+    pub tone: Arc<Mutex<Option<f32>>>,
+    /// Everything played, 48 kHz mono.
+    pub played: Arc<Mutex<Vec<f32>>>,
+}
+
+impl FakeAudio {
+    pub fn set_tone(&self, hz: Option<f32>) {
+        *self.tone.lock().unwrap() = hz;
+    }
+
+    /// The last `ms` milliseconds played.
+    pub fn last(&self, ms: usize) -> Vec<f32> {
+        let p = self.played.lock().unwrap();
+        let n = (RATE as usize * ms / 1000).min(p.len());
+        p[p.len() - n..].to_vec()
+    }
+}
+
+struct Mic {
+    tone: Arc<Mutex<Option<f32>>>,
+    start: Instant,
+    made: u64,
+    phase: f32,
+}
+
+impl AudioInput for Mic {
+    fn read(&mut self, out: &mut Vec<f32>) {
+        let due = (self.start.elapsed().as_secs_f64() * f64::from(RATE)) as u64;
+        let tone = *self.tone.lock().unwrap();
+        for _ in self.made..due {
+            out.push(tone.map_or(0.0, |hz| {
+                self.phase = (self.phase + hz / RATE as f32).fract();
+                0.5 * (self.phase * std::f32::consts::TAU).sin()
+            }));
+        }
+        self.made = due;
+    }
+}
+
+struct Speakers(Arc<Mutex<Vec<f32>>>);
+
+impl AudioOutput for Speakers {
+    fn write(&mut self, samples: &[f32]) {
+        self.0.lock().unwrap().extend_from_slice(samples);
+    }
+}
+
+impl AudioDevices for FakeAudio {
+    fn input(&self) -> Result<Box<dyn AudioInput>, String> {
+        Ok(Box::new(Mic {
+            tone: self.tone.clone(),
+            start: Instant::now(),
+            made: 0,
+            phase: 0.0,
+        }))
+    }
+
+    fn output(&self) -> Result<Box<dyn AudioOutput>, String> {
+        Ok(Box::new(Speakers(self.played.clone())))
+    }
+}
+
 /// A desktop client without a window.
 pub struct Client {
     pub tx: UnboundedSender<Cmd>,
     rx: UnboundedReceiver<Event>,
     pub model: Model,
     pub store: Arc<MemStore>,
+    pub audio: FakeAudio,
 }
 
 impl Client {
     /// Starts the network thread and asks it for the stored session, as the app does at start.
     pub async fn start(store: Arc<MemStore>) -> Client {
-        let (tx, rx) = net::start(store.clone());
+        let audio = FakeAudio::default();
+        let (tx, rx) = net::start(store.clone(), Arc::new(audio.clone()));
         let mut c = Client {
             tx,
             rx,
             model: Model::default(),
             store,
+            audio,
         };
         c.run(vec![Cmd::Restore]);
         c.until("start", |m| m.screen != Screen::Starting).await;
@@ -185,6 +255,14 @@ impl Client {
             .is_err()
         {
             panic!("timed out waiting for {what}: {:?}", self.model);
+        }
+    }
+
+    /// Applies the events that came, without waiting.
+    pub fn pump(&mut self) {
+        while let Ok(ev) = self.rx.try_recv() {
+            let cmds = self.model.apply(ev);
+            self.run(cmds);
         }
     }
 
@@ -232,4 +310,20 @@ pub async fn two() -> (Server, Client, Client) {
     let mut b = Client::start(Arc::default()).await;
     b.sign_in(&s.origin, "bob").await;
     (s, a, b)
+}
+
+/// Feeds every client's events into its model until `done` holds. A call needs this: the SFU's offers are answered
+/// through each client's model.
+pub async fn until_all(cs: &mut [&mut Client], what: &str, done: impl Fn(&[&mut Client]) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        for c in cs.iter_mut() {
+            c.pump();
+        }
+        if done(cs) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }

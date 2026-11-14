@@ -7,8 +7,10 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use vesper_protocol::{Me, MessagePage, ServerMsg};
 
 use super::Vesper;
-use crate::model::Screen;
+use crate::model::{HEADPHONES, Phase, Screen};
 use crate::net::{Cmd, Event};
+use crate::voice::{VoiceCmd, VoiceEvent};
+use vesper_protocol::ClientMsg;
 
 fn open(
     cx: &mut TestAppContext,
@@ -202,4 +204,168 @@ fn the_room_view_shows_rooms_and_messages_and_sends(cx: &mut TestAppContext) {
             .any(|c| matches!(c, Cmd::LoadLatest(2)))
     );
     view.read_with(cx, |v, _| assert_eq!(v.model.active, Some(2)));
+}
+
+fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    let b = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} is drawn"));
+    cx.simulate_click(b.center(), Modifiers::none());
+    cx.run_until_parked();
+}
+
+/// The engine is faked: its events are applied by hand.
+#[gpui::test]
+fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    drain(&mut rx);
+    assert!(cx.debug_bounds("call-bar").is_none());
+
+    click(cx, "join-voice");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(
+            cmds.as_slice(),
+            [Cmd::Voice(VoiceCmd::Start { call: 1, .. })]
+        ),
+        "{cmds:?}"
+    );
+    apply(
+        &view,
+        cx,
+        Event::Voice {
+            call: 1,
+            ev: VoiceEvent::Offer("offer".into()),
+        },
+    );
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [Cmd::Signal(ClientMsg::Join { room_id: 1, .. })]
+    ));
+    // Bob is already in voice in the room shown.
+    let bob = serde_json::from_value(
+        json!({ "user_id": "b", "name": "Bob", "room_id": 1, "muted": false,
+        "deafened": false, "force_muted": false, "share": null }),
+    )
+    .unwrap();
+    let joined = ServerMsg::Joined {
+        user_id: "a".into(),
+        answer: "answer".into(),
+        peers: vec![bob],
+    };
+    apply(&view, cx, Event::Server(Box::new(joined)));
+    apply(
+        &view,
+        cx,
+        Event::Voice {
+            call: 1,
+            ev: VoiceEvent::Connected,
+        },
+    );
+    apply(
+        &view,
+        cx,
+        Event::Voice {
+            call: 1,
+            ev: VoiceEvent::Speaking {
+                me: false,
+                peers: vec!["b".into()],
+            },
+        },
+    );
+    drain(&mut rx);
+    for s in [
+        "call-bar",
+        "call-mute",
+        "call-deafen",
+        "call-leave",
+        "leave-voice",
+        "call-person-a",
+        "call-person-b",
+        "volume-b",
+        "speaking-b",
+    ] {
+        assert!(cx.debug_bounds(s).is_some(), "{s} is drawn");
+    }
+    assert!(
+        cx.debug_bounds("volume-a").is_none(),
+        "no slider for myself"
+    );
+    assert!(cx.debug_bounds("speaking-a").is_none());
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.call.phase, Phase::Joined);
+        assert!(v.model.call.headphones, "{HEADPHONES}");
+    });
+
+    click(cx, "call-mute");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(
+            cmds.as_slice(),
+            [
+                Cmd::Voice(VoiceCmd::Muted(true)),
+                Cmd::Signal(ClientMsg::SetVoiceState {
+                    muted: true,
+                    deafened: false
+                })
+            ]
+        ),
+        "{cmds:?}"
+    );
+    click(cx, "call-deafen");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(
+            cmds.as_slice(),
+            [
+                Cmd::Voice(VoiceCmd::Deafened(true)),
+                Cmd::Signal(ClientMsg::SetVoiceState {
+                    muted: true,
+                    deafened: true
+                })
+            ]
+        ),
+        "{cmds:?}"
+    );
+    view.read_with(cx, |v, _| {
+        assert!(v.model.call.muted && v.model.call.deafened)
+    });
+
+    // A force mute: the button cannot unmute.
+    apply(
+        &view,
+        cx,
+        Event::Server(Box::new(ServerMsg::ForceMuted { muted: true })),
+    );
+    drain(&mut rx);
+    click(cx, "call-mute");
+    assert!(drain(&mut rx).is_empty());
+
+    click(cx, "call-leave");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(
+            cmds.as_slice(),
+            [Cmd::Signal(ClientMsg::Leave), Cmd::Voice(VoiceCmd::Stop)]
+        ),
+        "{cmds:?}"
+    );
+    // GPUI 0.2.2 never forgets a debug selector once drawn, so the bar's going is checked on the model.
+    view.read_with(cx, |v, _| assert_eq!(v.model.call.phase, Phase::Idle));
+
+    // A device that does not open: the reason shows, and the app goes on.
+    click(cx, "join-voice");
+    apply(
+        &view,
+        cx,
+        Event::Voice {
+            call: 2,
+            ev: VoiceEvent::Failed("No microphone was found.".into()),
+        },
+    );
+    assert!(cx.debug_bounds("call-error").is_some());
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.call.error, "No microphone was found.")
+    });
 }
