@@ -121,6 +121,13 @@ impl State {
 }
 
 impl State {
+    /// `user_id`'s member, only if `session` is still its current one.
+    fn current_mut(&mut self, user_id: &str, session: u64) -> Option<&mut Member> {
+        self.members
+            .get_mut(user_id)
+            .filter(|m| m.session == session)
+    }
+
     /// Tell `sharer` how many people in their call watch the share. Nothing if none runs.
     fn send_watchers(&self, sharer: &str) {
         let Some(s) = self.members.get(sharer).filter(|s| s.share.is_some()) else {
@@ -359,11 +366,11 @@ impl Voice {
     /// replaced). A force-muted user stays muted.
     pub fn set_state(&self, user_id: &str, session: u64, muted: bool, deafened: bool) {
         let mut st = self.lock();
-        let Some(m) = st.members.get_mut(user_id) else {
+        let Some(m) = st.current_mut(user_id, session) else {
             return;
         };
         let muted = muted || m.force_muted;
-        if m.session != session || (m.muted, m.deafened) == (muted, deafened) {
+        if (m.muted, m.deafened) == (muted, deafened) {
             return;
         }
         (m.muted, m.deafened) = (muted, deafened);
@@ -380,12 +387,9 @@ impl Voice {
         info: ShareInfo,
     ) -> Result<(), ErrorCode> {
         let mut st = self.lock();
-        let Some(m) = st.members.get_mut(user_id) else {
+        let Some(m) = st.current_mut(user_id, session) else {
             return Ok(());
         };
-        if m.session != session {
-            return Ok(());
-        }
         let room = m.room;
         if st.rooms.get(&room).is_none_or(|r| r.kind == RoomKind::Dm) {
             return Err(ErrorCode::Forbidden);
@@ -434,10 +438,10 @@ impl Voice {
 
     fn end_share(&self, user_id: &str, session: u64, cut: bool) {
         let mut st = self.lock();
-        let Some(m) = st.members.get_mut(user_id) else {
+        let Some(m) = st.current_mut(user_id, session) else {
             return;
         };
-        if m.session != session || m.share.take().is_none() {
+        if m.share.take().is_none() {
             return;
         }
         self.0.sfu.set_sharing(user_id, false);
