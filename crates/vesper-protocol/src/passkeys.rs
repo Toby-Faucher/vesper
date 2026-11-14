@@ -29,7 +29,7 @@ pub struct PasskeyList {
 
 /// `POST /api/passkeys/register/start` and `/api/passkeys/login/start` answer: the options for
 /// `navigator.credentials.create` or `.get`, and the one-use id of the server-side challenge.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PasskeyChallenge {
     pub challenge_id: String,
@@ -39,7 +39,7 @@ pub struct PasskeyChallenge {
 
 /// `POST /api/passkeys/register/finish` and `/api/passkeys/login/finish`: the browser's answer.
 /// `name` is used by register only.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PasskeyFinish {
     pub challenge_id: String,

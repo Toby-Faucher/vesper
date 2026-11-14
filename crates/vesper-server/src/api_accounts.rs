@@ -264,7 +264,7 @@ async fn signup(
     {
         return Err(ApiError::new(ApiErrorCode::InviteInvalid, BAD_INVITE));
     }
-    let phc = hash_password(req.password).await;
+    let phc = hash_password(req.password.0).await;
     let (token, token_hash) = new_token();
     let label = device_label(h.get(header::USER_AGENT).and_then(|v| v.to_str().ok()));
     let account = NewAccount {
@@ -313,7 +313,7 @@ async fn login(
     limit(&st, Kind::Login, &format!("{ip} {username}"))?;
     let row = st.store.login_row(&username).await?;
     let phc = row.as_ref().and_then(|r| r.password_phc.clone());
-    let ok = verify_password(req.password, phc).await;
+    let ok = verify_password(req.password.0, phc).await;
     let Some(row) = row.filter(|r| ok && !r.banned) else {
         return Err(wrong());
     };
@@ -413,10 +413,10 @@ async fn change_password(
         .await?
         .and_then(|r| r.password_phc);
     // 403, not 401: the session is still good, only the old password is wrong.
-    if !verify_password(req.old, phc).await {
+    if !verify_password(req.old.0, phc).await {
         return Err(ApiError::new(ApiErrorCode::Forbidden, "wrong password"));
     }
-    let phc = hash_password(req.new).await;
+    let phc = hash_password(req.new.0).await;
     st.store
         .set_password(&a.user.user_id, &phc, a.session_id)
         .await?;
@@ -445,7 +445,7 @@ async fn reset_password(
     if !st.store.reset_valid(&hash, now_ms()).await? {
         return Err(invalid());
     }
-    let phc = hash_password(req.password).await;
+    let phc = hash_password(req.password.0).await;
     let from = if is_private(ip) { "lan" } else { "internet" };
     let (id, by) = st
         .store

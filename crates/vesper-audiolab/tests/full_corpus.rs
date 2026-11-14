@@ -25,7 +25,7 @@ fn manifest_in(corpus: &str, split: &str) -> (Manifest, PathBuf) {
 }
 
 #[test]
-#[ignore]
+#[ignore = "needs the real corpus and models, see the file header"]
 fn built_v2_corpus_is_balanced_wideband_and_disjoint() {
     let mut seen = Vec::new();
     for (split, n) in [("dev", 160), ("gate", 400), ("holdout", 160)] {
@@ -75,7 +75,7 @@ fn built_v2_corpus_is_balanced_wideband_and_disjoint() {
 
 /// UTMOS (second_mos) on v2 dev: clean above 0 dB SNR, and rising with SNR on average.
 #[test]
-#[ignore]
+#[ignore = "needs the real corpus and models, see the file header"]
 fn utmos_ranks_clean_above_noisy() {
     let u = vesper_audiolab::second_mos::Utmos::load(
         &root().join("research/models/utmos22_strong.onnx"),
@@ -105,7 +105,7 @@ fn utmos_ranks_clean_above_noisy() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "needs the real corpus and models, see the file header"]
 fn built_corpus_matches_its_grid() {
     let mut seen = Vec::new();
     for (split, n) in [("dev", 120), ("gate", 240), ("holdout", 120)] {
@@ -159,7 +159,7 @@ fn mean(v: &[Scores]) -> Scores {
 
 /// Clean speech must score clearly above the same speech at 0 dB SNR, and scores must rise with SNR.
 #[test]
-#[ignore]
+#[ignore = "needs the real corpus and models, see the file header"]
 fn dnsmos_ranks_clean_above_noisy_and_rises_with_snr() {
     let d = Dnsmos::load(&root().join("research/models/sig_bak_ovr.onnx")).unwrap();
     let (m, dir) = manifest("dev");

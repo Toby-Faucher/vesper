@@ -79,6 +79,15 @@ impl Config {
         let origin =
             normalise_origin(&origin).map_err(|e| format!("VESPER_ORIGIN={origin}: {e}"))?;
         let quota_mb = num("VESPER_UPLOAD_QUOTA_MB", 10240)?;
+        // A bigger count makes `Semaphore::new` panic at start.
+        let max_sockets = num("VESPER_MAX_SOCKETS", 256)?;
+        let max_sockets = usize::try_from(max_sockets)
+            .ok()
+            .filter(|&n| n <= tokio::sync::Semaphore::MAX_PERMITS)
+            .ok_or_else(|| {
+                let max = tokio::sync::Semaphore::MAX_PERMITS;
+                format!("VESPER_MAX_SOCKETS={max_sockets}: must be at most {max}")
+            })?;
         let push_subject = match get("VESPER_PUSH_SUBJECT").filter(|s| !s.is_empty()) {
             Some(s) if valid_push_subject(&s) => Some(s),
             Some(s) => {
@@ -96,7 +105,7 @@ impl Config {
             max_room_size: 12,
             ring_timeout: Duration::from_secs(30),
             ping_interval: Duration::from_secs(25),
-            max_sockets: num("VESPER_MAX_SOCKETS", 256)? as usize,
+            max_sockets,
             web_dir: get("VESPER_WEB_DIR")
                 .filter(|d| !d.is_empty())
                 .map_or_else(|| "web/dist".into(), PathBuf::from),
@@ -237,6 +246,15 @@ mod tests {
         assert!(c.public_host.is_none());
         assert_eq!(c.max_sockets, 256);
         assert_eq!(c.web_dir, PathBuf::from("web/dist"));
+    }
+
+    #[test]
+    fn max_sockets_too_big_is_an_error_not_a_panic() {
+        let with = |n: &str| lookup(&[("VESPER_MAX_SOCKETS", n)]);
+        assert_eq!(with("10").unwrap().max_sockets, 10);
+        assert!(with("18446744073709551615").is_err());
+        assert!(with(&tokio::sync::Semaphore::MAX_PERMITS.to_string()).is_ok());
+        assert!(with(&(tokio::sync::Semaphore::MAX_PERMITS as u64 + 1).to_string()).is_err());
     }
 
     #[test]

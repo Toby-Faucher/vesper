@@ -6,7 +6,7 @@ Vesper uses `vMAJOR.MINOR.PATCH`. One number covers the whole app: the server, t
 |---|---|
 | MAJOR | A change that breaks people or data: a database migration an older image cannot read, a changed wire message, a removed setting. Needs a backup and a note on how to roll back. |
 | MINOR | New features and visible changes. Migrations must only add things. |
-| PATCH | Bug fixes and docs only. No migration. |
+| PATCH | Bug fixes, docs, dependency bumps and internal cleanups (refactors, lints). A patch can be large inside the code, as long as nothing changes for people: no migration, no changed wire message, no removed setting. |
 
 ## Where we are
 

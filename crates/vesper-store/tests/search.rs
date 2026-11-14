@@ -138,7 +138,7 @@ async fn search_filters_room_author_date() {
     assert_eq!(
         run(&|q| {
             q.from = Some(200);
-            q.to = Some(300)
+            q.to = Some(300);
         })
         .await,
         vec![m2, m3]

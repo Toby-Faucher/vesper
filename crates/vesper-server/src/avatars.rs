@@ -147,10 +147,7 @@ fn png_ends_at_iend(b: &[u8]) -> bool {
 
 /// 16 hex of the bytes' SHA-256: the version in `UserInfo.avatar` and the ETag.
 fn version(b: &[u8]) -> String {
-    Sha256::digest(b)[..8]
-        .iter()
-        .map(|x| format!("{x:02x}"))
-        .collect()
+    vesper_store::hex(&Sha256::digest(b)[..8])
 }
 
 async fn set(
