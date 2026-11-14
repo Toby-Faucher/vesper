@@ -24,10 +24,14 @@ It exists because the other Discord replacements sound bad. Discord's edge is it
 |---|---|
 | **Clean mic** | DeepFilterNet3 in an AudioWorklet and a Worker. If it fails to load or falls behind, the call keeps going on the browser's own suppression and the UI says so. |
 | **Your bitrate** | Pick 32 to 510 kbps per person. Opus at 48 kHz, in-band FEC on, optional DTX. |
-| **Voice controls** | Mute, deafen, per-person volume, a speaking ring, push to talk, a mic test with a level meter. |
-| **A Rust SFU** | One UDP port carries all audio. The server forwards each person's Opus stream and never decodes it. |
+| **Voice controls** | Mute, deafen, per-person volume up to 400 %, a speaking ring, push to talk, a mic test with a level meter. |
+| **Screen share** | In group rooms. 30 or 60 fps at a bitrate you pick, with an upload test. A panel with Grid, Focus and Dock layouts. A share only sends while someone watches it. |
+| **Text chat** | Rooms with markdown, replies, reactions, pins, file uploads, search and mentions. Web Push for mentions and for voice starting. |
+| **Direct messages** | A locked two-person chat. Only its two members can see it, and a voice join rings the other person. |
+| **A Rust SFU** | One UDP port carries all audio and video. The server forwards each person's Opus stream and each VP8 share and never decodes them. |
 | **Diagnostics** | Live round trip, jitter and loss, mic and denoiser levels, plus a "Test connection" button that tells you if UDP is blocked. |
-| **Yours** | Self-hosted, no telemetry, accounts by invite only. |
+| **Looks** | Dark, Light or System, an accent colour per account, and four more styles: Persona, Cozy, BBS and Aurora. |
+| **Yours** | Self-hosted, no telemetry, accounts by invite only, sign in with a password or a passkey. |
 
 ## How it fits together
 
@@ -58,12 +62,14 @@ For friends on other machines, see [docs/deploy.md](docs/deploy.md): Docker or s
 
 ## Status
 
-Last updated 2026-10-30. This is a personal project and the voice foundation is built, not battle tested.
+Last updated 2026-11-13. This is a personal project. The latest release is v1.7.1. [docs/versions.md](docs/versions.md) lists each release and what was verified in it.
 
-- Built and covered by tests: the SFU, the server, the web client, the load test (12 speakers for 30 s, no loss on a local run), the deploy files.
-- **Not tried yet in a real browser:** Chrome and Firefox behaviour, the encoder bitrate after the Opus fix, the Docker build, a real deploy, the router forward.
+- Built and covered by tests: the SFU, the server, the web client, text chat, accounts and passkeys, screen share, the load test (12 speakers for 30 s, no loss on a local run), the deploy files. The end-to-end suite runs headless Chromium, with a canvas in place of a real screen.
+- **Deployed:** v1.0 on 2026-11-01. A test build of v1.7.1 has run on the live server since 2026-11-11.
+- **Not verified:** screen share in Firefox or Zen in a real call, Windows browsers, several sharers at once on a real network, passkeys with a real authenticator, and a call rejoining without a click in a real browser. Docker, Caddy and the router forward are not verified on the dev machine.
 - **Not measured yet:** the delay DeepFilterNet adds, and how the audio sounds next to Discord. [docs/testing/checkpoint.md](docs/testing/checkpoint.md) is the listening test.
-- **Next:** text chat, accounts and rooms, a real design pass. Screen share with watch controls exists; it is not yet tried in a real call.
+- **Known issue:** heavy video can still drop voice at the server's UDP receive buffer. See [docs/known-issues.md](docs/known-issues.md).
+- **Next:** open work is in the GitHub issues.
 
 ## Layout
 
@@ -73,7 +79,9 @@ Last updated 2026-10-30. This is a personal project and the voice foundation is 
 | `crates/vesper-sfu` | The audio SFU, built on [str0m](https://github.com/algesten/str0m). |
 | `crates/vesper-server` | axum server: signaling, presence, the web app, `/health`. |
 | `crates/vesper-dsp` | DeepFilterNet wrapper, native for tests and WASM for the browser. |
-| `crates/vesper-loadtest` | Synthetic speakers for load and loss checks. |
+| `crates/vesper-store` | SQLite storage through sqlx. The only crate that imports it ([ADR 0005](docs/decisions/0005-sqlite-sqlx.md)). |
+| `crates/vesper-loadtest` | Synthetic speakers and screen shares for load and loss checks. |
+| `crates/vesper-audiolab` | Audio lab: a seeded corpus of noisy mixtures, metrics and the `audiolab` CLI that scores the capture path. |
 | `web/` | The Svelte client. |
 | `deploy/` | Dockerfile, compose, Caddyfile example, systemd unit. |
 
