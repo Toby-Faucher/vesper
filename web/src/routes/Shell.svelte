@@ -20,6 +20,7 @@
   import IconButton from '../lib/ui/c/IconButton.svelte';
   import Dialog from '../lib/ui/c/Dialog.svelte';
   import { lazy } from '../lib/ui/lazy';
+  import { takeSeen } from '../lib/whats-new';
   import SwitcherField from './SwitcherField.svelte';
   import { MAX_QUERY } from '../lib/ui/search-max';
   import ConnectionBanner from './ConnectionBanner.svelte';
@@ -54,6 +55,18 @@
   $effect(() => {
     if (room) try { storage?.setItem(LAST, String(room.id)); } catch { /* storage blocked */ }
     recent = room ? pushRecent(storage, uid, room.id) : loadRecent(storage, uid);
+  });
+  // "What's new": the first Me of this sign-in stores the server's version; when it is newer than the one stored before,
+  // the popup's chunk loads (WhatsNew.svelte). It waits while a call rings, and closes if one starts ringing.
+  let WhatsNew = $state<typeof import('./WhatsNew.svelte').default>();
+  let whatsNew = $state<{ seen: string; current: string } | null>(null);
+  let versionChecked = false;
+  $effect(() => {
+    const current = session.state.me?.server?.version;
+    if (!current || versionChecked) return;
+    versionChecked = true;
+    const seen = takeSeen(storage, current);
+    if (seen) import('./WhatsNew.svelte').then((m) => ((WhatsNew = m.default), (whatsNew = { seen, current })), () => {});
   });
   // The open room left the list (made private, or archived): go to the first room, without a history entry.
   let had: number | null = null;
@@ -224,6 +237,7 @@
 </Dialog>
 <!-- The incoming DM call prompt is a chunk of its own: loaded on the first ring. -->
 {#if ring.list.length}{#await import('./RingPrompt.svelte') then m}<m.default />{/await}{/if}
+{#if WhatsNew && whatsNew && !ring.list.length}<WhatsNew seen={whatsNew.seen} current={whatsNew.current} onclose={() => (whatsNew = null)} />{/if}
 {#if layersMod}<layersMod.Shortcuts open={layers.shortcuts} onclose={() => (layers.shortcuts = false)} />{/if}
 
 <style>

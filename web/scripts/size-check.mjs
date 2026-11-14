@@ -41,7 +41,9 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 200, cssFirst: 12, css
 // 2026-11-14: 61.4 to 61.6 for v1.8.1, the intent cue (the data-intent mark in intent.ts, for the sidebar rows) and
 // roomOrder in keys.ts (the shell and the neighbour prefetch share the sidebar order); measured 61.28 on the dev machine
 // against 61.11 before, so CI is expected near 61.45. The viewer's video code and its icon stay in the lazy chat chunk.
-export const RATCHET_GZIP_KB = { first: 61.6 };
+// 2026-11-14: 61.6 to 61.9 for v1.8.2 "What's new" (the version check in whats-new.ts and its effect in the shell); measured
+// 61.60 on the dev machine against 61.32 before, so CI is expected near 61.75. The notes and the dialog are a lazy chunk.
+export const RATCHET_GZIP_KB = { first: 61.9 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.

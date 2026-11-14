@@ -4,6 +4,8 @@ import { UI_MESSAGES as FIRST } from './messages-first';
 // All of them, for the lazy pages. A text the first load needs goes in messages-first.ts.
 export const UI_MESSAGES = {
   ...FIRST,
+  whatsNewTitle: "What's new",
+  whatsNewVersion: (v: string) => `Version ${v}`,
   shareTitle: 'Share your screen',
   shareEditTitle: 'Share settings',
   shareFps: 'Frame rate',
