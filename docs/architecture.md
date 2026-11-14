@@ -52,7 +52,7 @@ The "Not verified" list at the end says what was only read.
   verified). The dialog waits 300 ms after the last key, does not send a lone one-letter word, aborts a request the next query replaces,
   retries a 429 once after a second and then says search is busy until Enter, drops the hits of a room you can no longer see and asks again,
   and a result jumps to the message with `around=`. New messages from others are read out by a polite live region; paste
-  takes only PNG, JPEG, GIF and WebP images. A pasted image named `image.png` gets a name like `Pasted image 2026-11-03 14.05.png` (local time, ` (2)` for a repeat); other names stay.
+  takes only PNG, JPEG, GIF and WebP images and common audio and video types (mp3, m4a, ogg, wav, flac, mp4, mov, webm). A pasted image named `image.png` gets a name like `Pasted image 2026-11-03 14.05.png` (local time, ` (2)` for a repeat); other names stay.
 - **Markdown** (`web/src/lib/markdown.ts`) is a hand-written parser into a tree that `Markdown.svelte` renders with text nodes and fixed
   elements. The server stores and searches the raw text; only the client formats it. This is the whole subset:
 
@@ -454,8 +454,12 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
 - **On disk.** The file name is the id (32 random hex), under `uploads/<first 2>/`, dirs 0700 and files 0600. A request id that is
   not 32 lowercase hex is 404 before any path is built, so no client text ever reaches a path.
 - **Type.** Decided from the first bytes, never from the name or the request's `Content-Type`. Only png, jpeg, gif and webp count
-  as images (`Attachment.image`) and are served inline with their type. Everything else, SVG and HTML included, is
-  `application/octet-stream` with `Content-Disposition: attachment`.
+  as images. Audio and video: an ISO `ftyp` box (brand `M4A ` or `M4B ` is `audio/mp4`, `qt  ` is `video/quicktime`, HEIF and AVIF
+  brands are not media, any other brand is `video/mp4`), EBML (`video/webm`), mp3 (`ID3` or an MPEG audio frame header), `OggS`
+  (`audio/ogg`), `RIFF....WAVE` (`audio/wav`) and `fLaC` (`audio/flac`). `Attachment.kind` is `image`, `audio`, `video` or `file`,
+  and the first three are served inline with their type. The timeline plays audio and video with the browser's own player and
+  shows the file card if the browser cannot play it. Everything else, SVG and HTML included, is `application/octet-stream` with
+  `Content-Disposition: attachment`. An upload stored before v1.8.0 keeps the type it got then.
 - **Name.** Display text only: control, bidi and hidden format characters dropped, `/` and `\` turned into `_`, at most 200
   characters, `file` when empty. `Content-Disposition` carries an ASCII `filename` and the exact name as `filename*` (RFC 6266 and
   5987), so a name can not add a header.

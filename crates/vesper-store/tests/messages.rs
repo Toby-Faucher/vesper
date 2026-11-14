@@ -1,5 +1,5 @@
 use tempfile::TempDir;
-use vesper_protocol::{Message, Role};
+use vesper_protocol::{AttachmentKind, Message, Role};
 use vesper_store::{Cursor, NewAccount, NewMessage, Store, StoreError};
 
 async fn open() -> (TempDir, Store) {
@@ -497,12 +497,18 @@ async fn attachments_must_be_own_unattached_same_room() {
         })
         .await
         .unwrap();
-    let got: Vec<(&str, bool)> = m
+    let got: Vec<(&str, AttachmentKind)> = m
         .attachments
         .iter()
-        .map(|x| (x.id.as_str(), x.image))
+        .map(|x| (x.id.as_str(), x.kind))
         .collect();
-    assert_eq!(got, [(img.as_str(), true), (doc.as_str(), false)]);
+    assert_eq!(
+        got,
+        [
+            (img.as_str(), AttachmentKind::Image),
+            (doc.as_str(), AttachmentKind::File)
+        ]
+    );
     // Already attached.
     let again = [img.clone()];
     assert!(matches!(

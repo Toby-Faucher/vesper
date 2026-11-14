@@ -1,8 +1,9 @@
 //! Uploads: a raw-body POST streamed to disk under a 25 MiB cap and a total quota, served back
 //! with headers that keep a file from running as a page. Files live at
 //! `<data dir>/uploads/<first 2 of id>/<id>` (dirs 0700, files 0600); the id is 32 random hex,
-//! never anything the client sent. The type is sniffed from the first bytes: only png, jpeg,
-//! gif and webp are images, everything else is `application/octet-stream` and a download.
+//! never anything the client sent. The type is sniffed from the first bytes: png, jpeg, gif and
+//! webp are images; mp4, mov, m4a, webm, mp3, ogg, wav and flac are media; all of them are
+//! served inline. Everything else is `application/octet-stream` and a download.
 //! The client's file name is display text only.
 
 use std::fmt::Write as _;
@@ -21,7 +22,7 @@ use http_body_util::BodyExt;
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tower_http::services::ServeFile;
-use vesper_protocol::{ApiErrorCode, Attachment, DiskUse, Role, UploadDone};
+use vesper_protocol::{ApiErrorCode, Attachment, AttachmentKind, DiskUse, Role, UploadDone};
 use vesper_store::{StoreError, UploadRow, now_ms, random_hex};
 
 use crate::api_accounts::limit;
@@ -40,6 +41,16 @@ pub const READ_IDLE: Duration = Duration::from_secs(30);
 pub const READ_TOTAL: Duration = Duration::from_secs(600);
 const OCTET: &str = "application/octet-stream";
 const IMAGES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const MEDIA: [&str; 8] = [
+    "audio/mp4",
+    "video/quicktime",
+    "video/mp4",
+    "video/webm",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+    "audio/flac",
+];
 const MAX_NAME: usize = 200;
 
 /// Held around the quota check, the rename and the row insert, so two uploads cannot both pass
@@ -65,6 +76,48 @@ pub fn sniff_image(head: &[u8]) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// The audio or video type whose magic bytes start `head`, if any. The browser may still not
+/// play it (a codec it lacks); the client then shows a download.
+pub fn sniff_media(head: &[u8]) -> Option<&'static str> {
+    let at = |i: usize, m: &[u8]| head.get(i..i + m.len()) == Some(m);
+    if at(4, b"ftyp") {
+        // HEIF, AVIF and Canon raw share the ISO box; they stay a download.
+        match head.get(8..12)? {
+            b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"msf1" | b"avif" | b"avis"
+            | b"crx " => None,
+            b"M4A " | b"M4B " => Some(MEDIA[0]),
+            b"qt  " => Some(MEDIA[1]),
+            _ => Some(MEDIA[2]),
+        }
+    } else if at(0, b"\x1a\x45\xdf\xa3") {
+        Some(MEDIA[3])
+    } else if at(0, b"ID3") || mpeg_frame(head) {
+        Some(MEDIA[4])
+    } else if at(0, b"OggS") {
+        Some(MEDIA[5])
+    } else if at(0, b"RIFF") && at(8, b"WAVE") {
+        Some(MEDIA[6])
+    } else if at(0, b"fLaC") {
+        Some(MEDIA[7])
+    } else {
+        None
+    }
+}
+
+/// An MPEG audio frame header: 11 sync bits, then no reserved version, layer, bitrate or rate.
+/// Layer bits 00 are AAC ADTS, not mp3. JPEG's `FF D8` fails the sync.
+fn mpeg_frame(head: &[u8]) -> bool {
+    let [0xff, b1, b2, ..] = *head else {
+        return false;
+    };
+    b1 & 0xe0 == 0xe0 && b1 & 0x18 != 0x08 && b1 & 0x06 != 0 && b2 >> 4 != 0xf && b2 & 0x0c != 0x0c
+}
+
+/// The type an upload is stored and served as: an image or media type, or None for a download.
+pub fn sniff(head: &[u8]) -> Option<&'static str> {
+    sniff_image(head).or_else(|| sniff_media(head))
 }
 
 /// Display name: control, bidi and other hidden format characters dropped, `/` and `\` become
@@ -327,7 +380,7 @@ async fn upload(
     file.sync_all().await.map_err(io_error)?;
     drop(file);
 
-    let mime = sniff_image(&head);
+    let mime = sniff(&head);
     let row = UploadRow {
         id,
         room_id: room.id,
@@ -352,7 +405,7 @@ async fn upload(
         cleanup.keep();
     }
     let attachment = Attachment {
-        image: mime.is_some(),
+        kind: AttachmentKind::of(&row.mime),
         id: row.id,
         name: row.name,
         mime: row.mime,
@@ -416,16 +469,16 @@ async fn download(
         .await
         .map_err(io_error)?;
     let mut res = res.map(Body::new);
-    let image = IMAGES.contains(&row.mime.as_str());
+    let known = IMAGES.into_iter().chain(MEDIA).find(|&m| m == row.mime);
     let ok = res.status().is_success();
     let h = res.headers_mut();
     h.insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_static(IMAGES.into_iter().find(|&m| m == row.mime).unwrap_or(OCTET)),
+        HeaderValue::from_static(known.unwrap_or(OCTET)),
     );
     h.insert(
         header::CONTENT_DISPOSITION,
-        content_disposition(&row.name, image),
+        content_disposition(&row.name, known.is_some()),
     );
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
@@ -605,5 +658,50 @@ mod tests {
         ] {
             assert_eq!(sniff_image(no), None, "{no:?}");
         }
+    }
+
+    #[test]
+    fn sniff_media_rules() {
+        for (head, want) in [
+            (&b"\0\0\0\x20ftypM4A \0\0\0\0"[..], "audio/mp4"),
+            (b"\0\0\0\x20ftypM4B ", "audio/mp4"),
+            (b"\0\0\0\x14ftypqt  ", "video/quicktime"),
+            (b"\0\0\0\x18ftypisom", "video/mp4"),
+            (b"\0\0\0\x18ftypmp42", "video/mp4"),
+            (b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81", "video/webm"),
+            (b"ID3\x04\0\0\0\0", "audio/mpeg"),
+            (b"\xff\xfb\x90\x64", "audio/mpeg"),
+            (b"\xff\xf3\x48\xc4", "audio/mpeg"),
+            (b"\xff\xe3\x18\xc4", "audio/mpeg"),
+            (b"OggS\0\x02", "audio/ogg"),
+            (b"RIFF\0\0\0\0WAVEfmt ", "audio/wav"),
+            (b"fLaC\0\0\0\x22", "audio/flac"),
+        ] {
+            assert_eq!(sniff_media(head), Some(want), "{head:?}");
+            assert_eq!(sniff(head), Some(want), "{head:?}");
+        }
+        for no in [
+            &b""[..],
+            b"\0\0\0\x18ftyp",
+            b"\0\0\0\x18ftypheic",
+            b"\0\0\0\x1cftypavif",
+            b"\0\0\0\x18ftypmif1",
+            b"ftypisom",
+            b"\x1a\x45\xdf",
+            b"RIFF\0\0\0\0WEBPVP8 ",
+            b"RIFF\0\0\0\0AVI ",
+            b"\xff\xd8\xff\xe0",
+            b"\xff\xf1\x50\x80", // AAC ADTS: layer bits 00
+            b"\xff\xfb\xf0\x64", // bitrate index 15
+            b"\xff\xfb\x9c\x64", // sample rate 3
+            b"\xff\xeb\x90\x64", // version 01 is reserved
+            b"\xff",
+            b"<svg xmlns=",
+            b"<html><script>",
+        ] {
+            assert_eq!(sniff_media(no), None, "{no:?}");
+        }
+        // jpeg stays an image when both are asked.
+        assert_eq!(sniff(b"\xff\xd8\xff\xe0"), Some("image/jpeg"));
     }
 }

@@ -35,8 +35,12 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   the server log has both account ids. The taker sees the "your password was reset" notice first, so the member is told
   only after they get back in through a new link (that reset shows the earlier ones again). The owner can give the member
   a new link and ban the moderator, which ends every live link the moderator made. The owner can do the same to anyone.
-- **Uploads are not scanned for viruses.** Images are served inline only after their magic bytes match, everything else is a
-  download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
+- **Uploads are not scanned for viruses.** Images, audio and video are served inline only after their magic bytes match, everything
+  else is a download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
+- **Whether audio or video plays depends on the browser.** The server checks only the container, not the codec. A file the browser
+  cannot decode (HEVC video in Firefox, for one) shows the file card with Download instead. An mp4 with an unknown brand is served
+  as `video/mp4`, and audio in a WebM or mp4 container gets a video player. Files uploaded before v1.8.0 stay downloads. Not
+  verified: playback, seeking and the fallback in a real browser.
 - **Rooms cannot be deleted, only archived.** An archived room's messages and files stay in the database and count toward disk use. Its search index rows stay too.
 - **Passkeys are new and only tested with a software authenticator.** The server tests use a P-256 key made in the test, not a real
   authenticator or browser, so a real phone, security key or password manager is not verified. Passkeys are sign in only: the password

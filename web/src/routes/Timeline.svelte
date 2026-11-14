@@ -306,7 +306,7 @@
   // The viewer walks the images of the loaded slice, oldest first.
   let viewer = $state<{ images: Attachment[]; at: number; chunk: ReturnType<typeof viewerChunk> } | null>(null);
   function view(id: string) {
-    const images = (log?.messages ?? []).filter((m) => !m.deleted).flatMap((m) => m.attachments.filter((a) => a.image));
+    const images = (log?.messages ?? []).filter((m) => !m.deleted).flatMap((m) => m.attachments.filter((a) => a.kind === 'image'));
     const chunk = viewerChunk();
     chunk.catch(() => {
       viewer = null;
