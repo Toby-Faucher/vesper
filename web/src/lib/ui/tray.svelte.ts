@@ -4,7 +4,7 @@
 // One tray for the page (`tray`), each file with its room: a room change keeps the uploads going and the finished files
 // wait in their room. Sign out and a lost session clear it (session.svelte.ts). A reload loses it: memory only.
 import { ApiFailure, errorText } from '../api';
-import { MAX_UPLOAD, upload } from '../chat.svelte';
+import { upload, uploadCap } from '../chat.svelte';
 import type { Attachment } from '../gen/Attachment';
 import { UI_MESSAGES } from './messages-first';
 
@@ -24,7 +24,7 @@ export type TrayItem = {
 /** The plain text for a failed upload, and whether Retry can help. */
 export function uploadError(e: unknown): { error: string; retry: boolean } {
   if (e instanceof ApiFailure) {
-    if (e.status === 413) return { error: UI_MESSAGES.fileTooLarge, retry: false };
+    if (e.status === 413) return { error: UI_MESSAGES.fileTooLarge(uploadCap.max), retry: false };
     if (e.status === 507) return { error: UI_MESSAGES.uploadQuota, retry: true };
     if (e.status === 429) return { error: UI_MESSAGES.uploadRate, retry: true };
     return { error: errorText(e), retry: true };
@@ -52,9 +52,9 @@ export class Tray {
 
   add(room: number, files: File[]) {
     for (const file of files) {
-      const big = file.size > MAX_UPLOAD; // the server's limit, checked here so a large file is not sent at all
+      const big = file.size > uploadCap.max; // the server's limit, checked here so a large file is not sent at all
       this.items.push({
-        key: ++keys, room, file, state: big ? 'failed' : 'queued', progress: 0, error: big ? UI_MESSAGES.fileTooLarge : '',
+        key: ++keys, room, file, state: big ? 'failed' : 'queued', progress: 0, error: big ? UI_MESSAGES.fileTooLarge(uploadCap.max) : '',
         retry: !big, attachment: null, ctrl: null,
       });
     }

@@ -11,7 +11,7 @@ export const expandIcon = 'M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3
 export const BOX = { w: 360, h: 280 };
 const MIN = 48; // a tiny image still gets a box you can click
 
-/** "12 KB", "3.4 MB": binary units, as the server counts its 25 MB limit, rounded up. */
+/** "12 KB", "3.4 MB": binary units, as the server counts its upload limit, rounded up. */
 export const fileSize = (n: number) =>
   n < 1024 * 1024 ? `${Math.max(1, Math.ceil(n / 1024))} KB` : `${(Math.ceil((n / 1024 / 1024) * 10) / 10).toFixed(1)} MB`; // up: just over 25 MB never reads 25.0
 

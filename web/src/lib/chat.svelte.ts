@@ -17,7 +17,8 @@ export type ChatState = {
 };
 
 export const TYPING_MS = 5000;
-export const MAX_UPLOAD = 25 * 1024 * 1024;
+/** Bytes per upload: the server's `Me.upload_max`, set by each hello (session.svelte.ts). 25 MiB until the first. */
+export const uploadCap = { max: 25 * 1024 * 1024 };
 const PAGE = 50;
 
 /**
@@ -228,7 +229,7 @@ export const markRead = (roomId: number, lastReadId: number) =>
  */
 export function upload(roomId: number, file: File, onProgress?: (done: number) => void, signal?: AbortSignal): Promise<Attachment> {
   if (signal?.aborted) return Promise.reject(new DOMException('Upload cancelled', 'AbortError'));
-  if (file.size > MAX_UPLOAD) return Promise.reject(new ApiFailure(413, 'too_large'));
+  if (file.size > uploadCap.max) return Promise.reject(new ApiFailure(413, 'too_large'));
   return new Promise((resolve, reject) => {
     const x = new XMLHttpRequest();
     const stop = () => x.abort();

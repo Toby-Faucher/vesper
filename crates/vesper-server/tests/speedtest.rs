@@ -70,11 +70,11 @@ async fn speedtest_is_rate_limited() {
 }
 
 #[tokio::test]
-async fn speedtest_refuses_over_25_mib() {
-    let server = TestServer::new().await;
+async fn speedtest_refuses_over_the_upload_cap() {
+    let server = TestServer::with(|c| c.upload_max_bytes = 2 << 20, common::spawn_sfu()).await;
     let alice = server.account("alice", Role::Member).await;
     let m = Bytes::from(vec![7u8; 1 << 20]);
-    let chunks: Vec<Result<Bytes, std::io::Error>> = (0..26).map(|_| Ok(m.clone())).collect();
+    let chunks: Vec<Result<Bytes, std::io::Error>> = (0..3).map(|_| Ok(m.clone())).collect();
     let body = Body::from_stream(futures_util::stream::iter(chunks));
     let (status, _, v) = server.call(req(body, Some(&alice), true)).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{v}");

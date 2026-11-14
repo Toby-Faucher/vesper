@@ -6,4 +6,8 @@ export type Me = { user: UserInfo, session_id: number,
 /**
  * The server that answered. A tab compares `build` with the one it loaded under (v1.4).
  */
-server: ServerBuild, };
+server: ServerBuild, 
+/**
+ * Largest upload this server takes, in bytes (`VESPER_UPLOAD_MAX_MB`).
+ */
+upload_max: number, };

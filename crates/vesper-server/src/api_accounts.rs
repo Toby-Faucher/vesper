@@ -290,6 +290,7 @@ async fn signup(
             user,
             session_id,
             server: st.cfg.server_build(),
+            upload_max: st.cfg.upload_max_bytes as i64,
         }),
     )
         .into_response())
@@ -326,6 +327,7 @@ async fn login(
             user,
             session_id,
             server: st.cfg.server_build(),
+            upload_max: st.cfg.upload_max_bytes as i64,
         }),
     )
         .into_response())
@@ -345,6 +347,7 @@ async fn me(State(st): State<AppState>, a: Authed) -> Json<Me> {
         user: a.user,
         session_id: a.session_id,
         server: st.cfg.server_build(),
+        upload_max: st.cfg.upload_max_bytes as i64,
     })
 }
 

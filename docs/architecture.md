@@ -310,7 +310,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/signup` (`SignupReq`) | Invite limit by address | 201 `Me` and the session cookie |
 | `POST /api/login` (`LoginReq`) | Login limits by address, then by address and username | `Me` and a new session cookie |
 | `POST /api/logout` | a session | 204, the session is deleted and the cookie cleared |
-| `GET /api/me` | a session | `Me`, with `server { version, build }` |
+| `GET /api/me` | a session | `Me`, with `server { version, build }` and `upload_max` (bytes) |
 | `PATCH /api/me` (`ProfilePatch`) | a session | the new `UserInfo`; `bio` follows the display name rule, 0 to 160 characters; `ui_accent` is an `AccentPreset` key or `#rrggbb` (the client checks a custom colour's contrast) |
 | `PUT /api/me/avatar` (the raw picture as the body) | a session, Upload limit by user | the new `UserInfo`; 400 unless png, jpeg or webp of at most 1024 px a side (see Profile pictures), 413 `too_large` past 512 KiB |
 | `DELETE /api/me/avatar` | a session, Change limit by user | the new `UserInfo` with `avatar: null` |
@@ -360,9 +360,9 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `PUT /api/messages/{id}/pin` (`PinReq`) | sees the room, Change limit by user | the new `Message`; pushes `message_updated` |
 | `PUT /api/rooms/{id}/read` (`ReadReq`) | sees the room | 204; sends `read` to every socket of the user |
 | `GET /api/search?q=&room_id=&author_id=&from=&to=&before=` (`SearchQuery`) | a session, Search limit by user | `SearchPage`, 20 hits, newest first, only rooms you can see; a `room_id` you cannot see is 404 |
-| `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past 25 MiB, 507 `quota_full` |
+| `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past `VESPER_UPLOAD_MAX_MB`, 507 `quota_full` |
 | `GET /api/uploads/{id}` | sees the room; an upload not attached yet needs the uploader | the file (Range works), else 404 |
-| `POST /api/speedtest` (the raw body, up to 25 MiB; `speedtest.rs`) | a session, Speedtest limit by user (3, one back per 20 s) | 204; the body is read and thrown away, nothing is stored. The share dialog times a 4 MiB post to suggest a bitrate |
+| `POST /api/speedtest` (the raw body, up to `VESPER_UPLOAD_MAX_MB`; `speedtest.rs`) | a session, Speedtest limit by user (3, one back per 20 s) | 204; the body is read and thrown away, nothing is stored. The share dialog times a 4 MiB post to suggest a bitrate |
 | `GET /api/admin/disk` | owner | `DiskUse` |
 | `GET /api/admin/server` | owner | `ServerStatus`: version and build, uptime, the `DiskUse` numbers, people in voice, failed pushes in the last 24 h (in memory, since start if shorter), the newest `*.db` in `<data>/backups` (name and time). No secrets and no one's address. The advertised public address is not in it: the server does not record when it changed |
 
@@ -445,10 +445,11 @@ new URL. It is served with the uploads' headers: the sniffed type, `nosniff`, `d
 
 Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the raw body (no multipart). Rules:
 
-- **Size.** At most 25 MiB (`MAX_UPLOAD`). A larger `Content-Length` is 413 before the body is read; a body with no length is
+- **Size.** At most `VESPER_UPLOAD_MAX_MB` ([env.md](env.md), 100 MiB by default). `Me.upload_max` tells the client, which
+  refuses a larger file before sending it (25 MiB until the first `hello`). A larger `Content-Length` is 413 before the body is read; a body with no length is
   counted while it streams to `uploads/tmp/<id>` and is cut off with 413 once it passes the cap. The partial file is deleted, also
   when the client goes away mid-body, sends nothing for 30 s (`READ_IDLE`) or is not done after 10 minutes (`READ_TOTAL`): 400
-  `upload too slow`. So a 25 MiB file needs about 44 KB/s (350 kbit/s) on average. The Upload limit is 10, then 1 every 30 s, per user.
+  `upload too slow`. So a 100 MiB file needs about 175 KB/s (1.4 Mbit/s) on average. The Upload limit is 10, then 1 every 30 s, per user.
 - **Quota.** Uploads together stay under `VESPER_UPLOAD_QUOTA_MB` ([env.md](env.md)). The check, the move into place and the row
   insert run under one lock, so uploads racing each other cannot pass it (507 `quota_full`). A `Content-Length` that cannot fit
   what is left is 507 before the body is read.

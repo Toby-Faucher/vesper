@@ -1,4 +1,4 @@
-//! Uploads: a raw-body POST streamed to disk under a 25 MiB cap and a total quota, served back
+//! Uploads: a raw-body POST streamed to disk under a size cap (`VESPER_UPLOAD_MAX_MB`) and a total quota, served back
 //! with headers that keep a file from running as a page. Files live at
 //! `<data dir>/uploads/<first 2 of id>/<id>` (dirs 0700, files 0600); the id is 32 random hex,
 //! never anything the client sent. The type is sniffed from the first bytes: png, jpeg, gif and
@@ -32,7 +32,6 @@ use crate::auth::is_hidden_format;
 use crate::limits::Kind;
 use crate::{ApiError, AppState, Authed};
 
-pub const MAX_UPLOAD: u64 = 25 * 1024 * 1024;
 /// An upload not attached to a message within this long is swept.
 pub const STALE_MS: i64 = 24 * 3600 * 1000;
 const SWEEP_EVERY: Duration = Duration::from_secs(3600);
@@ -173,8 +172,11 @@ fn not_found() -> ApiError {
     ApiError::new(ApiErrorCode::NotFound, "not found")
 }
 
-fn too_large() -> ApiError {
-    ApiError::new(ApiErrorCode::TooLarge, "file over 25 MiB")
+fn too_large(max: u64) -> ApiError {
+    ApiError::new(
+        ApiErrorCode::TooLarge,
+        format!("file over {} MiB", max >> 20),
+    )
 }
 
 fn quota_full() -> ApiError {
@@ -395,8 +397,9 @@ async fn upload(
     let declared = headers
         .get(header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
-    if declared.is_some_and(|n| n > MAX_UPLOAD) {
-        return Err(too_large());
+    let max = st.cfg.upload_max_bytes;
+    if declared.is_some_and(|n| n > max) {
+        return Err(too_large(max));
     }
     // Saves reading a body that cannot fit. Only a hint: the check under QUOTA below decides.
     if let Some(n) = declared {
@@ -418,7 +421,7 @@ async fn upload(
         .await
         .map_err(io_error)?;
     let mut cleanup = Cleanup(Some(tmp.clone()));
-    let (size, head) = read_body(body, &mut file, READ_IDLE, READ_TOTAL).await?;
+    let (size, head) = read_body(body, &mut file, max, READ_IDLE, READ_TOTAL).await?;
     file.sync_all().await.map_err(io_error)?;
     drop(file);
 
@@ -456,12 +459,13 @@ async fn upload(
     Ok((StatusCode::CREATED, Json(UploadDone { attachment })))
 }
 
-/// Streams `body` into `file` under the 25 MiB cap. Returns the size and the first 16 bytes. A
+/// Streams `body` into `file`, at most `max` bytes. Returns the size and the first 16 bytes. A
 /// gap of `idle` between chunks or a body not done after `total` is a 400, so a slow client
 /// cannot hold an upload open.
 pub async fn read_body(
     mut body: Body,
     file: &mut (impl tokio::io::AsyncWrite + Unpin),
+    max: u64,
     idle: Duration,
     total: Duration,
 ) -> Result<(u64, Vec<u8>), ApiError> {
@@ -481,8 +485,8 @@ pub async fn read_body(
             continue;
         };
         size += chunk.len() as u64;
-        if size > MAX_UPLOAD {
-            return Err(too_large());
+        if size > max {
+            return Err(too_large(max));
         }
         let want = (16 - head.len()).min(chunk.len());
         head.extend_from_slice(&chunk[..want]);
@@ -592,7 +596,14 @@ mod tests {
 
     async fn read(body: Body, idle_ms: u64, total_ms: u64) -> Result<(u64, Vec<u8>), ApiError> {
         let ms = Duration::from_millis;
-        read_body(body, &mut tokio::io::sink(), ms(idle_ms), ms(total_ms)).await
+        read_body(
+            body,
+            &mut tokio::io::sink(),
+            u64::MAX,
+            ms(idle_ms),
+            ms(total_ms),
+        )
+        .await
     }
 
     #[tokio::test]

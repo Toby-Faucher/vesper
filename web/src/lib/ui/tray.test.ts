@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiFailure } from '../api';
-import { MAX_UPLOAD } from '../chat.svelte';
+import { uploadCap } from '../chat.svelte';
 import type { Attachment } from '../gen/Attachment';
 import { LIMIT, Tray, uploadError } from './tray.svelte';
 import { UI_MESSAGES } from './messages';
@@ -35,13 +35,28 @@ describe('Tray', () => {
   });
 
   it('refuses a file over the limit before any upload', () => {
+    expect(uploadCap.max).toBe(25 * 1024 * 1024); // before the hello
     const f = fake();
     const t = new Tray(f.up);
-    t.add(1, [file('big', MAX_UPLOAD + 1), file('ok', MAX_UPLOAD)]);
+    t.add(1, [file('big', uploadCap.max + 1), file('ok', uploadCap.max)]);
     expect(f.calls.map((c) => c.name)).toEqual(['ok']);
-    expect(t.items[0]).toMatchObject({ state: 'failed', error: UI_MESSAGES.fileTooLarge, retry: false });
+    expect(t.items[0]).toMatchObject({ state: 'failed', error: 'Files can be up to 25 MB.', retry: false });
     t.retry(t.items[0].key);
     expect(f.calls.length).toBe(1);
+  });
+
+  it('uses the limit the server sent', () => {
+    const was = uploadCap.max;
+    uploadCap.max = 100 * 1024 * 1024;
+    try {
+      const f = fake();
+      const t = new Tray(f.up);
+      t.add(1, [file('big', uploadCap.max + 1), file('mid', 50 * 1024 * 1024)]);
+      expect(f.calls.map((c) => c.name)).toEqual(['mid']);
+      expect(t.items[0].error).toBe('Files can be up to 100 MB.');
+    } finally {
+      uploadCap.max = was;
+    }
   });
 
   it('cancel aborts a running upload, removes it and starts a queued one', async () => {
@@ -108,7 +123,7 @@ describe('Tray', () => {
   });
 
   it('words each failure plainly', () => {
-    expect(uploadError(new ApiFailure(413, 'too_large'))).toEqual({ error: UI_MESSAGES.fileTooLarge, retry: false });
+    expect(uploadError(new ApiFailure(413, 'too_large'))).toEqual({ error: UI_MESSAGES.fileTooLarge(uploadCap.max), retry: false });
     expect(uploadError(new ApiFailure(507, 'quota_full')).error).toBe(UI_MESSAGES.uploadQuota);
     expect(uploadError(new ApiFailure(429, 'rate_limited')).error).toBe(UI_MESSAGES.uploadRate);
     expect(uploadError(new TypeError('network')).error).toBe(UI_MESSAGES.uploadNetwork);

@@ -11,7 +11,7 @@ class FakeWS {
   close() { this.onclose?.({ code: 1000 }); }
   drop(code: number) { this.onclose?.({ code }); }
   hello(build = 'b1') {
-    const me = { user: { user_id: 'a', username: 'a', display_name: 'A', accent: '#888888', role: 'member', banned: false }, session_id: 1, server: { version: '1.4.0', build } };
+    const me = { user: { user_id: 'a', username: 'a', display_name: 'A', accent: '#888888', role: 'member', banned: false }, session_id: 1, server: { version: '1.4.0', build }, upload_max: 1 << 20 };
     this.onmessage?.({ data: JSON.stringify({ type: 'hello', me, users: [me.user], rooms: [], voice: [], unread: [] }) });
   }
 }

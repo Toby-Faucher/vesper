@@ -23,6 +23,7 @@ fn config(data: &TempDir) -> Config {
         origin: "http://localhost:8080".into(),
         secure_cookies: false,
         upload_quota_bytes: 0,
+        upload_max_bytes: 100 << 20,
         push_subject: None,
         build: "test-build".into(),
         backup_keep: 5,

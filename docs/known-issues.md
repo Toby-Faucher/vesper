@@ -7,12 +7,12 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 
 - **Plain HTTP connections are not capped in number.** Each one is closed after 10 s without a full request head, but there is no limit per
   address; the cap of 256 sockets counts upgraded sockets only.
-- **There is no response timeout.** A client that reads a download (up to 25 MiB) very slowly keeps its connection until it is done.
-- **An upload must average about 44 KB/s (350 kbit/s).** The 10 minute total limit means a 25 MiB file on a slower uplink fails near
-  the end with `upload too slow`.
+- **There is no response timeout.** A client that reads a download (up to `VESPER_UPLOAD_MAX_MB`, 100 MiB by default) very slowly keeps its connection until it is done.
+- **An upload must finish in 10 minutes.** At the default cap of 100 MiB that is about 175 KB/s (1.4 Mbit/s) on average, so a
+  100 MiB file on a slower uplink fails near the end with `upload too slow`.
 - **Uploads in flight can pass the quota on disk for a while.** The quota is checked again under a lock before a file is kept, so it is never
-  passed for good, but each upload streams to `uploads/tmp` first: up to 25 MiB per upload in flight, so about 250 MiB for one user's burst
-  of 10. A `Content-Length` that cannot fit is refused before any byte is read.
+  passed for good, but each upload streams to `uploads/tmp` first: up to `VESPER_UPLOAD_MAX_MB` (100 MiB by default) per upload in
+  flight, so about 1 GiB for one user's burst of 10. A `Content-Length` that cannot fit is refused before any byte is read.
 - **A request cancelled during the upload row insert can leave a row with no file.** It counts against the quota until the 24 h sweep
   removes it (it is never attached, since the uploader's request failed).
 - **Search timing shows a little about hidden rooms.** Matches in rooms you cannot see are skipped one by one while the index is walked,
