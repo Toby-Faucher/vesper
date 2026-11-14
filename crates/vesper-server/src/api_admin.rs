@@ -144,7 +144,7 @@ async fn create_invite(
         )
         .await?;
     let url = format!("{}/invite#{code}", st.cfg.origin);
-    Ok((StatusCode::CREATED, Json(InviteCreated { info, url })))
+    Ok((StatusCode::CREATED, Json(InviteCreated { info, url: url.into() })))
 }
 
 async fn revoke_invite(
@@ -195,7 +195,7 @@ async fn create_reset(
         .login_row(&a.user.username)
         .await?
         .and_then(|r| r.password_phc);
-    if !verify_password(req.password, phc).await {
+    if !verify_password(req.password.0, phc).await {
         return Err(ApiError::new(ApiErrorCode::Forbidden, "wrong password"));
     }
     // Again after the hash: a role change or ban during it must not leave a link it forbids.
@@ -214,7 +214,7 @@ async fn create_reset(
         .await?;
     tracing::info!(user_id = %id, by = %a.user.user_id, "password reset link created");
     let url = format!("{}/reset#{code}", st.cfg.origin);
-    Ok((StatusCode::CREATED, Json(ResetCreated { url, expires_at })))
+    Ok((StatusCode::CREATED, Json(ResetCreated { url: url.into(), expires_at })))
 }
 
 /// Each account's latest reset link plus every reset used in the last 30 days, so the owner sees

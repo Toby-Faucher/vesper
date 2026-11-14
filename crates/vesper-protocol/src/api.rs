@@ -3,6 +3,37 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+/// A string that `Debug` never shows: a password, an invite or reset code, a capability URL.
+/// It is a plain string on the wire and in TypeScript. Read it through `Deref` (`&*secret`).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(pub String);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***")
+    }
+}
+
+impl std::ops::Deref for Secret {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Secret {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(s: &str) -> Self {
+        Self(s.into())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -99,42 +130,23 @@ pub enum ApiErrorCode {
     Internal,
 }
 
-// `Debug` is written by hand so the password and invite code never reach a log.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SignupReq {
-    pub invite: String,
+    #[ts(as = "String")]
+    pub invite: Secret,
     pub username: String,
-    pub password: String,
+    #[ts(as = "String")]
+    pub password: Secret,
     pub display_name: String,
 }
 
-// `Debug` is written by hand so the password and invite code never reach a log.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LoginReq {
     pub username: String,
-    pub password: String,
-}
-
-impl std::fmt::Debug for SignupReq {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SignupReq")
-            .field("invite", &"***")
-            .field("username", &self.username)
-            .field("password", &"***")
-            .field("display_name", &self.display_name)
-            .finish()
-    }
-}
-
-impl std::fmt::Debug for LoginReq {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LoginReq")
-            .field("username", &self.username)
-            .field("password", &"***")
-            .finish()
-    }
+    #[ts(as = "String")]
+    pub password: Secret,
 }
 
 /// A missing field is left as it is.
@@ -157,21 +169,13 @@ pub struct ProfilePatch {
     pub ui_accent: Option<String>,
 }
 
-// `Debug` is written by hand so the password and invite code never reach a log.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PasswordChange {
-    pub old: String,
-    pub new: String,
-}
-
-impl std::fmt::Debug for PasswordChange {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PasswordChange")
-            .field("old", &"***")
-            .field("new", &"***")
-            .finish()
-    }
+    #[ts(as = "String")]
+    pub old: Secret,
+    #[ts(as = "String")]
+    pub new: Secret,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -208,36 +212,20 @@ pub struct InviteCreate {
     pub expires_hours: u32,
 }
 
-// `Debug` is written by hand so the invite code in `url` never reaches a log.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct InviteCreated {
     pub info: InviteInfo,
-    pub url: String,
-}
-
-impl std::fmt::Debug for InviteCreated {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InviteCreated")
-            .field("info", &self.info)
-            .field("url", &"***")
-            .finish()
-    }
+    #[ts(as = "String")]
+    pub url: Secret,
 }
 
 /// `POST /api/users/{id}/reset`: the caller's own password, checked again before a link is made.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ResetCreate {
-    pub password: String,
-}
-
-impl std::fmt::Debug for ResetCreate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResetCreate")
-            .field("password", &"***")
-            .finish()
-    }
+    #[ts(as = "String")]
+    pub password: Secret,
 }
 
 /// `GET /api/resets` (owner): for each account its latest reset link, plus every reset used in the
@@ -274,38 +262,23 @@ pub struct ResetNotice {
 }
 
 /// `POST /api/users/{id}/reset`: a one-use link to set a new password, shown once.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ResetCreated {
-    pub url: String,
+    #[ts(as = "String")]
+    pub url: Secret,
     #[ts(type = "number")]
     pub expires_at: i64,
 }
 
-impl std::fmt::Debug for ResetCreated {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResetCreated")
-            .field("url", &"***")
-            .field("expires_at", &self.expires_at)
-            .finish()
-    }
-}
-
 /// `POST /api/reset`: the code from the link and the new password (8 to 128 characters).
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ResetReq {
-    pub code: String,
-    pub password: String,
-}
-
-impl std::fmt::Debug for ResetReq {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResetReq")
-            .field("code", &"***")
-            .field("password", &"***")
-            .finish()
-    }
+    #[ts(as = "String")]
+    pub code: Secret,
+    #[ts(as = "String")]
+    pub password: Secret,
 }
 
 /// `PATCH /api/users/{id}/role`. `role` not `owner`.
@@ -637,15 +610,16 @@ pub struct PushDevice {
 
 /// `PUT /api/push/subscription`: this browser's push subscription (from
 /// `PushSubscription.toJSON()`) and its three switches. Replaces this session's earlier one.
-// `Debug` is written by hand: the endpoint is a capability URL and `auth` a secret.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PushSubscribe {
-    pub endpoint: String,
+    #[ts(as = "String")]
+    pub endpoint: Secret,
     /// base64url of the 65-byte P-256 public key.
     pub p256dh: String,
     /// base64url of the 16-byte auth secret.
-    pub auth: String,
+    #[ts(as = "String")]
+    pub auth: Secret,
     pub mentions: bool,
     pub voice: bool,
     /// Absent from an older client: on, as it was before this switch existed.
@@ -655,18 +629,6 @@ pub struct PushSubscribe {
 
 fn yes() -> bool {
     true
-}
-
-impl std::fmt::Debug for PushSubscribe {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PushSubscribe")
-            .field("endpoint", &"***")
-            .field("auth", &"***")
-            .field("mentions", &self.mentions)
-            .field("voice", &self.voice)
-            .field("dms", &self.dms)
-            .finish()
-    }
 }
 
 /// What a push is about. The service worker reads the snake_case name.
@@ -778,13 +740,13 @@ mod tests {
                         created_by: None,
                         revoked: false,
                     },
-                    url: format!("http://x/invite#{secret}"),
+                    url: format!("http://x/invite#{secret}").into(),
                 }
             ),
             format!(
                 "{:?}",
                 ResetCreated {
-                    url: format!("http://x/reset#{secret}"),
+                    url: format!("http://x/reset#{secret}").into(),
                     expires_at: 0,
                 }
             ),
@@ -804,7 +766,7 @@ mod tests {
             format!(
                 "{:?}",
                 PushSubscribe {
-                    endpoint: format!("https://fcm.googleapis.com/fcm/send/{secret}"),
+                    endpoint: format!("https://fcm.googleapis.com/fcm/send/{secret}").into(),
                     p256dh: "p".into(),
                     auth: secret.into(),
                     mentions: true,
