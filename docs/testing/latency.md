@@ -103,3 +103,25 @@ tc qdisc show dev lo          # should show no netem
 Note netem on `lo` applies to both directions of every loopback packet (including the WebSocket signaling), so expect roughly double the configured delay end to end and loss on both legs. With 5% loss each way, the load test is expected to FAIL its 95% bar; that is the point of the exercise (it proves the harness detects loss).
 
 A dummy interface does NOT work as a substitute: traffic between two local addresses is routed over `lo`, so netem on the dummy device does nothing. Shaping a non-loopback path needs two network namespaces joined by a veth pair (unverified, not described here; not run).
+
+## Prefetch on intent
+
+`npm --prefix web run bench:intent` runs the real `project` rule from `web/src/lib/ui/intent.ts` and the 80 ms hover rule on
+simulated mouse moves. Each move is a minimum-jerk path with a slight arc and 1 px of jitter, timed by Fitts's law, sampled
+at 60 Hz, then a 120 ms rest before the click. The layout is the sidebar's: 15 rows of 28 px. 400 moves per case, seeded.
+"Lead" is how long before the click the target room's fetch starts. "Wrong" is other rooms fetched per move.
+
+Measured 2026-11-14 on the dev machine:
+
+| Case | Hover lead (median) | Hover + velocity lead (median, p10) | Wrong, hover | Wrong, hover + velocity |
+| --- | --- | --- | --- | --- |
+| Main pane to a row | 160 ms | 401 ms, 234 ms | 0.47 | 2.84 |
+| Row to another row | 157 ms | 375 ms, 321 ms | 1.66 | 5.95 |
+| Within the main pane | none | none | 0 | 0 |
+
+Variants tried and dropped: checking three points along the projection, nearest first (lead 297 ms, wrong 2.15), the same
+row on 3 samples in a row (257 ms, 1.17), and only while slowing down (293 ms, 2.02). A wrong room costs one history GET,
+once per session, since a loaded room is cached. The test fails if the lead gain drops under 150 ms or wrong passes 3.5.
+
+Not verified: real mouse paths. The model has no overshoot, no corrections and no pauses, so real numbers will be lower.
+The ms saved in a browser depend on how long the history GET takes, which was not measured.

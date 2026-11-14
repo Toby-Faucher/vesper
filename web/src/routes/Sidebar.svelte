@@ -10,6 +10,7 @@
   import { glide } from '../lib/ui/motion';
   import { layers } from '../lib/ui/layers.svelte';
   import { isMac } from '../lib/ui/keys';
+  import { intent } from '../lib/ui/intent';
   import { shares } from '../lib/share/state.svelte';
   import { UI_MESSAGES } from '../lib/ui/messages-first';
   import Avatar from '../lib/ui/c/Avatar.svelte';
@@ -86,13 +87,13 @@
 
   {#if me}
     <div class="flex h-12 shrink-0 items-center gap-1 border-t border-subtle px-2">
-      <button bind:this={accountEl} type="button" aria-label="Account, {me.display_name}" onclick={() => (menuOpen = !menuOpen)}
+      <button bind:this={accountEl} type="button" {@attach intent(() => { if (staff) import('./admin/AdminPage.svelte').catch(() => {}); })} aria-label="Account, {me.display_name}" onclick={() => (menuOpen = !menuOpen)}
         class="account flex h-8 min-w-0 flex-1 items-center gap-2 rounded-sm px-2 text-left">
         <Avatar user={me} size={20} />
         <span class="min-w-0 truncate text-fg" title={me.display_name}>{me.display_name}</span>
         <span class="ml-auto flex shrink-0 text-fg-2"><Icon d={I.chevronDown} /></span>
       </button>
-      <span class="cog flex"><IconButton icon={I.settings} label="Settings" tip onclick={() => navigate(href({ name: 'settings', section: 'voice' }))} /></span>
+      <span class="cog flex" {@attach intent(() => import('./settings/SettingsPage.svelte').catch(() => {}))}><IconButton icon={I.settings} label="Settings" tip onclick={() => navigate(href({ name: 'settings', section: 'voice' }))} /></span>
       <Menu anchor={accountEl} open={menuOpen} onclose={() => (menuOpen = false)} label="Account">
         {#if staff}<MenuItem icon={I.shield} onselect={() => navigate(href({ name: 'admin', section: 'invites' }))}>Admin</MenuItem>{/if}
         <MenuItem icon={I.logOut} onselect={() => session.logout()}>Log out</MenuItem>

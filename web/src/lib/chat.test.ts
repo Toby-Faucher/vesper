@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CAP, anchorTop, applyChatMsg, cap, chat, lastOwn, loadLatest, mergeLatest, openRoom, trimRooms, typers, upload, type ChatState } from './chat.svelte';
+import { CAP, anchorTop, applyChatMsg, cap, chat, lastOwn, loadLatest, mergeLatest, openRoom, prefetchRoom, trimRooms, typers, upload, type ChatState } from './chat.svelte';
 import type { Message } from './gen/Message';
 
 const msg = (id: number, over: Partial<Message> = {}): Message => ({
@@ -101,6 +101,22 @@ describe('mergeLatest (refetch after a reconnect)', () => {
       await done;
       expect(ids(chat.state)).toEqual(before ? [1, 2, 3, 4, 5] : [2, 3, 4, 5]);
     }
+  });
+
+  it('opening a room while its prefetch is in flight waits for the page, with one fetch', async () => {
+    let answer!: (r: Response) => void;
+    const f = vi.fn(() => new Promise<Response>((r) => (answer = r)));
+    vi.stubGlobal('fetch', f);
+    prefetchRoom(1);
+    prefetchRoom(1); // held (the placeholder): no second fetch
+    let opened = false;
+    const done = openRoom(1).then(() => (opened = true));
+    await Promise.resolve();
+    expect(opened).toBe(false);
+    answer(Response.json(page([msg(7)])));
+    await done;
+    expect(ids(chat.state)).toEqual([7]);
+    expect(f).toHaveBeenCalledOnce();
   });
 
   it('re-entering a room left on an older slice shows the newest page', async () => {

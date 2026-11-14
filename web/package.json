@@ -13,6 +13,7 @@
     "test": "vitest run",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "size": "node scripts/size-check.mjs",
+    "bench:intent": "BENCH=1 vitest run src/lib/ui/intent.test.ts --silent=false",
     "ci": "npm run check && npm test && npm run build && npm run size",
     "e2e": "node e2e/cleanup.mjs && node e2e/two-browser.mjs && node e2e/share.mjs && node e2e/flows.mjs && node e2e/ui.mjs && node e2e/push.mjs",
     "shots": "node e2e/shots.mjs"

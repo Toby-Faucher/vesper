@@ -129,8 +129,17 @@ export function trimRooms(shown: number | null, atBottom: boolean): void {
 const setLog = (roomId: number, log: RoomLog) => (chat.state = { ...chat.state, rooms: { ...chat.state.rooms, [roomId]: log } });
 const history = (roomId: number, q = '') => api<MessagePage>('GET', `/api/rooms/${roomId}/messages?limit=${PAGE}${q}`);
 
+// The newest-page load in flight per room, so an open during a prefetch waits for it instead of showing the empty placeholder.
+const inflight = new Map<number, Promise<void>>();
+
 /** Loads the newest page of a room, merged into what is held. */
-export async function loadLatest(roomId: number): Promise<void> {
+export function loadLatest(roomId: number): Promise<void> {
+  const p = fetchLatest(roomId).finally(() => inflight.get(roomId) === p && inflight.delete(roomId));
+  inflight.set(roomId, p);
+  return p;
+}
+
+async function fetchLatest(roomId: number): Promise<void> {
   // An empty log first, so a message pushed while the page is in flight is held and then merged.
   const placeholder = !chat.state.rooms[roomId];
   if (placeholder) setLog(roomId, { messages: [], moreBefore: false, moreAfter: false });
@@ -179,11 +188,18 @@ export function openRoom(roomId: number, jumping = false): Promise<void> {
   chat.active = roomId;
   const log = chat.state.rooms[roomId];
   // Back in a room left on an older slice after a jump: show the newest page again, so live messages and mark-read work.
-  return !log || (log.moreAfter && !jumping) ? loadLatest(roomId) : Promise.resolve();
+  return inflight.get(roomId) ?? (!log || (log.moreAfter && !jumping) ? loadLatest(roomId) : Promise.resolve());
+}
+
+/** Warms a room's newest page before it is opened (hover or focus on its row). Silent; skipped when held or on save-data. */
+export function prefetchRoom(roomId: number): void {
+  const saveData = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData;
+  if (!chat.state.rooms[roomId] && !saveData) loadLatest(roomId).catch(() => {});
 }
 
 /** Shows the history around one message (a search hit). */
 export async function jumpTo(roomId: number, id: number): Promise<void> {
+  await inflight.get(roomId)?.catch(() => {}); // a prefetch landing after the jump would replace its slice
   const page = await history(roomId, `&around=${id}`);
   setLog(roomId, { messages: page.messages, moreBefore: page.more_before, moreAfter: page.more_after });
 }
