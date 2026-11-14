@@ -163,6 +163,10 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - Not verified: real keys, a real tray, start with the computer, real audio through DeepFilterNet, and running on Windows.
 - The call's UDP socket is IPv4 only, so an SFU reachable only over IPv6 does not connect.
 - Not verified on real devices or across a real network with NAT: the voice tests run on loopback with fake audio.
+- Screen share: the desktop app can watch, not share. It watches one share at a time, at fit size, without the web's layouts,
+  1:1, zoom, pop-out or pointer. It cannot tell whether its window is visible (GPUI 0.2.2), so an open share view keeps the
+  sharer sending even when the window is minimised or behind a game; Stop watching ends it. Not verified with a real browser
+  sharing, nor how a real 60 fps share looks or keeps up on a screen.
 
 ## Build and deploy
 

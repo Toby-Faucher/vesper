@@ -58,8 +58,8 @@ against a real `vesper-server` started inside the tests. Anything that needs a s
 | D2 | Rooms and DMs in a sidebar, a room's history, live new messages, sending, unread counts | Done 2026-11-14. Tests: two clients, one sends, the other sees it |
 | D3 | Voice: join and leave, hear others, be heard, mute and deafen, per-person volume, who is speaking | Done 2026-11-14. Tests: engines exchange Opus through a real SFU and hear each other's tones |
 | D4 | DeepFilterNet on the mic, global push to talk, tray icon, start with the computer, a Settings view | Done 2026-11-14. Tests: the real model takes noise out of a speech-like fixture (when the model is on disk), a slow fake falls back, a bad checksum is refused, push to talk with a fake key source |
-| D5 | Watch a screen share (VP8 decode), share notices | tests decode the SFU's forwarded VP8 |
-| D6 | Packages. The friends use Windows **[Toby, 2026-11-14]**, so Windows comes first | **D6a done**: `desktop-package.yml` builds a release `Vesper.exe` and uploads a zip (exe, README, licence) as a 30-day artifact on every push to `v2/desktop`. Not signed, so SmartScreen warns. Not verified: running it. Still to do: an installer, signing (Toby's call), Linux and macOS packages |
+| D5 | Watch a screen share (VP8 decode), share notices | Done 2026-11-14. Tests: a fake sharer sends VP8 through a real SFU; a desktop client watches, decodes the right colour, stops watching, and clears the view when the share ends |
+| D6 | Packages. The friends use Windows **[Toby, 2026-11-14]**, so Windows comes first | **D6a done**: `desktop-package.yml` builds a release `Vesper.exe` and uploads a zip (exe, README, licence, third-party notices) as a 30-day artifact on every push to `v2/desktop`. Not signed, so SmartScreen warns. Not verified: running it. Still to do: an installer, signing (Toby's call), Linux and macOS packages |
 | Later | Uploads, reactions, edits, search, settings parity, sharing a screen, echo cancellation | |
 
 ## D1 and D2: what was built and how it was checked
@@ -119,7 +119,7 @@ out (it is stored only with the session).
 
 - **Engine.** `src/voice/engine.rs` runs one call on its own thread (`vesper-voice`), not on the GPUI thread. It is a str0m
   0.24 client, like the SFU's `FakeClient`: one send and receive Opus m-line and no video m-line, so the SFU never offers it
-  video (ADR 0009). The socket is bound to `0.0.0.0`; after the answer, the engine adds a host candidate for each SFU address
+  video (ADR 0009). D5 adds a receive-only video m-line (below). The socket is bound to `0.0.0.0`; after the answer, the engine adds a host candidate for each SFU address
   in it, using the local address the OS would route to that address. Every 20 ms it encodes what the microphone gave
   (`opus` 0.3 on the system libopus, Voip, the bitrate from `Call::bitrate_kbps`, 64 kbps by default like the web's setting;
   the desktop app has no settings screen yet) and sends it, then takes one frame per person from their jitter buffer,
@@ -246,6 +246,73 @@ Not verified:
 
 Left for later on purpose: the gate's threshold setting and the gate after DeepFilterNet (the web has both), input gain, saved
 per-person volumes, a mouse button for push to talk.
+
+## D5: what was built and how it was checked
+
+- **Video m-line.** The join offer has a receive-only VP8 m-line after the audio one. The web's is send-only, for its own
+  share. The SFU marks any client whose offer has a video m-line as able to get video and offers it one m-line per other client
+  that sends video (ADR 0009), but it makes an incoming track only from an m-line the client sends on. So the desktop client gets
+  others' screens, holds no track at the SFU, and no one is offered video from it **[call]**. Renegotiation is unchanged: the
+  engine answers the SFU's offers as before. The desktop cannot share yet.
+- **Watching**, like the web's `watch.ts`. The call's room shows a share panel while someone in the call shares: "Bob is sharing
+  their screen." with Watch, or Stop watching. One share is watched at a time **[call]**; Watch on another switches. The share
+  counts as watched while it is chosen and its view is on screen (the call's room shown, not Settings). Then `watch` on goes to
+  the server and the engine at once; `watch` off goes `WATCH_GRACE` (10 s, the web's `WATCH_GRACE_MS`) after that stops, so a quick
+  look at another room costs no keyframe wait. A call that ends drops the gates without a `watch` off, as the server forgets
+  them with the session. GPUI 0.2.2 has no call that says whether the window is visible, so a minimised window or one behind a
+  game still counts as watching **[call]**: close the view (Stop watching) to let the sharer stop sending.
+- **Keyframes.** The server's `watch` makes the SFU send the sharer a PLI. The engine also sends a PLI on the share's m-line
+  (str0m's `request_keyframe`, which the SFU passes to the sharer) when the decoder waits for a keyframe, when a frame does not
+  decode, or when a frame had to be dropped. At most one a second per share.
+- **Decoding** on its own thread (`vesper-video`, `src/voice/video.rs`), so a big frame never delays the 20 ms audio turn.
+  `vp8-decoder` 0.1.1 **[call]**: pure Rust, no C, no system package, so the Windows build needs nothing new. It decodes
+  keyframes and interframes with every VP8 feature, and its README says it matches the WebM project's 59 test vectors bit for
+  bit. Checked here as well (once, not in the tests): three streams encoded by the system's libvpx through ffmpeg
+  (720p60 realtime with four token partitions and error resilience, 854x480 with alt-ref frames, 1080p60 at 10 Mbps) decoded
+  byte for byte the same as libvpx's own output. The 1080p60 stream decoded at about 236 fps on one core of the dev machine in a
+  release build. The other options: libvpx through `env-libvpx-sys`, `vpx-sys` or `libvpx-native-sys` links a system libvpx
+  (vcpkg on Windows), and `shiguredo_libvpx`'s source build needs libvpx's configure and an assembler on Windows. Its only
+  `unsafe` is in its SSE2 and NEON loop filters; ours stays `forbid(unsafe_code)`. A debug build optimises it alone
+  (`[profile.dev.package.vp8-decoder]`), as a debug decode of a big screen cannot keep up.
+- **Frames to the screen.** The decoder turns each picture from I420 into BGRA (BT.601 limited range, VP8's colour space) and
+  hands it to the model as an event. Only the newest picture waits: the next goes out once the view has taken the last one, so a
+  busy UI skips pictures instead of queueing them. Compressed frames queue for the decoder up to 30; past that the engine drops
+  them and asks for a keyframe. The view moves the pixels into a GPUI `RenderImage` without a copy, draws it with `img` (object
+  fit Contain: the whole screen at its own aspect ratio) and frees the previous one's GPU copy (`drop_image`).
+- **Notices**, the web's texts: "Bob stopped sharing." when the watched share ends (the picture goes at once), "Bob's upload is
+  struggling." while the watched share lost over 2 % of packets in a receiver report (str0m's stats every 2 s) or had a frame
+  that did not decode or was dropped, in the last 6 s (the web's window), and "A moderator stopped your screen share." for
+  `share_stopped`, which only a sharer gets. The cap texts ("Too many screens are being shared right now." and the 35 Mbps
+  cut) go only to a sharer, so a viewer never sees them. The call bar notes "sharing" next to each person sharing.
+
+Verified, by `scripts/check-desktop.sh` on the dev machine (no display):
+
+- Against a real `vesper-server` and SFU on loopback (`desktop/tests/share.rs`): a fake sharer (a str0m peer with send-only Opus
+  and VP8, sending a 160x90 solid colour at 30 fps from `vp8-encoder` 0.1.1, with a keyframe when asked) joins after the desktop
+  client, so the client's video m-line comes by renegotiation. The client sees the share, watches it, and decodes 160x90 pictures:
+  red came out as RGB (255, 0, 0), and after the sharer turned blue, (0, 0, 255). The sharer got a keyframe request and a watcher
+  count of 1. Stopping watching sent `watch` off (the sharer's count went to 0) and no picture came in the next 500 ms. Watching
+  again brought pictures back. The sharer stopping cleared the view and showed "bob stopped sharing.", and the call went on. The
+  SFU offered the sharer no video m-line from the desktop client. Six runs in a row passed. The voice tests pass with the new
+  m-line.
+- Unit tests: the colour conversion, the decoder thread (only watched shares, one picture held at a time and then the newest,
+  a gap waits for a keyframe and asks for one, a broken frame asks too, a full queue drops), and the model's watch rules (on
+  only when chosen and on screen, off after the grace, back within it sends nothing, the share's end, the call's end, the
+  notices).
+- GPUI's headless window (`ui/view_tests.rs`): the panel shows with a sharer, Watch sends the watch to the server and the engine,
+  the view waits, then draws a 16x9 fake picture as a `RenderImage` of that size, the struggling note shows, and the share's
+  end clears the picture and shows the note.
+
+Not verified:
+
+- A real browser sharing to the desktop client. The SFU forwards the browser's VP8 as it is, and libvpx streams decoded right
+  here, but Chromium's and Firefox's own encoders (and their temporal layers) were not run against it.
+- How it looks and how fast it is on a screen: the picture's sharpness at fit size, a real 1080p or 1440p share at 60 fps in a
+  release build, and GPU memory over a long share.
+- Windows beyond what CI builds and tests (the real-server tests are Unix only).
+
+Left for later on purpose: sharing from the desktop, several shares at once, the web's layouts, 1:1 full screen, zoom, pop-out,
+pointer, hide, the share stats and the share sounds.
 
 ## Not in v2.0
 

@@ -86,7 +86,7 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 - Build: `cd desktop && ../scripts/capped.sh cargo build`. Run: `cargo run` there, on a machine with a display.
 - Linux needs the X11, Wayland, Vulkan, fontconfig, ALSA and Opus development headers (the package list is in the `desktop` CI
   job). Arch: `opus` and `alsa-lib`; Debian and Ubuntu: `libopus-dev` and `libasound2-dev`. The `opus` crate links the system
-  libopus through pkg-config.
+  libopus through pkg-config. Watching a screen share needs nothing more: the VP8 decoder (`vp8-decoder`) is pure Rust.
 - Check: `scripts/check-desktop.sh` (fmt, clippy `-D warnings`, tests). It is not part of `scripts/check.sh`; CI runs it as its own job.
 - Windows is the main target (the friends use it). CI's `desktop-windows` job builds the app and runs the unit and headless GPUI tests
   on Windows; the real-server tests in `desktop/tests/` are Unix only, because the server crates use Unix file permissions.
@@ -96,7 +96,8 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   The tests start a real `vesper-server` in process (a path dev-dependency, so the first build compiles the server too) on a free
   loopback port over plain http, and draw the views in GPUI's headless test window. No display, keyring or network is needed.
   The voice tests (`desktop/tests/voice.rs`) run whole calls through that server's SFU with a sine for a microphone and a
-  recorder for speakers, so no audio devices are needed either.
+  recorder for speakers, so no audio devices are needed either. The share test (`desktop/tests/share.rs`) has a fake sharer
+  send VP8 made by `vp8-encoder` (a dev-dependency), so it needs no screen or video file.
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
   Windows). Use headphones: there is no echo cancellation yet.
 - Settings (the button next to Sign out) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
