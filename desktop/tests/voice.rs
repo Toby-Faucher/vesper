@@ -54,7 +54,10 @@ async fn two_engines_hear_each_other_mute_and_leave() {
     a.audio.set_tone(Some(440.0));
     join(&mut a, room);
     join(&mut b, room);
-    assert!(a.model.call.headphones, "the headphones note shows once");
+    assert!(
+        !a.model.call.headphones,
+        "echo cancellation is on, so no headphones note"
+    );
     until_all(&mut [&mut a, &mut b], "both connected", |c| {
         c.iter()
             .all(|c| c.model.call.phase == Phase::Joined && c.model.call.connected)

@@ -56,7 +56,7 @@ impl Vesper {
     /// A volume slider for `id`, made once and kept.
     fn slider(&mut self, id: &str, cx: &mut Context<Self>) -> AnyElement {
         if !self.sliders.contains_key(id) {
-            let start = self.model.call.volume(id);
+            let start = self.model.volume(id);
             let state = cx.new(|_| {
                 SliderState::new()
                     .min(0.)
@@ -69,11 +69,12 @@ impl Vesper {
                 let SliderEvent::Change(v) = e;
                 let v = v.start();
                 this.act(|m| m.set_volume(&user, v), cx);
+                this.save_settings();
             });
             self.sliders.insert(id.to_string(), (state, sub));
         }
         let state = &self.sliders[id].0;
-        let percent = self.model.call.volume(id).round();
+        let percent = self.model.volume(id).round();
         let id = id.to_string();
         h_flex()
             .debug_selector(|| format!("volume-{id}"))
@@ -227,6 +228,8 @@ impl Vesper {
             .collect();
         let error = self.model.call.error.clone();
         let filter = self.model.call.filter.clone();
+        let devices = self.model.call.devices.clone();
+        let echo_off = self.model.call.echo_off.clone();
 
         Some(
             v_flex()
@@ -270,6 +273,8 @@ impl Vesper {
                         .child(div().debug_selector(|| "call-leave".into()).child(leave)),
                 )
                 .when_some_text(&error, theme::DANGER_FG, "call-error")
+                .when_some_text(&devices, theme::WARN_FG, "call-devices")
+                .when_some_text(&echo_off, theme::WARN_FG, "call-echo")
                 .when_some_text(&filter, theme::FG_3, "call-filter")
                 .child(h_flex().flex_wrap().gap_4().child(mine).children(people)),
         )

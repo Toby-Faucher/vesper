@@ -1,6 +1,7 @@
 //! The app's settings: a small JSON file in the OS config dir. It holds no secrets (the session is in the keyring).
 //! Values are clamped on load like the web's `clampSettings`, so a hand-edited or old file cannot break a call.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,8 @@ pub enum Denoise {
 #[serde(default)]
 pub struct Settings {
     pub denoise: Denoise,
+    /// Echo cancellation on the microphone.
+    pub echo_cancel: bool,
     /// Push to talk; otherwise the mic sends whenever it is not muted (voice activity).
     pub push_to_talk: bool,
     /// A `device_query` key name, like `V`, `F13` or `Grave`.
@@ -30,12 +33,15 @@ pub struct Settings {
     pub input_device: Option<String>,
     pub output_device: Option<String>,
     pub start_with_computer: bool,
+    /// Each person's volume, 0 to 400 percent, by user id. Applied whenever they are in a call.
+    pub volumes: HashMap<String, f32>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             denoise: Denoise::DeepFilter,
+            echo_cancel: true,
             push_to_talk: false,
             // Not Space as on the web: a global Space would open the mic on every jump in a game.
             ptt_key: "Grave".into(),
@@ -43,6 +49,7 @@ impl Default for Settings {
             input_device: None,
             output_device: None,
             start_with_computer: false,
+            volumes: HashMap::new(),
         }
     }
 }
@@ -53,6 +60,11 @@ impl Settings {
         if crate::voice::ptt::parse_key(&self.ptt_key).is_none() {
             self.ptt_key = Settings::default().ptt_key;
         }
+        let max = crate::voice::mix::MAX_VOLUME;
+        self.volumes.retain(|_, v| v.is_finite());
+        self.volumes
+            .values_mut()
+            .for_each(|v| *v = v.clamp(0.0, max));
         self
     }
 
@@ -110,19 +122,21 @@ mod tests {
         assert_eq!(Settings::load(&p), Settings::default(), "missing file");
         let s = Settings {
             denoise: Denoise::Gate,
+            echo_cancel: false,
             push_to_talk: true,
             ptt_key: "F13".into(),
             bitrate_kbps: 96,
             input_device: Some("USB mic".into()),
             output_device: None,
             start_with_computer: true,
+            volumes: HashMap::from([("0123456789abcdef0123456789abcdef".into(), 250.0)]),
         };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
 
         std::fs::write(
             &p,
-            r#"{"bitrate_kbps": 9000, "ptt_key": "Nope", "denoise": "off"}"#,
+            r#"{"bitrate_kbps": 9000, "ptt_key": "Nope", "denoise": "off", "volumes": {"a": 900, "b": -5}}"#,
         )
         .unwrap();
         let s = Settings::load(&p);
@@ -130,6 +144,12 @@ mod tests {
             (s.bitrate_kbps, s.ptt_key.as_str(), s.denoise),
             (510, "Grave", Denoise::Off)
         );
+        assert_eq!(
+            (s.volumes["a"], s.volumes["b"]),
+            (400.0, 0.0),
+            "volumes clamped"
+        );
+        assert!(s.echo_cancel, "on when the file does not say");
         std::fs::write(&p, "not json").unwrap();
         assert_eq!(Settings::load(&p), Settings::default());
     }

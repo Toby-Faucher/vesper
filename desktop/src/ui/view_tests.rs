@@ -274,9 +274,18 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
             },
         },
     );
+    apply(
+        &view,
+        cx,
+        Event::Voice {
+            call: 1,
+            ev: VoiceEvent::Devices("Your microphone was disconnected.".into()),
+        },
+    );
     drain(&mut rx);
     for s in [
         "call-bar",
+        "call-devices",
         "call-mute",
         "call-deafen",
         "call-leave",
@@ -295,7 +304,10 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("speaking-a").is_none());
     view.read_with(cx, |v, _| {
         assert_eq!(v.model.call.phase, Phase::Joined);
-        assert!(v.model.call.headphones, "{HEADPHONES}");
+        assert!(
+            !v.model.call.headphones,
+            "echo cancellation is on, so no {HEADPHONES}"
+        );
     });
 
     click(cx, "call-mute");
@@ -494,11 +506,13 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
     );
 
     click(cx, "settings-gate");
+    click(cx, "settings-echo-off");
     click(cx, "settings-mic-0");
     click(cx, "settings-speakers");
     view.read_with(cx, |v, _| {
         let s = &v.model.settings;
         assert_eq!(s.denoise, Denoise::Gate);
+        assert!(!s.echo_cancel);
         assert_eq!(s.input_device.as_deref(), Some("USB mic"));
         assert_eq!(s.output_device, None, "back to the default");
     });

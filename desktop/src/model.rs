@@ -22,7 +22,8 @@ pub enum Screen {
 pub const SESSION_ENDED: &str = "Your session ended. Sign in again.";
 pub const DISCONNECTED: &str = "A moderator disconnected you. Sign out and in again to come back.";
 pub const NOT_REMEMBERED: &str = "There is no keyring on this computer, so Vesper will not remember this sign in after it closes.";
-pub const HEADPHONES: &str = "Use headphones. Echo cancellation is not in the desktop app yet.";
+pub const HEADPHONES: &str =
+    "Echo cancellation is off. Use headphones, or the others may hear themselves.";
 pub const NOT_ONLINE: &str = "Not connected to the server. Wait a moment and try again.";
 pub const CALL_ENDED: &str =
     "Your call ended. You may have joined from another device, or a moderator removed you.";
@@ -85,15 +86,17 @@ pub struct Call {
     pub me_speaking: bool,
     /// User ids of the others speaking now.
     pub speaking: Vec<String>,
-    /// Percent (0 to 400) by user id. Kept for the run of the app, not saved.
-    pub volumes: HashMap<String, f32>,
     /// The room to join again once the socket is back, and since when.
     pub rejoin: Option<(i64, Instant)>,
     /// Why the last call ended or what went wrong in this one.
     pub error: String,
     /// What the noise filter does, or why DeepFilterNet is not running.
     pub filter: String,
-    /// The headphones note is shown.
+    /// Why echo cancellation turned off during this call.
+    pub echo_off: String,
+    /// A lost device ("Your microphone was disconnected."), empty when both are there.
+    pub devices: String,
+    /// The headphones note is shown (echo cancellation off).
     pub headphones: bool,
     headphones_seen: bool,
     /// The screen share I chose to watch. One at a time.
@@ -123,10 +126,11 @@ impl Default for Call {
             force_muted: false,
             me_speaking: false,
             speaking: vec![],
-            volumes: HashMap::new(),
             rejoin: None,
             error: String::new(),
             filter: String::new(),
+            echo_off: String::new(),
+            devices: String::new(),
             headphones: false,
             headphones_seen: false,
             watching: None,
@@ -141,16 +145,11 @@ impl Default for Call {
 }
 
 impl Call {
-    pub fn volume(&self, user_id: &str) -> f32 {
-        self.volumes.get(user_id).copied().unwrap_or(100.0)
-    }
-
     /// Back to no call. What lasts across calls stays. The server forgets the watches with the session, so the
     /// gates go without a `watch off`.
     fn end(&mut self, error: &str) {
         *self = Call {
             id: self.id,
-            volumes: std::mem::take(&mut self.volumes),
             headphones: self.headphones,
             headphones_seen: self.headphones_seen,
             share_visible: self.share_visible,
@@ -538,6 +537,14 @@ impl Model {
                 c.filter = text;
                 vec![]
             }
+            VoiceEvent::EchoOff(text) => {
+                c.echo_off = text;
+                vec![]
+            }
+            VoiceEvent::Devices(text) => {
+                c.devices = text;
+                vec![]
+            }
             VoiceEvent::Frame(f) => {
                 // A late picture of a share no longer watched is dropped.
                 if c.watching.as_ref() == Some(&f.user_id) {
@@ -628,16 +635,17 @@ impl Model {
         self.call.end(""); // a new call starts unmuted; the server sends a force mute again if it holds
         let c = &mut self.call;
         (c.phase, c.room, c.id) = (Phase::Starting, Some(room), c.id + 1);
-        if !c.headphones_seen {
+        let s = &self.settings;
+        if !s.echo_cancel && !c.headphones_seen {
             (c.headphones, c.headphones_seen) = (true, true);
         }
-        let s = &self.settings;
         cmds.push(Cmd::Voice(VoiceCmd::Start {
             call: c.id,
             setup: Setup {
                 bitrate_kbps: s.bitrate_kbps.clamp(32, 510),
-                volumes: c.volumes.clone(),
+                volumes: s.volumes.clone(),
                 denoise: s.denoise,
+                echo: s.echo_cancel,
                 input: s.input_device.clone(),
                 output: s.output_device.clone(),
             },
@@ -675,10 +683,15 @@ impl Model {
         ]
     }
 
-    /// One person's volume, 0 to 400 percent.
+    /// One person's volume in percent, 100 when not set.
+    pub fn volume(&self, user_id: &str) -> f32 {
+        self.settings.volumes.get(user_id).copied().unwrap_or(100.0)
+    }
+
+    /// One person's volume, 0 to 400 percent. Kept in the settings, which the view saves.
     pub fn set_volume(&mut self, user_id: &str, percent: f32) -> Vec<Cmd> {
         let percent = percent.clamp(0.0, crate::voice::mix::MAX_VOLUME);
-        self.call.volumes.insert(user_id.into(), percent);
+        self.settings.volumes.insert(user_id.into(), percent);
         if self.call.phase == Phase::Idle {
             return vec![];
         }
@@ -976,7 +989,7 @@ mod tests {
         assert!(m.join_voice(1).is_empty(), "not before hello");
         assert_eq!(m.call.error, NOT_ONLINE);
         let mut m = in_call();
-        assert!(m.call.headphones);
+        assert!(!m.call.headphones, "echo cancellation is on");
         assert!(m.join_voice(1).is_empty(), "already in it");
         let cmds = server(&mut m, ServerMsg::Offer { sdp: "re".into() });
         assert!(matches!(cmds.as_slice(), [Cmd::Voice(VoiceCmd::Offer(s))] if s == "re"));
@@ -1048,7 +1061,11 @@ mod tests {
             [Cmd::Signal(ClientMsg::Leave), Cmd::Voice(VoiceCmd::Stop)]
         ));
         assert_eq!(m.call.phase, Phase::Idle);
-        assert_eq!(m.call.volume("b"), 400.0, "volumes outlive the call");
+        assert_eq!(m.volume("b"), 400.0, "volumes outlive the call");
+        assert_eq!(
+            m.settings.volumes["b"], 400.0,
+            "in the settings, which the view saves"
+        );
         assert!(m.toggle_mute().is_empty());
         let cmds = m.join_voice(1);
         assert!(
@@ -1142,6 +1159,34 @@ mod tests {
             (setup.bitrate_kbps, setup.denoise, setup.input.as_deref()),
             (510, crate::settings::Denoise::Gate, Some("USB"))
         );
+        assert!(setup.echo && !m.call.headphones);
+    }
+
+    #[test]
+    fn echo_off_shows_the_headphones_note_once_and_notices_clear_with_the_call() {
+        let mut m = in_call();
+        voice(
+            &mut m,
+            VoiceEvent::Devices("Your speakers were disconnected.".into()),
+        );
+        voice(&mut m, VoiceEvent::EchoOff("slow".into()));
+        assert_eq!(
+            (m.call.devices.as_str(), m.call.echo_off.as_str()),
+            ("Your speakers were disconnected.", "slow")
+        );
+        m.set_settings(Settings {
+            echo_cancel: false,
+            ..Settings::default()
+        });
+        m.leave_voice();
+        assert!(m.call.devices.is_empty() && m.call.echo_off.is_empty());
+        let cmds = m.join_voice(1);
+        assert!(matches!(&cmds[..], [Cmd::Voice(VoiceCmd::Start { setup, .. })] if !setup.echo));
+        assert!(m.call.headphones);
+        m.call.headphones = false;
+        m.leave_voice();
+        m.join_voice(1);
+        assert!(!m.call.headphones, "once");
     }
 
     #[test]

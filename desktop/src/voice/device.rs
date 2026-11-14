@@ -1,10 +1,15 @@
 //! The microphone and speakers through cpal: the ones chosen in the settings by name, else the system defaults.
 //! Capture becomes 48 kHz mono; playback goes from 48 kHz mono to the device's own rate and channels.
 //!
-//! shortcut: linear resampling, and a device lost mid-call goes silent without a message; upgrade when people hear it.
+//! A stream error that means the device is gone, or a microphone that stops giving samples, makes `alive` false; the
+//! engine then says so and opens the device again.
+//!
+//! shortcut: linear resampling; upgrade when people hear it.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
@@ -12,6 +17,21 @@ use cpal::{FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use super::{AudioDevices, AudioInput, AudioOutput, RATE};
 
 type Queue = Arc<Mutex<VecDeque<f32>>>;
+
+/// A microphone that gives nothing for this long is gone, even if its backend said nothing.
+const SILENT_MIC: Duration = Duration::from_secs(2);
+
+/// Set by the stream's error callback when the error means the device is gone. A glitch (an underrun), a route that
+/// followed the default device, or real-time scheduling refused, do not count.
+fn on_error(failed: &Arc<AtomicBool>) -> impl FnMut(cpal::Error) + Send + 'static {
+    let failed = failed.clone();
+    move |e| {
+        use cpal::ErrorKind::{DeviceChanged, RealtimeDenied, Xrun};
+        if !matches!(e.kind(), Xrun | DeviceChanged | RealtimeDenied) {
+            failed.store(true, Ordering::Relaxed);
+        }
+    }
+}
 
 /// The input and output device names, for the settings. Empty when there are none or the system cannot list them.
 pub fn device_names() -> (Vec<String>, Vec<String>) {
@@ -47,11 +67,12 @@ impl AudioDevices for Cpal {
         let supported = dev.default_input_config().map_err(|e| fail(&e))?;
         let cfg = supported.config();
         let queue = Queue::default();
+        let failed = Arc::new(AtomicBool::new(false));
         let stream = match supported.sample_format() {
-            SampleFormat::F32 => capture::<f32>(&dev, cfg, queue.clone()),
-            SampleFormat::I16 => capture::<i16>(&dev, cfg, queue.clone()),
-            SampleFormat::U16 => capture::<u16>(&dev, cfg, queue.clone()),
-            SampleFormat::I32 => capture::<i32>(&dev, cfg, queue.clone()),
+            SampleFormat::F32 => capture::<f32>(&dev, cfg, queue.clone(), &failed),
+            SampleFormat::I16 => capture::<i16>(&dev, cfg, queue.clone(), &failed),
+            SampleFormat::U16 => capture::<u16>(&dev, cfg, queue.clone(), &failed),
+            SampleFormat::I32 => capture::<i32>(&dev, cfg, queue.clone(), &failed),
             f => return Err(fail(&format!("sample format {f} is not supported"))),
         }
         .map_err(|e| fail(&e))?;
@@ -59,6 +80,8 @@ impl AudioDevices for Cpal {
         Ok(Box::new(Input {
             _stream: stream,
             queue,
+            failed,
+            heard: Instant::now(),
         }))
     }
 
@@ -70,11 +93,12 @@ impl AudioDevices for Cpal {
         let supported = dev.default_output_config().map_err(|e| fail(&e))?;
         let cfg = supported.config();
         let queue = Queue::default();
+        let failed = Arc::new(AtomicBool::new(false));
         let stream = match supported.sample_format() {
-            SampleFormat::F32 => play::<f32>(&dev, cfg, queue.clone()),
-            SampleFormat::I16 => play::<i16>(&dev, cfg, queue.clone()),
-            SampleFormat::U16 => play::<u16>(&dev, cfg, queue.clone()),
-            SampleFormat::I32 => play::<i32>(&dev, cfg, queue.clone()),
+            SampleFormat::F32 => play::<f32>(&dev, cfg, queue.clone(), &failed),
+            SampleFormat::I16 => play::<i16>(&dev, cfg, queue.clone(), &failed),
+            SampleFormat::U16 => play::<u16>(&dev, cfg, queue.clone(), &failed),
+            SampleFormat::I32 => play::<i32>(&dev, cfg, queue.clone(), &failed),
             f => return Err(fail(&format!("sample format {f} is not supported"))),
         }
         .map_err(|e| fail(&e))?;
@@ -82,6 +106,7 @@ impl AudioDevices for Cpal {
         Ok(Box::new(Output {
             _stream: stream,
             queue,
+            failed,
             resampler: Resampler::new(RATE, cfg.sample_rate),
             channels: usize::from(cfg.channels),
             // 200 ms of device samples: more means the engine runs ahead of the device, so the oldest go.
@@ -90,7 +115,12 @@ impl AudioDevices for Cpal {
     }
 }
 
-fn capture<T>(dev: &cpal::Device, cfg: StreamConfig, queue: Queue) -> Result<Stream, cpal::Error>
+fn capture<T>(
+    dev: &cpal::Device,
+    cfg: StreamConfig,
+    queue: Queue,
+    failed: &Arc<AtomicBool>,
+) -> Result<Stream, cpal::Error>
 where
     T: SizedSample,
     f32: FromSample<T>,
@@ -112,12 +142,17 @@ where
             let extra = q.len().saturating_sub(RATE as usize);
             q.drain(..extra);
         },
-        |_| {},
+        on_error(failed),
         None,
     )
 }
 
-fn play<T>(dev: &cpal::Device, cfg: StreamConfig, queue: Queue) -> Result<Stream, cpal::Error>
+fn play<T>(
+    dev: &cpal::Device,
+    cfg: StreamConfig,
+    queue: Queue,
+    failed: &Arc<AtomicBool>,
+) -> Result<Stream, cpal::Error>
 where
     T: SizedSample + FromSample<f32>,
 {
@@ -129,7 +164,7 @@ where
                 *s = T::from_sample(q.pop_front().unwrap_or(0.0));
             }
         },
-        |_| {},
+        on_error(failed),
         None,
     )
 }
@@ -137,17 +172,29 @@ where
 struct Input {
     _stream: Stream,
     queue: Queue,
+    failed: Arc<AtomicBool>,
+    /// When samples last came.
+    heard: Instant,
 }
 
 impl AudioInput for Input {
     fn read(&mut self, out: &mut Vec<f32>) {
-        out.extend(self.queue.lock().expect("audio queue").drain(..));
+        let mut q = self.queue.lock().expect("audio queue");
+        if !q.is_empty() {
+            self.heard = Instant::now();
+        }
+        out.extend(q.drain(..));
+    }
+
+    fn alive(&self) -> bool {
+        !self.failed.load(Ordering::Relaxed) && self.heard.elapsed() < SILENT_MIC
     }
 }
 
 struct Output {
     _stream: Stream,
     queue: Queue,
+    failed: Arc<AtomicBool>,
     resampler: Resampler,
     channels: usize,
     cap: usize,
@@ -161,6 +208,10 @@ impl AudioOutput for Output {
             .run(samples, |s| q.extend(std::iter::repeat_n(s, ch)));
         let extra = q.len().saturating_sub(self.cap);
         q.drain(..extra);
+    }
+
+    fn alive(&self) -> bool {
+        !self.failed.load(Ordering::Relaxed)
     }
 }
 

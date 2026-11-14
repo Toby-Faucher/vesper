@@ -8,6 +8,7 @@
 
 pub mod denoise;
 mod device;
+pub mod echo;
 mod engine;
 pub mod jitter;
 pub mod mix;
@@ -31,12 +32,20 @@ pub const FRAME: usize = 960;
 pub trait AudioInput {
     /// Moves what was captured since the last call to the end of `out`.
     fn read(&mut self, out: &mut Vec<f32>);
+    /// False once the device is gone (unplugged, or its stream failed). The engine then opens it again.
+    fn alive(&self) -> bool {
+        true
+    }
 }
 
 /// Audio to play, 48 kHz mono, -1 to 1.
 pub trait AudioOutput {
     /// Queues `samples` to play after what is queued.
     fn write(&mut self, samples: &[f32]);
+    /// False once the device is gone.
+    fn alive(&self) -> bool {
+        true
+    }
 }
 
 /// Opens the devices for a call. Called on the call's thread, so a device that must stay on one thread can.
@@ -54,6 +63,8 @@ pub struct Setup {
     /// Percent by user id.
     pub volumes: HashMap<String, f32>,
     pub denoise: Denoise,
+    /// Echo cancellation on the microphone.
+    pub echo: bool,
     pub input: Option<String>,
     pub output: Option<String>,
 }
@@ -99,6 +110,10 @@ pub enum VoiceEvent {
     Speaking { me: bool, peers: Vec<String> },
     /// What the noise filter is doing, for the call bar. Sent when it changes.
     Filter(String),
+    /// Echo cancellation turned off during the call: why, for the call bar.
+    EchoOff(String),
+    /// A device was lost ("Your microphone was disconnected."), or empty once both are back.
+    Devices(String),
     /// The newest picture of a watched screen share.
     Frame(Frame),
     /// A watched share loses packets or frames, or stopped doing so. Sent when it changes.

@@ -1,4 +1,4 @@
-//! The Settings view, from the sidebar: the noise filter, voice activity or push to talk and its key, the
+//! The Settings view, from the sidebar: echo cancellation, the noise filter, voice activity or push to talk and its key, the
 //! microphone and speakers, the Opus bitrate, and start with the computer. Saved as JSON on each change.
 
 use gpui::{
@@ -16,7 +16,7 @@ use crate::settings::{self, Denoise, Settings};
 use crate::voice::ptt::{self, KeyMsg};
 
 pub const APPLIES_NEXT_CALL: &str =
-    "The noise filter, devices and bitrate apply from your next call.";
+    "Echo cancellation, the noise filter, devices and bitrate apply from your next call.";
 pub const CAPTURING: &str = "Press the key to use. Esc cancels.";
 
 fn section(title: &'static str) -> Div {
@@ -67,18 +67,24 @@ impl Vesper {
         let cmds = self.model.set_settings(s);
         self.run(cmds);
         self.watch_key();
-        if let Some(path) = self.settings_file.clone() {
-            if let Some(on) = autostart
-                && let Err(e) = settings::set_start_with_computer(on)
-            {
-                self.model.settings.start_with_computer = !on;
-                self.settings_error = e;
-            }
-            if let Err(e) = self.model.settings.save(&path) {
-                self.settings_error = format!("Could not save the settings: {e}");
-            }
+        if let Some(on) = autostart
+            && self.settings_file.is_some()
+            && let Err(e) = settings::set_start_with_computer(on)
+        {
+            self.model.settings.start_with_computer = !on;
+            self.settings_error = e;
         }
+        self.save_settings();
         cx.notify();
+    }
+
+    /// Writes the model's settings to the file, if the app has one (tests do not).
+    pub(super) fn save_settings(&mut self) {
+        if let Some(path) = &self.settings_file
+            && let Err(e) = self.model.settings.save(path)
+        {
+            self.settings_error = format!("Could not save the settings: {e}");
+        }
     }
 
     /// Tells the key thread which key to watch, if push to talk is on.
@@ -295,6 +301,29 @@ impl Vesper {
             )
             .child(help(APPLIES_NEXT_CALL))
             .when_some_text(&error, theme::DANGER_FG, "settings-error")
+            .child(section("Echo cancellation"))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(self.choice(
+                        "settings-echo-on",
+                        "On",
+                        s.echo_cancel,
+                        cx,
+                        |s| s.echo_cancel = true,
+                    ))
+                    .child(self.choice(
+                        "settings-echo-off",
+                        "Off",
+                        !s.echo_cancel,
+                        cx,
+                        |s| s.echo_cancel = false,
+                    )),
+            )
+            .child(help(
+                "Takes the sound of your speakers out of your mic, so others do not hear themselves. Turn it off only \
+                 with headphones.",
+            ))
             .child(section("Noise filter"))
             .child(
                 h_flex()
