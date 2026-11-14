@@ -313,6 +313,16 @@ describe('in a call', () => {
     expect(voice).toMatchObject({ joined: false, joinedRoom: null, capture: undefined, pc: undefined, quality: 'unknown', error: '' });
   });
 
+  it('my own join and leave play connect and disconnect', async () => {
+    chime.mockClear();
+    await joined();
+    flushSync();
+    expect(chime).toHaveBeenLastCalledWith('connect', null, expect.any(Number));
+    v.leave();
+    flushSync();
+    expect(chime).toHaveBeenLastCalledWith('disconnect', null, expect.any(Number));
+  });
+
   it('the end of a call sends one summary to your own list; a failed join sends none', async () => {
     const fetch = vi.fn(async () => ({ ok: true, status: 204 }));
     vi.stubGlobal('fetch', fetch);

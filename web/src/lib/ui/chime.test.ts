@@ -108,10 +108,10 @@ it('the_default_volume_is_half_the_peak_and_the_default_speaker_needs_no_switch'
   expect(ctx.sinks).toEqual([]); // a new context already plays on the default speaker
 });
 
-it('others_joining_and_leaving_are_louder_and_longer_than_my_own_cues', () => {
+it('joining_leaving_and_the_connection_are_louder_and_longer_than_the_mute_cues', () => {
   vi.useFakeTimers(); // the shared afterEach runs pending timers
-  // Someone else joining or leaving is news; it must carry over game audio, so it is 8 dB up and longer.
-  for (const c of ['join', 'leave'] as const) {
+  // Someone else joining or leaving, and my own call starting or ending, must carry over game audio: 8 dB up and longer.
+  for (const c of ['join', 'leave', 'connect', 'disconnect', 'lost'] as const) {
     expect(MAX_GAIN * TONES[c].gain! * 0.5).toBeCloseTo(0.2); // at the default volume 50: about -14 dBFS
     expect(TONES[c].step).toBeGreaterThanOrEqual(TONES.mute.step * 2);
     expect(TONES[c].wave).toBe('triangle');
