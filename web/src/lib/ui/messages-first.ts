@@ -23,7 +23,7 @@ export const UI_MESSAGES = {
   switcherFailed: 'Could not load the switcher. Check your connection and try again.',
   searchFailed: 'Could not load search. Check your connection and try again.',
   offlineAction: 'You are offline. This works again once the connection is back.',
-  fileTooLarge: 'Files can be up to 25 MB.',
+  fileTooLarge: (bytes: number) => `Files can be up to ${Math.floor(bytes / 1024 / 1024)} MB.`,
   uploadQuota: 'The server has no room for more files. Ask the owner to free some space.',
   uploadRate: 'Too many uploads in a short time. Wait a minute and try again.',
   uploadNetwork: 'The upload stopped. Check your connection and try again.',

@@ -114,6 +114,7 @@ async fn hello(st: &WsState, user: &UserInfo, session_id: i64) -> Result<ServerM
             user: user.clone(),
             session_id,
             server: st.app.cfg.server_build(),
+            upload_max: st.app.cfg.upload_max_bytes as i64,
         },
         users,
         rooms,

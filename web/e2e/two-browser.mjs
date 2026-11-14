@@ -478,7 +478,7 @@ try {
   await bob.page.waitForFunction(() => document.querySelector('article img[alt="dot.png"]')?.naturalWidth === 1, null, { timeout: 5000 });
   console.log('upload_roundtrip: ok');
 
-  // uploads_ui in a room "files": the tray refuses a file over 25 MB before any upload and cancels a running one, the drop
+  // uploads_ui in a room "files": the tray refuses a file over the server's 8 MB (lib.mjs) before any upload and cancels a running one, the drop
   // overlay shows for files only, a file card downloads by id, an image keeps its 360 x 280 box until it loads and does
   // not move the view when it loads above it, the bottom stays the bottom when the last row grows (a late image, or
   // anything: the ResizeObserver on the last row), and the viewer moves with the arrow keys and gives focus back.
@@ -486,8 +486,8 @@ try {
   await roomLink(alice.page, 'files').waitFor({ timeout: 5000 });
   await openRoom(alice.page, 'files');
   const attach = alice.page.getByLabel('Attach a file');
-  await attach.setInputFiles({ name: 'huge.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(25 * 1024 * 1024 + 1) });
-  await alice.page.getByRole('alert').filter({ hasText: 'Files can be up to 25 MB.' }).waitFor({ timeout: 5000 });
+  await attach.setInputFiles({ name: 'huge.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(8 * 1024 * 1024 + 1) });
+  await alice.page.getByRole('alert').filter({ hasText: 'Files can be up to 8 MB.' }).waitFor({ timeout: 5000 });
   assert.equal(await alice.page.getByRole('button', { name: 'Retry huge.bin' }).count(), 0, 'Retry offered for a file that is too large');
   await alice.page.getByRole('button', { name: 'Remove huge.bin' }).click();
   await alice.page.route('**/api/rooms/*/uploads?*', () => {}); // held: never answered

@@ -7,12 +7,12 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 
 - **Plain HTTP connections are not capped in number.** Each one is closed after 10 s without a full request head, but there is no limit per
   address; the cap of 256 sockets counts upgraded sockets only.
-- **There is no response timeout.** A client that reads a download (up to 25 MiB) very slowly keeps its connection until it is done.
-- **An upload must average about 44 KB/s (350 kbit/s).** The 10 minute total limit means a 25 MiB file on a slower uplink fails near
-  the end with `upload too slow`.
+- **There is no response timeout.** A client that reads a download (up to `VESPER_UPLOAD_MAX_MB`, 100 MiB by default) very slowly keeps its connection until it is done.
+- **An upload must finish in 10 minutes.** At the default cap of 100 MiB that is about 175 KB/s (1.4 Mbit/s) on average, so a
+  100 MiB file on a slower uplink fails near the end with `upload too slow`.
 - **Uploads in flight can pass the quota on disk for a while.** The quota is checked again under a lock before a file is kept, so it is never
-  passed for good, but each upload streams to `uploads/tmp` first: up to 25 MiB per upload in flight, so about 250 MiB for one user's burst
-  of 10. A `Content-Length` that cannot fit is refused before any byte is read.
+  passed for good, but each upload streams to `uploads/tmp` first: up to `VESPER_UPLOAD_MAX_MB` (100 MiB by default) per upload in
+  flight, so about 1 GiB for one user's burst of 10. A `Content-Length` that cannot fit is refused before any byte is read.
 - **A request cancelled during the upload row insert can leave a row with no file.** It counts against the quota until the 24 h sweep
   removes it (it is never attached, since the uploader's request failed).
 - **Search timing shows a little about hidden rooms.** Matches in rooms you cannot see are skipped one by one while the index is walked,
@@ -39,8 +39,12 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   else is a download with `Content-Disposition: attachment` and a sandbox CSP, but the file itself is passed on as uploaded.
 - **Whether audio or video plays depends on the browser.** The server checks only the container, not the codec. A file the browser
   cannot decode (HEVC video in Firefox, for one) shows the file card with Download instead. An mp4 with an unknown brand is served
-  as `video/mp4`, and audio in a WebM or mp4 container gets a video player. Files uploaded before v1.8.0 stay downloads. Not
-  verified: playback, seeking and the fallback in a real browser.
+  as `video/mp4`, and audio in a WebM or mp4 container gets a video player. Not verified: playback, seeking and the fallback in a
+  real browser.
+- **An old upload someone already downloaded may stay a download for them.** Files kept before v1.8.0 get their image or media
+  type at the next server start, but the URL does not change, and the response a browser cached before then says
+  `application/octet-stream`, `attachment` and `immutable` for a year. That browser can reuse it for the new player instead of
+  asking again. Whether it then still plays is not verified. Clearing the site's data in that browser fixes it.
 - **Rooms cannot be deleted, only archived.** An archived room's messages and files stay in the database and count toward disk use. Its search index rows stay too.
 - **Passkeys are new and only tested with a software authenticator.** The server tests use a P-256 key made in the test, not a real
   authenticator or browser, so a real phone, security key or password manager is not verified. Passkeys are sign in only: the password

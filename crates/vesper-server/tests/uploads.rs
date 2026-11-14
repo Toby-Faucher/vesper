@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use vesper_protocol::{AttachmentKind, Role, UploadDone};
 use vesper_server::router;
-use vesper_server::uploads::{self, MAX_UPLOAD, STALE_MS};
+use vesper_server::uploads::{self, STALE_MS};
 use vesper_store::now_ms;
 
 const PNG_HEX: &str = "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63f8cfc0f01f00050001ff89993d1d0000000049454e44ae426082";
@@ -325,6 +325,50 @@ async fn media_is_inline() {
     }
 }
 
+/// An upload kept before the media sniffers is octet-stream. At start it gets the type its bytes
+/// show and is then served inline; a row whose file is gone is left as it was.
+#[tokio::test]
+async fn old_octet_upload_is_retyped() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let room = general(&server).await;
+    let row = |id: &str| vesper_store::UploadRow {
+        id: id.into(),
+        room_id: room,
+        uploader_id: alice.user.user_id.clone(),
+        message_id: None,
+        name: "song.bin".into(),
+        mime: "application/octet-stream".into(),
+        size: 72,
+        created_at: now_ms(),
+    };
+    let (mp3, gone, zip) = ("ab".repeat(16), "cd".repeat(16), "ef".repeat(16));
+    for (id, bytes) in [(&mp3, &b"ID3\x04\0\0\0\0"[..]), (&zip, b"PK\x03\x04")] {
+        server.state.store.insert_upload(&row(id)).await.unwrap();
+        let path = file_of(&server, id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, [bytes, &[0u8; 64][..]].concat()).unwrap();
+    }
+    server.state.store.insert_upload(&row(&gone)).await.unwrap();
+    assert_eq!(uploads::retype_octet(&server.state).await.unwrap(), 1);
+    let store = &server.state.store;
+    assert_eq!(store.upload(&mp3).await.unwrap().mime, "audio/mpeg");
+    assert_eq!(
+        store.upload(&zip).await.unwrap().mime,
+        "application/octet-stream"
+    );
+    assert_eq!(
+        store.upload(&gone).await.unwrap().mime,
+        "application/octet-stream"
+    );
+    let (status, headers, _) = download(&server, &mp3, &alice).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(h(&headers, "content-type"), "audio/mpeg");
+    assert!(h(&headers, "content-disposition").starts_with("inline;"));
+    // Run again: nothing left to change.
+    assert_eq!(uploads::retype_octet(&server.state).await.unwrap(), 0);
+}
+
 #[tokio::test]
 async fn file_name_cannot_inject_headers() {
     let server = TestServer::new().await;
@@ -354,12 +398,16 @@ async fn file_name_cannot_inject_headers() {
 
 #[tokio::test]
 async fn oversize_body_is_413_and_cleaned() {
-    let server = TestServer::new().await;
+    const MAX: u64 = 3 << 20;
+    let server = TestServer::with(|c| c.upload_max_bytes = MAX, spawn_sfu()).await;
     let alice = server.account("alice", Role::Member).await;
     let room = general(&server).await;
+    // Me tells the client the cap.
+    let (_, _, me) = server.call(get("/api/me", &alice)).await;
+    assert_eq!(me["upload_max"], MAX);
     let mib = Bytes::from(vec![7u8; 1 << 20]);
     let chunks = |extra: usize| {
-        let mut c: Vec<Result<Bytes, std::io::Error>> = (0..25).map(|_| Ok(mib.clone())).collect();
+        let mut c: Vec<Result<Bytes, std::io::Error>> = (0..3).map(|_| Ok(mib.clone())).collect();
         c.push(Ok(Bytes::from(vec![7u8; extra])));
         Body::from_stream(futures_util::stream::iter(c))
     };
@@ -369,12 +417,13 @@ async fn oversize_body_is_413_and_cleaned() {
     let (status, _, v) = server.call(req).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{v}");
     assert_eq!(v["code"], "too_large");
+    assert_eq!(v["message"], "file over 3 MiB");
     assert!(entries(&tmp_dir(&server)).is_empty());
     // A declared length over the cap is refused before the body is read.
     let mut req = upload_req(room, "big.bin", Body::from("tiny"), &alice);
     req.headers_mut().insert(
         header::CONTENT_LENGTH,
-        (MAX_UPLOAD + 1).to_string().parse().unwrap(),
+        (MAX + 1).to_string().parse().unwrap(),
     );
     let (status, _, _) = server.call(req).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
@@ -385,7 +434,7 @@ async fn oversize_body_is_413_and_cleaned() {
         .call(upload_req(room, "max.bin", chunks(0), &alice))
         .await;
     assert_eq!(status, StatusCode::CREATED, "{v}");
-    assert_eq!(v["attachment"]["size"], MAX_UPLOAD);
+    assert_eq!(v["attachment"]["size"], MAX);
 }
 
 #[tokio::test]

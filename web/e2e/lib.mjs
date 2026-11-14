@@ -79,6 +79,7 @@ export async function startServer() {
     VESPER_HTTP_BIND: `127.0.0.1:${httpPort}`,
     VESPER_UDP_BIND: `127.0.0.1:${udpPort}`,
     VESPER_WEB_DIR: 'dist',
+    VESPER_UPLOAD_MAX_MB: '8', // two-browser.mjs checks the client takes this from Me (its fallback is 25)
   };
   let server, spawnError;
   const launch = () => {

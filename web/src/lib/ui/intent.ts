@@ -1,6 +1,7 @@
 // Prefetch on intent. A registered element runs its `run` when the user looks likely to use it: the mouse heading for
-// it (pointer velocity, projected ahead), the mouse resting on it for `delay` ms, a press (touch included) or keyboard
-// focus (focusin, so a wrapper works). `run` must be cheap to call again: it fires on every hit.
+// it (pointer velocity, projected ahead), the mouse resting on it for 80 ms, a press (touch included) or keyboard
+// focus (focusin, so a wrapper works). `run` must be cheap to call again: it fires on every hit. With `cue`, the element
+// the pointer heads for also shows it (`data-intent`, styled by the caller).
 
 export type Sample = { x: number; y: number; t: number };
 
@@ -26,31 +27,54 @@ export function project(s: Sample[], ahead = AHEAD): { x: number; y: number } | 
   return { x: b.x + vx * ahead, y: b.y + vy * ahead };
 }
 
-const targets = new WeakMap<Element, () => void>();
+const targets = new WeakMap<Element, { run: () => void; cue: boolean }>();
 let samples: Sample[] = [];
 let listening = false;
+
+// The cue: an element registered with `cue` gets `data-intent` while the pointer heads for it. One element at a time; a
+// miss keeps the mark for CUE_HOLD ms, so a jittery projection does not flicker. Hover, a press or a non-cue hit clears it.
+export const CUE_HOLD = 150;
+let marked: Element | null = null;
+let hold: ReturnType<typeof setTimeout> | undefined;
+function mark(el: Element | null): void {
+  clearTimeout(hold);
+  if (el === marked) return;
+  marked?.removeAttribute('data-intent');
+  el?.setAttribute('data-intent', '');
+  marked = el;
+}
 
 function onMove(e: PointerEvent): void {
   if (e.pointerType !== 'mouse') return;
   samples = keep(samples, { x: e.clientX, y: e.clientY, t: e.timeStamp });
   const p = project(samples);
   for (let el = p && document.elementFromPoint(p.x, p.y); el; el = el.parentElement) {
-    const run = targets.get(el);
-    if (run) return run();
+    const t = targets.get(el);
+    if (!t) continue;
+    if (!t.cue || el.contains(e.target as Node)) mark(null); // already over it: hover shows it
+    else {
+      mark(el);
+      hold = setTimeout(() => mark(null), CUE_HOLD);
+    }
+    return t.run();
   }
 }
 
-export const intent = (run: () => void, delay = 80) => (el: HTMLElement) => {
-  targets.set(el, run);
+export const intent = (run: () => void, { cue = false } = {}) => (el: HTMLElement) => {
+  targets.set(el, { run, cue });
   if (!listening && typeof document !== 'undefined') {
     listening = true;
     document.addEventListener('pointermove', onMove, { passive: true });
+    document.addEventListener('pointerdown', () => mark(null), true);
   }
   let t: ReturnType<typeof setTimeout> | undefined;
   const now = () => { clearTimeout(t); run(); };
-  const enter = (e: PointerEvent) => { if (e.pointerType === 'mouse') t = setTimeout(now, delay); };
+  const enter = (e: PointerEvent) => {
+    if (marked === el) mark(null);
+    if (e.pointerType === 'mouse') t = setTimeout(now, 80);
+  };
   const leave = () => clearTimeout(t);
   const ev: [string, EventListener][] = [['pointerenter', enter as EventListener], ['pointerleave', leave], ['pointerdown', now], ['focusin', now]];
   for (const [k, f] of ev) el.addEventListener(k, f);
-  return () => { clearTimeout(t); targets.delete(el); for (const [k, f] of ev) el.removeEventListener(k, f); };
+  return () => { clearTimeout(t); targets.delete(el); for (const [k, f] of ev) el.removeEventListener(k, f); }; // a mark goes with its hold
 };

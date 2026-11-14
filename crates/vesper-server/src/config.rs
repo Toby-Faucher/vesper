@@ -33,6 +33,8 @@ pub struct Config {
     /// True when `origin` is https: cookies get `Secure` and the `__Host-` name.
     pub secure_cookies: bool,
     pub upload_quota_bytes: u64,
+    /// Largest single upload in bytes (`VESPER_UPLOAD_MAX_MB`, default 100).
+    pub upload_max_bytes: u64,
     /// VAPID contact (`mailto:` or `https:`) sent to push services. None turns Web Push off.
     pub push_subject: Option<String>,
     /// The build id in `hello` and `/health`: `VESPER_BUILD_ID`, else the one compiled in.
@@ -57,7 +59,7 @@ impl Config {
     /// `VESPER_PUBLIC_HOST` (optional), `VESPER_UDP_PORT_PUBLIC` (default: the `VESPER_UDP_BIND`
     /// port), `VESPER_MAX_SOCKETS` (default 256), `VESPER_WEB_DIR` (default `web/dist`),
     /// `VESPER_DATA_DIR` (default `data`), `VESPER_ORIGIN` (default `http://localhost:8080`) and
-    /// `VESPER_UPLOAD_QUOTA_MB` (default 10240) and `VESPER_PUSH_SUBJECT` (default: the origin
+    /// `VESPER_UPLOAD_QUOTA_MB` (default 10240), `VESPER_UPLOAD_MAX_MB` (default 100) and `VESPER_PUSH_SUBJECT` (default: the origin
     /// when it is https, else unset, which turns push off).
     pub fn from_env() -> Result<Config, String> {
         Config::from_lookup(|k| std::env::var(k).ok())
@@ -117,6 +119,12 @@ impl Config {
             upload_quota_bytes: quota_mb
                 .checked_mul(1024 * 1024)
                 .ok_or("VESPER_UPLOAD_QUOTA_MB is too large")?,
+            // At most i64::MAX bytes: `Me.upload_max` is an i64.
+            upload_max_bytes: Some(num("VESPER_UPLOAD_MAX_MB", 100)?)
+                .filter(|&mb| mb >= 1)
+                .and_then(|mb| mb.checked_mul(1024 * 1024))
+                .filter(|&b| i64::try_from(b).is_ok())
+                .ok_or("VESPER_UPLOAD_MAX_MB must be 1 to 8796093022207")?,
             push_subject,
             build: match get("VESPER_BUILD_ID").filter(|s| !s.is_empty()) {
                 Some(b) if valid_build(&b) => b,
@@ -350,6 +358,32 @@ mod tests {
         ] {
             assert!(set(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn upload_max_is_checked() {
+        let with = |v: &str| lookup(&[("VESPER_UPLOAD_MAX_MB", v)]);
+        assert_eq!(lookup(&[]).unwrap().upload_max_bytes, 100 * 1024 * 1024);
+        assert_eq!(with("").unwrap().upload_max_bytes, 100 * 1024 * 1024);
+        assert_eq!(with("1").unwrap().upload_max_bytes, 1024 * 1024);
+        assert_eq!(
+            with("8796093022207").unwrap().upload_max_bytes,
+            8796093022207 * 1024 * 1024
+        );
+        for bad in [
+            "0",
+            "-1",
+            "x",
+            "8796093022208",
+            "18446744073709551615",
+            "99999999999999999999",
+        ] {
+            assert!(with(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            with("0").unwrap_err(),
+            "VESPER_UPLOAD_MAX_MB must be 1 to 8796093022207"
+        );
     }
 
     #[test]

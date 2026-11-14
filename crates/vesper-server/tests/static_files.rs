@@ -46,6 +46,7 @@ async fn start_at(web_dir: std::path::PathBuf, origin: &str) -> SocketAddr {
         origin: origin.into(),
         secure_cookies: false,
         upload_quota_bytes: 0,
+        upload_max_bytes: 100 << 20,
         push_subject: None,
         build: "test-build".into(),
         backup_keep: 5,

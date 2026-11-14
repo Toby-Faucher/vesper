@@ -186,6 +186,9 @@ pub struct Me {
     pub session_id: i64,
     /// The server that answered. A tab compares `build` with the one it loaded under (v1.4).
     pub server: ServerBuild,
+    /// Largest upload this server takes, in bytes (`VESPER_UPLOAD_MAX_MB`).
+    #[ts(type = "number")]
+    pub upload_max: i64,
 }
 
 /// The running server: `version` is the release number, `build` tells two builds of it apart

@@ -311,6 +311,7 @@ async fn login_finish(
             user,
             session_id,
             server: st.cfg.server_build(),
+            upload_max: st.cfg.upload_max_bytes as i64,
         }),
     )
         .into_response())

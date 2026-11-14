@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Unread } from '../gen/Unread';
-import { SHORTCUTS, isSendKey, isTyping, keyName, keysFor, nextUnread, pttKeyProblem, shortcut, stepRoom, type Def } from './keys';
+import { SHORTCUTS, isSendKey, isTyping, keyName, keysFor, nextUnread, pttKeyProblem, roomOrder, shortcut, stepRoom, type Def } from './keys';
+import type { RoomInfo } from '../gen/RoomInfo';
 
 const un = (room_id: number, unread: number): Unread => ({ room_id, last_read_id: 0, unread, mentions: 0 });
 
@@ -167,6 +168,10 @@ describe('room steps', () => {
     expect(stepRoom(order, null, 1)).toBe(5);
     expect(stepRoom(order, null, -1)).toBe(9);
     expect(stepRoom([], null, 1)).toBe(null);
+  });
+  it('orders rooms by position, then DMs', () => {
+    const r = (id: number, position: number) => ({ id, position }) as RoomInfo;
+    expect(roomOrder({ rooms: [r(5, 2), r(2, 0), r(9, 1)], dms: [r(7, 0), r(3, 0)] })).toEqual([2, 9, 5, 7, 3]);
   });
   it('next unread wraps and skips the current room', () => {
     expect(nextUnread(order, 2, { 5: un(5, 1) })).toBe(5);

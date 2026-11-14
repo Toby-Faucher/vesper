@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { intent, keep, project, type Sample } from './intent';
+import { CUE_HOLD, intent, keep, project, type Sample } from './intent';
 
 const fire = (el: EventTarget, type: string, pointerType?: string) => el.dispatchEvent(Object.assign(new Event(type), { pointerType }));
 
@@ -34,6 +34,65 @@ describe('intent', () => {
     off();
     fire(el, 'focusin');
     expect(run).toHaveBeenCalledTimes(2);
+  });
+});
+
+// The cue needs a document: a stand-in with elementFromPoint returning `hit`, and elements that keep their attributes.
+describe('cue', () => {
+  class El extends EventTarget {
+    attrs = new Set<string>();
+    parentElement = null;
+    setAttribute(k: string) { this.attrs.add(k); }
+    removeAttribute(k: string) { this.attrs.delete(k); }
+    contains(n: unknown) { return n === this; }
+  }
+  it('marks one element the pointer heads for, holds it over a miss, and clears it on hover or a press', () => {
+    vi.useFakeTimers();
+    let hit: El | null = null;
+    const doc = Object.assign(new EventTarget(), { elementFromPoint: () => hit });
+    vi.stubGlobal('document', doc);
+    let t = 0;
+    const move = (to: El | null, target: unknown = doc) => {
+      hit = to;
+      t += 20;
+      const e = Object.assign(new Event('pointermove'), { pointerType: 'mouse', clientX: t, clientY: 0 }); // 1 px/ms
+      Object.defineProperties(e, { timeStamp: { value: t }, target: { value: target } });
+      doc.dispatchEvent(e);
+    };
+    const [a, b, c] = [new El(), new El(), new El()];
+    const runC = vi.fn();
+    intent(() => {}, { cue: true })(a as unknown as HTMLElement);
+    const offB = intent(() => {}, { cue: true })(b as unknown as HTMLElement);
+    intent(runC)(c as unknown as HTMLElement);
+    const on = () => [a, b, c].map((x) => x.attrs.has('data-intent'));
+
+    move(null); // one sample: no projection yet
+    move(a);
+    expect(on()).toEqual([true, false, false]);
+    move(b);
+    expect(on()).toEqual([false, true, false]);
+    move(null);
+    vi.advanceTimersByTime(CUE_HOLD - 1);
+    expect(on()).toEqual([false, true, false]); // a miss holds the mark
+    vi.advanceTimersByTime(1);
+    expect(on()).toEqual([false, false, false]);
+    move(b);
+    b.dispatchEvent(Object.assign(new Event('pointerenter'), { pointerType: 'mouse' }));
+    expect(on()).toEqual([false, false, false]); // hover takes over
+    move(b, b);
+    expect(on()).toEqual([false, false, false]); // already over it
+    move(b);
+    doc.dispatchEvent(new Event('pointerdown'));
+    expect(on()).toEqual([false, false, false]);
+    move(a);
+    move(c);
+    expect(on()).toEqual([false, false, false]); // c has no cue, and it still runs
+    expect(runC).toHaveBeenCalled();
+    move(b);
+    offB();
+    vi.advanceTimersByTime(CUE_HOLD);
+    expect(on()).toEqual([false, false, false]); // removed: the hold still clears it
+    vi.unstubAllGlobals();
   });
 });
 

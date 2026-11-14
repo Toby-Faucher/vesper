@@ -1,5 +1,5 @@
 import { ApiFailure, api } from './api';
-import { applyChatMsg, chat, resync } from './chat.svelte';
+import { applyChatMsg, chat, resync, uploadCap } from './chat.svelte';
 import { loginHref } from './route';
 import { badge, resetBadge } from './ui/badge';
 import { onServerMsg } from './ui/notify';
@@ -121,6 +121,7 @@ function open(): void {
     if (m.type === 'hello') {
       upAt = Date.now();
       session.online = true;
+      uploadCap.max = m.me.upload_max;
     }
     const prev = session.state;
     session.state = applyServerMsg(prev, m);

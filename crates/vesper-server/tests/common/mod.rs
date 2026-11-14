@@ -53,6 +53,7 @@ pub fn config(data: &TempDir) -> Config {
         origin: ORIGIN.into(),
         secure_cookies: false,
         upload_quota_bytes: 1 << 30,
+        upload_max_bytes: 100 << 20,
         push_subject: Some("mailto:test@example.invalid".into()),
         build: "test-build".into(),
         backup_keep: 5,

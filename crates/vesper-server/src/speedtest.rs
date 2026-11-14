@@ -18,6 +18,7 @@ pub fn routes() -> Router<AppState> {
 
 async fn upload(State(st): State<AppState>, a: Authed, body: Body) -> Result<StatusCode, ApiError> {
     limit(&st, Kind::Speedtest, &a.user.user_id)?;
-    read_body(body, &mut tokio::io::sink(), READ_IDLE, READ_TOTAL).await?;
+    let max = st.cfg.upload_max_bytes;
+    read_body(body, &mut tokio::io::sink(), max, READ_IDLE, READ_TOTAL).await?;
     Ok(StatusCode::NO_CONTENT)
 }

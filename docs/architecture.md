@@ -294,7 +294,7 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
   track before it asks again, since a running track would hand the new request its own (silent) source. The e2e checks both tracks in headless
   Chromium, and a second track of zeros (the filtered one stays); whether the switch is heard, and real Edge on Windows, are not verified.
 - The page starts fetching the denoiser files (`web/src/lib/audio/preload.ts`, called from `main.ts`) when it loads, before Join. The server answers `/dsp/*` with `no-cache`, so the worker's later fetch is a revalidation. `scripts/build-dsp.sh` writes `vesper_dsp_bg.wasm.gz` next to the wasm and the server sends it to browsers that accept gzip (`ServeDir` `precompressed_gzip`): 2.2 MB instead of 10.9 MB. `npm run build` also writes a `.br` of it in `dist/dsp` (1.3 MB, measured 2026-11-02), sent to browsers that accept brotli. With the 8.0 MB model the first visit downloads about 9 to 10 MB. Skipped when the browser asks to save data. Not verified in a real browser.
-- Prefetch on intent (`web/src/lib/ui/intent.ts`): a sidebar room's newest page (`prefetchRoom` in `chat.svelte.ts`) and the chat chunk load when the mouse heads for its row, rests on it for 80 ms, presses it or focuses it. The Settings cog and Account button warm their pages' chunks the same way. Heading for: one `pointermove` listener measures the pointer's velocity over the last 50 ms and, between 0.2 and 4 px/ms, projects it 120 ms ahead; the element under that point fires. Skipped on save-data. The bench is `npm --prefix web run bench:intent`; results in [testing/latency.md](testing/latency.md#prefetch-on-intent).
+- Prefetch on intent (`web/src/lib/ui/intent.ts`): a sidebar room's newest page (`prefetchRoom` in `chat.svelte.ts`) and the chat chunk load when the mouse heads for its row, rests on it for 80 ms, presses it or focuses it. The Settings cog and Account button warm their pages' chunks the same way. Heading for: one `pointermove` listener measures the pointer's velocity over the last 50 ms and, between 0.2 and 4 px/ms, projects it 120 ms ahead; the element under that point fires. A sidebar row the pointer heads for also gets a faint fill (`intent(run, { cue: true })` sets `data-intent`): one row at a time, kept for 150 ms after the last hit so it does not flicker, and cleared when the pointer enters the row or presses anywhere. Once an opened room's own load is done, the timeline also prefetches the rooms Alt+Up and Alt+Down would go to next (`stepRoom` over `roomOrder` in `keys.ts`). The prefetch is skipped on save-data. The bench is `npm --prefix web run bench:intent`; results in [testing/latency.md](testing/latency.md#prefetch-on-intent).
 - The server side has no fallback. A dead SFU is not restarted in process; the process exits and the supervisor restarts it.
 
 ## HTTP API
@@ -310,7 +310,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `POST /api/signup` (`SignupReq`) | Invite limit by address | 201 `Me` and the session cookie |
 | `POST /api/login` (`LoginReq`) | Login limits by address, then by address and username | `Me` and a new session cookie |
 | `POST /api/logout` | a session | 204, the session is deleted and the cookie cleared |
-| `GET /api/me` | a session | `Me`, with `server { version, build }` |
+| `GET /api/me` | a session | `Me`, with `server { version, build }` and `upload_max` (bytes) |
 | `PATCH /api/me` (`ProfilePatch`) | a session | the new `UserInfo`; `bio` follows the display name rule, 0 to 160 characters; `ui_accent` is an `AccentPreset` key or `#rrggbb` (the client checks a custom colour's contrast) |
 | `PUT /api/me/avatar` (the raw picture as the body) | a session, Upload limit by user | the new `UserInfo`; 400 unless png, jpeg or webp of at most 1024 px a side (see Profile pictures), 413 `too_large` past 512 KiB |
 | `DELETE /api/me/avatar` | a session, Change limit by user | the new `UserInfo` with `avatar: null` |
@@ -360,9 +360,9 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `PUT /api/messages/{id}/pin` (`PinReq`) | sees the room, Change limit by user | the new `Message`; pushes `message_updated` |
 | `PUT /api/rooms/{id}/read` (`ReadReq`) | sees the room | 204; sends `read` to every socket of the user |
 | `GET /api/search?q=&room_id=&author_id=&from=&to=&before=` (`SearchQuery`) | a session, Search limit by user | `SearchPage`, 20 hits, newest first, only rooms you can see; a `room_id` you cannot see is 404 |
-| `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past 25 MiB, 507 `quota_full` |
+| `POST /api/rooms/{id}/uploads?name=` (the raw file as the body) | sees the room, Upload limit by user | 201 `UploadDone`; 413 `too_large` past `VESPER_UPLOAD_MAX_MB`, 507 `quota_full` |
 | `GET /api/uploads/{id}` | sees the room; an upload not attached yet needs the uploader | the file (Range works), else 404 |
-| `POST /api/speedtest` (the raw body, up to 25 MiB; `speedtest.rs`) | a session, Speedtest limit by user (3, one back per 20 s) | 204; the body is read and thrown away, nothing is stored. The share dialog times a 4 MiB post to suggest a bitrate |
+| `POST /api/speedtest` (the raw body, up to `VESPER_UPLOAD_MAX_MB`; `speedtest.rs`) | a session, Speedtest limit by user (3, one back per 20 s) | 204; the body is read and thrown away, nothing is stored. The share dialog times a 4 MiB post to suggest a bitrate |
 | `GET /api/admin/disk` | owner | `DiskUse` |
 | `GET /api/admin/server` | owner | `ServerStatus`: version and build, uptime, the `DiskUse` numbers, people in voice, failed pushes in the last 24 h (in memory, since start if shorter), the newest `*.db` in `<data>/backups` (name and time). No secrets and no one's address. The advertised public address is not in it: the server does not record when it changed |
 
@@ -445,10 +445,11 @@ new URL. It is served with the uploads' headers: the sniffed type, `nosniff`, `d
 
 Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the raw body (no multipart). Rules:
 
-- **Size.** At most 25 MiB (`MAX_UPLOAD`). A larger `Content-Length` is 413 before the body is read; a body with no length is
+- **Size.** At most `VESPER_UPLOAD_MAX_MB` ([env.md](env.md), 100 MiB by default). `Me.upload_max` tells the client, which
+  refuses a larger file before sending it (25 MiB until the first `hello`). A larger `Content-Length` is 413 before the body is read; a body with no length is
   counted while it streams to `uploads/tmp/<id>` and is cut off with 413 once it passes the cap. The partial file is deleted, also
   when the client goes away mid-body, sends nothing for 30 s (`READ_IDLE`) or is not done after 10 minutes (`READ_TOTAL`): 400
-  `upload too slow`. So a 25 MiB file needs about 44 KB/s (350 kbit/s) on average. The Upload limit is 10, then 1 every 30 s, per user.
+  `upload too slow`. So a 100 MiB file needs about 175 KB/s (1.4 Mbit/s) on average. The Upload limit is 10, then 1 every 30 s, per user.
 - **Quota.** Uploads together stay under `VESPER_UPLOAD_QUOTA_MB` ([env.md](env.md)). The check, the move into place and the row
   insert run under one lock, so uploads racing each other cannot pass it (507 `quota_full`). A `Content-Length` that cannot fit
   what is left is 507 before the body is read.
@@ -459,8 +460,13 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
   brands are not media, any other brand is `video/mp4`), EBML (`video/webm`), mp3 (`ID3` or an MPEG audio frame header), `OggS`
   (`audio/ogg`), `RIFF....WAVE` (`audio/wav`) and `fLaC` (`audio/flac`). `Attachment.kind` is `image`, `audio`, `video` or `file`,
   and the first three are served inline with their type. The timeline plays audio and video with the browser's own player and
-  shows the file card if the browser cannot play it. Everything else, SVG and HTML included, is `application/octet-stream` with
-  `Content-Disposition: attachment`. An upload stored before v1.8.0 keeps the type it got then.
+  shows the file card if the browser cannot play it. A click on an image, or the open button on a video's card, opens the
+  viewer (`ImageViewer.svelte`, a lazy chunk): one image or video at fit size, the video with the browser's controls and
+  autoplay, and Left and Right through the images and videos of the loaded part of the room. Opening it pauses the inline
+  videos. Audio plays inline only. Everything else, SVG and HTML included, is `application/octet-stream` with
+  `Content-Disposition: attachment`. At start, in the background, every upload stored as `application/octet-stream` is
+  sniffed again (`retype_octet`) and gets the image or media type its first bytes show, so files kept before v1.8.0 play inline.
+  A missing file is skipped and a row with any other type is never changed. Tests: `tests/uploads.rs` `old_octet_upload_is_retyped`.
 - **Name.** Display text only: control, bidi and hidden format characters dropped, `/` and `\` turned into `_`, at most 200
   characters, `file` when empty. `Content-Disposition` carries an ASCII `filename` and the exact name as `filename*` (RFC 6266 and
   5987), so a name can not add a header.
