@@ -95,7 +95,19 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   loopback port over plain http, and draw the views in GPUI's headless test window. No display, keyring or network is needed.
   The voice tests (`desktop/tests/voice.rs`) run whole calls through that server's SFU with a sine for a microphone and a
   recorder for speakers, so no audio devices are needed either.
-- Voice uses the system's default microphone and speakers (cpal: ALSA on Linux). Use headphones: there is no echo cancellation yet.
+- Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
+  Windows). Use headphones: there is no echo cancellation yet.
+- Settings (the button next to Sign out) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
+  `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets.
+- DeepFilterNet runs natively (`vesper-dsp` with tract, the same `=0.21.4` pin and debug-assertions override as the root
+  workspace). The app does not ship the model: at the first call it downloads `/dsp/model.tar.gz` from the server it is signed
+  in to (the file the web app loads), checks its sha256 against the pin in `scripts/fetch-model.sh`, and keeps it as
+  `Vesper/DeepFilterNet3_onnx.tar.gz` in the OS data dir. A server without `/dsp/` (a dev server without `scripts/build-dsp.sh`)
+  gives a call with the noise gate and a note in the call bar.
+- The DeepFilterNet test with the real model runs only when `crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz` exists
+  (`scripts/fetch-model.sh`); without it the test prints `SKIPPED` and passes. CI has no model, so it skips there.
+- Push to talk watches its key globally on Windows, macOS (with Accessibility access) and X11. On Wayland it works only while the
+  window has focus. The tray uses KSNI on Linux (no GTK headers needed); a desktop without a tray host shows none.
 - Sign in: the app asks for the server address (the one you open Vesper at in a browser, e.g. `https://vesper.example.com`), a
   username and a password. Accounts are made in the web app. The session is kept in the OS keyring (Secret Service on Linux,
   for example GNOME Keyring or KWallet); without one the app works but asks you to sign in at every start.

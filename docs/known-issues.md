@@ -151,8 +151,16 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 ## Desktop client (v2, in progress)
 
 - No echo cancellation in calls yet: without headphones the others hear themselves. The app says so at the first join.
-- Calls use the default microphone and speakers; there is no device choice yet. A device lost mid-call goes silent with no
-  message. Per-person volumes last until the app closes.
+- A device lost mid-call goes silent with no message. Per-person volumes last until the app closes.
+- The first call in DeepFilterNet mode downloads the 8 MB model from the server; until it is in, and on a server without
+  `/dsp/` (a dev server without `scripts/build-dsp.sh`), the noise gate runs and the call bar says so. The fallback after slow
+  frames is one way for the rest of the call, as on the web. The noise gate has no threshold setting (fixed at -50 dBFS).
+- Push to talk needs X11 for a global key on Linux; on Wayland it works only while the window has focus. On macOS it needs
+  Accessibility access. A game running as administrator on Windows may hide its keys from the app (not tried). The key also
+  opens the mic while typing it in Vesper's own composer.
+- Closing the window during a call minimises it instead of hiding it (GPUI 0.2.2 cannot hide a window on Windows), so it
+  stays in the taskbar. On a Linux desktop without a tray host there is no tray icon.
+- Not verified: real keys, a real tray, start with the computer, real audio through DeepFilterNet, and running on Windows.
 - The call's UDP socket is IPv4 only, so an SFU reachable only over IPv6 does not connect.
 - Not verified on real devices or across a real network with NAT: the voice tests run on loopback with fake audio.
 

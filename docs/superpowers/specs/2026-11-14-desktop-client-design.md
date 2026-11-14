@@ -57,7 +57,7 @@ against a real `vesper-server` started inside the tests. Anything that needs a s
 | D1 | Server address and sign in, signed-in state kept across restarts, sign out | Done 2026-11-14. Tests sign in against a real server, a bad password shows the server's error |
 | D2 | Rooms and DMs in a sidebar, a room's history, live new messages, sending, unread counts | Done 2026-11-14. Tests: two clients, one sends, the other sees it |
 | D3 | Voice: join and leave, hear others, be heard, mute and deafen, per-person volume, who is speaking | Done 2026-11-14. Tests: engines exchange Opus through a real SFU and hear each other's tones |
-| D4 | DeepFilterNet on the mic, global push to talk, tray icon, start with the computer | engine tests with a fake hotkey and recorded audio |
+| D4 | DeepFilterNet on the mic, global push to talk, tray icon, start with the computer, a Settings view | Done 2026-11-14. Tests: the real model takes noise out of a speech-like fixture (when the model is on disk), a slow fake falls back, a bad checksum is refused, push to talk with a fake key source |
 | D5 | Watch a screen share (VP8 decode), share notices | tests decode the SFU's forwarded VP8 |
 | D6 | Packages: Linux first, then Windows and macOS through CI | CI builds them; running them is not verified here |
 | Later | Uploads, reactions, edits, search, settings parity, sharing a screen, echo cancellation | |
@@ -173,6 +173,79 @@ Not verified:
 
 Left for later on purpose: echo cancellation, device choice, a settings screen (bitrate, saved volumes), DTX and in-band FEC,
 the call sounds, connection quality, screen share.
+
+## D4: what was built and how it was checked
+
+- **Noise filter** (`src/voice/denoise.rs`). Capture order: mic, then the filter, then Opus (no echo cancellation and no input
+  gain yet). Three modes, like the web's: DeepFilterNet, the noise gate, off. The web's `browser` mode is the browser's own
+  suppression, which has no native match, so the light mode is the web's noise gate (`dynamics.ts`: open above -50 dBFS peak,
+  close 200 ms after 4 dB under it, 2 ms and 120 ms ramps) on the raw mic **[call]**. DeepFilterNet is `vesper-dsp` with tract,
+  with the root workspace's `tract-core = "=0.21.4"` pin and its debug-assertions override, copied into `desktop/Cargo.toml`;
+  the lockfile pins (`libc` 0.2.189, `mio` 1.2.4) still hold. tract's state cannot move between threads and its build takes
+  about 1.9 s in a debug build, so DeepFilterNet runs on its own thread (`vesper-denoise`): it builds there, and the call thread
+  hands it each 10 ms frame and waits for the answer. Until it is ready the gate runs.
+- **Fallback**, the web's `ModeController` logic: past a warm-up of 50 frames, 20 late frames in the last 100 turn
+  DeepFilterNet off for the rest of the call and the gate takes over. The budget is 10 ms per 10 ms frame, not the web's 30 ms
+  (that is the depth of the web's output queue; here a frame must be done in its own time). A frame not answered in 100 ms
+  also falls back. The call bar says which filter runs and why DeepFilterNet does not.
+- **Model.** Not in the binary and not committed. At a call in DeepFilterNet mode the network thread reads the cached copy
+  (`<data dir>/Vesper/DeepFilterNet3_onnx.tar.gz`) or downloads `/dsp/model.tar.gz` from the signed-in server (the file the web
+  app loads: the upstream DeepFilterNet3 tar.gz, which tract reads natively; nothing in it is wasm specific), at most 32 MB.
+  It must match the sha256 pinned in `scripts/fetch-model.sh` (a test checks the copy in the code is the same), or it is
+  refused and not cached. A bad cached copy is downloaded again. Without a model the call runs with the gate and says why.
+- **Push to talk** (`src/voice/ptt.rs`). `device_query` 4.0.1 asks the OS whether the key is down every 10 ms on a thread of its
+  own: `GetAsyncKeyState` on Windows, `CGEventSourceKeyState` on macOS, `XQueryKeymap` on X11. It reports press and release and
+  never takes the key away from the game **[call]**: `global-hotkey` registers a system hotkey, which on Windows swallows a
+  key without modifiers in every other app, and `rdev` hooks the keyboard and has had no release since 2023. The window's own
+  key events also count, which is all there is on Wayland; there the Settings view says global keys need X11. Release delay
+  200 ms: the web app has none, so this is new **[call]**. The key is chosen by pressing it, like the web's Settings; Ctrl,
+  Alt, Meta, Tab, Enter and Backspace are refused. The default is the key left of 1 (`Grave`), not the web's Space, which would
+  open the mic on every jump in a game **[call]**. As on the web, the mic sends only when not muted and the key is held;
+  a mute, a force mute or turning push to talk off closes it, and the key never unmutes. The model tells the engine
+  `Muted(!live)`; the server's mute state is untouched by the key, as on the web.
+- **Tray** (`src/ui/tray.rs`, `tray-icon` 0.26.1): Show, Mute, Deafen, Quit. On Windows it needs a message loop on its thread;
+  GPUI 0.2.2 runs `GetMessageW`/`DispatchMessageW` for the whole main thread, so the icon is made there, inside
+  `Application::run`. On Linux it uses the KSNI backend (D-Bus, no GTK or appindicator headers), so CI's apt list is
+  unchanged and no cargo feature is needed. Closing the window during a call minimises it (GPUI 0.2.2 has no hide on
+  Windows); outside a call it quits as before.
+- **Start with the computer** (`auto-launch` 0.6.0): the Run key on Windows, a login item on macOS, an autostart entry on Linux.
+  Off by default; set when the setting changes.
+- **Settings view**, from the sidebar: the noise filter, voice activity or push to talk and its key, microphone and speakers
+  (cpal's lists, saved by name, the default when the name is gone), the Opus bitrate (32 to 510 kbps, 64 by default), start
+  with the computer. Saved on each change as `Vesper/settings.json` in the OS config dir (no secrets). Push to talk applies at
+  once; the filter, devices and bitrate at the next call.
+
+Verified, by `scripts/check-desktop.sh` on the dev machine (no display, microphone, speakers or tray):
+
+- With the real model (`crates/vesper-dsp/model/`, copied from the main checkout; the test skips without it): a speech-like
+  signal (120 Hz harmonics with vibrato, 300 ms syllables and 200 ms pauses) plus white noise at 0.02 RMS through the call's
+  filter. Noise in the pauses dropped 57.6 dB (the model outputs near silence there); the syllables kept their level within
+  12.7 dB (the model takes part of a synthetic voice for noise). A pure sine plus noise comes out as silence, so it is not the
+  fixture. Debug build: 1.9 s to build the denoiser, 3.3 ms per 10 ms frame with the hand-over to its thread.
+- A fake filter that takes 12 ms per frame falls back to the gate after its third late frame and says so; a missing model, a
+  failed build and a refused checksum each give the call the gate and the reason. A wrong-checksum download is not cached, a
+  tampered cached file is not used.
+- Against a real server with no `/dsp/`: a call in DeepFilterNet mode shows "DeepFilterNet is not available (the server has no
+  model: 404 Not Found) ..." and the other side still hears the tone through the gate.
+- Push to talk: the state machine (press, release, the 200 ms delay, a press inside it), the key thread with a fake key source
+  and window keys, turning it off; the model's mute rules (mute wins, the key never unmutes, force mute, a new call starts
+  closed). GPUI's headless window: Settings opens from the sidebar, each choice lands in the model, a missing device says so,
+  the key is taken from a key press (Backspace and Ctrl+V refused), V in the window opens and closes push to talk, and Join
+  voice starts with the chosen filter and device, closed until the key.
+- The settings file round trip, clamping and a corrupt file.
+
+Not verified:
+
+- Real keys: `device_query` on Windows, macOS and X11, a game in front (also one running as administrator, which may hide
+  keys from a normal app), and the Wayland note on a real Wayland session.
+- A real tray on Windows, macOS or a Linux desktop, the close-to-tray behaviour, and start with the computer: none can run here.
+- Real audio through DeepFilterNet, its time per frame in a release build, and whether a slow laptop trips the fallback.
+- The model download from a real server behind Caddy or Cloudflare (a proxy that adds `Content-Encoding` would fail the
+  checksum and fall back), and the data dir on Windows and macOS.
+- Anything on Windows beyond what CI builds and the unit and headless tests it runs.
+
+Left for later on purpose: the gate's threshold setting and the gate after DeepFilterNet (the web has both), input gain, saved
+per-person volumes, a mouse button for push to talk.
 
 ## Not in v2.0
 
