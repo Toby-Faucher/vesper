@@ -84,10 +84,15 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 ([ADR 0010](decisions/0010-gpui-desktop-client.md), [design](superpowers/specs/2026-11-14-desktop-client-design.md)).
 
 - Build: `cd desktop && ../scripts/capped.sh cargo build`. Run: `cargo run` there, on a machine with a display.
-- Linux needs the X11, Wayland, Vulkan, fontconfig and ALSA development headers (the package list is in the `desktop` CI job).
+- Linux needs the X11, Wayland, Vulkan, fontconfig, ALSA and Opus development headers (the package list is in the `desktop` CI
+  job). Arch: `opus` and `alsa-lib`; Debian and Ubuntu: `libopus-dev` and `libasound2-dev`. The `opus` crate links the system
+  libopus through pkg-config.
 - Check: `scripts/check-desktop.sh` (fmt, clippy `-D warnings`, tests). It is not part of `scripts/check.sh`; CI runs it as its own job.
   The tests start a real `vesper-server` in process (a path dev-dependency, so the first build compiles the server too) on a free
   loopback port over plain http, and draw the views in GPUI's headless test window. No display, keyring or network is needed.
+  The voice tests (`desktop/tests/voice.rs`) run whole calls through that server's SFU with a sine for a microphone and a
+  recorder for speakers, so no audio devices are needed either.
+- Voice uses the system's default microphone and speakers (cpal: ALSA on Linux). Use headphones: there is no echo cancellation yet.
 - Sign in: the app asks for the server address (the one you open Vesper at in a browser, e.g. `https://vesper.example.com`), a
   username and a password. Accounts are made in the web app. The session is kept in the OS keyring (Secret Service on Linux,
   for example GNOME Keyring or KWallet); without one the app works but asks you to sign in at every start.

@@ -56,7 +56,7 @@ against a real `vesper-server` started inside the tests. Anything that needs a s
 | D0 | Crate, GPUI window, pins, a check script and a CI job | `cargo build` and the check pass |
 | D1 | Server address and sign in, signed-in state kept across restarts, sign out | Done 2026-11-14. Tests sign in against a real server, a bad password shows the server's error |
 | D2 | Rooms and DMs in a sidebar, a room's history, live new messages, sending, unread counts | Done 2026-11-14. Tests: two clients, one sends, the other sees it |
-| D3 | Voice: join and leave, hear others, be heard, mute and deafen, per-person volume, who is speaking | tests: two engines exchange Opus through a real SFU |
+| D3 | Voice: join and leave, hear others, be heard, mute and deafen, per-person volume, who is speaking | Done 2026-11-14. Tests: engines exchange Opus through a real SFU and hear each other's tones |
 | D4 | DeepFilterNet on the mic, global push to talk, tray icon, start with the computer | engine tests with a fake hotkey and recorded audio |
 | D5 | Watch a screen share (VP8 decode), share notices | tests decode the SFU's forwarded VP8 |
 | D6 | Packages: Linux first, then Windows and macOS through CI | CI builds them; running them is not verified here |
@@ -114,6 +114,65 @@ Not verified:
 Left for later on purpose: typing indicators, day separators and grouping, Markdown, previews, the build change check of
 the web app (a message kind this build does not know is skipped instead), and remembering the server address after sign
 out (it is stored only with the session).
+
+## D3: what was built and how it was checked
+
+- **Engine.** `src/voice/engine.rs` runs one call on its own thread (`vesper-voice`), not on the GPUI thread. It is a str0m
+  0.24 client, like the SFU's `FakeClient`: one send and receive Opus m-line and no video m-line, so the SFU never offers it
+  video (ADR 0009). The socket is bound to `0.0.0.0`; after the answer, the engine adds a host candidate for each SFU address
+  in it, using the local address the OS would route to that address. Every 20 ms it encodes what the microphone gave
+  (`opus` 0.3 on the system libopus, Voip, the bitrate from `Call::bitrate_kbps`, 64 kbps by default like the web's setting;
+  the desktop app has no settings screen yet) and sends it, then takes one frame per person from their jitter buffer,
+  decodes it, mixes and plays it.
+- **Signaling** goes through the model, as `join.ts` does it on the web: the engine makes the offer, the model sends `join`,
+  hands the `joined` answer to the engine, passes each SFU `offer` to the engine and sends its `answer` back. The network
+  thread writes `Cmd::Signal` messages on the socket and owns the running call (`Cmd::Voice`); signing out or a dropped
+  session ends it. Engine events carry a call number, so a late event of an ended call is dropped.
+- **Receiving.** Each forwarded track's MSID stream id is the sender's `user_id` (`accounts.id`); the engine keys a decoder,
+  a jitter buffer and a speaking detector on it. The jitter buffer (`voice/jitter.rs`) holds frames by RTP time, starts
+  after 60 ms, drops late packets, conceals a gap with Opus PLC (up to 5 frames, then waits to fill again), drops the oldest
+  past 200 ms, and starts over when the timestamps jump (a rejoin or an unmute).
+- **Mix** (`voice/mix.rs`). Per-person volume from 0 to 400 % on the web's curve (`volume.ts`), then a peak limiter at
+  -3 dBFS (instant attack, about 50 ms release). Deafen plays silence. Speaking: the RMS of each 20 ms frame, on above 0.02 (the
+  web's threshold) and off after 300 ms under 0.01. The engine sends who speaks only when it changes.
+- **Controls** like `voice.svelte.ts` and `call.ts`: mute stops sending (the RTP clock runs on), deafen does not mute;
+  both send `set_voice_state`. A force mute mutes and blocks unmuting; lifting it does not unmute. The call ends with the
+  web's texts on my own `peer_left`, a room that is gone (with `leave`), an error at join, or an engine failure (no device,
+  no UDP path, the connection lost). A dropped socket stops the call and joins the same room again after the next `hello`,
+  unless it took over 60 s.
+- **Devices** (`voice/device.rs`): cpal 0.18, the default input and output in their default format, turned into 48 kHz mono
+  and back (downmix, linear resampling, upmix). A device that does not open shows why in the call bar, and the app goes on.
+- **UI.** Join voice or Leave in the room header; the call bar above the composer with the room, Connecting or Connected,
+  Mute, Deafen and Leave, then the people in the call: a ring while someone speaks, muted or deafened, and a volume slider
+  for each other person. "Use headphones. Echo cancellation is not in the desktop app yet." shows at the first join.
+
+Verified, by `scripts/check-desktop.sh` on the dev machine (no display, microphone or speakers):
+
+- Against a real `vesper-server` and SFU on loopback (`desktop/tests/voice.rs`), with a sine generator as the microphone and a
+  recorder as the speakers: two clients join the same call; ann's 440 Hz tone reaches bob (about 0.29 RMS at 438 Hz measured
+  by zero crossings) and bob's 660 Hz reaches ann; ann's mute silences her at bob and bob sees her muted; bob's deafen
+  silences what he plays; leave stops ann's playback and bob sees her go. With three clients, bob's speaking list names ann
+  when only she plays and carol when only she plays, so each stream maps to its own `user_id`; carol at 0 % is silent for bob
+  while ann still hears her, and at 400 % the peak stays under the limiter's ceiling. A force mute from the server mutes bob and
+  blocks unmuting, and lifting it leaves him muted; a socket the server drops brings the call back after the reconnect; a
+  join from another device of the same account ends the first call with the "Your call ended" text.
+- Unit tests: the jitter buffer (order, gaps, late and early packets, underrun, reset, overflow), the mixer, the volume curve
+  and the limiter, the speaking hysteresis, the resampler, the SDP candidate parsing, and the model's call flow (join, answer,
+  renegotiation, mute, deafen, volume, force mute, the endings, rejoin and its 60 s limit).
+- GPUI's headless window (`ui/view_tests.rs`): Join voice sends the start, the call bar and the people draw with a speaking
+  ring and a slider for the other person only, Mute, Deafen and Leave send the right messages, a force mute disables Mute,
+  and a device error shows in the bar.
+
+Not verified:
+
+- Real devices: cpal with ALSA, PulseAudio or PipeWire, other sample rates and formats, a device unplugged mid-call, and how
+  the call sounds. The dev machine has none.
+- A real network: NAT, a firewall, Wi-Fi loss and jitter, an SFU behind `VESPER_PUBLIC_HOST`, IPv6. Only loopback ran.
+- A call with the web app on the other end. The SFU forwards the same Opus, but it was not run here.
+- Windows and macOS.
+
+Left for later on purpose: echo cancellation, device choice, a settings screen (bitrate, saved volumes), DTX and in-band FEC,
+the call sounds, connection quality, screen share.
 
 ## Not in v2.0
 

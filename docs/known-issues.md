@@ -148,6 +148,14 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - **The output queue only grows after jitter.** After a bad patch it can sit at 60 to 80 ms until it drops a frame. Diagnostics shows it as `Queue`.
 - **Thresholds are untuned:** the fallback trips at 20 late frames out of 100, with a 30 ms budget, after a 3 s warm-up. The numbers come from one laptop (2.1 ms average per frame there). The fallback is one-way for the rest of the call.
 
+## Desktop client (v2, in progress)
+
+- No echo cancellation in calls yet: without headphones the others hear themselves. The app says so at the first join.
+- Calls use the default microphone and speakers; there is no device choice yet. A device lost mid-call goes silent with no
+  message. Per-person volumes last until the app closes.
+- The call's UDP socket is IPv4 only, so an SFU reachable only over IPv6 does not connect.
+- Not verified on real devices or across a real network with NAT: the voice tests run on loopback with fake audio.
+
 ## Build and deploy
 
 - **`scripts/build-dsp.sh` writes straight into `web/public/dsp`.** If `wasm-bindgen` fails half way, the folder is partial.
