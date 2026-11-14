@@ -18,7 +18,8 @@ export const RELEASE_NOTES: readonly Note[] = [
   {
     version: '1.8.3',
     items: [
-      'A sound plays when someone joins or leaves your call. No sound? Turn on "Others joining and leaving" in Settings.',
+      'A sound plays when someone joins or leaves your call.',
+      'No sound? Turn it on in Settings, Notifications.',
       'Joining, leaving and losing a call sound louder, so you hear them.',
       'Moderators can stop a screen share from the person card.',
     ],
