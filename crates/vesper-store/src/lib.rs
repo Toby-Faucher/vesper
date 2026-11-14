@@ -332,7 +332,16 @@ impl Store {
 pub fn random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     getrandom::fill(&mut buf).expect("OS random source failed");
-    buf.iter().map(|b| format!("{b:02x}")).collect()
+    hex(&buf)
+}
+
+/// `bytes` as lowercase hex.
+pub fn hex(bytes: &[u8]) -> String {
+    use fmt::Write;
+    bytes.iter().fold(String::new(), |mut out, b| {
+        write!(out, "{b:02x}").expect("writing to a String cannot fail");
+        out
+    })
 }
 
 /// Unix time in milliseconds.

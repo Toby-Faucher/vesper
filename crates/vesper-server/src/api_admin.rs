@@ -144,7 +144,13 @@ async fn create_invite(
         )
         .await?;
     let url = format!("{}/invite#{code}", st.cfg.origin);
-    Ok((StatusCode::CREATED, Json(InviteCreated { info, url: url.into() })))
+    Ok((
+        StatusCode::CREATED,
+        Json(InviteCreated {
+            info,
+            url: url.into(),
+        }),
+    ))
 }
 
 async fn revoke_invite(
@@ -214,7 +220,13 @@ async fn create_reset(
         .await?;
     tracing::info!(user_id = %id, by = %a.user.user_id, "password reset link created");
     let url = format!("{}/reset#{code}", st.cfg.origin);
-    Ok((StatusCode::CREATED, Json(ResetCreated { url: url.into(), expires_at })))
+    Ok((
+        StatusCode::CREATED,
+        Json(ResetCreated {
+            url: url.into(),
+            expires_at,
+        }),
+    ))
 }
 
 /// Each account's latest reset link plus every reset used in the last 30 days, so the owner sees

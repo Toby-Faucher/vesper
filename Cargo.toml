@@ -35,6 +35,11 @@ unsafe_code = "forbid"
 dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
+ignore_without_reason = "warn"
+redundant_clone = "warn"
+format_collect = "warn"
+derive_partial_eq_without_eq = "warn"
+semicolon_if_nothing_returned = "warn"
 
 # The audio lab's corpus and metric tests do a lot of sample maths; unoptimised they take minutes.
 [profile.dev.package.vesper-audiolab]

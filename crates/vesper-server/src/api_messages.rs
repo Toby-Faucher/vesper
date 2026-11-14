@@ -390,7 +390,7 @@ mod tests {
             assert!(mentioned_usernames(none).is_empty(), "{none}");
         }
         assert_eq!(mentioned_usernames("(@bob) @bob.x"), ["bob"]);
-        let many: String = (0..30).map(|i| format!("@user{i:02} ")).collect();
+        let many = (0..30).fold(String::new(), |s, i| s + &format!("@user{i:02} "));
         assert_eq!(mentioned_usernames(&many).len(), MAX_MENTIONS);
     }
 

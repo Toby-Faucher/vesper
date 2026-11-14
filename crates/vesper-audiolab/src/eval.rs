@@ -528,7 +528,7 @@ pub fn load_configs(paths: &[PathBuf]) -> Result<PipelineConfig> {
         for (k, v) in from {
             match (into.get_mut(&k), v) {
                 (Some(toml::Value::Table(a)), toml::Value::Table(b)) => {
-                    merge(a, b, &format!("{path}{k}."))?
+                    merge(a, b, &format!("{path}{k}."))?;
                 }
                 (Some(old), v) if *old != v => {
                     bail!("stacked configs disagree on {path}{k}: {old} vs {v}")

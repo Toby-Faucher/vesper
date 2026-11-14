@@ -15,7 +15,7 @@ mod wasm;
 /// Samples per frame (10 ms at 48 kHz).
 pub const HOP: usize = 480;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DspError {
     BadFrameLength { got: usize },
     Model(String),

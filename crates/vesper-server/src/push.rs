@@ -1039,7 +1039,7 @@ mod tests {
         ];
         // a sends; b has a tab open; c, and the moderator who sees every room, get it.
         let got = recipients(&users, &room, &a.user_id, |id| id == b.user_id);
-        assert_eq!(got, [c.user_id.clone(), m.user_id.clone()]);
+        assert_eq!(got, [c.user_id, m.user_id]);
         let open = RoomInfo {
             restricted: false,
             members: vec![],

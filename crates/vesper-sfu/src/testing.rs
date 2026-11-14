@@ -305,7 +305,7 @@ impl State {
                         let track = self.remote_tracks.iter().rev().find(|(m, _)| *m == d.mid);
                         match track {
                             Some((_, MediaKind::Video)) => {
-                                self.received_video.push(d.data.to_vec())
+                                self.received_video.push(d.data.to_vec());
                             }
                             _ => self.received.push(d.data.to_vec()),
                         }

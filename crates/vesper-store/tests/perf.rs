@@ -14,7 +14,7 @@ const WORDS: &[&str] = &[
 ];
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
+#[ignore = "a timing run, by hand in release, see the file header"]
 async fn perf_100k_messages() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("v.db");

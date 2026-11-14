@@ -67,7 +67,7 @@ impl Sfu {
             .name("vesper-sfu".into())
             .spawn(move || {
                 let _guard = guard; // dropped on return and on panic unwind
-                room::run(socket, rx, cfg)
+                room::run(socket, rx, cfg);
             })?;
         Ok(SfuHandle {
             tx,

@@ -333,31 +333,14 @@ mod tests {
             frame_ms: 10,
             ..OpusCfg::default()
         };
-        let clean = roundtrip(
-            &x,
-            &OpusCfg {
-                loss: 0.0,
-                ..base.clone()
-            },
-            1,
-        )
-        .unwrap()
-        .0;
+        let clean = roundtrip(&x, &OpusCfg { loss: 0.0, ..base }, 1).unwrap().0;
         assert_eq!(clean.len(), x.len());
         let s0 = si_sdr(&clean, &x);
         assert!(
             si_sdr(&clean[1..], &x[..x.len() - 1]) < s0,
             "10 ms output misaligned"
         );
-        let (red, lost) = roundtrip(
-            &x,
-            &OpusCfg {
-                red: true,
-                ..base.clone()
-            },
-            1,
-        )
-        .unwrap();
+        let (red, lost) = roundtrip(&x, &OpusCfg { red: true, ..base }, 1).unwrap();
         assert!(lost > 0);
         let fec = roundtrip(&x, &base, 1).unwrap().0;
         assert!(

@@ -241,7 +241,12 @@ pub async fn serve(
     api_calls::spawn_prune(state.clone());
     match cfg.public_host.clone() {
         Some(host) => {
-            public_addr::spawn_refresh(sfu.clone(), host, cfg.udp_port_public, public_addr::REFRESH)
+            public_addr::spawn_refresh(
+                sfu.clone(),
+                host,
+                cfg.udp_port_public,
+                public_addr::REFRESH,
+            );
         }
         None => {
             let local = sfu.local_addr();
