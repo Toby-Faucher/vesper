@@ -1,0 +1,4 @@
+# audiopus_sys 0.2.2 builds its bundled Opus with a CMakeLists.txt that asks for a CMake older than 3.5, which CMake 4
+# refuses. This tells CMake to configure it anyway (Windows builds Opus from source; Linux links the system libopus).
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

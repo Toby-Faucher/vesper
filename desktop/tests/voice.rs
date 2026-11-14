@@ -225,7 +225,13 @@ async fn force_mute_a_lost_socket_and_another_device() {
     )
     .await;
     assert_eq!(a.model.call.error, CALL_ENDED);
-    assert!(b.model.state.voice.iter().any(|p| p.user_id == ann));
+    // The old session's leave and the new one's join reach bob as two messages: wait for the join.
+    until_all(
+        &mut [&mut a, &mut b, &mut other],
+        "bob sees ann in the call again",
+        |c| c[1].model.state.voice.iter().any(|p| p.user_id == ann),
+    )
+    .await;
 }
 
 /// DeepFilterNet chosen, but this test server has no `/dsp/model.tar.gz`: the call goes on with the noise gate, says
