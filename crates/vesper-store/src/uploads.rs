@@ -98,4 +98,26 @@ impl Store {
         .fetch_all(&self.pool)
         .await?)
     }
+
+    /// Ids of uploads stored as `application/octet-stream`, the type of anything not sniffed.
+    pub async fn octet_uploads(&self) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT id FROM uploads WHERE mime = 'application/octet-stream' ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Sets the type of an upload that is still `application/octet-stream`. Returns whether a row
+    /// changed: a typed row is never retyped.
+    pub async fn retype_upload(&self, id: &str, mime: &str) -> Result<bool> {
+        let r = sqlx::query(
+            "UPDATE uploads SET mime = ?2 WHERE id = ?1 AND mime = 'application/octet-stream'",
+        )
+        .bind(id)
+        .bind(mime)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() == 1)
+    }
 }

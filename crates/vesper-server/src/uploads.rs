@@ -334,6 +334,48 @@ pub fn spawn_sweep(st: AppState) {
     });
 }
 
+/// Gives uploads stored as `application/octet-stream` the image or media type `sniff` now finds in
+/// their first bytes, so files kept before the media sniffers (v1.8.0) play inline. A missing or
+/// unreadable file is skipped; a row with any other type is never changed. Returns how many changed.
+pub async fn retype_octet(st: &AppState) -> Result<usize, StoreError> {
+    use tokio::io::AsyncReadExt;
+    let mut n = 0;
+    for id in st.store.octet_uploads().await? {
+        let Some(p) = upload_path(&st.cfg.data_dir, &id) else {
+            continue;
+        };
+        let mut head = Vec::with_capacity(16);
+        let read = match tokio::fs::File::open(&p).await {
+            Ok(f) => f.take(16).read_to_end(&mut head).await.map(drop),
+            Err(e) => Err(e),
+        };
+        match read {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                tracing::warn!("upload retype: {}: {e}", p.display());
+                continue;
+            }
+        }
+        if let Some(mime) = sniff(&head)
+            && st.store.retype_upload(&id, mime).await?
+        {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// Runs `retype_octet` once, in the background so start is not held up.
+pub fn spawn_retype(st: AppState) {
+    tokio::spawn(async move {
+        match retype_octet(&st).await {
+            Ok(n) => tracing::info!("gave {n} old uploads an image or media type"),
+            Err(e) => tracing::error!("upload retype: {e}"),
+        }
+    });
+}
+
 #[derive(Deserialize)]
 struct NameQuery {
     name: Option<String>,

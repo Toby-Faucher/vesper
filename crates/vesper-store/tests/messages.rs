@@ -568,6 +568,32 @@ async fn upload_rows_sum_sweep_and_skip_attached() {
     assert!(s.upload(&attached).await.unwrap().message_id.is_some());
 }
 
+#[tokio::test]
+async fn octet_uploads_can_be_retyped_once() {
+    let (_tmp, s) = open().await;
+    let a = user(&s, "alice").await;
+    let room = general(&s).await;
+    let (octet, png) = ("a".repeat(32), "b".repeat(32));
+    upload(&s, &octet, room, &a, "application/octet-stream").await;
+    upload(&s, &png, room, &a, "image/png").await;
+    assert_eq!(
+        s.octet_uploads().await.unwrap(),
+        std::slice::from_ref(&octet)
+    );
+    // A typed row is never changed.
+    assert!(!s.retype_upload(&png, "audio/mpeg").await.unwrap());
+    assert_eq!(s.upload(&png).await.unwrap().mime, "image/png");
+    assert!(s.retype_upload(&octet, "audio/mpeg").await.unwrap());
+    assert!(!s.retype_upload(&octet, "video/mp4").await.unwrap());
+    assert_eq!(s.upload(&octet).await.unwrap().mime, "audio/mpeg");
+    assert!(s.octet_uploads().await.unwrap().is_empty());
+    assert!(
+        !s.retype_upload(&"c".repeat(32), "audio/mpeg")
+            .await
+            .unwrap()
+    );
+}
+
 /// Every change raises `updated_at`, also when the clock stands still or goes back, and the
 /// stored copy (history) carries the same stamp as the one the change returned.
 #[tokio::test]

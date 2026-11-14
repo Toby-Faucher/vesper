@@ -463,7 +463,9 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
   viewer (`ImageViewer.svelte`, a lazy chunk): one image or video at fit size, the video with the browser's controls and
   autoplay, and Left and Right through the images and videos of the loaded part of the room. Opening it pauses the inline
   videos. Audio plays inline only. Everything else, SVG and HTML included, is `application/octet-stream` with
-  `Content-Disposition: attachment`. An upload stored before v1.8.0 keeps the type it got then.
+  `Content-Disposition: attachment`. At start, in the background, every upload stored as `application/octet-stream` is
+  sniffed again (`retype_octet`) and gets the image or media type its first bytes show, so files kept before v1.8.0 play inline.
+  A missing file is skipped and a row with any other type is never changed. Tests: `tests/uploads.rs` `old_octet_upload_is_retyped`.
 - **Name.** Display text only: control, bidi and hidden format characters dropped, `/` and `\` turned into `_`, at most 200
   characters, `file` when empty. `Content-Disposition` carries an ASCII `filename` and the exact name as `filename*` (RFC 6266 and
   5987), so a name can not add a header.

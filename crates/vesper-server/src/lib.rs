@@ -238,6 +238,7 @@ pub async fn serve(
     STARTED.get_or_init(std::time::Instant::now);
     uploads::clean_tmp(&cfg.data_dir)?;
     uploads::spawn_sweep(state.clone());
+    uploads::spawn_retype(state.clone());
     api_calls::spawn_prune(state.clone());
     match cfg.public_host.clone() {
         Some(host) => {

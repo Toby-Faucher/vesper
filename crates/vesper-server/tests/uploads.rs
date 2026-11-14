@@ -325,6 +325,50 @@ async fn media_is_inline() {
     }
 }
 
+/// An upload kept before the media sniffers is octet-stream. At start it gets the type its bytes
+/// show and is then served inline; a row whose file is gone is left as it was.
+#[tokio::test]
+async fn old_octet_upload_is_retyped() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let room = general(&server).await;
+    let row = |id: &str| vesper_store::UploadRow {
+        id: id.into(),
+        room_id: room,
+        uploader_id: alice.user.user_id.clone(),
+        message_id: None,
+        name: "song.bin".into(),
+        mime: "application/octet-stream".into(),
+        size: 72,
+        created_at: now_ms(),
+    };
+    let (mp3, gone, zip) = ("ab".repeat(16), "cd".repeat(16), "ef".repeat(16));
+    for (id, bytes) in [(&mp3, &b"ID3\x04\0\0\0\0"[..]), (&zip, b"PK\x03\x04")] {
+        server.state.store.insert_upload(&row(id)).await.unwrap();
+        let path = file_of(&server, id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, [bytes, &[0u8; 64][..]].concat()).unwrap();
+    }
+    server.state.store.insert_upload(&row(&gone)).await.unwrap();
+    assert_eq!(uploads::retype_octet(&server.state).await.unwrap(), 1);
+    let store = &server.state.store;
+    assert_eq!(store.upload(&mp3).await.unwrap().mime, "audio/mpeg");
+    assert_eq!(
+        store.upload(&zip).await.unwrap().mime,
+        "application/octet-stream"
+    );
+    assert_eq!(
+        store.upload(&gone).await.unwrap().mime,
+        "application/octet-stream"
+    );
+    let (status, headers, _) = download(&server, &mp3, &alice).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(h(&headers, "content-type"), "audio/mpeg");
+    assert!(h(&headers, "content-disposition").starts_with("inline;"));
+    // Run again: nothing left to change.
+    assert_eq!(uploads::retype_octet(&server.state).await.unwrap(), 0);
+}
+
 #[tokio::test]
 async fn file_name_cannot_inject_headers() {
     let server = TestServer::new().await;
