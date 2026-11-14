@@ -78,6 +78,16 @@ The link is printed once and never logged; the server keeps only a hash of it.
 For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000` and
 `VESPER_PUBLIC_HOST=<address they can reach>`, and put HTTPS in front (their mic needs it). See [deploy.md](deploy.md).
 
+## Desktop client (v2, in progress)
+
+`desktop/` is the GPUI desktop client, a Cargo workspace of its own with its own `Cargo.lock`
+([ADR 0010](decisions/0010-gpui-desktop-client.md), [design](superpowers/specs/2026-11-14-desktop-client-design.md)).
+
+- Build: `cd desktop && ../scripts/capped.sh cargo build`. Run: `cargo run` there, on a machine with a display.
+- Linux needs the X11, Wayland, Vulkan, fontconfig and ALSA development headers (the package list is in the `desktop` CI job).
+- Check: `scripts/check-desktop.sh` (fmt, clippy `-D warnings`, tests). It is not part of `scripts/check.sh`; CI runs it as its own job.
+- Its lockfile pins `libc` 0.2.189 and `mio` 1.2.4 on purpose (see the ADR). Do not `cargo update` it as a whole either.
+
 ## Check before a PR
 
 ```bash

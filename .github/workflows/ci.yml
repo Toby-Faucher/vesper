@@ -73,6 +73,22 @@ jobs:
       # bindings reruns the vesper-protocol export tests and diffs web/src/lib/gen against the commit.
       - run: scripts/check.sh test bindings
 
+  # The v2 desktop client (desktop/, its own workspace). GPUI needs the X11, Wayland, Vulkan and font headers.
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - run: >-
+          sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+          libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libssl-dev pkg-config
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: scripts/check-desktop.sh
+
   supply-chain:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

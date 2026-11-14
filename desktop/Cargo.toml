@@ -1,0 +1,17 @@
+# The v2 desktop client (GPUI). Its own workspace and lockfile, so GPUI's dependency tree never moves the server's
+# pins (tract, sqlx, time). Shares wire types with the server through the vesper-protocol path dependency.
+[workspace]
+
+[package]
+name = "vesper-desktop"
+version = "2.0.0-alpha.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+gpui = "=0.2.2"
+gpui-component = "=0.5.1"
+
+[lints.rust]
+unsafe_code = "forbid"
