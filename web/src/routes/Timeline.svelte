@@ -15,12 +15,13 @@
   import { UI_MESSAGES } from '../lib/ui/messages';
   import { arrivals, firstUnreadInPage, follows, plain, rows } from '../lib/ui/timeline';
   import { lazy } from '../lib/ui/lazy';
+  import { viewable } from '../lib/ui/attachments';
   import type { Attachment } from '../lib/gen/Attachment';
   import Button from '../lib/ui/c/Button.svelte';
   import EmptyState from '../lib/ui/c/EmptyState.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
 
-  // The image viewer loads on the first image click.
+  // The viewer loads on the first image click or video open.
   const viewerChunk = lazy(() => import('./ImageViewer.svelte'));
 
   let {
@@ -303,16 +304,17 @@
     noteTimer = setTimeout(() => (note = ''), 8000);
   }
 
-  // The viewer walks the images of the loaded slice, oldest first.
-  let viewer = $state<{ images: Attachment[]; at: number; chunk: ReturnType<typeof viewerChunk> } | null>(null);
+  // The viewer walks the images and videos of the loaded slice, oldest first. Inline videos pause: the viewer plays its own.
+  let viewer = $state<{ items: Attachment[]; at: number; chunk: ReturnType<typeof viewerChunk> } | null>(null);
   function view(id: string) {
-    const images = (log?.messages ?? []).filter((m) => !m.deleted).flatMap((m) => m.attachments.filter((a) => a.kind === 'image'));
+    const items = viewable(log?.messages ?? []);
+    list?.querySelectorAll('video').forEach((v) => v.pause());
     const chunk = viewerChunk();
     chunk.catch(() => {
       viewer = null;
       say(UI_MESSAGES.viewerFailed);
     });
-    viewer = { images, at: Math.max(0, images.findIndex((a) => a.id === id)), chunk };
+    viewer = { items, at: Math.max(0, items.findIndex((a) => a.id === id)), chunk };
   }
 
   function showFirst() {
@@ -365,9 +367,9 @@
   {#if !stuck || log?.moreAfter}
     <button type="button" class="pill bottom" aria-label="Jump to latest" onclick={toLatest} in:motion={'rise'} out:motion={'rise'}><Icon d={I.arrowDown} />Jump to latest</button>
   {/if}
-  {#if viewer?.images.length}
+  {#if viewer?.items.length}
     {#await viewer.chunk then V}
-      <V.default images={viewer.images} bind:at={viewer.at} onclose={() => (viewer = null)} />
+      <V.default items={viewer.items} bind:at={viewer.at} onclose={() => (viewer = null)} />
     {/await}
   {/if}
   <p role="status">{#if note}<span class="pill note">{note}</span>{/if}</p>

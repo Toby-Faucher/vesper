@@ -1,4 +1,11 @@
 // Helpers for files in messages and in the upload tray. Names and types come from users: shown as text only.
+import type { Attachment } from '../gen/Attachment';
+import type { Message } from '../gen/Message';
+import type { IconPath } from './icons';
+
+// The video card's open button. Here, not in icons.ts, so it stays in the lazy chat chunk (icons.ts is in the first load).
+// Lucide `maximize` (lucide-static 0.460.0, ISC licence, see icons.ts).
+export const expandIcon = 'M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3' as IconPath;
 
 /** The largest box an image takes in the timeline. Space for it is kept before the image loads. */
 export const BOX = { w: 360, h: 280 };
@@ -83,3 +90,7 @@ export function pastedName(mime: string, now: Date, taken: ReadonlySet<string>):
   for (let n = 2; taken.has(name); n++) name = `${base} (${n}).${ext}`;
   return name;
 }
+
+/** What the viewer walks: the images and videos of `messages` in order, deleted messages left out. Audio stays inline. */
+export const viewable = (messages: Message[]): Attachment[] =>
+  messages.filter((m) => !m.deleted).flatMap((m) => m.attachments.filter((a) => a.kind === 'image' || a.kind === 'video'));

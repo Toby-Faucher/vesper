@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { BOX, fileSize, fit, isGenericPaste, pastedName, typeLabel, viewCase } from './attachments';
+import type { Attachment } from '../gen/Attachment';
+import type { Message } from '../gen/Message';
+import { BOX, fileSize, fit, isGenericPaste, pastedName, typeLabel, viewable, viewCase } from './attachments';
 
 describe('attachments', () => {
   it('fits an image into the box without scaling it up', () => {
@@ -46,5 +48,12 @@ describe('attachments', () => {
     expect(isGenericPaste('Image.JPG')).toBe(true);
     expect(isGenericPaste('holiday.png')).toBe(false);
     expect(isGenericPaste('my image.png')).toBe(false);
+  });
+
+  it('the viewer walks images and videos in order, not audio, files or deleted messages', () => {
+    const a = (id: string, kind: Attachment['kind']) => ({ id, name: id, mime: '', size: 1, kind });
+    const m = (attachments: Attachment[], deleted = false) => ({ attachments, deleted }) as Message;
+    const list = viewable([m([a('i1', 'image'), a('s1', 'audio')]), m([a('v1', 'video')], true), m([a('f1', 'file'), a('v2', 'video'), a('i2', 'image')])]);
+    expect(list.map((x) => x.id)).toEqual(['i1', 'v2', 'i2']);
   });
 });

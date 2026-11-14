@@ -3,14 +3,16 @@
   // the list; once loaded the box takes the image's own shape, and keepView holds the reader's place. A click opens the
   // viewer. Other files are a card with a Download link. Audio and video are the same card with the browser's player on
   // top, in a fixed box (a 16:9 frame or one control bar) so a late load never moves the list; a file the browser cannot
-  // play (a codec it lacks) drops the player and leaves the card. Every file comes from the same-origin route by id; the
+  // play (a codec it lacks) drops the player and leaves the card. A playable video's card also has a button that opens it in
+  // the viewer. Every file comes from the same-origin route by id; the
   // name is text only (the alt, the label, the title, the download name) and never part of a URL.
   import { tick } from 'svelte';
   import type { Attachment } from '../lib/gen/Attachment';
   import * as I from '../lib/ui/icons';
-  import { BOX, fileSize, fit, keepView, typeLabel } from '../lib/ui/attachments';
+  import { BOX, expandIcon, fileSize, fit, keepView, typeLabel } from '../lib/ui/attachments';
   import { UI_MESSAGES } from '../lib/ui/messages';
   import Icon from '../lib/ui/c/Icon.svelte';
+  import IconButton from '../lib/ui/c/IconButton.svelte';
 
   let { list, onview }: { list: Attachment[]; onview: (id: string) => void } = $props();
 
@@ -62,6 +64,9 @@
         <p class="truncate text-fg" title={a.name}>{a.name}</p>
         <p class="meta">{[typeLabel(a.mime, a.name), fileSize(a.size)].filter(Boolean).join(', ')}</p>
       </div>
+      {#if media === 'video'}
+        <IconButton icon={expandIcon} label="Open video {a.name}" onclick={(e) => { e.currentTarget.focus(); onview(a.id); }} />
+      {/if}
       <a class="mini-act" href="/api/uploads/{a.id}" download={a.name} aria-label="Download {a.name}"><Icon d={I.download} size={16} />Download</a>
     </div>
   {/if}

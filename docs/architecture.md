@@ -459,7 +459,10 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
   brands are not media, any other brand is `video/mp4`), EBML (`video/webm`), mp3 (`ID3` or an MPEG audio frame header), `OggS`
   (`audio/ogg`), `RIFF....WAVE` (`audio/wav`) and `fLaC` (`audio/flac`). `Attachment.kind` is `image`, `audio`, `video` or `file`,
   and the first three are served inline with their type. The timeline plays audio and video with the browser's own player and
-  shows the file card if the browser cannot play it. Everything else, SVG and HTML included, is `application/octet-stream` with
+  shows the file card if the browser cannot play it. A click on an image, or the open button on a video's card, opens the
+  viewer (`ImageViewer.svelte`, a lazy chunk): one image or video at fit size, the video with the browser's controls and
+  autoplay, and Left and Right through the images and videos of the loaded part of the room. Opening it pauses the inline
+  videos. Audio plays inline only. Everything else, SVG and HTML included, is `application/octet-stream` with
   `Content-Disposition: attachment`. An upload stored before v1.8.0 keeps the type it got then.
 - **Name.** Display text only: control, bidi and hidden format characters dropped, `/` and `\` turned into `_`, at most 200
   characters, `file` when empty. `Content-Disposition` carries an ASCII `filename` and the exact name as `filename*` (RFC 6266 and
