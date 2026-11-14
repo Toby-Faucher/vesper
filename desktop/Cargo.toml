@@ -52,5 +52,9 @@ vesper-store = { path = "../crates/vesper-store" }
 
 # tract 0.21.4 trips a debug-only assertion on the DeepFilterNet3 model ("duplicate name /convt3/Conv.bias"); the
 # same override as the root Cargo.toml. Remove both once tract is upgraded past the bug.
+[profile.release]
+lto = "thin"
+strip = true
+
 [profile.dev.package.tract-core]
 debug-assertions = false

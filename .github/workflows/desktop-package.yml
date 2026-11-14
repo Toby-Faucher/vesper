@@ -1,0 +1,44 @@
+name: desktop-package
+# A Windows build of the desktop client that friends can download: a release Vesper.exe in a zip, kept as a
+# workflow artifact for 30 days. Runs on pushes to the v2 branch and on desktop tags, or by hand.
+on:
+  push:
+    branches: [v2/desktop]
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: desktop
+          key: release
+      - run: cargo build --release --locked
+        working-directory: desktop
+      - name: Package
+        run: |
+          mkdir -p dist/Vesper
+          cp desktop/target/release/vesper-desktop.exe dist/Vesper/Vesper.exe
+          cp desktop/package/README.txt dist/Vesper/README.txt
+          cp LICENSE dist/Vesper/LICENSE.txt
+          ls -la dist/Vesper
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: vesper-desktop-windows-x64-${{ github.sha }}
+          path: dist/Vesper
+          retention-days: 30

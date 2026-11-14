@@ -59,7 +59,7 @@ against a real `vesper-server` started inside the tests. Anything that needs a s
 | D3 | Voice: join and leave, hear others, be heard, mute and deafen, per-person volume, who is speaking | Done 2026-11-14. Tests: engines exchange Opus through a real SFU and hear each other's tones |
 | D4 | DeepFilterNet on the mic, global push to talk, tray icon, start with the computer, a Settings view | Done 2026-11-14. Tests: the real model takes noise out of a speech-like fixture (when the model is on disk), a slow fake falls back, a bad checksum is refused, push to talk with a fake key source |
 | D5 | Watch a screen share (VP8 decode), share notices | tests decode the SFU's forwarded VP8 |
-| D6 | Packages: Linux first, then Windows and macOS through CI | CI builds them; running them is not verified here |
+| D6 | Packages. The friends use Windows **[Toby, 2026-11-14]**, so Windows comes first | **D6a done**: `desktop-package.yml` builds a release `Vesper.exe` and uploads a zip (exe, README, licence) as a 30-day artifact on every push to `v2/desktop`. Not signed, so SmartScreen warns. Not verified: running it. Still to do: an installer, signing (Toby's call), Linux and macOS packages |
 | Later | Uploads, reactions, edits, search, settings parity, sharing a screen, echo cancellation | |
 
 ## D1 and D2: what was built and how it was checked

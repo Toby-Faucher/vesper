@@ -91,6 +91,8 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 - Windows is the main target (the friends use it). CI's `desktop-windows` job builds the app and runs the unit and headless GPUI tests
   on Windows; the real-server tests in `desktop/tests/` are Unix only, because the server crates use Unix file permissions.
   Running the app on Windows is not verified by CI.
+- A Windows build to try: the `desktop-package` workflow uploads `vesper-desktop-windows-x64-<commit>` (a zip with `Vesper.exe`) for every
+  push to `v2/desktop`. Download it from the workflow run's Artifacts. `desktop/package/README.txt` is what the zip's README says.
   The tests start a real `vesper-server` in process (a path dev-dependency, so the first build compiles the server too) on a free
   loopback port over plain http, and draw the views in GPUI's headless test window. No display, keyring or network is needed.
   The voice tests (`desktop/tests/voice.rs`) run whole calls through that server's SFU with a sine for a microphone and a
