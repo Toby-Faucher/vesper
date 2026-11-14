@@ -165,6 +165,8 @@ pub enum ServerMsg {
     ForceMuted {
         muted: bool,
     },
+    /// To a sharer, after its own `PeerShare` with no share: a moderator stopped the share.
+    ShareStopped,
     /// A new message in a room this user can see.
     MessageNew {
         message: Message,

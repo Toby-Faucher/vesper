@@ -15,6 +15,15 @@ export function whatsNew(seen: string | null, current: string, notes: readonly N
 }
 
 export const RELEASE_NOTES: readonly Note[] = [
+  {
+    version: '1.8.3',
+    items: [
+      'A sound plays when someone joins or leaves your call.',
+      'No sound? Turn it on in Settings, Notifications.',
+      'Joining, leaving and losing a call sound louder, so you hear them.',
+      'Moderators can stop a screen share from the person card.',
+    ],
+  },
   { version: '1.8.2', items: ["You'll see what's new here after each update."] },
   {
     version: '1.8.1',

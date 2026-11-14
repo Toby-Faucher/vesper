@@ -728,3 +728,26 @@ async fn share_over_the_ceiling_is_cut() {
     );
     assert_eq!(a.share_cuts(), 1);
 }
+
+/// A share the server ends (the sharer's stop or a moderator's) stops the video to watchers.
+#[tokio::test(flavor = "multi_thread")]
+async fn sharing_off_stops_video() {
+    let t = Ctx::loopback();
+    let a = t.join_video("r", "a").await;
+    let b = t.join_video("r", "b").await;
+    t.ready(&a, 2).await;
+    t.ready(&b, 2).await;
+    t.h.set_sharing("a", true);
+    t.h.watch("b", "a", true);
+    a.client.send_video(30, 1200);
+    t.wait_until("b got video", CONNECT, || {
+        b.client.received_video().len() >= 25
+    })
+    .await;
+    t.h.set_sharing("a", false);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let got = b.client.received_video().len();
+    a.client.send_video(60, 1200); // 1 s at 60 frames a second
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(b.client.received_video().len(), got, "b still gets video");
+}

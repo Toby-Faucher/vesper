@@ -47,7 +47,7 @@ They have far more bandwidth than that stream used. Toby's connection (which als
 - Sharing part of a screen.
 - Sizes above the sharer's screen size, and simulcast (a second, smaller copy of each share).
 - Phones and mobile layouts.
-- A moderator button to stop someone's share.
+- A moderator button to stop someone's share. (Built later; see "Built, and where it differs".)
 - Limits for large calls. The group is four people. See "Large calls" below.
 - Watch together. It is parked as its own project. See "Parked".
 
@@ -309,6 +309,7 @@ Built in `ccaef6f` through `0d6dc5d` on `feat/screen-share`. The differences, al
 - **The chat drawer pushes screens aside** instead of covering them, which the mockup did.
 - **Tile chips are opaque.** The mockup used an 84% mix.
 - **The first-load JS ratchet was raised twice**: 58.9 to 59.8 kB, then to 60.4 kB.
+- **A moderator can stop a share** (asked for by Toby after the build; it was a non-goal of the first version). `POST /api/users/{id}/stop-share`, from "Stop share" in the person card, ends the share the same way `share_stop` does and then sends the sharer `share_stopped`, which shows "A moderator stopped your screen share." It uses force-mute's checks: moderator or owner, on a lower role, without being in the call. Nothing holds afterwards, so the sharer may share again. Verified by `moderator_stops_a_share` (server), `sharing_off_stops_video` (SFU) and a web unit test; not verified in a real browser.
 
 ### What was checked, and how
 

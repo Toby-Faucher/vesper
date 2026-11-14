@@ -390,7 +390,7 @@ try {
     await b.getByRole('status').filter({ hasText: 'Allowed' }).waitFor();
     await b.getByRole('button', { name: 'Send a test notification' }).waitFor();
     assert.equal(await b.evaluate(() => window.__asked), 0, 'permission asked on load');
-    assert.ok(!(await b.getByRole('switch', { name: 'Others joining and leaving' }).isChecked()), 'join and leave sounds should be off by default');
+    assert.ok(await b.getByRole('switch', { name: 'Others joining and leaving' }).isChecked(), 'join and leave sounds should be on by default (v1.8.3)');
     assert.ok(await b.getByRole('switch', { name: 'Mute and deafen' }).isChecked(), 'mute and deafen sounds should be on by default');
     await sw.uncheck();
     assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.notify')).mentions), false);

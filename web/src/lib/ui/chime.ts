@@ -18,12 +18,14 @@ export const TONES: Record<Cue, Tone> = {
   mute: { hz: [1318.5, 880], step: 0.06, wave: 'sine' },
   deafen: { hz: [440, 440], step: 0.06, wave: 'sine', gap: 0.03 }, // A4 twice
   undeafen: { hz: [659.25, 659.25], step: 0.06, wave: 'sine', gap: 0.03 }, // E5 twice
-  connect: { hz: [587.33, 880], step: 0.11, wave: 'triangle' }, // D5 A5
-  disconnect: { hz: [880, 587.33], step: 0.11, wave: 'triangle' },
+  // My own call starting or ending: as loud as the two above. At 1x the leave was lost under game audio, and the
+  // mic closing at the same moment can switch a headset's output.
+  connect: { hz: [587.33, 880], step: 0.12, wave: 'triangle', gain: 2.5 }, // D5 A5
+  disconnect: { hz: [880, 587.33], step: 0.12, wave: 'triangle', gain: 2.5 },
   ring: { hz: [659.25, 523.25, 659.25, 523.25], step: 0.16, wave: 'triangle', gap: 0.04 }, // E5 C5 twice, an incoming DM call
   'share-start': { hz: [698.46, 1046.5], step: 0.07, wave: 'triangle' }, // F5 C6
   'share-stop': { hz: [1046.5, 698.46], step: 0.07, wave: 'triangle' },
-  lost: { hz: [220, 164.81], step: 0.12, wave: 'triangle' }, // A3 E3
+  lost: { hz: [220, 164.81], step: 0.12, wave: 'triangle', gain: 2.5 }, // A3 E3
 };
 /** Peak gain at volume 100; the default 50 gives 0.08 (about -22 dBFS). */
 export const MAX_GAIN = 0.16;
