@@ -66,7 +66,7 @@
       busy = '';
     }
   }
-  async function act(what: 'force-mute' | 'kick' | 'disconnect', body?: ForceMute) {
+  async function act(what: 'force-mute' | 'stop-share' | 'kick' | 'disconnect', body?: ForceMute) {
     busy = what;
     error = '';
     try {
@@ -81,7 +81,7 @@
   }
 </script>
 
-{#snippet action(icon: I.IconPath, text: string, what: 'force-mute' | 'kick' | 'disconnect', run: () => void, danger = false)}
+{#snippet action(icon: I.IconPath, text: string, what: 'force-mute' | 'stop-share' | 'kick' | 'disconnect', run: () => void, danger = false)}
   <!-- Busy ignores clicks but stays focusable (not disabled), so focus is not dropped while a request runs. -->
   <button type="button" class="act" class:danger aria-busy={busy === what || undefined} aria-disabled={!!busy || undefined} onclick={() => busy || run()}>
     <Icon d={icon} /><span class="truncate">{text}</span>
@@ -131,6 +131,7 @@
         {#if peer}
           {@render action(peer.force_muted ? I.mic : I.micOff, peer.force_muted ? 'Allow to speak' : 'Mute for everyone', 'force-mute',
             () => act('force-mute', { muted: !peer.force_muted }))}
+          {#if peer.share}{@render action(I.monitor, 'Stop share', 'stop-share', () => act('stop-share'))}{/if}
           {@render action(I.phoneOff, 'Remove from voice', 'kick', () => act('kick'))}
         {/if}
         {@render action(I.logOut, 'Disconnect', 'disconnect', () => (confirming = true), true)}

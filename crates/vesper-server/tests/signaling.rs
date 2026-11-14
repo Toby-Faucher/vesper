@@ -2214,6 +2214,55 @@ async fn share_stop_reaches_the_room() {
     );
 }
 
+/// A moderator ends a share like the sharer's own stop, and the sharer hears why. A member may
+/// not; a stopped sharer may share again. The SFU side is `sharing_off_stops_video`.
+#[tokio::test]
+async fn moderator_stops_a_share() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let moder = server.account("moder", Role::Moderator).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (mut a, a_id, _) = Conn::joined(&server, &alice, room).await;
+    let (mut b, _, _) = Conn::joined(&server, &bob, room).await;
+    share_start(&a, 30, 2000);
+    b.until("PeerShare", is_share).await;
+    a.until("Watchers", is_watchers).await;
+    let path = format!("/api/users/{a_id}/stop-share");
+    let sharing = || {
+        server
+            .state
+            .voice
+            .peers(|_| true)
+            .iter()
+            .any(|p| p.share.is_some())
+    };
+
+    let (status, _, _) = server.call(post(&path, json!({}), &bob)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a member may not");
+    assert!(sharing());
+
+    let (status, _, _) = server.call(post(&path, json!({}), &moder)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let gone = ServerMsg::PeerShare {
+        user_id: a_id.clone(),
+        share: None,
+    };
+    assert_eq!(b.until("PeerShare", is_share).await, gone);
+    assert_eq!(a.until("PeerShare", is_share).await, gone);
+    assert_eq!(a.next().await, ServerMsg::ShareStopped);
+    assert!(!sharing());
+    // Nothing to stop now.
+    let (status, _, _) = server.call(post(&path, json!({}), &moder)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    share_start(&a, 30, 2000);
+    assert!(
+        b.until("PeerShare", is_share).await != gone,
+        "may share again"
+    );
+}
+
 #[tokio::test]
 async fn share_in_a_dm_is_refused() {
     let server = TestServer::new().await;

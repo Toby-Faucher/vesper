@@ -590,6 +590,17 @@ describe('screen share', () => {
     expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
   });
 
+  it('a_moderator_stop_ends_the_share_with_a_notice', async () => {
+    const { track } = await sharing();
+    sig.emit({ type: 'peer_share', user_id: me, share: null });
+    sig.emit({ type: 'share_stopped' });
+    expect(track.stop).toHaveBeenCalled();
+    expect(shares.mine).toBeNull();
+    expect(voice.notice).toBe('A moderator stopped your screen share.');
+    expect(voice.error).toBe('');
+    expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]); // no share_stop: the server ended it
+  });
+
   it('rate_limited_just_after_a_cut_says_the_share_was_stopped', async () => {
     const cut = 'Your screen share sent more than 35 Mbps and was stopped.';
     const limited = Object.assign(new Error('Too many tries. Wait a moment and try again.'), { code: 'rate_limited' });

@@ -522,6 +522,7 @@ export async function join(roomId: number): Promise<boolean> {
 const SHARE_FAILED = 'Could not share your screen.';
 const SHARE_CUT = 'Your screen share sent more than 35 Mbps and was stopped.';
 const SHARE_DM = 'Screen share is only in group rooms.';
+const SHARE_STOPPED = 'A moderator stopped your screen share.';
 const MARKER_MS = 3000;
 let cutAt = 0; // when the server last cut my share
 let before: Mine | null | undefined; // my share before my last share_start (null: it started one), for a refusal
@@ -572,6 +573,9 @@ function onShareMsg(m: ServerMsg) {
     void applyMine();
   } else if (m.type === 'peer_share' && m.user_id === voice.userId && !m.share) {
     if (endShare()) cutAt = Date.now(); // the server cut my share; its error says why
+  } else if (m.type === 'share_stopped') {
+    endShare(); // already ended by the peer_share before it
+    showNotice(SHARE_STOPPED);
   } else if (m.type === 'point') {
     const mk = { share: m.user_id, from: m.from, x: m.x, y: m.y, until: Date.now() + MARKER_MS };
     shares.markers = [...shares.markers, mk];
