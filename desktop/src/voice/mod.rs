@@ -1,5 +1,6 @@
 //! Voice: the call engine and the audio around it. One call runs on its own thread (`engine.rs`): a str0m client over
 //! UDP to the server's SFU, Opus both ways, a jitter buffer and decoder per person, and the mix to the speakers.
+//! Watched screen shares decode on a second thread (`video.rs`).
 //!
 //! Signaling is not done here. The engine makes an offer and answers the SFU's offers; the model sends them over the
 //! socket, as the web app's `join.ts` does. Audio comes in through `AudioInput` and goes out through `AudioOutput`, so
@@ -11,12 +12,14 @@ mod engine;
 pub mod jitter;
 pub mod mix;
 pub mod ptt;
+pub mod video;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
 pub use device::{Cpal, Resampler, device_names};
+pub use video::Frame;
 
 use crate::settings::Denoise;
 
@@ -75,6 +78,11 @@ pub enum VoiceCmd {
         user_id: String,
         percent: f32,
     },
+    /// Decode `user_id`'s screen share (sent with the server's `watch`), or stop.
+    Watch {
+        user_id: String,
+        on: bool,
+    },
     Stop,
 }
 
@@ -91,6 +99,10 @@ pub enum VoiceEvent {
     Speaking { me: bool, peers: Vec<String> },
     /// What the noise filter is doing, for the call bar. Sent when it changes.
     Filter(String),
+    /// The newest picture of a watched screen share.
+    Frame(Frame),
+    /// A watched share loses packets or frames, or stopped doing so. Sent when it changes.
+    Struggling { user_id: String, on: bool },
     /// The call cannot go on. The text is for the user.
     Failed(String),
 }
@@ -106,12 +118,16 @@ impl Call {
         devices: Arc<dyn AudioDevices>,
         setup: Setup,
         denoiser: Receiver<denoise::Loaded>,
-        emit: impl Fn(VoiceEvent) + Send + 'static,
+        emit: impl Fn(VoiceEvent) + Send + Sync + 'static,
     ) -> Call {
         let (tx, rx) = std::sync::mpsc::channel();
+        let emit = Arc::new(emit);
+        let pictures = emit.clone();
+        // Screen shares decode on their own thread, so a big frame never delays the 20 ms audio turn.
+        let video = video::Video::start(move |f| pictures(VoiceEvent::Frame(f)));
         std::thread::Builder::new()
             .name("vesper-voice".into())
-            .spawn(move || engine::run(&*devices, setup, denoiser, rx, &emit))
+            .spawn(move || engine::run(&*devices, setup, denoiser, video, rx, &*emit))
             .expect("the call thread starts");
         Call { tx }
     }

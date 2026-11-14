@@ -263,9 +263,16 @@ impl Client {
 
     /// Applies the events that came, without waiting.
     pub fn pump(&mut self) {
+        self.pump_with(|_| vec![]);
+    }
+
+    /// Like `pump`, and `also` sees each event first; what it returns is sent too. For a test's own media.
+    pub fn pump_with(&mut self, mut also: impl FnMut(&Event) -> Vec<Cmd>) {
         while let Ok(ev) = self.rx.try_recv() {
+            let extra = also(&ev);
             let cmds = self.model.apply(ev);
             self.run(cmds);
+            self.run(extra);
         }
     }
 

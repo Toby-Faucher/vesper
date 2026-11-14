@@ -9809,6 +9809,7 @@ dependencies = [
  "futures-util",
  "gpui",
  "gpui-component",
+ "image",
  "keyring",
  "opus",
  "reqwest",
@@ -9828,6 +9829,8 @@ dependencies = [
  "vesper-server",
  "vesper-sfu",
  "vesper-store",
+ "vp8-decoder",
+ "vp8-encoder",
 ]
 
 [[package]]
@@ -9895,6 +9898,21 @@ dependencies = [
  "serde_json",
  "sqlx",
  "vesper-protocol",
+]
+
+[[package]]
+name = "vp8-decoder"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e0950d7ffa096605272fd9285825cfd82b32cd72c713eb26887217fa9afd8e0"
+
+[[package]]
+name = "vp8-encoder"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "293585438b38a11edc42d7ea23b2e03b1a96a6818d86b0dc373feb083071d424"
+dependencies = [
+ "vp8-decoder",
 ]
 
 [[package]]

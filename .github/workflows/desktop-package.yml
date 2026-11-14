@@ -36,6 +36,7 @@ jobs:
           cp desktop/target/release/vesper-desktop.exe dist/Vesper/Vesper.exe
           cp desktop/package/README.txt dist/Vesper/README.txt
           cp LICENSE dist/Vesper/LICENSE.txt
+          cp desktop/package/THIRD-PARTY.txt dist/Vesper/THIRD-PARTY.txt
           ls -la dist/Vesper
       - uses: actions/upload-artifact@v7.0.2
         with:

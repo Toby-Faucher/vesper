@@ -211,12 +211,11 @@ impl Vesper {
             .filter(|p| Some(p.room_id) == c.room && p.user_id != me)
             .map(|p| {
                 let speaking = c.speaking.contains(&p.user_id);
-                (
-                    p.user_id.clone(),
-                    p.name.clone(),
-                    speaking,
-                    note(p.muted || p.force_muted, p.deafened),
-                )
+                let note = match note(p.muted || p.force_muted, p.deafened) {
+                    "" if p.share.is_some() => "sharing",
+                    n => n,
+                };
+                (p.user_id.clone(), p.name.clone(), speaking, note)
             })
             .collect();
         let people: Vec<Div> = others

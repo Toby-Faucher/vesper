@@ -1,7 +1,7 @@
 //! Everything the app shows, and what it asks the network for. No GPUI here: the views read a `Model` and call its
 //! methods, and the tests drive the same methods against a real server.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use vesper_protocol::{ClientMsg, ErrorCode, ServerMsg};
@@ -9,7 +9,7 @@ use vesper_protocol::{ClientMsg, ErrorCode, ServerMsg};
 use crate::net::{Cmd, Event};
 use crate::settings::Settings;
 use crate::state::{AppState, Chat, RoomLog, merge_latest, merge_older};
-use crate::voice::{Setup, VoiceCmd, VoiceEvent};
+use crate::voice::{Frame, Setup, VoiceCmd, VoiceEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -31,6 +31,19 @@ pub const REJOINING: &str = "Connection lost. You rejoin the call as soon as it 
 pub const CALL_DROPPED: &str = "Disconnected from the server.";
 /// How long a call whose socket dropped waits for it to come back, like the web's `REJOIN_MS`.
 pub const REJOIN_FOR: Duration = Duration::from_secs(60);
+/// A share stops being watched this long after its view went away, like the web's `WATCH_GRACE_MS`, so a quick
+/// look at another room costs no keyframe wait.
+pub const WATCH_GRACE: Duration = Duration::from_secs(10);
+/// The web's text for `share_stopped`. Only a sharer gets it, and the desktop app cannot share yet.
+pub const SHARE_STOPPED: &str = "A moderator stopped your screen share.";
+
+/// Whether the server and the engine have been told to watch one share, like the web's `WatchGate`.
+#[derive(Debug, Default)]
+struct Gate {
+    on: bool,
+    /// When `watch off` goes, once the share is no longer wanted.
+    off_at: Option<Instant>,
+}
 
 /// The server's socket error codes in plain words, as `SIGNAL_MESSAGES` in `web/src/lib/signaling.ts`.
 pub fn signal_text(code: ErrorCode) -> &'static str {
@@ -83,6 +96,19 @@ pub struct Call {
     /// The headphones note is shown.
     pub headphones: bool,
     headphones_seen: bool,
+    /// The screen share I chose to watch. One at a time.
+    pub watching: Option<String>,
+    /// The share view is on screen: the call's room is shown, not Settings. Set by the view.
+    pub share_visible: bool,
+    gates: HashMap<String, Gate>,
+    /// The newest picture of the watched share. The view takes its pixels to draw; the next picture comes after.
+    pub frame: Option<Frame>,
+    /// Pictures of the watched share so far.
+    pub frames: u64,
+    /// Watched shares that lose packets or frames.
+    pub struggling: HashSet<String>,
+    /// Why the watched share went away.
+    pub share_notice: String,
 }
 
 impl Default for Call {
@@ -103,6 +129,13 @@ impl Default for Call {
             filter: String::new(),
             headphones: false,
             headphones_seen: false,
+            watching: None,
+            share_visible: false,
+            gates: HashMap::new(),
+            frame: None,
+            frames: 0,
+            struggling: HashSet::new(),
+            share_notice: String::new(),
         }
     }
 }
@@ -112,16 +145,28 @@ impl Call {
         self.volumes.get(user_id).copied().unwrap_or(100.0)
     }
 
-    /// Back to no call. What lasts across calls stays.
+    /// Back to no call. What lasts across calls stays. The server forgets the watches with the session, so the
+    /// gates go without a `watch off`.
     fn end(&mut self, error: &str) {
         *self = Call {
             id: self.id,
             volumes: std::mem::take(&mut self.volumes),
             headphones: self.headphones,
             headphones_seen: self.headphones_seen,
+            share_visible: self.share_visible,
             error: error.into(),
             ..Call::default()
         };
+    }
+
+    /// The pixels of the newest picture, for the view to draw. Taking them lets the next picture come.
+    pub fn take_frame(&mut self) -> Option<Frame> {
+        self.frame.take()
+    }
+
+    /// When the next `watch off` is due, for the view's timer.
+    pub fn watch_deadline(&self) -> Option<Instant> {
+        self.gates.values().filter_map(|g| g.off_at).min()
     }
 }
 
@@ -333,7 +378,85 @@ impl Model {
             }
         }
         cmds.extend(self.call_msg(&m));
+        if let Some(id) = self.call.watching.clone()
+            && !self.sharers().iter().any(|(s, _)| *s == id)
+        {
+            let c = &mut self.call;
+            c.share_notice = format!("{} stopped sharing.", self.state.name_of(&id));
+            (c.watching, c.frame, c.frames) = (None, None, 0);
+        }
+        cmds.extend(self.sync_watches(Instant::now()));
         cmds.extend(self.maybe_read());
+        cmds
+    }
+
+    /// The others sharing a screen in my call, as (user id, name).
+    pub fn sharers(&self) -> Vec<(String, String)> {
+        let me = self.state.my_id();
+        self.state
+            .voice
+            .iter()
+            .filter(|p| Some(p.room_id) == self.call.room && p.share.is_some() && p.user_id != me)
+            .map(|p| (p.user_id.clone(), p.name.clone()))
+            .collect()
+    }
+
+    /// Watch `user`'s screen share, or stop (`None`). Choosing another share stops the one before.
+    pub fn watch(&mut self, user: Option<String>, now: Instant) -> Vec<Cmd> {
+        let c = &mut self.call;
+        if c.watching != user {
+            (c.watching, c.frame, c.frames) = (user, None, 0);
+            c.share_notice.clear();
+        }
+        self.sync_watches(now)
+    }
+
+    /// The view tells whether the share view is on screen.
+    pub fn set_share_visible(&mut self, visible: bool, now: Instant) -> Vec<Cmd> {
+        if self.call.share_visible == visible {
+            return vec![];
+        }
+        self.call.share_visible = visible;
+        self.sync_watches(now)
+    }
+
+    /// Sends `watch` on or off for each sharer, like the web's `syncWatches`: on as soon as the share is chosen and
+    /// its view is on screen, off only `WATCH_GRACE` after that stops. The engine is told too, so it decodes only
+    /// what is watched. A share that ended keeps its gate, so the off still goes out.
+    pub fn sync_watches(&mut self, now: Instant) -> Vec<Cmd> {
+        let sharing: HashSet<String> = self.sharers().into_iter().map(|(id, _)| id).collect();
+        let c = &mut self.call;
+        let ids: HashSet<String> = sharing.iter().chain(c.gates.keys()).cloned().collect();
+        let mut cmds = vec![];
+        for id in ids {
+            let want = c.phase == Phase::Joined
+                && c.share_visible
+                && c.watching.as_ref() == Some(&id)
+                && sharing.contains(&id);
+            let g = c.gates.entry(id.clone()).or_default();
+            let on = if want && !g.on {
+                true
+            } else if !want && g.on && now >= *g.off_at.get_or_insert(now + WATCH_GRACE) {
+                false
+            } else {
+                if want {
+                    g.off_at = None;
+                } else if !g.on {
+                    c.gates.remove(&id);
+                }
+                continue;
+            };
+            if on {
+                *g = Gate { on, off_at: None };
+            } else {
+                c.gates.remove(&id);
+            }
+            cmds.push(Cmd::Signal(ClientMsg::Watch {
+                user_id: id.clone(),
+                on,
+            }));
+            cmds.push(Cmd::Voice(VoiceCmd::Watch { user_id: id, on }));
+        }
         cmds
     }
 
@@ -366,6 +489,10 @@ impl Model {
                     return vec![];
                 }
                 vec![self.sending()]
+            }
+            ServerMsg::ShareStopped => {
+                c.share_notice = SHARE_STOPPED.into();
+                vec![]
             }
             ServerMsg::RoomsChanged { rooms }
                 if c.room
@@ -409,6 +536,21 @@ impl Model {
             }
             VoiceEvent::Filter(text) => {
                 c.filter = text;
+                vec![]
+            }
+            VoiceEvent::Frame(f) => {
+                // A late picture of a share no longer watched is dropped.
+                if c.watching.as_ref() == Some(&f.user_id) {
+                    (c.frame, c.frames) = (Some(f), c.frames + 1);
+                }
+                vec![]
+            }
+            VoiceEvent::Struggling { user_id, on } => {
+                if on {
+                    c.struggling.insert(user_id);
+                } else {
+                    c.struggling.remove(&user_id);
+                }
                 vec![]
             }
             VoiceEvent::Failed(e) => self.end_call(&e, true),
@@ -1128,5 +1270,130 @@ mod tests {
             error: "Too many tries.".into(),
         });
         assert_eq!(m.draft_back.as_deref(), Some("hi"));
+    }
+
+    fn share(m: &mut Model, user: &str, on: bool) -> Vec<Cmd> {
+        let share = on.then_some(vesper_protocol::ShareInfo {
+            fps: 60,
+            bitrate_kbps: 8000,
+        });
+        let user_id = user.into();
+        server(m, ServerMsg::PeerShare { user_id, share })
+    }
+
+    /// The `watch` message and the engine's `Watch` for each turn, in order.
+    fn watches(cmds: &[Cmd]) -> Vec<(String, bool)> {
+        let mut out = vec![];
+        for c in cmds {
+            match c {
+                Cmd::Signal(ClientMsg::Watch { user_id, on }) => out.push((user_id.clone(), *on)),
+                Cmd::Voice(VoiceCmd::Watch { user_id, on }) => {
+                    assert_eq!(
+                        out.last(),
+                        Some(&(user_id.clone(), *on)),
+                        "the engine follows"
+                    )
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn picture(user: &str) -> VoiceEvent {
+        VoiceEvent::Frame(Frame {
+            user_id: user.into(),
+            width: 2,
+            height: 1,
+            bgra: std::sync::Arc::new(vec![0; 8]),
+        })
+    }
+
+    #[test]
+    fn watching_needs_the_view_on_screen_and_stops_after_the_grace() {
+        let mut m = in_call();
+        let t = Instant::now();
+        assert!(m.sharers().is_empty());
+        assert!(
+            watches(&share(&mut m, "b", true)).is_empty(),
+            "shown, not watched"
+        );
+        assert_eq!(m.sharers(), [("b".to_string(), "Bob".to_string())]);
+
+        // Chosen, but the view is not on screen: nothing yet. On screen: watch on, once.
+        assert!(m.watch(Some("b".into()), t).is_empty());
+        assert_eq!(watches(&m.set_share_visible(true, t)), [("b".into(), true)]);
+        assert!(m.sync_watches(t).is_empty());
+
+        // Pictures of the watched share are kept; others are dropped.
+        voice(&mut m, picture("b"));
+        voice(&mut m, picture("c"));
+        assert_eq!(m.call.frames, 1);
+        assert!(m.call.take_frame().is_some_and(|f| f.user_id == "b"));
+        assert!(m.call.take_frame().is_none());
+
+        // Off screen: off only after the grace; back within it: nothing sent at all.
+        assert!(m.set_share_visible(false, t).is_empty());
+        assert_eq!(m.call.watch_deadline(), Some(t + WATCH_GRACE));
+        assert!(m.set_share_visible(true, t + WATCH_GRACE / 2).is_empty());
+        assert_eq!(m.call.watch_deadline(), None);
+        assert!(m.watch(None, t).is_empty());
+        assert!(m.sync_watches(t + WATCH_GRACE / 2).is_empty());
+        assert_eq!(
+            watches(&m.sync_watches(t + WATCH_GRACE)),
+            [("b".into(), false)]
+        );
+        assert!(m.sync_watches(t + WATCH_GRACE * 2).is_empty(), "sent once");
+
+        // Struggling, as the engine says.
+        assert!(m.watch(Some("b".into()), t).len() == 2);
+        voice(
+            &mut m,
+            VoiceEvent::Struggling {
+                user_id: "b".into(),
+                on: true,
+            },
+        );
+        assert!(m.call.struggling.contains("b"));
+        voice(
+            &mut m,
+            VoiceEvent::Struggling {
+                user_id: "b".into(),
+                on: false,
+            },
+        );
+        assert!(m.call.struggling.is_empty());
+    }
+
+    #[test]
+    fn a_share_ending_clears_the_view_and_a_call_ending_forgets_the_watches() {
+        let mut m = in_call();
+        share(&mut m, "b", true);
+        let t = Instant::now();
+        m.set_share_visible(true, t);
+        assert_eq!(watches(&m.watch(Some("b".into()), t)), [("b".into(), true)]);
+        voice(&mut m, picture("b"));
+
+        // Bob stops: the picture goes at once with a note; the off goes after the grace.
+        assert!(watches(&share(&mut m, "b", false)).is_empty());
+        assert_eq!((m.call.watching.as_deref(), m.call.frames), (None, 0));
+        assert!(m.call.frame.is_none());
+        assert_eq!(m.call.share_notice, "Bob stopped sharing.");
+        assert!(m.call.watch_deadline().is_some());
+        let later = Instant::now() + WATCH_GRACE;
+        assert_eq!(watches(&m.sync_watches(later)), [("b".into(), false)]);
+
+        // Watching again, then the call ends: the server forgets watches with the session, so nothing is sent.
+        share(&mut m, "b", true);
+        m.watch(Some("b".into()), t);
+        let cmds = m.leave_voice();
+        assert!(watches(&cmds).is_empty());
+        assert!(m.call.watching.is_none() && m.call.watch_deadline().is_none());
+        assert!(m.call.share_visible, "the view's state stays");
+
+        // share_stopped goes only to a sharer; its text is the web's.
+        let mut m = in_call();
+        server(&mut m, ServerMsg::ShareStopped);
+        assert_eq!(m.call.share_notice, SHARE_STOPPED);
     }
 }

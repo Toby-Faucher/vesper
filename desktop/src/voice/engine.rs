@@ -2,8 +2,11 @@
 //!
 //! Every 20 ms the engine encodes what the microphone gave and sends it on its one audio m-line, then takes one frame
 //! from each person's jitter buffer, decodes it (or conceals a lost one), and mixes them into the output.
+//!
+//! Screen shares come in on the video m-lines the SFU adds. The engine passes a watched share's VP8 frames to the
+//! decoder thread (`video.rs`) and asks the sharer for a keyframe (a PLI, which the SFU passes on) when it needs one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -12,13 +15,14 @@ use std::time::{Duration, Instant};
 use opus::{Application, Bitrate, Channels, Decoder, Encoder};
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::format::Codec;
-use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid};
+use str0m::media::{Direction, Frequency, KeyframeRequestKind, MediaKind, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
 use super::denoise::{Capture, Late, Loaded, deep_filter};
 use super::jitter::{Jitter, Pop};
 use super::mix::{Limiter, Speaking, mix_into, rms, volume_to_gain};
+use super::video::Video;
 use super::{AudioDevices, AudioInput, AudioOutput, FRAME, RATE, Setup, VoiceCmd, VoiceEvent};
 
 const TICK: Duration = Duration::from_millis(20);
@@ -26,6 +30,12 @@ const TICK: Duration = Duration::from_millis(20);
 const MAX_CAPTURED: usize = FRAME * 5;
 /// Media must be up this long after the answer.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// One keyframe request per share in this time at most: a keyframe of a big screen costs every viewer.
+const KEYFRAME_EVERY: Duration = Duration::from_secs(1);
+/// A share counts as struggling this long after lost packets or a frame that did not decode (the web's 6 s window).
+const STRUGGLE_FOR: Duration = Duration::from_secs(6);
+/// Packet loss above this, in a receiver report, is struggling (the web's 2 %).
+const STRUGGLE_LOSS: f32 = 0.02;
 
 pub const NO_CONNECT: &str = "Could not reach the voice server. A firewall may block UDP.";
 pub const LOST: &str = "The voice connection was lost.";
@@ -61,6 +71,18 @@ struct Engine<'a> {
     me: Speaking,
     limiter: Limiter,
     shown: (bool, Vec<String>),
+    video: Video,
+    /// Shares being decoded, by user id.
+    watching: HashSet<String>,
+    /// Each sharer's video m-line, by user id.
+    video_mids: HashMap<String, Mid>,
+    /// Shares whose last frame was dropped: the next one needs a keyframe.
+    gaps: HashSet<String>,
+    /// When each share was last asked for a keyframe.
+    asked: HashMap<String, Instant>,
+    /// When each share last lost packets or frames, and the shares shown as struggling.
+    trouble: HashMap<String, Instant>,
+    struggling: HashSet<String>,
     emit: &'a dyn Fn(VoiceEvent),
 }
 
@@ -68,10 +90,11 @@ pub fn run(
     devices: &dyn AudioDevices,
     setup: Setup,
     denoiser: Receiver<Loaded>,
+    video: Video,
     cmds: Receiver<VoiceCmd>,
     emit: &dyn Fn(VoiceEvent),
 ) {
-    let mut e = match Engine::new(devices, setup, denoiser, emit) {
+    let mut e = match Engine::new(devices, setup, denoiser, video, emit) {
         Ok(e) => e,
         Err(text) => return emit(VoiceEvent::Failed(text)),
     };
@@ -85,6 +108,7 @@ impl<'a> Engine<'a> {
         devices: &dyn AudioDevices,
         setup: Setup,
         denoiser: Receiver<Loaded>,
+        video: Video,
         emit: &'a dyn Fn(VoiceEvent),
     ) -> Result<Self, String> {
         let input = devices.input(setup.input.as_deref())?;
@@ -100,11 +124,16 @@ impl<'a> Engine<'a> {
         let mut rtc = Rtc::builder()
             .clear_codecs()
             .enable_opus(true, false)
+            .enable_vp8(true)
+            .set_stats_interval(Some(Duration::from_secs(2)))
             .build(Instant::now());
-        // One audio m-line both ways, as the browser's addTrack makes. No video m-line: the SFU then never offers
-        // video (ADR 0009). Others' voices come on m-lines the SFU adds.
+        // One audio m-line both ways, as the browser's addTrack makes. Others' voices come on m-lines the SFU adds.
+        // One receive-only video m-line: an offer with a video m-line gets others' screens (ADR 0009), and as this
+        // one never sends, the SFU makes no track of it and offers nobody video from this client. (The web's
+        // m-line is send-only, for its own share.)
         let mut change = rtc.sdp_api();
         let mid = change.add_media(MediaKind::Audio, Direction::SendRecv, None, None, None);
+        change.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
         let (offer, pending) = change.apply().expect("adding media is a change");
         emit(VoiceEvent::Offer(offer.to_sdp_string()));
         Ok(Engine {
@@ -128,6 +157,13 @@ impl<'a> Engine<'a> {
             me: Speaking::default(),
             limiter: Limiter::default(),
             shown: (false, vec![]),
+            video,
+            watching: HashSet::new(),
+            video_mids: HashMap::new(),
+            gaps: HashSet::new(),
+            asked: HashMap::new(),
+            trouble: HashMap::new(),
+            struggling: HashSet::new(),
             emit,
         })
     }
@@ -155,12 +191,16 @@ impl<'a> Engine<'a> {
                 // A port unreachable after a send comes back as an error on Linux; ICE copes.
                 Err(_) => {}
             }
+            while let Ok(need) = self.video.needs.try_recv() {
+                self.need_keyframe(&need.user_id, need.broken);
+            }
             let now = Instant::now();
             self.rtc
                 .handle_input(Input::Timeout(now))
                 .map_err(|_| LOST)?;
             if now >= tick {
                 self.tick();
+                self.struggle();
                 tick += TICK;
                 if tick < now {
                     tick = now + TICK; // fell behind: skip, do not burst
@@ -193,6 +233,15 @@ impl<'a> Engine<'a> {
             VoiceCmd::Deafened(d) => self.deafened = d,
             VoiceCmd::Volume { user_id, percent } => {
                 self.volumes.insert(user_id, percent);
+            }
+            VoiceCmd::Watch { user_id, on } => {
+                if on {
+                    self.watching.insert(user_id.clone());
+                } else {
+                    self.watching.remove(&user_id);
+                    self.trouble.remove(&user_id);
+                }
+                self.video.watch(user_id, on);
             }
             VoiceCmd::Start { .. } | VoiceCmd::Stop => {}
         }
@@ -273,24 +322,92 @@ impl<'a> Engine<'a> {
                 }
                 Output::Event(Event::MediaData(d)) => {
                     // The SFU labels each forwarded track with the sender's user_id as its MSID stream id.
-                    let Some(user) = self
+                    let Some((kind, user)) = self
                         .rtc
                         .media(d.mid)
-                        .filter(|m| m.kind() == MediaKind::Audio)
-                        .map(|m| m.stream_id().to_string())
-                        .filter(|s| !s.is_empty())
+                        .map(|m| (m.kind(), m.stream_id().to_string()))
+                        .filter(|(_, s)| !s.is_empty())
                     else {
                         continue;
                     };
+                    if kind == MediaKind::Video {
+                        self.screen(user, d.mid, d.contiguous, d.data.to_vec());
+                        continue;
+                    }
                     let Some(peer) = self.peer(&user) else {
                         continue;
                     };
                     let rtp = d.time.rebase(Frequency::FORTY_EIGHT_KHZ).numer();
                     peer.jitter.push(rtp, d.data.to_vec());
                 }
+                Output::Event(Event::MediaIngressStats(s))
+                    if s.loss.is_some_and(|l| l > STRUGGLE_LOSS) =>
+                {
+                    if let Some(user) = self
+                        .video_mids
+                        .iter()
+                        .find(|(_, m)| **m == s.mid)
+                        .map(|(u, _)| u.clone())
+                    {
+                        self.trouble.insert(user, Instant::now());
+                    }
+                }
                 Output::Event(_) => {}
             }
         }
+    }
+
+    /// A VP8 frame of `user`'s screen: to the decoder while watched. A frame dropped because the decoder is behind
+    /// breaks the ones after it, so the next goes with `gap` and a keyframe is asked for.
+    fn screen(&mut self, user: String, mid: Mid, contiguous: bool, data: Vec<u8>) {
+        if !self.watching.contains(&user) {
+            return;
+        }
+        self.video_mids.insert(user.clone(), mid);
+        let gap = self.gaps.remove(&user) || !contiguous;
+        if !self.video.frame(user.clone(), data, gap) {
+            self.gaps.insert(user.clone());
+            self.need_keyframe(&user, true);
+        }
+    }
+
+    /// Asks `user` for a keyframe through the SFU, at most once a `KEYFRAME_EVERY`. `broken` counts as struggling.
+    fn need_keyframe(&mut self, user: &str, broken: bool) {
+        if broken {
+            self.trouble.insert(user.into(), Instant::now());
+        }
+        if self
+            .asked
+            .get(user)
+            .is_some_and(|t| t.elapsed() < KEYFRAME_EVERY)
+        {
+            return;
+        }
+        let Some(&mid) = self.video_mids.get(user) else {
+            return;
+        };
+        if let Some(mut w) = self.rtc.writer(mid)
+            && w.request_keyframe(None, KeyframeRequestKind::Pli).is_ok()
+        {
+            self.asked.insert(user.into(), Instant::now());
+        }
+    }
+
+    /// Tells the model which watched shares struggle, when that changes.
+    fn struggle(&mut self) {
+        let now: HashSet<String> = self
+            .trouble
+            .iter()
+            .filter(|(u, t)| self.watching.contains(*u) && t.elapsed() < STRUGGLE_FOR)
+            .map(|(u, _)| u.clone())
+            .collect();
+        for user in now.symmetric_difference(&self.struggling) {
+            (self.emit)(VoiceEvent::Struggling {
+                user_id: user.clone(),
+                on: now.contains(user),
+            });
+        }
+        self.struggling = now;
     }
 
     fn peer(&mut self, user: &str) -> Option<&mut Peer> {

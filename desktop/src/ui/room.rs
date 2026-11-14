@@ -246,7 +246,8 @@ impl Vesper {
             )
     }
 
-    pub(super) fn render_main(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        self.sync_share(window, cx);
         if self.settings_open {
             let settings = self.render_settings(cx);
             let call = self.render_call(cx);
@@ -340,6 +341,7 @@ impl Vesper {
             .when_some_text(&m.error, theme::DANGER_FG, "room-error")
             .child(Input::new(&self.composer));
         let call = self.render_call(cx);
+        let share = self.render_share(cx);
         let m = &self.model;
         let main = v_flex()
             .flex_1()
@@ -347,6 +349,7 @@ impl Vesper {
             .min_w_0()
             .child(header)
             .children(keyring)
+            .children(share)
             .when_some_text(
                 if m.loading_older {
                     "Loading older messages..."

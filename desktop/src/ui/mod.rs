@@ -4,6 +4,7 @@
 mod call;
 mod room;
 pub mod settings;
+mod share;
 mod sign_in;
 pub mod theme;
 mod tray;
@@ -13,12 +14,13 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
+use std::time::Instant;
 
 use gpui::{
     App, AppContext, Application, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement, Render, Styled,
-    Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, div, px,
-    rgb, size,
+    KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement, Render,
+    RenderImage, Styled, Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, div, px, rgb, size,
 };
 use gpui_component::Root;
 use gpui_component::input::{InputEvent, InputState};
@@ -143,6 +145,10 @@ pub struct Vesper {
     pub ptt_tx: Option<Sender<KeyMsg>>,
     /// Why push to talk works only while the window has focus.
     pub ptt_note: Option<&'static str>,
+    /// The watched screen's newest picture, by sharer.
+    screen: Option<(String, Arc<RenderImage>)>,
+    /// Sends the next `watch off` when it is due.
+    watch_timer: Option<(Instant, Task<()>)>,
     _tray: Option<tray_icon::TrayIcon>,
     _subs: Vec<Subscription>,
     _pump: Option<Task<()>>,
@@ -215,6 +221,8 @@ impl Vesper {
             bitrate: None,
             ptt_tx: None,
             ptt_note: None,
+            screen: None,
+            watch_timer: None,
             _tray: None,
             _subs: subs,
             _pump: None,

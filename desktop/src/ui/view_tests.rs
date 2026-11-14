@@ -370,6 +370,100 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
     });
 }
 
+/// The share panel with the engine faked: Watch sends the watch, a picture is drawn, the struggle and the end of
+/// the share show as text.
+#[gpui::test]
+fn the_share_panel_watches_and_draws_a_picture(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    click(cx, "join-voice");
+    let call = |ev| Event::Voice { call: 1, ev };
+    apply(&view, cx, call(VoiceEvent::Offer("offer".into())));
+    let bob = serde_json::from_value(
+        json!({ "user_id": "b", "name": "Bob", "room_id": 1, "muted": false,
+        "deafened": false, "force_muted": false, "share": { "fps": 60, "bitrate_kbps": 8000 } }),
+    )
+    .unwrap();
+    let joined = ServerMsg::Joined {
+        user_id: "a".into(),
+        answer: "answer".into(),
+        peers: vec![bob],
+    };
+    apply(&view, cx, Event::Server(Box::new(joined)));
+    drain(&mut rx);
+    assert!(cx.debug_bounds("share-panel").is_some());
+    assert!(
+        cx.debug_bounds("share-view").is_none(),
+        "nothing watched yet"
+    );
+
+    click(cx, "share-watch-b");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(
+            cmds.as_slice(),
+            [
+                Cmd::Signal(ClientMsg::Watch { user_id: s, on: true }),
+                Cmd::Voice(VoiceCmd::Watch { user_id: v, on: true })
+            ] if s == "b" && v == "b"
+        ),
+        "{cmds:?}"
+    );
+    assert!(cx.debug_bounds("share-view").is_some());
+    assert!(
+        cx.debug_bounds("share-picture").is_none(),
+        "waiting for a picture"
+    );
+
+    // A 16x9 red picture: the view takes it from the model and draws it.
+    let bgra = [0u8, 0, 255, 255].repeat(16 * 9);
+    let frame = crate::voice::Frame {
+        user_id: "b".into(),
+        width: 16,
+        height: 9,
+        bgra: std::sync::Arc::new(bgra),
+    };
+    apply(&view, cx, call(VoiceEvent::Frame(frame)));
+    assert!(cx.debug_bounds("share-picture").is_some());
+    view.read_with(cx, |v, _| {
+        assert!(v.model.call.frame.is_none(), "taken by the view");
+        let (id, image) = v.screen.as_ref().unwrap();
+        assert_eq!(id, "b");
+        let size = image.size(0);
+        assert_eq!((size.width.0, size.height.0), (16, 9));
+        assert_eq!(
+            image.as_bytes(0).unwrap()[..4],
+            [0, 0, 255, 255],
+            "the bytes stay BGRA"
+        );
+    });
+    let picture = cx.debug_bounds("share-picture").unwrap();
+    let panel = cx.debug_bounds("share-view").unwrap();
+    assert!(picture.size.width > gpui::px(0.) && picture.size.width <= panel.size.width);
+
+    apply(
+        &view,
+        cx,
+        call(VoiceEvent::Struggling {
+            user_id: "b".into(),
+            on: true,
+        }),
+    );
+    assert!(cx.debug_bounds("share-struggling").is_some());
+
+    // Bob stops: the picture goes and the panel says so.
+    let stop = ServerMsg::PeerShare {
+        user_id: "b".into(),
+        share: None,
+    };
+    apply(&view, cx, Event::Server(Box::new(stop)));
+    assert!(cx.debug_bounds("share-notice").is_some());
+    view.read_with(cx, |v, _| {
+        assert!(v.screen.is_none() && v.model.call.watching.is_none());
+        assert_eq!(v.model.call.share_notice, "Bob stopped sharing.");
+    });
+}
+
 /// Settings from the sidebar: each choice lands in the model, push to talk shows its key and takes a new one from a
 /// key press, a missing device says so, and nothing is saved without a settings file (the real app's only).
 #[gpui::test]
