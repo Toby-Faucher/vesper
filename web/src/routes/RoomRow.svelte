@@ -28,7 +28,7 @@
 <li>
   <div class="row group flex h-7 items-center rounded-sm" class:current class:unread={!!u?.unread}>
     <a href={href({ name: 'room', id: room.id })} aria-current={current ? 'page' : undefined} aria-label={label} title={room.name}
-      {@attach intent(() => { prefetchRoom(room.id); import('./Chat.svelte').catch(() => {}); })} class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2">
+      {@attach intent(() => { prefetchRoom(room.id); import('./Chat.svelte').catch(() => {}); }, { cue: true })} class="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm px-2">
       {#if dmUser}<Avatar user={dmUser} size={20} />{/if}
       <span class="name min-w-0 truncate">{room.name}</span>
       {#if room.kind === 'room' && room.restricted}<span class="meta flex shrink-0"><Icon d={I.shield} /></span>{/if}
@@ -50,6 +50,8 @@
 <style>
   .row { color: var(--fg-2); transition: background-color var(--dur-1) var(--ease-out); }
   .row:hover { background: var(--bg-hover); }
+  /* the row the mouse is heading for: half the hover fill, a colour change only. :global, as intent.ts sets the attribute. */
+  .row:not(:hover, .current):has(> a:global([data-intent])) { background: color-mix(in oklab, var(--bg-hover) 50%, transparent); }
   .row.unread { color: var(--fg); font-weight: var(--weight-strong); }
   .row.current { background: var(--bg-selected); color: var(--fg); }
   /* tertiary on the sidebar and on hover; never on the selected surface (4.26:1), where it steps up to --fg-2 */
