@@ -86,6 +86,11 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 - Build: `cd desktop && ../scripts/capped.sh cargo build`. Run: `cargo run` there, on a machine with a display.
 - Linux needs the X11, Wayland, Vulkan, fontconfig and ALSA development headers (the package list is in the `desktop` CI job).
 - Check: `scripts/check-desktop.sh` (fmt, clippy `-D warnings`, tests). It is not part of `scripts/check.sh`; CI runs it as its own job.
+  The tests start a real `vesper-server` in process (a path dev-dependency, so the first build compiles the server too) on a free
+  loopback port over plain http, and draw the views in GPUI's headless test window. No display, keyring or network is needed.
+- Sign in: the app asks for the server address (the one you open Vesper at in a browser, e.g. `https://vesper.example.com`), a
+  username and a password. Accounts are made in the web app. The session is kept in the OS keyring (Secret Service on Linux,
+  for example GNOME Keyring or KWallet); without one the app works but asks you to sign in at every start.
 - Its lockfile pins `libc` 0.2.189 and `mio` 1.2.4 on purpose (see the ADR). Do not `cargo update` it as a whole either.
 
 ## Check before a PR
