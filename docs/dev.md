@@ -99,7 +99,7 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   recorder for speakers, so no audio devices are needed either. The share test (`desktop/tests/share.rs`) has a fake sharer
   send VP8 made by `vp8-encoder` (a dev-dependency), so it needs no screen or video file.
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
-  Windows). Use headphones: there is no echo cancellation yet.
+  Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
 - Settings (the button next to Sign out) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
   `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets.
 - DeepFilterNet runs natively (`vesper-dsp` with tract, the same `=0.21.4` pin and debug-assertions override as the root

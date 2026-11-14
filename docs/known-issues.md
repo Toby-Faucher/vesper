@@ -150,8 +150,10 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 
 ## Desktop client (v2, in progress)
 
-- No echo cancellation in calls yet: without headphones the others hear themselves. The app says so at the first join.
-- A device lost mid-call goes silent with no message. Per-person volumes last until the app closes.
+- Echo cancellation (AEC3 through `sonora`) was only tested on a synthetic room, not with real speakers and a real mic. If it
+  falls behind it turns off for the rest of the call. There is no input gain yet.
+- A lost device is noticed by a cpal stream error, or for a mic, 2 s without samples. Which errors WASAPI and ALSA give on a
+  real unplug was not tried. A lost device that stays away leaves the call silent on that side until it comes back.
 - The first call in DeepFilterNet mode downloads the 8 MB model from the server; until it is in, and on a server without
   `/dsp/` (a dev server without `scripts/build-dsp.sh`), the noise gate runs and the call bar says so. The fallback after slow
   frames is one way for the rest of the call, as on the web. The noise gate has no threshold setting (fixed at -50 dBFS).

@@ -40,8 +40,8 @@ crates/vesper-protocol        shared wire types (path dependency)
   keyring so a restart stays signed in, and never logged **[call]**. Passkeys: not in the first version.
 - **Voice**: a str0m client (the same library as the server's SFU), Opus encode and decode, cpal for the microphone and
   speakers, DeepFilterNet through `vesper-dsp` (native tract, as the audio lab already does), and the same capture order as
-  the web: mic, echo cancellation, gain, DeepFilterNet, Opus. Echo cancellation needs a native library (WebRTC's audio
-  processing) and comes after the first working call; until then the app says headphones are needed **[call]**.
+  the web: mic, echo cancellation, gain, DeepFilterNet, Opus. Echo cancellation is `sonora`, a pure Rust port of WebRTC's
+  audio processing (AEC3), since D7; the app has no input gain yet **[call]**.
 - **Push to talk** with a global hotkey that works while another app has focus.
 
 ## Stages
@@ -60,7 +60,8 @@ against a real `vesper-server` started inside the tests. Anything that needs a s
 | D4 | DeepFilterNet on the mic, global push to talk, tray icon, start with the computer, a Settings view | Done 2026-11-14. Tests: the real model takes noise out of a speech-like fixture (when the model is on disk), a slow fake falls back, a bad checksum is refused, push to talk with a fake key source |
 | D5 | Watch a screen share (VP8 decode), share notices | Done 2026-11-14. Tests: a fake sharer sends VP8 through a real SFU; a desktop client watches, decodes the right colour, stops watching, and clears the view when the share ends |
 | D6 | Packages. The friends use Windows **[Toby, 2026-11-14]**, so Windows comes first | **D6a done**: `desktop-package.yml` builds a release `Vesper.exe` and uploads a zip (exe, README, licence, third-party notices) as a 30-day artifact on every push to `v2/desktop`. Not signed, so SmartScreen warns. Not verified: running it. Still to do: an installer, signing (Toby's call), Linux and macOS packages |
-| Later | Uploads, reactions, edits, search, settings parity, sharing a screen, echo cancellation | |
+| D7 | Echo cancellation, a device lost mid-call, saved per-person volumes | Done 2026-11-14. Tests: AEC3 on a synthetic room takes the echo down 50 dB once converged and keeps the near voice in double talk; the far end is exactly what was played; a fake device that is unplugged says so and is opened again; volumes saved and loaded |
+| Later | Uploads, reactions, edits, search, settings parity, sharing a screen, input gain | |
 
 ## D1 and D2: what was built and how it was checked
 
@@ -313,6 +314,57 @@ Not verified:
 
 Left for later on purpose: sharing from the desktop, several shares at once, the web's layouts, 1:1 full screen, zoom, pop-out,
 pointer, hide, the share stats and the share sounds.
+
+## D7: what was built and how it was checked
+
+- **Echo canceller: `sonora` 0.3.0 [call].** A pure Rust port of WebRTC's audio processing module, BSD-3-Clause, with only
+  its echo canceller (AEC3) turned on: no noise suppression or gain control, as DeepFilterNet and the noise gate do that. It has
+  no C and no build script, so Windows needs nothing new; `cargo check -p sonora --target x86_64-pc-windows-msvc` passed on the
+  dev machine. Its crates use `unsafe` for SIMD, in the FFT and to turn off denormals; ours stays `forbid(unsafe_code)`. The others looked at:
+  - `webrtc-audio-processing` 2.1 (the C++ AEC3): its bundled build runs meson and ninja, copies sources with `cp -a` and needs
+    bindgen (libclang), so the Windows MSVC job would need meson, ninja and LLVM set up, and the C++ library is far heavier.
+  - SpeexDSP: `speexdsp-sys` 0.1.2 (2018) links a system library through pkg-config, which Windows does not have; `aec-rs-sys`
+    bundles it but builds with CMake and bindgen. Speex's echo canceller is an older and weaker design than AEC3 and has no
+    delay estimator of its own.
+  - `aec3` 0.4 (another pure Rust AEC3 port): read, not measured. Its README says the graph API is a work in progress and
+    expected to change.
+- **Where it runs.** On the call thread, in each 20 ms turn: the mix of everyone (after the volumes and the limiter, zero
+  while deafened or with no speakers) goes to the speakers and, the same samples, to AEC3 as the far end; then each 20 ms
+  captured is cleaned in two 10 ms blocks before the noise filter and Opus. AEC3 finds the delay between the far end and the
+  microphone itself, with its matched filters, and follows it when the output queue or the room changes it; the engine sets
+  no delay. It runs while muted too, so it stays in step. A debug build optimises `sonora`, `sonora-aec3` and `sonora-fft`
+  (`[profile.dev.package]`), as the voice path does for the VP8 decoder.
+- **Falls back** like DeepFilterNet: with 20 of the last 100 blocks over 5 ms (render and capture work together), after 0.5 s,
+  it turns off for the rest of the call and the call bar says "Echo cancellation could not keep up on this computer, so it is
+  off for the rest of the call. Use headphones, or the others may hear themselves."
+- **Setting.** Settings > Echo cancellation, on by default, applies from the next call. The headphones note at the first join
+  now shows only when it is off.
+- **A device lost mid-call.** A cpal stream error that means the device is gone (anything but an underrun, a route change or
+  refused real-time scheduling), or a microphone that gives no samples for 2 s, makes the device lost. The call bar says "Your
+  microphone was disconnected.", "Your speakers were disconnected." or both, and every second the engine opens the saved
+  device again, else the system default. The call goes on: without a mic nothing is sent, without speakers the far end is
+  silence. The note clears when both are back.
+- **Per-person volumes** are saved in `settings.json` as `volumes`, percent by user id, clamped to 0 to 400 on load, and
+  the call starts with them. The slider saves on each change.
+
+Verified, by `scripts/check-desktop.sh` on the dev machine (no display, no audio devices):
+
+- `voice::echo` test, a synthetic room: a speech-like far voice (140 Hz harmonics with vibrato, in syllables) through a
+  room of a direct path 30 ms late at -6 dB and 60 reflections dying away over 60 ms, plus a near voice (210 Hz) from second 6.
+  Echo down 34 dB in the first second and 50 dB from 3 to 6 s (asserted over 15 dB). In double talk, with the near voice 6.8 dB
+  over the echo, the near voice comes out at -3.9 dB (measured as the difference between runs with and without it; asserted
+  over -6 dB) and the echo is down 54 dB. 0.54 ms per 10 ms block on the dev machine with `sonora` optimised.
+- `voice::engine` tests: what the fake speakers got is, sample for sample, the far end the canceller got, with a voice at 300 %
+  through the limiter and zeros while deafened; a fake mic and speakers unplugged and refusing to open give the right notes,
+  are tried as the saved device then the default, only once a second, and the note clears when they open; the call never
+  fails.
+- The voice tests through the real SFU pass with echo cancellation on in both clients.
+- Settings: `echo_cancel` and `volumes` round trip, an old file turns echo cancellation on, and volumes out of range are
+  clamped. The headless view tests draw the device note and the echo choice.
+
+Not verified: a real room, real speakers and microphones (how well AEC3 does with a laptop's speakers and mic, clock drift
+between two devices, a Bluetooth headset's long delay), unplugging a real device on Windows or Linux (which errors cpal's
+WASAPI and ALSA backends really give), and the CPU cost on a slow Windows laptop.
 
 ## Not in v2.0
 
