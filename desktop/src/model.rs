@@ -2,13 +2,15 @@
 //! methods, and the tests drive the same methods against a real server.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use vesper_protocol::{ClientMsg, ErrorCode, ServerMsg};
+use vesper_protocol::{ClientMsg, ErrorCode, Message, Role, RoomKind, ServerMsg};
 
 use crate::net::{Cmd, Event};
 use crate::settings::Settings;
 use crate::state::{AppState, Chat, RoomLog, merge_latest, merge_older};
+use crate::uploads::Tray;
 use crate::voice::{Frame, Setup, VoiceCmd, VoiceEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +37,15 @@ pub const REJOIN_FOR: Duration = Duration::from_secs(60);
 /// A share stops being watched this long after its view went away, like the web's `WATCH_GRACE_MS`, so a quick
 /// look at another room costs no keyframe wait.
 pub const WATCH_GRACE: Duration = Duration::from_secs(10);
+/// Typing is sent at most this often (the web's `TYPING_EVERY_MS`; the server takes one per 3 s).
+pub const TYPING_EVERY: Duration = Duration::from_secs(3);
+/// "X is typing" shows this long after the last typing event (the web's `TYPING_MS`).
+pub const TYPING_FOR: Duration = Duration::from_secs(5);
+/// The upload limit until the first `Me` says it, as the web.
+const UPLOAD_MAX: i64 = 25 << 20;
+pub const UPLOADS_BUSY: &str = "Wait for the files to finish uploading.";
+/// The web's three quick reactions.
+pub const EMOJIS: [&str; 3] = ["\u{1f44d}", "\u{1f602}", "\u{2764}\u{fe0f}"];
 /// The web's text for `share_stopped`. Only a sharer gets it, and the desktop app cannot share yet.
 pub const SHARE_STOPPED: &str = "A moderator stopped your screen share.";
 
@@ -202,6 +213,25 @@ pub struct Model {
     pub settings: Settings,
     /// The push-to-talk key is held (or its release delay runs).
     pub ptt_open: bool,
+    /// The message the next send replies to.
+    pub reply_to: Option<Message>,
+    /// My message open for editing, and why its last save failed.
+    pub editing: Option<i64>,
+    pub edit_error: String,
+    /// The message whose delete waits for a confirm.
+    pub confirm_delete: Option<i64>,
+    /// The message whose reaction picker is open.
+    pub picking: Option<i64>,
+    /// Room id, then user id, then when the "is typing" line ends.
+    pub typing: HashMap<i64, HashMap<String, Instant>>,
+    last_typing: Option<Instant>,
+    pub tray: Tray,
+    /// The pins panel: its room, and the pins once loaded.
+    pub pins: Option<(i64, Option<Vec<Message>>)>,
+    /// A loaded message the list scrolls to.
+    pub jump: Option<i64>,
+    /// Where the last saved file went.
+    pub saved: Option<PathBuf>,
 }
 
 impl Default for Model {
@@ -225,6 +255,17 @@ impl Default for Model {
             call: Call::default(),
             settings: Settings::default(),
             ptt_open: false,
+            reply_to: None,
+            editing: None,
+            edit_error: String::new(),
+            confirm_delete: None,
+            picking: None,
+            typing: HashMap::new(),
+            last_typing: None,
+            tray: Tray::default(),
+            pins: None,
+            jump: None,
+            saved: None,
         }
     }
 }
@@ -327,7 +368,47 @@ impl Model {
                     self.state.activity.entry(room).or_insert(id);
                 }
             }
-            Event::Sent(m) => self.chat.apply(&ServerMsg::MessageNew { message: *m }),
+            Event::Sent { message, keys } => {
+                self.tray.sent(&keys);
+                if self.reply_to.as_ref().map(|r| r.id) == message.reply_to.as_ref().map(|r| r.id) {
+                    self.reply_to = None;
+                }
+                self.chat
+                    .apply(&ServerMsg::MessageNew { message: *message });
+            }
+            Event::Changed(m) => return self.server_msg(ServerMsg::MessageUpdated { message: *m }),
+            Event::Edited(m) => {
+                if self.editing == Some(m.id) {
+                    (self.editing, self.edit_error) = (None, String::new());
+                }
+                return self.server_msg(ServerMsg::MessageUpdated { message: *m });
+            }
+            Event::ChangeFailed(e) => {
+                if self.editing.is_some() {
+                    self.edit_error = e;
+                } else {
+                    self.error = e;
+                }
+            }
+            Event::Pins { room, pins } => match (&mut self.pins, pins) {
+                (Some((r, list)), Ok(p)) if *r == room => *list = Some(p),
+                (_, Ok(_)) => {}
+                (_, Err(e)) => (self.pins, self.error) = (None, e),
+            },
+            Event::UploadProgress { key, progress } => self.tray.progress(key, progress),
+            Event::Uploaded { key, attachment } => return self.tray.finished(key, attachment),
+            Event::UploadFailed { key, fail } => {
+                let max = self.upload_max();
+                return self.tray.failed(key, fail, max);
+            }
+            // The view decodes nothing here; it keeps the pictures.
+            Event::Image { .. } => {}
+            Event::Downloaded { path, open } => {
+                if !open {
+                    self.saved = Some(path);
+                }
+            }
+            Event::DownloadFailed(e) => self.error = e,
             Event::SendFailed { room, body, error } => {
                 self.error = error;
                 if self.active == Some(room) {
@@ -345,9 +426,34 @@ impl Model {
         self.state.apply(&m);
         self.chat.apply(&m);
         let mut cmds = vec![];
+        match &m {
+            ServerMsg::Typing { room_id, user_id } => {
+                let until = Instant::now() + TYPING_FOR;
+                self.typing
+                    .entry(*room_id)
+                    .or_default()
+                    .insert(user_id.clone(), until);
+            }
+            ServerMsg::MessageNew { message } => {
+                if let Some(t) = self.typing.get_mut(&message.room_id) {
+                    t.remove(&message.author_id);
+                }
+            }
+            // A pin or unpin, here or elsewhere: the open panel loads again.
+            ServerMsg::MessageUpdated { message } => {
+                if let Some((room, Some(list))) = &self.pins
+                    && *room == message.room_id
+                    && message.pinned != list.iter().any(|p| p.id == message.id)
+                {
+                    cmds.push(Cmd::LoadPins(*room));
+                }
+            }
+            _ => {}
+        }
         let shown = self.active.filter(|id| self.state.find_room(*id).is_some());
         if let ServerMsg::Hello { .. } = m {
             (self.online, self.notice) = (true, String::new());
+            self.typing.clear();
             // Like resync(): events may have been missed while the socket was down, so drop the other rooms and
             // fetch the shown one's newest page again, merged into what is held.
             let keep = shown.or_else(|| self.state.rooms.first().map(|r| r.id));
@@ -749,6 +855,14 @@ impl Model {
         }
         (self.active, self.at_bottom, self.loading_older, self.error) =
             (Some(id), true, false, String::new());
+        // What belongs to the room left. Its uploads go on and wait there.
+        (
+            self.reply_to,
+            self.editing,
+            self.confirm_delete,
+            self.picking,
+            self.pins,
+        ) = (None, None, None, None, None);
         let mut cmds = vec![];
         // An empty log first, so a message pushed while the page is in flight is held and then merged.
         if let std::collections::hash_map::Entry::Vacant(e) = self.chat.rooms.entry(id) {
@@ -785,10 +899,28 @@ impl Model {
         self.maybe_read()
     }
 
-    /// Sends the composer's text to the shown room. Blank text sends nothing.
+    /// Sends the composer's text to the shown room, with the finished files and the reply. Blank text and no files
+    /// sends nothing; files still uploading wait.
     pub fn send(&mut self, body: &str) -> Vec<Cmd> {
         let (Some(room), body) = (self.active, body.trim()) else {
             return vec![];
+        };
+        if self.tray.busy(room) {
+            self.error = UPLOADS_BUSY.into();
+            return vec![];
+        }
+        let attachments = self.tray.done(room);
+        // A body is required: a message of files only is sent with their names, as the web does.
+        let body = if body.is_empty() {
+            let names: Vec<&str> = self
+                .tray
+                .of(room)
+                .filter(|i| i.attachment.is_some())
+                .map(|i| i.name.as_str())
+                .collect();
+            names.join(", ")
+        } else {
+            body.into()
         };
         if body.is_empty() {
             return vec![];
@@ -796,8 +928,212 @@ impl Model {
         self.error.clear();
         vec![Cmd::Send {
             room,
+            body,
+            reply_to: self.reply_to.as_ref().map(|r| r.id),
+            attachments,
+        }]
+    }
+
+    /// The composer's text changed: `typing` goes out at most every `TYPING_EVERY`, only for real text.
+    pub fn typed(&mut self, text: &str, now: Instant) -> Vec<Cmd> {
+        let Some(room) = self.active else {
+            return vec![];
+        };
+        if text.trim().is_empty()
+            || !self.online
+            || self
+                .last_typing
+                .is_some_and(|t| now.duration_since(t) < TYPING_EVERY)
+        {
+            return vec![];
+        }
+        self.last_typing = Some(now);
+        vec![Cmd::Signal(ClientMsg::Typing { room_id: room })]
+    }
+
+    /// The names of the others typing in `room` at `now`, sorted.
+    pub fn typers(&self, room: i64, now: Instant) -> Vec<String> {
+        let me = self.state.my_id();
+        let mut v: Vec<String> = self
+            .typing
+            .get(&room)
+            .into_iter()
+            .flatten()
+            .filter(|(id, until)| **until > now && *id != me)
+            .map(|(id, _)| self.state.name_of(id))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// When the soonest "is typing" line ends, for the view's timer.
+    pub fn typing_deadline(&self) -> Option<Instant> {
+        self.typing.values().flat_map(|t| t.values()).min().copied()
+    }
+
+    pub fn is_mod(&self) -> bool {
+        self.state
+            .me
+            .as_ref()
+            .is_some_and(|m| matches!(m.user.role, Role::Owner | Role::Moderator))
+    }
+
+    pub fn mine(&self, m: &Message) -> bool {
+        m.author_id == self.state.my_id()
+    }
+
+    /// The author deletes, and a moderator or the owner deletes anyone's, as the server allows.
+    pub fn can_delete(&self, m: &Message) -> bool {
+        !m.deleted && (self.mine(m) || self.is_mod())
+    }
+
+    /// Anyone who sees a room pins; a DM has no pins.
+    pub fn can_pin(&self) -> bool {
+        self.active
+            .and_then(|id| self.state.find_room(id))
+            .is_some_and(|r| r.kind == RoomKind::Room)
+    }
+
+    pub fn upload_max(&self) -> i64 {
+        self.state.me.as_ref().map_or(UPLOAD_MAX, |m| m.upload_max)
+    }
+
+    fn find(&self, id: i64) -> Option<&Message> {
+        self.log()?.messages.iter().find(|m| m.id == id)
+    }
+
+    pub fn reply(&mut self, id: i64) {
+        self.reply_to = self.find(id).filter(|m| !m.deleted).cloned();
+    }
+
+    pub fn cancel_reply(&mut self) {
+        self.reply_to = None;
+    }
+
+    /// Opens my message `id` for editing; the body to put in the edit box.
+    pub fn start_edit(&mut self, id: i64) -> Option<String> {
+        let m = self.find(id).filter(|m| self.mine(m) && !m.deleted)?;
+        let body = m.body.clone();
+        (self.editing, self.edit_error, self.confirm_delete) = (Some(id), String::new(), None);
+        Some(body)
+    }
+
+    /// Up in an empty composer: my newest loaded message that is not deleted.
+    pub fn edit_last(&mut self) -> Option<(i64, String)> {
+        let me = self.state.my_id();
+        let id = self
+            .log()?
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.author_id == me && !m.deleted)?
+            .id;
+        Some((id, self.start_edit(id)?))
+    }
+
+    pub fn save_edit(&mut self, body: &str) -> Vec<Cmd> {
+        let (Some(id), body) = (self.editing, body.trim()) else {
+            return vec![];
+        };
+        if body.is_empty() {
+            return vec![];
+        }
+        self.edit_error.clear();
+        vec![Cmd::Edit {
+            id,
             body: body.into(),
         }]
+    }
+
+    pub fn cancel_edit(&mut self) {
+        (self.editing, self.edit_error) = (None, String::new());
+    }
+
+    /// Delete asks first; `confirmed` sends it.
+    pub fn delete(&mut self, id: i64, confirmed: bool) -> Vec<Cmd> {
+        if !self.find(id).is_some_and(|m| self.can_delete(m)) {
+            return vec![];
+        }
+        if !confirmed {
+            (self.confirm_delete, self.picking) = (Some(id), None);
+            return vec![];
+        }
+        self.confirm_delete = None;
+        vec![Cmd::Delete(id)]
+    }
+
+    pub fn cancel_delete(&mut self) {
+        self.confirm_delete = None;
+    }
+
+    pub fn toggle_picker(&mut self, id: i64) {
+        self.picking = if self.picking == Some(id) {
+            None
+        } else {
+            Some(id)
+        };
+    }
+
+    /// Adds my `emoji` to message `id`, or takes it off when it is there.
+    pub fn react(&mut self, id: i64, emoji: &str) -> Vec<Cmd> {
+        let me = self.state.my_id();
+        let Some(m) = self.find(id).filter(|m| !m.deleted) else {
+            return vec![];
+        };
+        let on = !m
+            .reactions
+            .iter()
+            .any(|r| r.emoji == emoji && r.user_ids.iter().any(|u| u == me));
+        self.picking = None;
+        vec![Cmd::React {
+            id,
+            emoji: emoji.into(),
+            on,
+        }]
+    }
+
+    pub fn pin(&mut self, id: i64) -> Vec<Cmd> {
+        match self.find(id).filter(|m| !m.deleted) {
+            Some(m) if self.can_pin() => vec![Cmd::Pin { id, on: !m.pinned }],
+            _ => vec![],
+        }
+    }
+
+    /// Opens or closes the pins of the shown room.
+    pub fn toggle_pins(&mut self) -> Vec<Cmd> {
+        match (self.pins.take(), self.active) {
+            (None, Some(room)) if self.can_pin() => {
+                self.pins = Some((room, None));
+                vec![Cmd::LoadPins(room)]
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Scrolls to a message when it is loaded in the shown room. Returns whether it is.
+    pub fn jump_to(&mut self, id: i64) -> bool {
+        let found = self.find(id).is_some();
+        if found {
+            self.jump = Some(id);
+        }
+        found
+    }
+
+    /// Files (path, size) for the shown room's tray.
+    pub fn attach(&mut self, files: Vec<(PathBuf, u64)>) -> Vec<Cmd> {
+        let Some(room) = self.active else {
+            return vec![];
+        };
+        let max = self.upload_max();
+        self.tray.add(room, files, max)
+    }
+
+    pub fn remove_upload(&mut self, key: u64) -> Vec<Cmd> {
+        self.tray.remove(key)
+    }
+
+    pub fn retry_upload(&mut self, key: u64) -> Vec<Cmd> {
+        self.tray.retry(key)
     }
 }
 
@@ -1307,7 +1643,7 @@ mod tests {
         m.apply(Event::Server(Box::new(hello())));
         assert!(m.send("  \n ").is_empty());
         assert!(
-            matches!(m.send(" hi\n").as_slice(), [Cmd::Send { room: 1, body }] if body == "hi")
+            matches!(m.send(" hi\n").as_slice(), [Cmd::Send { room: 1, body, .. }] if body == "hi")
         );
         m.apply(Event::SendFailed {
             room: 1,
@@ -1440,5 +1776,209 @@ mod tests {
         let mut m = in_call();
         server(&mut m, ServerMsg::ShareStopped);
         assert_eq!(m.call.share_notice, SHARE_STOPPED);
+    }
+
+    fn chat() -> Model {
+        let mut m = signed_in();
+        m.apply(Event::Server(Box::new(hello())));
+        let mut mine = msg(11, 1, "a", "mine");
+        mine.reactions = vec![vesper_protocol::Reaction {
+            emoji: EMOJIS[0].into(),
+            user_ids: vec!["a".into()],
+        }];
+        m.apply(Event::Latest {
+            room: 1,
+            page: MessagePage {
+                messages: vec![msg(10, 1, "b", "theirs"), mine, msg(12, 1, "b", "last")],
+                more_before: false,
+                more_after: false,
+            },
+        });
+        m
+    }
+
+    #[test]
+    fn typing_goes_out_at_most_every_3_s_and_shows_for_5_s() {
+        let mut m = chat();
+        let t0 = Instant::now();
+        assert!(m.typed("  ", t0).is_empty(), "blank text is not typing");
+        let typing = |c: &[Cmd]| matches!(c, [Cmd::Signal(ClientMsg::Typing { room_id: 1 })]);
+        assert!(typing(&m.typed("h", t0)));
+        assert!(m.typed("hi", t0 + Duration::from_millis(2999)).is_empty());
+        assert!(typing(&m.typed("hi!", t0 + TYPING_EVERY)));
+        m.online = false;
+        assert!(
+            m.typed("hi!!", t0 + 2 * TYPING_EVERY).is_empty(),
+            "not while offline"
+        );
+
+        let now = Instant::now();
+        server(
+            &mut m,
+            ServerMsg::Typing {
+                room_id: 1,
+                user_id: "b".into(),
+            },
+        );
+        server(
+            &mut m,
+            ServerMsg::Typing {
+                room_id: 1,
+                user_id: "a".into(),
+            },
+        );
+        assert_eq!(m.typers(1, now), ["Bob"], "not me");
+        assert_eq!(
+            m.typers(1, now + TYPING_FOR + Duration::from_millis(10)),
+            Vec::<String>::new()
+        );
+        assert!(m.typing_deadline().is_some());
+        server(
+            &mut m,
+            ServerMsg::MessageNew {
+                message: msg(13, 1, "b", "sent"),
+            },
+        );
+        assert!(m.typers(1, now).is_empty(), "a message ends it");
+    }
+
+    #[test]
+    fn reply_edit_delete_react_and_pin() {
+        let mut m = chat();
+        m.reply(10);
+        let cmds = m.send("ok");
+        assert!(
+            matches!(
+                cmds.as_slice(),
+                [Cmd::Send {
+                    reply_to: Some(10),
+                    ..
+                }]
+            ),
+            "{cmds:?}"
+        );
+        let mut sent = msg(14, 1, "a", "ok");
+        sent.reply_to = Some(vesper_protocol::ReplyPreview {
+            id: 10,
+            author_id: "b".into(),
+            excerpt: "theirs".into(),
+        });
+        m.apply(Event::Sent {
+            message: Box::new(sent),
+            keys: vec![],
+        });
+        assert!(m.reply_to.is_none());
+
+        // Up in an empty composer opens my newest message.
+        assert_eq!(m.edit_last(), Some((14, "ok".into())));
+        assert!(m.start_edit(10).is_none(), "not someone else's");
+        assert!(
+            matches!(m.save_edit(" fixed ").as_slice(), [Cmd::Edit { id: 14, body }] if body == "fixed")
+        );
+        m.apply(Event::ChangeFailed(
+            "Too many tries. Wait a minute and try again.".into(),
+        ));
+        assert_eq!(m.editing, Some(14));
+        assert!(!m.edit_error.is_empty());
+        let mut edited = msg(14, 1, "a", "fixed");
+        edited.updated_at = 99;
+        m.apply(Event::Edited(Box::new(edited)));
+        assert_eq!(
+            (
+                m.editing,
+                m.log().unwrap().messages.last().unwrap().body.as_str()
+            ),
+            (None, "fixed")
+        );
+
+        // Delete asks first; a member cannot delete someone else's.
+        assert!(m.delete(11, false).is_empty());
+        assert_eq!(m.confirm_delete, Some(11));
+        assert!(matches!(m.delete(11, true).as_slice(), [Cmd::Delete(11)]));
+        assert!(m.delete(10, false).is_empty() && m.confirm_delete.is_none());
+        m.state.me.as_mut().unwrap().user.role = Role::Moderator;
+        assert!(
+            matches!(m.delete(10, true).as_slice(), [Cmd::Delete(10)]),
+            "a moderator can"
+        );
+
+        // My reaction comes off, a new one goes on.
+        assert!(matches!(
+            m.react(11, EMOJIS[0]).as_slice(),
+            [Cmd::React {
+                id: 11,
+                on: false,
+                ..
+            }]
+        ));
+        assert!(matches!(
+            m.react(11, EMOJIS[1]).as_slice(),
+            [Cmd::React {
+                id: 11,
+                on: true,
+                ..
+            }]
+        ));
+        assert!(matches!(
+            m.pin(10).as_slice(),
+            [Cmd::Pin { id: 10, on: true }]
+        ));
+        assert!(matches!(m.toggle_pins().as_slice(), [Cmd::LoadPins(1)]));
+        m.apply(Event::Pins {
+            room: 1,
+            pins: Ok(vec![]),
+        });
+        let mut pinned = msg(10, 1, "b", "theirs");
+        (pinned.pinned, pinned.updated_at) = (true, 50);
+        let cmds = m.apply(Event::Changed(Box::new(pinned)));
+        assert!(
+            matches!(cmds.as_slice(), [Cmd::LoadPins(1)]),
+            "the open panel loads again: {cmds:?}"
+        );
+        assert!(m.jump_to(10) && m.jump == Some(10));
+        assert!(!m.jump_to(999));
+        m.open_room(3);
+        assert!(m.pins.is_none() && !m.can_pin(), "a DM has no pins");
+    }
+
+    #[test]
+    fn files_send_with_the_message_once_uploaded() {
+        let mut m = chat();
+        m.state.me.as_mut().unwrap().upload_max = 1 << 20;
+        let cmds = m.attach(vec![("/tmp/a.txt".into(), 3)]);
+        assert!(matches!(
+            cmds.as_slice(),
+            [Cmd::Upload {
+                key: 1,
+                room: 1,
+                ..
+            }]
+        ));
+        assert!(m.send("x").is_empty());
+        assert_eq!(m.error, UPLOADS_BUSY);
+        let att = vesper_protocol::Attachment {
+            id: "u1".into(),
+            name: "a.txt".into(),
+            mime: "application/octet-stream".into(),
+            size: 3,
+            kind: vesper_protocol::AttachmentKind::File,
+        };
+        m.apply(Event::Uploaded {
+            key: 1,
+            attachment: att,
+        });
+        let cmds = m.send("");
+        assert!(
+            matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body == "a.txt" && attachments == &[(1, "u1".to_string())]),
+            "{cmds:?}"
+        );
+        m.apply(Event::Sent {
+            message: Box::new(msg(20, 1, "a", "a.txt")),
+            keys: vec![1],
+        });
+        assert!(m.tray.items.is_empty());
+        // The server's upload_max is checked before sending.
+        assert!(m.attach(vec![("/tmp/big".into(), 2 << 20)]).is_empty());
+        assert_eq!(m.tray.items[0].error, "Files can be up to 1 MB.");
     }
 }

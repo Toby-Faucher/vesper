@@ -180,7 +180,7 @@ fn the_room_view_shows_rooms_and_messages_and_sends(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let cmds = drain(&mut rx);
     assert!(
-        matches!(cmds.as_slice(), [Cmd::Send { room: 1, body }] if body == "hello\nworld"),
+        matches!(cmds.as_slice(), [Cmd::Send { room: 1, body, .. }] if body == "hello\nworld"),
         "{cmds:?}"
     );
     view.read_with(cx, |v, cx| assert_eq!(v.composer.read(cx).value(), ""));

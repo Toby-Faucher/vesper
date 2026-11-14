@@ -3,13 +3,15 @@
 //! Like a browser on the server's own page: the session cookie lives in a cookie jar, and every request and the
 //! socket upgrade send `Origin` equal to the server's origin, which the server checks (ADR 0007).
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use reqwest::cookie::{CookieStore, Jar};
-use reqwest::header::{COOKIE, HeaderMap, HeaderValue, ORIGIN};
-use reqwest::{Method, StatusCode};
+use reqwest::header::{CONTENT_LENGTH, COOKIE, HeaderMap, HeaderValue, ORIGIN};
+use reqwest::{Method, RequestBuilder, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -17,10 +19,12 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::{self, Message as WsMsg, client::IntoClientRequest};
 use url::Url;
 use vesper_protocol::{
-    ApiError, ApiErrorCode, CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ClientMsg, LoginReq, Me,
-    Message, MessagePage, ReadReq, Secret, SendMessage, ServerMsg,
+    ApiError, ApiErrorCode, Attachment, CLOSE_DISCONNECTED, CLOSE_SESSION_ENDED, ClientMsg,
+    EditMessage, LoginReq, Me, Message, MessagePage, PinReq, ReactionReq, ReadReq, Secret,
+    SendMessage, ServerMsg, UploadDone,
 };
 
+use crate::files::{self, IMAGE_MAX, Picture};
 use crate::settings::Denoise;
 use crate::store::{Saved, SessionStore};
 use crate::voice::denoise::{self, MODEL_MAX, MODEL_URL};
@@ -47,9 +51,42 @@ pub enum Cmd {
     },
     /// The newest message id of each DM, to sort them (`hello` has no activity).
     SeedActivity(Vec<i64>),
+    /// `attachments` are (tray key, upload id); the keys come back with `Sent`.
     Send {
         room: i64,
         body: String,
+        reply_to: Option<i64>,
+        attachments: Vec<(u64, String)>,
+    },
+    Edit {
+        id: i64,
+        body: String,
+    },
+    Delete(i64),
+    React {
+        id: i64,
+        emoji: String,
+        on: bool,
+    },
+    Pin {
+        id: i64,
+        on: bool,
+    },
+    LoadPins(i64),
+    /// Sends the file at `path` as the raw body of `POST /api/rooms/{room}/uploads`.
+    Upload {
+        key: u64,
+        room: i64,
+        path: PathBuf,
+    },
+    CancelUpload(u64),
+    /// An image attachment, decoded small for the timeline.
+    FetchImage(String),
+    /// An attachment written to `to`; `open` hands it to the system's app after.
+    Download {
+        id: String,
+        to: PathBuf,
+        open: bool,
     },
     MarkRead {
         room: i64,
@@ -98,7 +135,10 @@ pub enum Event {
         error: String,
     },
     Activity(Vec<(i64, i64)>),
-    Sent(Box<Message>),
+    Sent {
+        message: Box<Message>,
+        keys: Vec<u64>,
+    },
     SendFailed {
         room: i64,
         body: String,
@@ -107,6 +147,38 @@ pub enum Event {
     ReadFailed {
         room: i64,
     },
+    /// The new copy after a reaction or pin.
+    Changed(Box<Message>),
+    Edited(Box<Message>),
+    /// An edit, delete, reaction or pin failed.
+    ChangeFailed(String),
+    Pins {
+        room: i64,
+        pins: Result<Vec<Message>, String>,
+    },
+    UploadProgress {
+        key: u64,
+        progress: f32,
+    },
+    Uploaded {
+        key: u64,
+        attachment: Attachment,
+    },
+    /// `fail` is `None` when the file could not be read.
+    UploadFailed {
+        key: u64,
+        fail: Option<Fail>,
+    },
+    /// `None` when it did not load or decode.
+    Image {
+        id: String,
+        picture: Option<Picture>,
+    },
+    Downloaded {
+        path: PathBuf,
+        open: bool,
+    },
+    DownloadFailed(String),
     /// From the call started with `VoiceCmd::Start { call, .. }`.
     Voice {
         call: u64,
@@ -250,6 +322,10 @@ impl Api {
         if let Some(b) = body {
             req = req.json(&b);
         }
+        Self::answer(req).await
+    }
+
+    async fn answer<T: DeserializeOwned>(req: RequestBuilder) -> Result<T, Fail> {
         let res = req.send().await.map_err(|_| Fail::Network)?;
         let status = res.status();
         if !status.is_success() {
@@ -288,19 +364,116 @@ impl Api {
         .await
     }
 
-    pub async fn send(&self, room: i64, body: String) -> Result<Message, Fail> {
-        let b = serde_json::to_value(SendMessage {
-            body,
-            reply_to: None,
-            attachments: vec![],
-        })
-        .expect("json");
+    pub async fn send(&self, room: i64, msg: SendMessage) -> Result<Message, Fail> {
+        let b = serde_json::to_value(msg).expect("json");
         self.call(
             Method::POST,
             &format!("/api/rooms/{room}/messages"),
             Some(b),
         )
         .await
+    }
+
+    /// `PATCH`, `DELETE` or `PUT` on `/api/messages/{id}{path}`.
+    pub async fn change<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        id: i64,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<T, Fail> {
+        self.call(method, &format!("/api/messages/{id}{path}"), body)
+            .await
+    }
+
+    pub async fn pins(&self, room: i64) -> Result<Vec<Message>, Fail> {
+        self.call(Method::GET, &format!("/api/rooms/{room}/pins"), None)
+            .await
+    }
+
+    /// Streams the file at `path` up, calling `progress` with the share sent so far. `Err(None)`: unreadable.
+    pub async fn upload(
+        &self,
+        room: i64,
+        path: &std::path::Path,
+        progress: impl Fn(f32) + Send + Sync + 'static,
+    ) -> Result<Attachment, Option<Fail>> {
+        use tokio::io::AsyncReadExt;
+        let file = tokio::fs::File::open(path).await.map_err(|_| None)?;
+        let size = file.metadata().await.map_err(|_| None)?.len();
+        let name = path
+            .file_name()
+            .map_or("file".into(), |n| n.to_string_lossy().into_owned());
+        let mut url = self
+            .base
+            .join(&format!("/api/rooms/{room}/uploads"))
+            .map_err(|_| Some(Fail::NotVesper))?;
+        url.query_pairs_mut().append_pair("name", &name);
+        let progress = Arc::new(progress);
+        let stream = futures_util::stream::unfold((file, 0u64), move |(mut f, sent)| {
+            let progress = progress.clone();
+            async move {
+                let mut buf = vec![0; 64 * 1024];
+                match f.read(&mut buf).await {
+                    Ok(0) => None,
+                    Ok(n) => {
+                        buf.truncate(n);
+                        let sent = sent + n as u64;
+                        progress(sent as f32 / size.max(1) as f32);
+                        Some((Ok::<_, std::io::Error>(buf), (f, sent)))
+                    }
+                    Err(e) => Some((Err(e), (f, sent))),
+                }
+            }
+        });
+        let req = self
+            .http
+            .post(url)
+            .header(CONTENT_LENGTH, size)
+            .body(reqwest::Body::wrap_stream(stream))
+            // The server cuts off a slow upload itself; this only ends one that hangs.
+            .timeout(Duration::from_secs(3600));
+        Self::answer::<UploadDone>(req)
+            .await
+            .map(|d| d.attachment)
+            .map_err(Some)
+    }
+
+    /// An uploaded file, at most `max` bytes. The id must be the server's 32 hex.
+    pub async fn download(&self, id: &str, max: u64) -> Result<Vec<u8>, Fail> {
+        if !files::valid_id(id) {
+            return Err(Fail::NotVesper);
+        }
+        let url = self
+            .base
+            .join(&format!("/api/uploads/{id}"))
+            .map_err(|_| Fail::NotVesper)?;
+        let mut res = self
+            .http
+            .get(url)
+            .timeout(Duration::from_secs(600))
+            .send()
+            .await
+            .map_err(|_| Fail::Network)?;
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let code = res
+                .json::<ApiError>()
+                .await
+                .map_or(ApiErrorCode::Internal, |e| e.code);
+            return Err(Fail::Api { status, code });
+        }
+        let mut bytes = vec![];
+        while let Some(chunk) = res.chunk().await.map_err(|_| Fail::Network)? {
+            if (bytes.len() + chunk.len()) as u64 > max {
+                return Err(Fail::Api {
+                    status: 413,
+                    code: ApiErrorCode::TooLarge,
+                });
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     }
 
     pub async fn mark_read(&self, room: i64, id: i64) -> Result<(), Fail> {
@@ -407,6 +580,7 @@ pub fn start(
                     tx,
                     conn: None,
                     call: None,
+                    uploads: HashMap::new(),
                     warned: false,
                 }
                 .run(cmd_rx),
@@ -429,6 +603,8 @@ struct Net {
     tx: UnboundedSender<Event>,
     conn: Option<Conn>,
     call: Option<Call>,
+    /// Running uploads by tray key, so Cancel can stop them.
+    uploads: HashMap<u64, JoinHandle<()>>,
     /// NotRemembered was sent.
     warned: bool,
 }
@@ -450,6 +626,9 @@ impl Net {
     /// Ends the socket and any call.
     fn drop_conn(&mut self) -> Option<Api> {
         self.call = None;
+        for (_, u) in self.uploads.drain() {
+            u.abort();
+        }
         let c = self.conn.take()?;
         c.socket.abort();
         Some(c.api)
@@ -552,6 +731,37 @@ impl Net {
                 let emit = move |ev| drop(tx.send(Event::Voice { call, ev }));
                 self.call = Some(Call::start(self.devices.clone(), setup, denoiser, emit));
             }
+            Cmd::Upload { key, room, path } => {
+                let Some(c) = &self.conn else { return };
+                let (api, tx) = (c.api.clone(), self.tx.clone());
+                self.uploads.retain(|_, h| !h.is_finished());
+                self.uploads.insert(
+                    key,
+                    tokio::spawn(async move {
+                        let shown = std::sync::atomic::AtomicU32::new(0);
+                        let ptx = tx.clone();
+                        // At most one event per percent.
+                        let progress = move |p: f32| {
+                            let pct = (p * 100.0) as u32;
+                            if shown.swap(pct, std::sync::atomic::Ordering::Relaxed) != pct {
+                                let _ = ptx.send(Event::UploadProgress { key, progress: p });
+                            }
+                        };
+                        let ev = match api.upload(room, &path, progress).await {
+                            Ok(attachment) => Event::Uploaded { key, attachment },
+                            Err(Some(f)) if f.unauthorized() => Event::SessionEnded,
+                            Err(fail) => Event::UploadFailed { key, fail },
+                        };
+                        let _ = tx.send(ev);
+                    }),
+                );
+            }
+            // Dropping the request ends it; the server deletes the partial file.
+            Cmd::CancelUpload(key) => {
+                if let Some(h) = self.uploads.remove(&key) {
+                    h.abort();
+                }
+            }
             Cmd::Voice(VoiceCmd::Stop) => self.call = None,
             Cmd::Voice(c) => {
                 if let Some(call) = &self.call {
@@ -591,6 +801,21 @@ impl Net {
     }
 }
 
+pub const ATTACH_FAILED: &str = "That file could not be attached. Upload it again.";
+pub const PINS_FULL: &str = "This room has 50 pins, the most it can hold. Unpin one first.";
+pub const SAVE_FAILED: &str = "The file could not be saved there.";
+
+/// The answer to an edit, reaction or pin.
+fn changed(
+    r: Result<Message, Fail>,
+    ok: impl FnOnce(Message) -> Event,
+) -> (Result<(), Fail>, Event) {
+    match r {
+        Ok(m) => (Ok(()), ok(m)),
+        Err(f) => (Err(f), Event::ChangeFailed(f.text().into())),
+    }
+}
+
 /// One REST call; a 401 ends the session.
 async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
     let (res, ev) = match cmd {
@@ -626,16 +851,101 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
             }
             (Ok(()), Event::Activity(got))
         }
-        Cmd::Send { room, body } => match api.send(room, body.clone()).await {
-            Ok(m) => (Ok(()), Event::Sent(Box::new(m))),
-            Err(f) => (
-                Err(f),
-                Event::SendFailed {
+        Cmd::Send {
+            room,
+            body,
+            reply_to,
+            attachments,
+        } => {
+            let (keys, ids): (Vec<u64>, Vec<String>) = attachments.into_iter().unzip();
+            let msg = SendMessage {
+                body: body.clone(),
+                reply_to,
+                attachments: ids,
+            };
+            match api.send(room, msg).await {
+                Ok(m) => (
+                    Ok(()),
+                    Event::Sent {
+                        message: Box::new(m),
+                        keys,
+                    },
+                ),
+                Err(f) => {
+                    let error = match f {
+                        Fail::Api { status: 409, .. } => ATTACH_FAILED,
+                        f => f.text(),
+                    };
+                    let error = error.into();
+                    (Err(f), Event::SendFailed { room, body, error })
+                }
+            }
+        }
+        Cmd::Edit { id, body } => {
+            let b = serde_json::to_value(EditMessage { body }).expect("json");
+            changed(api.change(Method::PATCH, id, "", Some(b)).await, |m| {
+                Event::Edited(Box::new(m))
+            })
+        }
+        Cmd::Delete(id) => match api.change::<()>(Method::DELETE, id, "", None).await {
+            // The server pushes the deleted copy.
+            Ok(()) => return,
+            Err(f) => (Err(f), Event::ChangeFailed(f.text().into())),
+        },
+        Cmd::React { id, emoji, on } => {
+            let b = serde_json::to_value(ReactionReq { emoji, on }).expect("json");
+            let r = api.change(Method::PUT, id, "/reaction", Some(b)).await;
+            changed(r, |m| Event::Changed(Box::new(m)))
+        }
+        Cmd::Pin { id, on } => {
+            let b = serde_json::to_value(PinReq { on }).expect("json");
+            match api.change(Method::PUT, id, "/pin", Some(b)).await {
+                Ok(m) => (Ok(()), Event::Changed(Box::new(m))),
+                Err(f @ Fail::Api { status: 409, .. }) => {
+                    (Err(f), Event::ChangeFailed(PINS_FULL.into()))
+                }
+                Err(f) => (Err(f), Event::ChangeFailed(f.text().into())),
+            }
+        }
+        Cmd::LoadPins(room) => {
+            let r = api.pins(room).await;
+            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+            (
+                res,
+                Event::Pins {
                     room,
-                    body,
-                    error: f.text().into(),
+                    pins: r.map_err(|f| f.text().into()),
                 },
-            ),
+            )
+        }
+        Cmd::FetchImage(id) => {
+            let r = api.download(&id, IMAGE_MAX).await;
+            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+            let picture = match r {
+                Ok(bytes) => tokio::task::spawn_blocking(move || files::decode_picture(&bytes))
+                    .await
+                    .ok()
+                    .flatten(),
+                Err(_) => None,
+            };
+            (res, Event::Image { id, picture })
+        }
+        Cmd::Download { id, to, open } => match api.download(&id, u64::MAX).await {
+            Ok(bytes) => {
+                let path = to.clone();
+                let wrote = tokio::task::spawn_blocking(move || {
+                    if let Some(dir) = path.parent() {
+                        std::fs::create_dir_all(dir)?;
+                    }
+                    std::fs::write(&path, bytes)
+                })
+                .await;
+                match wrote {
+                    Ok(Ok(())) => (Ok(()), Event::Downloaded { path: to, open }),
+                    _ => (Ok(()), Event::DownloadFailed(SAVE_FAILED.into())),
+                }
+            }
+            Err(f) => (Err(f), Event::DownloadFailed(f.text().into())),
         },
         Cmd::MarkRead { room, id } => match api.mark_read(room, id).await {
             Ok(()) => return,
