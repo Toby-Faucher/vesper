@@ -10,8 +10,26 @@ license = "MIT"
 publish = false
 
 [dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 gpui = "=0.2.2"
 gpui-component = "=0.5.1"
+keyring = "4.2"
+reqwest = { version = "0.13", default-features = false, features = ["json", "cookies", "rustls-no-provider", "charset", "http2", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+url = "2"
+vesper-protocol = { version = "1.8.2", path = "../crates/vesper-protocol" }
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[dev-dependencies]
+gpui = { version = "=0.2.2", features = ["test-support"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+vesper-server = { path = "../crates/vesper-server" }
+vesper-sfu = { path = "../crates/vesper-sfu" }
+vesper-store = { path = "../crates/vesper-store" }
