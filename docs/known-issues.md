@@ -1,7 +1,7 @@
 # Known issues
 
 Things found in review that were left on purpose, because they are small, rare or wait on a bigger piece of work.
-Last updated 2026-11-10. Nothing here was run in a headed browser or a real deploy (the e2e runs headless Chromium). Fix an item, then delete its line in the same commit.
+Last updated 2026-11-13. Nothing here was run in a headed browser or a real deploy (the e2e runs headless Chromium). Fix an item, then delete its line in the same commit.
 
 ## Security and abuse
 
@@ -18,7 +18,6 @@ Last updated 2026-11-10. Nothing here was run in a headed browser or a real depl
 - **Search timing shows a little about hidden rooms.** Matches in rooms you cannot see are skipped one by one while the index is walked,
   so many newer hidden matches make a search slower (measured 2 ms against 20 ms at 100k messages). A very weak signal at this scale,
   and the search limit (10, then 1 a second) slows any probing.
-- **A very large `VESPER_MAX_SOCKETS` panics at start.** Keep it in the hundreds.
 - **The client address trusts headers from private peers.** When the TCP peer is loopback or private, the server takes a valid `CF-Connecting-IP`,
   else the last `X-Forwarded-For` entry, else the peer; from any other peer it ignores both. Through Cloudflare this is the real client, because
   Cloudflare overwrites `CF-Connecting-IP`. If the app is ever reached on a private network without Cloudflare (the HTTP port open on the LAN, or
