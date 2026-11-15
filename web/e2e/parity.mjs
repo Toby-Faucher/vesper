@@ -54,6 +54,19 @@ const SCENES = {
     web: async ({ alice }) => { await home(alice.page); return alice.page; },
     desktop: { user: 'alice' },
   },
+  // The logo in the teal accent: the web's #logo-tint filter (accent.ts), the desktop's tinted picture (theme::tint).
+  'logo-accent': {
+    web: async ({ alice }) => {
+      await api(alice.page, 'PATCH', '/api/me', { ui_accent: 'teal' });
+      await home(alice.page);
+      return alice.page;
+    },
+    desktop: { user: 'alice' },
+    after: async ({ alice }) => {
+      await api(alice.page, 'PATCH', '/api/me', { ui_accent: 'amber' });
+      await home(alice.page);
+    },
+  },
   // general with the 40 seeded messages, all from the same minute.
   'timeline-general': {
     web: async ({ alice, seed }) => {

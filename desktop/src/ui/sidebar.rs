@@ -429,7 +429,7 @@ impl Vesper {
                     .gap(px(8.))
                     .pr(px(8.))
                     .pl(px(16.))
-                    .child(img(logo()).h(px(28.)).w(px(59.)).flex_none())
+                    .child(img(logo(t.fill)).h(px(28.)).w(px(59.)).flex_none())
                     .child(
                         div()
                             .flex_1()

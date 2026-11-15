@@ -147,6 +147,8 @@ impl Motion {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tokens {
     pub scheme: Scheme,
+    /// The accent fill as chosen (`fillOf`), before the light scheme darkens it: the logo is tinted to it.
+    pub fill: u32,
     pub bg_app: Rgba,
     pub bg_sidebar: Rgba,
     pub bg_raised: Rgba,
@@ -232,6 +234,7 @@ impl Tokens {
         // :root, with the grays of the scheme.
         let mut t = Tokens {
             scheme,
+            fill: fill_of(accent),
             bg_app: g(1),
             bg_sidebar: g(2),
             bg_raised: g(3),
@@ -284,7 +287,7 @@ impl Tokens {
             t.light();
         }
         t.syn_com = t.fg_3;
-        t.set_accent(&roles(fill_of(accent), scheme));
+        t.set_accent(&roles(t.fill, scheme));
         t
     }
 
@@ -545,6 +548,22 @@ pub fn fill_of(v: Option<&str>) -> u32 {
     }
 }
 
+/// The logo's colour matrix (`accent.ts` `tint`, the `#logo-tint` feColorMatrix): row `i` gives output channel `i`
+/// from the input r, g, b (0 to 1, sRGB). It moves amber to `fill` and keeps every grey, so the white letters and the
+/// black outline stay. The identity for amber.
+pub fn tint(fill: u32) -> [[f64; 3]; 3] {
+    let (a, t) = (
+        chans(AMBER).map(|x| x / 255.),
+        chans(fill).map(|x| x / 255.),
+    );
+    let mean = (a[0] + a[1] + a[2]) / 3.;
+    let c = a.map(|x| x - mean); // amber off the grey axis: greys give 0, amber gives 1
+    let n = c.iter().map(|x| x * x).sum::<f64>();
+    std::array::from_fn(|i| {
+        std::array::from_fn(|j| f64::from(u8::from(i == j)) + (t[i] - a[i]) * c[j] / n)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,6 +676,27 @@ mod tests {
             (t.warn_fg, WARN_FG),
         ] {
             assert_eq!(hex(got), want);
+        }
+    }
+
+    #[test]
+    fn the_logo_tint_is_the_identity_for_amber_and_moves_amber_to_the_fill() {
+        let id = tint(AMBER);
+        for (i, row) in id.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                assert!((v - f64::from(u8::from(i == j))).abs() < 1e-9);
+            }
+        }
+        let through = |m: [[f64; 3]; 3], c: u32| -> [f64; 3] {
+            let x = chans(c).map(|v| v / 255.);
+            m.map(|r| (r[0] * x[0] + r[1] * x[1] + r[2] * x[2]) * 255.)
+        };
+        for (_, _, fill) in PRESETS {
+            let got = through(tint(fill), AMBER);
+            let want = chans(fill);
+            assert!((0..3).all(|i| (got[i] - want[i]).abs() < 0.5), "{fill:06x}");
+            let grey = through(tint(fill), 0x808080);
+            assert!(grey.iter().all(|v| (v - 128.).abs() < 0.5), "greys stay");
         }
     }
 

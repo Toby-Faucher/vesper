@@ -1,29 +1,46 @@
 //! The first screen, drawn like the web's `Login.svelte` in `AuthCard.svelte`: the logo over one card, anchored near
 //! the top third. The desktop adds the server address field (the web knows its server) and the keyring note.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Context, Div, Image, ImageFormat, InteractiveElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, img, px,
+    Context, Div, InteractiveElement, ParentElement, RenderImage, StatefulInteractiveElement,
+    Styled, Window, div, img, px,
 };
 
 use super::Vesper;
 use super::c::{Button, Field, PasswordInput, text_input};
-use super::theme::{SEMIBOLD, TEXT_SM, TEXT_XL, TextStepExt, tokens};
+use super::theme::{self, SEMIBOLD, TEXT_SM, TEXT_XL, TextStepExt, tokens};
 use crate::model::{INSECURE, NOT_REMEMBERED};
 
-/// The web's logo (`Mark.svelte`): the wordmark, 235x112, drawn at half size.
-pub(super) fn logo() -> Arc<Image> {
-    static LOGO: OnceLock<Arc<Image>> = OnceLock::new();
-    LOGO.get_or_init(|| {
-        Arc::new(Image::from_bytes(
-            ImageFormat::Webp,
-            include_bytes!("../../../web/src/lib/ui/logo.webp").to_vec(),
-        ))
-    })
-    .clone()
+/// The web's logo (`Mark.svelte`): the wordmark, 235x112, drawn at half size, in the accent `fill` like the web's
+/// `--logo-filter` (`theme::tint` on each pixel). The last fill's picture is kept, so a frame does not redo it.
+pub(super) fn logo(fill: u32) -> Arc<RenderImage> {
+    static LOGO: Mutex<Option<(u32, Arc<RenderImage>)>> = Mutex::new(None);
+    let mut kept = LOGO.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((f, pic)) = kept.as_ref()
+        && *f == fill
+    {
+        return pic.clone();
+    }
+    let mut px = image::load_from_memory_with_format(
+        include_bytes!("../../../web/src/lib/ui/logo.webp"),
+        image::ImageFormat::WebP,
+    )
+    .expect("the logo is a webp")
+    .to_rgba8();
+    let m = theme::tint(fill);
+    for p in px.pixels_mut() {
+        let x = [p[0], p[1], p[2]].map(|v| f64::from(v) / 255.);
+        let [r, g, b] = m.map(|row| {
+            ((row[0] * x[0] + row[1] * x[1] + row[2] * x[2]).clamp(0., 1.) * 255.).round() as u8
+        });
+        (p[0], p[1], p[2]) = (b, g, r); // GPUI draws BGRA
+    }
+    let pic = Arc::new(RenderImage::new(vec![image::Frame::new(px)]));
+    *kept = Some((fill, pic.clone()));
+    pic
 }
 
 impl Vesper {
@@ -150,7 +167,7 @@ impl Vesper {
                             .flex()
                             .justify_center()
                             .mb_5()
-                            .child(img(logo()).h(px(56.)).w(px(118.)).flex_none()),
+                            .child(img(logo(t.fill)).h(px(56.)).w(px(118.)).flex_none()),
                     )
                     .child(card)
                     .child(below),
