@@ -91,7 +91,7 @@ The "Not verified" list at the end says what was only read.
 | `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. The UI accent from Settings > Appearance (`0006_ui_accent.sql`): `accounts.ui_accent`, a preset key or `#rrggbb`, NULL for amber. Password resets (`0007_password_resets.sql`, `resets.rs`): every reset row is kept as an audit (who made it, used when and from the LAN or the internet, shown to the person); at most one live code per account (a partial unique index), cancelled by a new one, a role change, a ban or unban and a password change; a role change or ban of the maker cancels the live links they made. Archived rooms (`0008_room_archive.sql`): `rooms.archived_at`, NULL while not archived. `Store::backup_into` writes a consistent copy with `VACUUM INTO` (for `vesper-server backup` and the automatic backups). `Store::schema_versions` reads the newest applied and the newest embedded migration without changing the file, so the server can back up before `Store::open` migrates. Passkeys (`0013_passkeys.sql`, `passkeys.rs`): one row per WebAuthn credential, the credential id unique and the `webauthn-rs` credential kept as JSON (public key and counter), deleted with the account. It stores only hashes of session tokens, invite codes and reset codes. |
 | `vesper-sfu` | SFU on str0m. One UDP socket, rooms keyed by name, Opus voice and one VP8 screen per client forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
 | `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_passkeys.rs` (passkeys, WebAuthn through `webauthn-rs`), `api_admin.rs` (users, invites, reset links, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`, `listed`, `visible_room`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `speedtest.rs` (upload speed test), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands, `backup`, the automatic `pre-*` and `auto-*` backups and their keep rule), `build.rs` (the build id), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
-| `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
+| `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, and `Rnnoise` (the `nnnoiseless` port, model built in), both on 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
 ## Direct messages
@@ -241,6 +241,7 @@ unit tests in `hub.rs` and `voice.rs`.
 ## Audio pipeline (browser)
 
 Order, fixed by the spec: microphone, browser echo cancellation (always on), gain (the input boost), DeepFilterNet, Opus encode, WebRTC to the SFU.
+RNNoise takes DeepFilterNet's place in that order when it is picked.
 
 - In `deepfilter` mode: mic through a gain node (the input boost) into an AudioWorklet, which exchanges 10 ms frames with a DSP worker over a MessageChannel; worklet output goes
   into a `MediaStreamDestination`, and that track is what WebRTC sends (`web/src/lib/audio/capture.ts`, `denoise.worklet.ts`,
@@ -259,6 +260,11 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
     from frame arrival, so in played time the release starts 200 ms minus the queue depth after the sound drops. Turning it off
     ramps it open. The switch is disabled outside DeepFilterNet mode. The passthrough before the model is
     ready, and after a failure, is not gated.
+- In `rnnoise` mode the same graph, worklet and worker run, with `WasmRnnoise` from the same WASM file in the worker instead of
+  DeepFilterNet. It needs no model download. The input boost, the limiter and the noise gate stay off in this mode (the Settings
+  controls for them are DeepFilterNet only), so the path is mic, echo cancellation, RNNoise, Opus. The browser filter hand-over at
+  `ready` is the same as for DeepFilterNet. RNNoise delays the output by one frame (10 ms) where DeepFilterNet takes 30 ms.
+  Unit-tested with fakes and the Rust tests; not heard in a real browser or call.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
   suppression is on in `browser` mode, in `deepfilter` mode while the model loads, and in `deepfilter` mode if the user turned it on.
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is
@@ -266,7 +272,9 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
 
 ## DSP pipeline (Rust)
 
-`vesper-dsp` runs each 10 ms frame through a `Pipeline`: input gain, pre stages, DeepFilterNet, post stages. A `PipelineConfig`
+`vesper-dsp` runs each 10 ms frame through a `Pipeline`: input gain, pre stages, DeepFilterNet, post stages. `Rnnoise` is separate
+and has no settings: it scales the frame to the 16-bit range RNNoise expects and back. A test checks it takes white noise down by
+over 10 dB in the pauses of a synthetic voice while the voice stays within 6 dB (measured 30.3 dB and -2.2 dB on the dev machine). A `PipelineConfig`
 sets each step, and its default gives the same output as the shipped denoiser bit for bit (a golden hash test pins it). The WASM
 `WasmDenoiser` is backed by the same `Pipeline`, so an audio experiment changes Rust only and never needs a change under `web/`.
 DeepFilterNet3 delays the output by 1440 samples (30 ms), which a test checks against a measured delay to within one sample; `latency_samples()` reports what our own stages add on top.
@@ -274,8 +282,11 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 ## Fallback logic
 
-- Modes: `deepfilter`, `browser`, `off` (`web/src/lib/audio/mode.ts`).
-- `ModeController` trips from `deepfilter` to `browser` when 20 of the last 100 frames each took longer than 30 ms. The first 300 frames (about 3 s) are ignored. It stays tripped until `reset()`.
+- Modes: `deepfilter`, `rnnoise`, `browser`, `off` (`web/src/lib/audio/mode.ts`).
+- The chain is `deepfilter` or `rnnoise`, then `browser`, then `off`. RNNoise is a choice next to DeepFilterNet, not a step
+  after it: a slow or failed DeepFilterNet goes to `browser`, as before. Each fallback below applies to `rnnoise` the same way.
+  The desktop app has no browser filter, so both go to its noise gate there.
+- `ModeController` trips from `deepfilter` or `rnnoise` to `browser` when 20 of the last 100 frames each took longer than 30 ms. The first 300 frames (about 3 s) are ignored. It stays tripped until `reset()`.
   The numbers are set in `denoise-core.ts`.
 - A mic that ends mid-call (or that the system mutes for over 3 s) leaves the call up with `off (microphone lost: ...)`, and the call bar offers
   Retry microphone: `capture.retry()` asks for the mic again (a saved mic that is gone falls back to the default, as at the start) and builds
@@ -372,7 +383,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `GET /api/admin/disk` | owner | `DiskUse` |
 | `GET /api/admin/server` | owner | `ServerStatus`: version and build, uptime, the `DiskUse` numbers, people in voice, failed pushes in the last 24 h (in memory, since start if shorter), the newest `*.db` in `<data>/backups` (name and time). No secrets and no one's address. The advertised public address is not in it: the server does not record when it changed |
 
-Your recent calls (`api_calls.rs`, store `calls.rs`, table `call_stats` from migration `0010_call_stats.sql`): when you leave a call your
+Your recent calls (`api_calls.rs`, store `calls.rs`, table `call_stats` from migration `0010_call_stats.sql`; `0014_call_stats_rnnoise.sql` rebuilds it to allow the `rnnoise` mode and copies every row): when you leave a call your
 client posts one summary: how long it lasted, the noise suppression mode it ended in and its fallback reason, incoming loss, jitter,
 concealed share and round trip (averages over the call's 2 s stats polls), and whether the browser filter ran while DeepFilterNet
 loaded. No room and no other people are stored. Each person reads only their own (Settings > Account, "Your recent calls"); there is

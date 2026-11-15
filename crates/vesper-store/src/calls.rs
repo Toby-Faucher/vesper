@@ -27,6 +27,7 @@ struct Row {
 fn mode_str(m: CallMode) -> &'static str {
     match m {
         CallMode::Deepfilter => "deepfilter",
+        CallMode::Rnnoise => "rnnoise",
         CallMode::Browser => "browser",
         CallMode::Off => "off",
     }
@@ -37,6 +38,7 @@ impl TryFrom<Row> for CallRecord {
     fn try_from(r: Row) -> Result<CallRecord> {
         let mode = match r.mode.as_str() {
             "deepfilter" => CallMode::Deepfilter,
+            "rnnoise" => CallMode::Rnnoise,
             "browser" => CallMode::Browser,
             "off" => CallMode::Off,
             m => {

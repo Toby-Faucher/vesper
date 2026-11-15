@@ -3,4 +3,4 @@
 /**
  * The noise suppression a call ended in (the web client's `DenoiseMode`).
  */
-export type CallMode = "deepfilter" | "browser" | "off";
+export type CallMode = "deepfilter" | "rnnoise" | "browser" | "off";

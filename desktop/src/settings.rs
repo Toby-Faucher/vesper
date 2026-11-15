@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// What runs on the microphone before Opus. The web's modes are `deepfilter`, `browser` and `off`; the desktop has no
-/// browser filter, so its light mode is the web's noise gate on the raw microphone.
+/// What runs on the microphone before Opus. The web's modes are `deepfilter`, `rnnoise`, `browser` and `off`; the
+/// desktop has no browser filter, so its light mode is the web's noise gate on the raw microphone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Denoise {
     #[default]
     DeepFilter,
+    Rnnoise,
     Gate,
     Off,
 }
@@ -196,6 +197,26 @@ mod tests {
             "volumes clamped"
         );
         assert!(s.echo_cancel, "on when the file does not say");
+
+        // Every mode is saved by its name; files from before RNNoise keep their mode.
+        for (name, d) in [
+            ("deepfilter", Denoise::DeepFilter),
+            ("rnnoise", Denoise::Rnnoise),
+            ("gate", Denoise::Gate),
+            ("off", Denoise::Off),
+        ] {
+            let s = Settings {
+                denoise: d,
+                ..Settings::default()
+            };
+            s.save(&p).unwrap();
+            assert!(
+                std::fs::read_to_string(&p)
+                    .unwrap()
+                    .contains(&format!(r#""denoise": "{name}""#))
+            );
+            assert_eq!(Settings::load(&p), s);
+        }
 
         // One value this build cannot read falls back alone; the rest, volumes too, stay.
         std::fs::write(

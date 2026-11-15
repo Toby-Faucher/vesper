@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_AUDIO_SETTINGS, clampSettings, type AudioSettings } from './settings';
+import { DEFAULT_AUDIO_SETTINGS, SETTINGS_KEY, clampSettings, loadSettings, saveSettings, type AudioSettings } from './settings';
 
 describe('clampSettings', () => {
   it('fills defaults', () => {
@@ -33,6 +33,16 @@ describe('clampSettings', () => {
     expect(s).toEqual({ ...DEFAULT_AUDIO_SETTINGS, speakerId: 'spk' });
     expect(clampSettings({ vad: { thresholdDb: -500, gate: false } }).vad.thresholdDb).toBe(-100);
     expect(clampSettings({ vad: { thresholdDb: -30, gate: 'on' } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -30, gate: false });
+  });
+  it('every mode survives a save and load, and saved settings from before rnnoise load unchanged', () => {
+    const m = new Map<string, string>();
+    const store = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) } as Storage;
+    for (const mode of ['deepfilter', 'rnnoise', 'browser', 'off'] as const) {
+      saveSettings(store, { ...DEFAULT_AUDIO_SETTINGS, mode });
+      expect(loadSettings(store)).toEqual({ ...DEFAULT_AUDIO_SETTINGS, mode });
+    }
+    m.set(SETTINGS_KEY, JSON.stringify({ mode: 'browser', attenDb: 40 }));
+    expect(loadSettings(store)).toMatchObject({ mode: 'browser', attenDb: 40 });
   });
   it('the noise gate is off for saved settings from before it existed, and keeps their marker', () => {
     expect(clampSettings({ vad: { thresholdDb: -35 } } as unknown as Partial<AudioSettings>).vad).toEqual({ thresholdDb: -35, gate: false });

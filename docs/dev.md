@@ -122,7 +122,8 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   workspace). The app does not ship the model: at the first call it downloads `/dsp/model.tar.gz` from the server it is signed
   in to (the file the web app loads), checks its sha256 against the pin in `scripts/fetch-model.sh`, and keeps it as
   `Vesper/DeepFilterNet3_onnx.tar.gz` in the OS data dir. A server without `/dsp/` (a dev server without `scripts/build-dsp.sh`)
-  gives a call with the noise gate and a note in the call bar.
+  gives a call with the noise gate and a note in the call bar. RNNoise (`vesper-dsp`'s `Rnnoise`) is built into the app and
+  needs no model file.
 - The DeepFilterNet test with the real model runs only when `crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz` exists
   (`scripts/fetch-model.sh`); without it the test prints `SKIPPED` and passes. CI has no model, so it skips there.
 - Push to talk watches its key globally on Windows, macOS (with Accessibility access) and X11, only during a call. On Wayland it

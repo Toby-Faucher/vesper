@@ -103,7 +103,7 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 
 - **A very slow first visit can still fall back.** The denoiser files (about 10 MB, see Denoiser) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
 - **Not tried in real Chrome or Firefox.** Firefox may refuse a mic and AudioContext rate mismatch, which forces the browser fallback every time.
-- **The noise gate and the limiter work in DeepFilterNet mode only.** In browser and off mode the raw mic track is sent; the gate switch is disabled there. After an automatic fallback to browser mode the setting stays on but does nothing. With the gate on, the Settings meter shows the gated sound, so the noise under the marker is not visible; turn the gate off to set the marker.
+- **The noise gate, the limiter and the input boost work in DeepFilterNet mode only.** In browser and off mode the raw mic track is sent; in RNNoise mode they are left off on purpose, to match the Settings controls. The gate switch is disabled outside DeepFilterNet mode. After an automatic fallback to browser mode the setting stays on but does nothing. With the gate on, the Settings meter shows the gated sound, so the noise under the marker is not visible; turn the gate off to set the marker.
 - **Soft word starts under the marker are muted.** The gate opens on the first frame above the marker, so a quiet "s" or "h" before it can lose up to about 1.5 dB over the first 20 ms (measured on corpus speech).
 - **In Chromium the hand-over from the browser filter to DeepFilterNet opens the mic a second time.** The old track runs until the new one has sound, so there is no gap, but the new track's echo canceller starts from scratch, so echo can leak for a moment if others talk then. A browser that asks for mic permission each time could ask again. When the second track is silent or fails, both filters stay stacked for the call (`swap skipped: ...`). Not heard in a real browser; not tried on Edge on Windows, where the first silent reopen was seen.
 - **The switch from the passthrough to DeepFilterNet is a cut.** When the worker connects, the worklet goes from the passed-through mic to silence until 30 ms are queued, then fades in; the step to silence is not faded. It predates the underrun fade.
@@ -144,7 +144,7 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - **No panic hook in the wasm**, so a Rust panic shows as an opaque error. The build drops the name section, so a wasm stack trace shows function numbers, not names.
 - **Added delay is not measured.** The output queue starts at 30 ms and may grow to 80 ms, on top of the algorithm's lookahead. From the code we estimate about 30 ms more than before the larger buffers. The [checkpoint](testing/checkpoint.md) must measure it.
 - **`ndarray` and the `tract-core` pin in `vesper-dsp` are not optional**, although only the `tract` feature needs them. A featureless build pulls them in for nothing.
-- **The no-sound warnings work only in deepfilter mode.** In browser or off mode, also after a fallback, there are no pipeline numbers, so neither warning shows.
+- **The no-sound warnings work only in deepfilter and rnnoise mode.** In browser or off mode, also after a fallback, there are no pipeline numbers, so neither warning shows.
 - **The output queue only grows after jitter.** After a bad patch it can sit at 60 to 80 ms until it drops a frame. Diagnostics shows it as `Queue`.
 - **Thresholds are untuned:** the fallback trips at 20 late frames out of 100, with a 30 ms budget, after a 3 s warm-up. The numbers come from one laptop (2.1 ms average per frame there). The fallback is one-way for the rest of the call.
 
@@ -157,6 +157,8 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - The first call in DeepFilterNet mode downloads the 8 MB model from the server; until it is in, and on a server without
   `/dsp/` (a dev server without `scripts/build-dsp.sh`), the noise gate runs and the call bar says so. The fallback after slow
   frames is one way for the rest of the call, as on the web. The noise gate has no threshold setting (fixed at -50 dBFS).
+- RNNoise (Settings > Voice) is built into the app and needs no download. It falls back to the noise gate the same way.
+  Nobody has listened to it on a real call, on the web or the desktop; only the unit tests on synthetic noise ran.
 - Push to talk needs X11 for a global key on Linux; on Wayland it works only while the window has focus. On macOS it needs
   Accessibility access. A game running as administrator on Windows may hide its keys from the app (not tried).
 - Closing the window during a call minimises it instead of hiding it (GPUI 0.2.2 cannot hide a window on Windows), so it
