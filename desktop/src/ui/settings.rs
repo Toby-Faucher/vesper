@@ -1,11 +1,13 @@
 //! The Settings and Admin pages, framed like `SettingsPage.svelte` and `AdminPage.svelte`: a 48 px header with the
 //! title and Close, then a 200 px section list beside the open section (at most 640 px wide, 800 for Admin), centred.
 //!
-//! Settings has Voice, Notifications, Appearance, Account and App (the web's Desktop app section less its downloads). Voice holds what the desktop's own audio
-//! does (the noise filter, echo cancellation, the devices, the bitrate, push to talk). Not here, as the desktop has no
-//! such feature yet: the web's input meter, level marker, mic test, DeepFilterNet tuning, auto gain, DTX, levelling,
-//! the shortcut list, mention notifications, Web Push, the custom accent colour, the profile picture, adding a
-//! passkey, the welcome steps and Diagnostics. Account is in `account.rs`, Admin in `admin.rs`.
+//! Settings has Voice, Notifications, Appearance, Account and App (the web's Desktop app section less its downloads:
+//! Start with the computer). Voice holds what the desktop's own audio does (the devices, the input level and its
+//! marker, the mic test, the noise filter, echo cancellation, the bitrate, push to talk) and the shortcut list. Not
+//! here, as the desktop has no such feature yet: the web's noise gate switch (a gate after DeepFilterNet),
+//! DeepFilterNet tuning, browser noise suppression, auto gain, DTX, levelling, mention notifications, Web Push, the
+//! custom accent colour, adding a passkey, the welcome steps and Diagnostics. Account is in `account.rs`, Admin in
+//! `admin.rs`.
 
 use std::collections::HashMap;
 
@@ -25,7 +27,7 @@ use vesper_protocol::Role;
 use super::c::{self, Button, Dialog, Field, Select, Switch, Variant, kbd, radio_list, radio_row};
 use super::theme::{self, Scheme, Style, TEXT_BASE, TEXT_SM, TEXT_XL, TEXT_XS, TextStepExt};
 use super::{Vesper, account, admin};
-use crate::model::Phase;
+use crate::model::{Hint, Phase};
 use crate::net::{Cmd, Fail, Json};
 use crate::settings::{self, Denoise, Settings};
 use crate::voice::ptt::{self, KeyMsg};
@@ -90,10 +92,10 @@ impl Default for At {
     }
 }
 
-/// The groups of Settings > Voice that have Reset to defaults (`sections.ts` RESETS; the desktop's Input has nothing
-/// to reset).
+/// The groups of Settings > Voice that have Reset to defaults (`sections.ts` RESETS).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
+    Input,
     Noise,
     Quality,
     Ptt,
@@ -102,6 +104,7 @@ pub enum Group {
 impl Group {
     fn name(self) -> &'static str {
         match self {
+            Group::Input => "Input",
             Group::Noise => "Noise and echo",
             Group::Quality => "Quality",
             Group::Ptt => "Talk mode",
@@ -111,6 +114,7 @@ impl Group {
     pub fn reset(self, s: &mut Settings) {
         let d = Settings::default();
         match self {
+            Group::Input => s.gate_db = d.gate_db,
             Group::Noise => (s.denoise, s.echo_cancel) = (d.denoise, d.echo_cancel),
             Group::Quality => s.bitrate_kbps = d.bitrate_kbps,
             Group::Ptt => s.push_to_talk = d.push_to_talk,
@@ -184,6 +188,59 @@ pub(super) fn text(s: impl Into<SharedString>, color: impl Into<gpui::Hsla>, sma
         .child(s.into())
 }
 
+/// `Meter.svelte`: a bar on a track from -100 to 0 dBFS (`--ok-fg`, `--warn-fg` from -3), the level beside it, and
+/// the marker line.
+pub(super) fn meter(db: f32, marker: Option<f32>, cx: &App) -> Div {
+    let t = theme::tokens(cx);
+    let v = db.clamp(-100., 0.).round();
+    let share = |x: f32| gpui::relative((x + 100.) / 100.);
+    h_flex()
+        .gap(px(12.))
+        .child(
+            div()
+                .debug_selector(|| "settings-meter".into())
+                .relative()
+                .flex()
+                .flex_1()
+                .h(px(8.))
+                .overflow_hidden()
+                .rounded(px(4.))
+                .bg(t.bg_selected)
+                .border_1()
+                .border_color(t.line_strong)
+                .child(
+                    div()
+                        .debug_selector(|| "settings-meter-bar".into())
+                        .h_full()
+                        .w(share(v))
+                        .bg(if v >= -3. { t.warn_fg } else { t.ok_fg }),
+                )
+                .children(marker.map(|m| {
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(share(m.clamp(-100., 0.)))
+                        .ml(px(-1.))
+                        .w(px(2.))
+                        .h_full()
+                        .bg(t.fg)
+                })),
+        )
+        .child(
+            div()
+                .w(px(64.))
+                .flex_none()
+                .text_right()
+                .text_step(TEXT_XS)
+                .text_color(t.fg_2)
+                .child(if v <= -100. {
+                    "Silent".to_string()
+                } else {
+                    format!("{v} dBFS")
+                }),
+        )
+}
+
 /// The words of a failed request.
 pub(super) fn fail_text(f: Fail) -> String {
     f.text().to_string()
@@ -196,9 +253,9 @@ impl Vesper {
 
     /// Opens a page, or another section of the one open, and loads what it shows.
     pub(super) fn open_page(&mut self, at: At, window: &mut Window, cx: &mut Context<Self>) {
+        self.page.at = at;
         self.show_settings(true);
         self.capturing_key = false;
-        self.page.at = at;
         self.page.select = None;
         match at {
             At::Settings(Section::Voice) if self.settings_file.is_some() => {
@@ -797,7 +854,7 @@ impl Vesper {
         let mode_help = match s.denoise {
             Denoise::DeepFilter => "Strongest. Runs on your computer.",
             Denoise::Gate => {
-                "Lighter. Mutes your mic between words, when it is quieter than -50 dB."
+                "Lighter. Mutes your mic between words, when it is under the level marker."
             }
             Denoise::Off => "No filtering.",
         };
@@ -893,11 +950,85 @@ impl Vesper {
                 })
         });
 
-        let input = section().child(self.voice_head("Input", None, cx)).child(
-            Field::new("Microphone")
-                .help("The system default follows your computer's sound settings.")
-                .child(mic),
+        let marker = self.page_slider(
+            "gate",
+            (-100., 0., 1.),
+            s.gate_db as f32,
+            cx,
+            |this, v, cx| {
+                let db = v.round() as i32;
+                if db != this.model.settings.gate_db {
+                    this.change_settings(|s| s.gate_db = db, cx);
+                }
+            },
         );
+        let mc = &self.model.mic;
+        let hint = match mc.hint {
+            Hint::Clipping => {
+                Some("Too loud: the signal is clipping. Lower your microphone's volume.")
+            }
+            Hint::TooQuiet => Some("Very quiet or silent. Speak, or check the mic."),
+            Hint::Ok => None,
+        };
+        let input = section()
+            .child(self.voice_head("Input", Some(Group::Input), cx))
+            .child(
+                Field::new("Microphone")
+                    .help("The system default follows your computer's sound settings.")
+                    .child(mic),
+            )
+            .child(
+                v_flex()
+                    .gap(px(6.))
+                    .child(div().font_weight(t.weight_ui).child("Input level"))
+                    .child(meter(mc.db, Some(s.gate_db as f32), cx))
+                    .children(hint.map(|h| text(h, t.warn_fg, true))),
+            )
+            .child(
+                Field::new("Level marker")
+                    .value(format!("{} dB", s.gate_db))
+                    .help("The thin line across the meter. The noise gate mutes sound below it.")
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-marker".into())
+                            .child(c::range(&marker, cx)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_x(px(12.))
+                    .gap_y(px(4.))
+                    .child(
+                        div().debug_selector(|| "settings-mic-test".into()).child(
+                            Button::new(
+                                "settings-mic-test",
+                                if mc.testing {
+                                    "Stop mic test"
+                                } else {
+                                    "Mic test (hear yourself)"
+                                },
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let cmds = this.model.mic_test();
+                                this.run(cmds);
+                                cx.notify();
+                            })),
+                        ),
+                    )
+                    .child(text(
+                        "Use headphones, or you will get feedback.",
+                        t.fg_3,
+                        true,
+                    ))
+                    .when(!mc.error.is_empty(), |d| {
+                        d.child(
+                            text(mc.error.clone(), t.danger_fg, false)
+                                .w_full()
+                                .debug_selector(|| "settings-mic-error".into()),
+                        )
+                    }),
+            );
         let echo = s.echo_cancel;
         let noise = section()
             .child(self.voice_head("Noise and echo", Some(Group::Noise), cx))
@@ -939,14 +1070,17 @@ impl Vesper {
                 ),
             )
             .children(ptt_more);
+        let keys = section()
+            .child(h_flex().h(px(32.)).child(h3("Keyboard shortcuts", cx)))
+            .child(super::find::shortcut_list(&t));
         let error = (!self.settings_error.is_empty()).then(|| {
             text(self.settings_error.clone(), t.danger_fg, false)
                 .debug_selector(|| "settings-error".into())
         });
-        v_flex()
-            .gap(px(16.))
-            .children(error)
-            .child(sections(vec![input, noise, output, quality, talk], cx))
+        v_flex().gap(px(16.)).children(error).child(sections(
+            vec![input, noise, output, quality, talk, keys],
+            cx,
+        ))
     }
 
     fn render_notifications(&mut self, cx: &mut Context<Self>) -> Div {

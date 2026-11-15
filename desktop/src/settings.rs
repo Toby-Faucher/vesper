@@ -30,6 +30,8 @@ pub struct Settings {
     pub ptt_key: String,
     /// 32 to 510, 64 like the web's default.
     pub bitrate_kbps: u32,
+    /// The level marker, -100 to 0 dBFS (the web's `vad.thresholdDb`): the noise gate opens above it.
+    pub gate_db: i32,
     /// Device names; `None` or a name that is gone means the system default.
     pub input_device: Option<String>,
     pub output_device: Option<String>,
@@ -56,6 +58,7 @@ impl Default for Settings {
             // Not Space as on the web: a global Space would open the mic on every jump in a game.
             ptt_key: "Grave".into(),
             bitrate_kbps: 64,
+            gate_db: -50,
             input_device: None,
             output_device: None,
             start_with_computer: false,
@@ -72,6 +75,7 @@ impl Default for Settings {
 impl Settings {
     pub fn clamped(mut self) -> Settings {
         self.bitrate_kbps = self.bitrate_kbps.clamp(32, 510);
+        self.gate_db = self.gate_db.clamp(-100, 0);
         self.volume = self.volume.min(100);
         if crate::voice::ptt::parse_key(&self.ptt_key).is_none() {
             self.ptt_key = Settings::default().ptt_key;
@@ -167,6 +171,7 @@ mod tests {
             push_to_talk: true,
             ptt_key: "F13".into(),
             bitrate_kbps: 96,
+            gate_db: -42,
             input_device: Some("USB mic".into()),
             output_device: None,
             start_with_computer: true,

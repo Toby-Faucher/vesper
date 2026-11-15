@@ -1924,7 +1924,7 @@ fn x_button(
 }
 
 /// `ShortcutList.svelte`: every shortcut with its keys, then the switcher's filters.
-fn shortcut_list(t: &Tokens) -> Div {
+pub(super) fn shortcut_list(t: &Tokens) -> Div {
     let row = |label: &'static str, keys: Vec<&'static str>| {
         div()
             .flex()

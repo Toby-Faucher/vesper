@@ -272,6 +272,70 @@ pub struct Model {
     pub person_error: String,
     /// A DM the person card asked for is there: the view opens it.
     pub dm_opened: Option<i64>,
+    /// Settings > Voice's input level and mic test.
+    pub mic: MicCheck,
+}
+
+/// `levelHint` of devices.ts over the last 30 levels (3 s).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Hint {
+    #[default]
+    Ok,
+    Clipping,
+    TooQuiet,
+}
+
+/// `MicCheck.svelte`: the input level, metered from the mic test or the call while Settings > Voice is open, and the
+/// mic test (hear yourself). In a call both use the call's own capture; outside one the test opens the mic itself.
+#[derive(Debug)]
+pub struct MicCheck {
+    /// Settings > Voice is open. Set by the view.
+    pub open: bool,
+    pub testing: bool,
+    /// The level in dBFS, -100 for silence.
+    pub db: f32,
+    peaks: std::collections::VecDeque<f32>,
+    pub hint: Hint,
+    /// Why the test stopped or did not start.
+    pub error: String,
+}
+
+impl Default for MicCheck {
+    fn default() -> Self {
+        MicCheck {
+            open: false,
+            testing: false,
+            db: -100.0,
+            peaks: Default::default(),
+            hint: Hint::Ok,
+            error: String::new(),
+        }
+    }
+}
+
+impl MicCheck {
+    fn level(&mut self, db: f32) {
+        self.db = db;
+        self.peaks.push_back(db);
+        if self.peaks.len() > 30 {
+            self.peaks.pop_front();
+        }
+        let max = self.peaks.iter().copied().fold(-100f32, f32::max);
+        self.hint = if self.peaks.len() < 30 {
+            Hint::Ok
+        } else if max >= -1.0 {
+            Hint::Clipping
+        } else if max < -40.0 {
+            Hint::TooQuiet
+        } else {
+            Hint::Ok
+        };
+    }
+
+    fn quiet(&mut self) {
+        (self.db, self.hint) = (-100.0, Hint::Ok);
+        self.peaks.clear();
+    }
 }
 
 impl Default for Model {
@@ -313,6 +377,7 @@ impl Default for Model {
             person_busy: "",
             person_error: String::new(),
             dm_opened: None,
+            mic: MicCheck::default(),
         }
     }
 }
@@ -389,6 +454,16 @@ impl Model {
                 return cmds;
             }
             Event::Voice { call, ev } => return self.voice_event(call, ev),
+            Event::MicTest(ev) if self.mic.testing && self.call.phase == Phase::Idle => match ev {
+                VoiceEvent::Level(db) => self.mic.level(db),
+                VoiceEvent::Failed(why) => {
+                    self.mic.testing = false;
+                    self.mic.error = why;
+                    self.mic.quiet();
+                }
+                _ => {}
+            },
+            Event::MicTest(_) => {} // a late one, after the test stopped
             Event::Server(m) => return self.server_msg(*m),
             Event::Latest { room, page } => {
                 let log = merge_latest(self.chat.rooms.get(&room), &page);
@@ -745,6 +820,10 @@ impl Model {
                 c.filter = text;
                 vec![]
             }
+            VoiceEvent::Level(db) => {
+                self.mic.level(db);
+                vec![]
+            }
             VoiceEvent::EchoOff(text) => {
                 c.echo_off = text;
                 vec![]
@@ -794,6 +873,10 @@ impl Model {
         }
         self.call.end(error);
         let mut cmds = vec![];
+        if self.mic.testing {
+            self.mic.testing = false; // the test was the call's: it ends with it, as on the web
+        }
+        self.mic.quiet();
         if leave && matches!(phase, Phase::Joining | Phase::Joined) {
             cmds.push(Cmd::Signal(ClientMsg::Leave));
         }
@@ -870,12 +953,60 @@ impl Model {
                 echo: s.echo_cancel,
                 input: s.input_device.clone(),
                 output: s.output_device.clone(),
+                gate_db: Some(s.gate_db as f32),
             },
         }));
         if !self.live() {
             cmds.push(self.sending()); // push to talk: silent until the key
         }
+        if self.mic.testing {
+            self.mic.testing = false; // the test outside the call: the call takes the mic (net ends the test)
+            self.mic.quiet();
+        }
+        if self.mic.open {
+            cmds.push(Cmd::Voice(VoiceCmd::Meter(true)));
+        }
         cmds
+    }
+
+    /// The view shows Settings > Voice, or stopped showing it: the call meters while it shows, and the mic test ends
+    /// when it goes (as `MicCheck.svelte` stops its test when it is unmounted).
+    pub fn set_mic_open(&mut self, open: bool) -> Vec<Cmd> {
+        if self.mic.open == open {
+            return vec![];
+        }
+        self.mic.open = open;
+        let mut cmds = vec![];
+        if !open && self.mic.testing {
+            cmds = self.mic_test();
+        }
+        self.mic.quiet();
+        if self.call.phase != Phase::Idle {
+            cmds.push(Cmd::Voice(VoiceCmd::Meter(open)));
+        }
+        cmds
+    }
+
+    /// Mic test (hear yourself) or Stop mic test: in a call, on the call's capture; else on its own.
+    pub fn mic_test(&mut self) -> Vec<Cmd> {
+        let m = &mut self.mic;
+        m.testing = !m.testing;
+        m.error.clear();
+        if !m.testing {
+            m.quiet();
+        }
+        if self.call.phase != Phase::Idle {
+            return vec![Cmd::Voice(VoiceCmd::Hear(self.mic.testing))];
+        }
+        let s = &self.settings;
+        let setup = self.mic.testing.then(|| Setup {
+            denoise: s.denoise,
+            input: s.input_device.clone(),
+            output: s.output_device.clone(),
+            gate_db: Some(s.gate_db as f32),
+            ..Setup::default()
+        });
+        vec![Cmd::MicTest(setup)]
     }
 
     pub fn leave_voice(&mut self) -> Vec<Cmd> {
@@ -1519,6 +1650,63 @@ mod tests {
 
     fn server(m: &mut Model, msg: ServerMsg) -> Vec<Cmd> {
         m.apply(Event::Server(Box::new(msg)))
+    }
+
+    /// The mic test runs on its own outside a call and on the call's capture in one; the meter follows Settings >
+    /// Voice; a call ends the test that was its own.
+    #[test]
+    fn the_mic_test_and_meter() {
+        let mut m = signed_in();
+        server(&mut m, hello());
+        assert!(m.set_mic_open(true).is_empty(), "no call: nothing to meter");
+        let cmds = m.mic_test();
+        assert!(
+            matches!(cmds.as_slice(), [Cmd::MicTest(Some(Setup { gate_db: Some(g), .. }))] if *g == -50.0),
+            "{cmds:?}"
+        );
+        for _ in 0..30 {
+            m.apply(Event::MicTest(VoiceEvent::Level(-60.0)));
+        }
+        assert_eq!((m.mic.db, m.mic.hint), (-60.0, Hint::TooQuiet));
+        m.apply(Event::MicTest(VoiceEvent::Level(-0.5)));
+        assert_eq!(m.mic.hint, Hint::Clipping);
+        m.apply(Event::MicTest(VoiceEvent::Failed(
+            "No microphone was found.".into(),
+        )));
+        assert!(!m.mic.testing);
+        assert_eq!(
+            (m.mic.db, m.mic.error.as_str()),
+            (-100.0, "No microphone was found.")
+        );
+
+        assert!(matches!(m.mic_test().as_slice(), [Cmd::MicTest(Some(_))]));
+        let cmds = m.join_voice(1);
+        assert!(!m.mic.testing, "the call takes the mic");
+        assert!(
+            matches!(cmds.last(), Some(Cmd::Voice(VoiceCmd::Meter(true)))),
+            "{cmds:?}"
+        );
+        assert!(matches!(
+            m.mic_test().as_slice(),
+            [Cmd::Voice(VoiceCmd::Hear(true))]
+        ));
+        voice(&mut m, VoiceEvent::Level(-20.0));
+        assert_eq!(m.mic.db, -20.0);
+        let cmds = m.set_mic_open(false);
+        assert!(
+            matches!(
+                cmds.as_slice(),
+                [
+                    Cmd::Voice(VoiceCmd::Hear(false)),
+                    Cmd::Voice(VoiceCmd::Meter(false))
+                ]
+            ),
+            "leaving Settings > Voice stops the test: {cmds:?}"
+        );
+        m.set_mic_open(true);
+        m.mic_test();
+        m.leave_voice();
+        assert!(!m.mic.testing, "the call's test ends with it");
     }
 
     /// Signed in, online, and in the call in room 1.

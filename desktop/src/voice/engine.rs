@@ -26,7 +26,7 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 use super::denoise::{Capture, Late, Loaded, deep_filter};
 use super::echo::{self, Echo};
 use super::jitter::{Jitter, Pop};
-use super::mix::{Limiter, Speaking, mix_into, rms, volume_to_gain};
+use super::mix::{Limiter, Meter, Speaking, mix_into, rms, volume_to_gain};
 use super::video::Video;
 use super::{AudioDevices, AudioInput, AudioOutput, FRAME, RATE, Setup, VoiceCmd, VoiceEvent};
 
@@ -101,6 +101,11 @@ struct Engine<'a> {
     /// Percent by user id.
     volumes: HashMap<String, f32>,
     me: Speaking,
+    /// Settings > Voice is open: the level goes to the model.
+    meter: Option<Meter>,
+    /// The mic test: what is sent is played too, a frame later.
+    hear: bool,
+    heard: Vec<f32>,
     limiter: Limiter,
     shown: (bool, Vec<String>),
     video: Video,
@@ -190,12 +195,21 @@ impl<'a> Engine<'a> {
             devices_shown: "",
             encoder,
             echo: Echo::new(setup.echo, echo::late()),
-            capture: Capture::new(setup.denoise, denoiser, deep_filter, Late::default()),
+            capture: {
+                let mut c = Capture::new(setup.denoise, denoiser, deep_filter, Late::default());
+                if let Some(g) = setup.gate_db {
+                    c.set_gate(g);
+                }
+                c
+            },
             captured: vec![],
             frames: 0,
             peers: HashMap::new(),
             volumes: setup.volumes,
             me: Speaking::default(),
+            meter: None,
+            hear: false,
+            heard: vec![],
             limiter: Limiter::default(),
             shown: (false, vec![]),
             video,
@@ -278,6 +292,8 @@ impl<'a> Engine<'a> {
             }
             VoiceCmd::Muted(m) => self.muted = m,
             VoiceCmd::Deafened(d) => self.deafened = d,
+            VoiceCmd::Meter(on) => self.meter = on.then(Meter::default),
+            VoiceCmd::Hear(on) => (self.hear, self.heard) = (on, vec![]),
             VoiceCmd::Volume { user_id, percent } => {
                 self.volumes.insert(user_id, percent);
             }
@@ -582,9 +598,16 @@ impl<'a> Engine<'a> {
             mix.fill(0.0);
         }
         if let Some(o) = &mut self.output {
-            o.write(&mix);
+            // The mic test's own voice is left out of the echo canceller's far end, or it would take the voice out.
+            let mut out = mix;
+            let n = self.heard.len().min(FRAME);
+            if !self.deafened {
+                mix_into(&mut out[..n], &self.heard[..n], 1.0);
+            }
+            self.heard.drain(..n);
+            o.write(&out);
         }
-        // The far end is exactly what went to the speakers: nothing while deafened or without them.
+        // The far end is what went to the speakers: nothing while deafened or without them.
         self.echo.render(&mix);
 
         if let Some(i) = &mut self.input {
@@ -608,6 +631,15 @@ impl<'a> Engine<'a> {
             }
             let level = if self.muted { 0.0 } else { rms(&frame) };
             me = self.me.update(level);
+            if self.muted {
+                frame.fill(0.0); // not filtered, not sent: silence on the meter and in the mic test
+            }
+            if let Some(db) = self.meter.as_mut().and_then(|m| m.update(&frame)) {
+                (self.emit)(VoiceEvent::Level(db));
+            }
+            if self.hear && self.heard.len() < 4 * FRAME {
+                self.heard.extend_from_slice(&frame);
+            }
             self.send(&frame);
         }
 
@@ -756,6 +788,52 @@ mod tests {
         let (_, denoiser) = std::sync::mpsc::channel();
         let e = Engine::new(fake, setup, denoiser, Video::start(|_| {}), emit);
         e.unwrap_or_else(|_| panic!("the engine starts"))
+    }
+
+    /// The mic test plays what is sent, outside the echo canceller's far end; the meter says its level every 100 ms
+    /// while on, and silence while muted.
+    #[test]
+    fn the_mic_test_is_heard_and_metered() {
+        let fake = Fake::default();
+        let levels = Mutex::new(vec![]);
+        let emit = |ev| {
+            if let VoiceEvent::Level(db) = ev {
+                levels.lock().unwrap().push(db);
+            }
+        };
+        let mut e = engine(&fake, &emit);
+        e.tick();
+        assert!(levels.lock().unwrap().is_empty(), "no meter until asked");
+        e.command(VoiceCmd::Meter(true)).unwrap();
+        e.command(VoiceCmd::Hear(true)).unwrap();
+        for _ in 0..10 {
+            e.tick();
+        }
+        let played = fake.played.lock().unwrap().clone();
+        assert!(rms(&played[5 * FRAME..]) > 0.01, "my voice is played");
+        assert!(
+            e.echo.far.iter().all(|s| *s == 0.0),
+            "and is not the far end"
+        );
+        let got = levels.lock().unwrap().clone();
+        assert_eq!(got.len(), 2, "every fifth frame: {got:?}");
+        assert!(got.iter().all(|db| *db > -60.0 && *db < 0.0), "{got:?}");
+
+        e.command(VoiceCmd::Muted(true)).unwrap();
+        for _ in 0..5 {
+            e.tick();
+        }
+        assert_eq!(
+            levels.lock().unwrap().last(),
+            Some(&-100.0),
+            "muted is silent"
+        );
+        e.command(VoiceCmd::Hear(false)).unwrap();
+        e.command(VoiceCmd::Meter(false)).unwrap();
+        for _ in 0..5 {
+            e.tick();
+        }
+        assert_eq!(levels.lock().unwrap().len(), 3);
     }
 
     /// What goes to the speakers is, sample for sample, what the echo canceller gets as its far end: someone's

@@ -1,13 +1,14 @@
 //! Settings > Account (`Account.svelte`, `Passkeys.svelte`, `RecentCalls.svelte`): the name, colour and bio, the
 //! password, the devices signed in, the passkeys and your recent calls, through the same `/api` routes as the web.
-//! Not here: the profile picture, adding or renaming a passkey (WebAuthn is the browser's) and the welcome steps.
+//! The profile picture is picked or dropped, cropped to the centre square and sent 256 px wide, as `avatar.ts` does.
+//! Not here: adding or renaming a passkey (WebAuthn is the browser's) and the welcome steps.
 
 use std::collections::HashMap;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Context, Div, InteractiveElement, ParentElement, SharedString, StatefulInteractiveElement,
-    Styled, Window, div, px,
+    App, AppContext, Context, Div, InteractiveElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{h_flex, v_flex};
 use reqwest::Method;
@@ -24,6 +25,49 @@ use super::theme::{self, TEXT_BASE, TextStepExt};
 use crate::net::Fail;
 
 pub const MAX_BIO: usize = 160;
+/// `avatar.ts`: the picture sent is a 256 px square of at most 512 KiB, from a file of at most 20 MiB.
+pub const PICTURE_PX: u32 = 256;
+pub const MAX_PICTURE: usize = 512 * 1024;
+pub const MAX_PICTURE_FILE: u64 = 20 * 1024 * 1024;
+/// `messages.ts`.
+pub const PICTURE_TYPE: &str = "Pick a PNG, JPEG, WebP or GIF picture.";
+pub const PICTURE_UNREADABLE: &str = "That picture could not be read. Try another file.";
+pub const PICTURE_REFUSED: &str = "The server did not take that picture. Try another file.";
+pub const PICTURE_TOO_LARGE: &str = "That picture is too large. Try a smaller one.";
+
+/// `squarePicture`: the centre square of a PNG, JPEG, WebP or GIF, redrawn at 256 px, as a PNG (the server takes PNG,
+/// JPEG and WebP; this build's WebP encoder is lossless only, so PNG is as small). The error is for the user.
+pub fn square_picture(file: &[u8]) -> Result<Vec<u8>, &'static str> {
+    use image::ImageFormat as F;
+    if !matches!(
+        image::guess_format(file),
+        Ok(F::Png | F::Jpeg | F::WebP | F::Gif)
+    ) {
+        return Err(PICTURE_TYPE);
+    }
+    let img = image::load_from_memory(file).map_err(|_| PICTURE_UNREADABLE)?;
+    let (w, h) = (img.width(), img.height());
+    let side = w.min(h);
+    if side == 0 {
+        return Err(PICTURE_UNREADABLE);
+    }
+    let square = img
+        .crop_imm((w - side) / 2, (h - side) / 2, side, side)
+        .resize_exact(
+            PICTURE_PX,
+            PICTURE_PX,
+            image::imageops::FilterType::Lanczos3,
+        );
+    let mut out = std::io::Cursor::new(vec![]);
+    square
+        .write_to(&mut out, F::Png)
+        .map_err(|_| PICTURE_UNREADABLE)?;
+    let out = out.into_inner();
+    if out.len() > MAX_PICTURE {
+        return Err(PICTURE_TOO_LARGE);
+    }
+    Ok(out)
+}
 
 /// A list the page fetched.
 #[derive(Debug, Default)]
@@ -64,6 +108,10 @@ pub struct State {
     passkey_error: String,
     calls: Load<Vec<CallRecord>>,
     now: i64,
+    /// `upload` or `remove` while the picture's request runs, its result in words, and why it failed.
+    pic_busy: &'static str,
+    pic_done: &'static str,
+    pic_error: String,
 }
 
 pub fn now_ms() -> i64 {
@@ -183,6 +231,7 @@ impl Vesper {
         let a = &mut self.page.account;
         a.slot = avatar_slot(&me.user_id, &me.accent);
         (a.saved, a.profile_error, a.pw_done, a.pw_error) = (false, String::new(), false, None);
+        (a.pic_done, a.pic_error) = ("", String::new());
         (a.devices, a.passkeys, a.calls) = (Load::Loading, Load::Loading, Load::Loading);
         a.now = now_ms();
         a.filled = false;
@@ -208,6 +257,33 @@ impl Vesper {
                 }
             }
             "passkeys" => a.passkeys = Load::from(r),
+            "picture" => {
+                let upload = a.pic_busy == "upload";
+                a.pic_busy = "";
+                match r.map(serde_json::from_value::<UserInfo>) {
+                    Ok(u) => {
+                        a.pic_done = if upload {
+                            "Picture saved."
+                        } else {
+                            "Picture removed."
+                        };
+                        // The socket's user_updated does the same a moment later; this shows it at once.
+                        if let Ok(u) = u {
+                            self.model.state.users.insert(u.user_id.clone(), u);
+                            self.sync_pictures(window, cx);
+                        }
+                    }
+                    Err(Fail::Api {
+                        code: ApiErrorCode::TooLarge,
+                        ..
+                    }) => a.pic_error = PICTURE_TOO_LARGE.into(),
+                    Err(Fail::Api {
+                        code: ApiErrorCode::BadRequest,
+                        ..
+                    }) if upload => a.pic_error = PICTURE_REFUSED.into(),
+                    Err(f) => a.pic_error = fail_text(f),
+                }
+            }
             "calls" => a.calls = Load::from(r),
             "profile" => {
                 a.saving = false;
@@ -254,6 +330,69 @@ impl Vesper {
             _ => {}
         }
         let _ = (window, cx);
+    }
+
+    /// Change picture: the file picker, then the picture is sent as soon as it is picked.
+    fn pick_picture(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = rx.await
+                && let Some(p) = paths.into_iter().next()
+            {
+                let _ = this.update(cx, |v, cx| v.set_picture(p, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Crops and sends a picked or dropped file (off the UI thread).
+    fn set_picture(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        let a = &mut self.page.account;
+        if !a.pic_busy.is_empty() {
+            return;
+        }
+        (a.pic_busy, a.pic_done, a.pic_error) = ("upload", "", String::new());
+        let made = cx.background_spawn(async move {
+            let size = std::fs::metadata(&path)
+                .map_err(|_| PICTURE_UNREADABLE)?
+                .len();
+            if size > MAX_PICTURE_FILE {
+                return Err(PICTURE_TOO_LARGE);
+            }
+            square_picture(&std::fs::read(&path).map_err(|_| PICTURE_UNREADABLE)?)
+        });
+        cx.spawn(async move |this, cx| {
+            let made = made.await;
+            let _ = this.update(cx, |v, cx| {
+                match made {
+                    Ok(png) => drop(
+                        v.cmds
+                            .send(crate::net::Cmd::PutAvatar(crate::net::Png(png))),
+                    ),
+                    Err(why) => {
+                        (v.page.account.pic_busy, v.page.account.pic_error) = ("", why.into())
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn remove_picture(&mut self, cx: &mut Context<Self>) {
+        let a = &mut self.page.account;
+        if !a.pic_busy.is_empty() {
+            return;
+        }
+        (a.pic_busy, a.pic_done, a.pic_error) = ("remove", "", String::new());
+        self.http("account:picture", Method::DELETE, "/api/me/avatar", None);
+        cx.notify();
     }
 
     fn save_profile(&mut self, cx: &mut Context<Self>) {
@@ -375,12 +514,23 @@ impl Vesper {
         } else {
             name.clone()
         };
+        let accent = t.accent;
         let card = h_flex()
+            .id("account-picture-card")
             .max_w(px(320.))
             .gap(px(12.))
-            .p(px(12.))
+            .p(px(10.)) // 12 less the 2 px ring, which the web draws as an outline
             .rounded(t.radius)
             .bg(t.bg_raised)
+            .border_2()
+            .border_color(gpui::transparent_black())
+            // A file dropped on the card is the new picture (shortcut: a solid accent ring, the web's is dashed).
+            .drag_over::<gpui::ExternalPaths>(move |s, _, _, _| s.border_color(accent))
+            .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                if let Some(p) = paths.paths().first() {
+                    this.set_picture(p.clone(), cx);
+                }
+            }))
             .child(Avatar::new(
                 me.user_id.clone(),
                 shown_name.clone(),
@@ -427,45 +577,94 @@ impl Vesper {
                     cx.notify();
                 }))
         }));
-        let profile = section().child(h3("Profile", cx)).child(card).child(
-            v_flex()
-                .max_w(px(320.))
-                .gap(px(20.))
-                .child(
-                    Field::new("Display name")
-                        .help("1 to 32 characters.")
-                        .error(a.profile_error.clone())
-                        .child(text_input(&name_input, cx)),
-                )
-                .child(
-                    v_flex()
-                        .child(div().mb(px(8.)).font_weight(t.weight_ui).child("Colour"))
-                        .child(swatches),
-                )
-                .child(
-                    Field::new("Bio")
-                        .value(format!("{bio_len} / {MAX_BIO}"))
-                        .help(format!(
-                            "Up to {MAX_BIO} characters, shown on your person card."
-                        ))
-                        .child(text_input(&bio_input, cx)),
-                )
-                .child(
-                    h_flex()
-                        .gap(px(12.))
-                        .child(
-                            div().debug_selector(|| "account-save".into()).child(
-                                Button::new("account-save", "Save")
-                                    .loading(a.saving)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.save_profile(cx);
-                                        cx.notify();
-                                    })),
+        let has_pic = me.avatar.is_some();
+        // A set width, not max_w: GPUI measured the wrapped help text at another width than it drew it.
+        let picture = v_flex()
+            .w(px(320.))
+            .gap(px(8.))
+            .child(
+                // No wrap: a wrapped row in GPUI kept the height of a line it did not draw.
+                h_flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div().debug_selector(|| "account-picture".into()).child(
+                            Button::new(
+                                "account-picture",
+                                if has_pic { "Change picture" } else { "Upload picture" },
+                            )
+                            .small()
+                            .loading(a.pic_busy == "upload")
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_picture(cx))),
+                        ),
+                    )
+                    .when(has_pic, |d| {
+                        d.child(
+                            div().debug_selector(|| "account-picture-remove".into()).child(
+                                Button::new("account-picture-remove", "Remove picture")
+                                    .small()
+                                    .variant(Variant::Ghost)
+                                    .loading(a.pic_busy == "remove")
+                                    .on_click(cx.listener(|this, _, _, cx| this.remove_picture(cx))),
                             ),
                         )
-                        .child(text(if a.saved { "Saved." } else { "" }, t.fg_2, false)),
-                ),
-        );
+                    })
+                    .when(!a.pic_done.is_empty(), |d| d.child(text(a.pic_done, t.fg_2, false))),
+            )
+            .child(text(
+                "PNG, JPEG, WebP or GIF. You can also drop one on the card above. It is cropped to a square.",
+                t.fg_2,
+                true,
+            ))
+            .when(!a.pic_error.is_empty(), |d| {
+                d.child(
+                    text(a.pic_error.clone(), t.danger_fg, false)
+                        .debug_selector(|| "account-picture-error".into()),
+                )
+            });
+        let profile = section()
+            .child(h3("Profile", cx))
+            .child(card)
+            .child(picture)
+            .child(
+                v_flex()
+                    .max_w(px(320.))
+                    .gap(px(20.))
+                    .child(
+                        Field::new("Display name")
+                            .help("1 to 32 characters.")
+                            .error(a.profile_error.clone())
+                            .child(text_input(&name_input, cx)),
+                    )
+                    .child(
+                        v_flex()
+                            .child(div().mb(px(8.)).font_weight(t.weight_ui).child("Colour"))
+                            .child(swatches),
+                    )
+                    .child(
+                        Field::new("Bio")
+                            .value(format!("{bio_len} / {MAX_BIO}"))
+                            .help(format!(
+                                "Up to {MAX_BIO} characters, shown on your person card."
+                            ))
+                            .child(text_input(&bio_input, cx)),
+                    )
+                    .child(
+                        h_flex()
+                            .gap(px(12.))
+                            .child(
+                                div().debug_selector(|| "account-save".into()).child(
+                                    Button::new("account-save", "Save")
+                                        .loading(a.saving)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.save_profile(cx);
+                                            cx.notify();
+                                        })),
+                                ),
+                            )
+                            .child(text(if a.saved { "Saved." } else { "" }, t.fg_2, false)),
+                    ),
+            );
 
         let (pw_done, changing) = (a.pw_done, a.changing);
         let form_error = a
@@ -737,5 +936,42 @@ impl Vesper {
 
         let _ = Variant::Ghost;
         sections(vec![profile, password, devices, passkeys, calls], cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        // Left half red, right half blue: the centre square of a wide picture is half and half.
+        let img = image::RgbImage::from_fn(w, h, |x, _| {
+            if x < w / 2 {
+                image::Rgb([255, 0, 0])
+            } else {
+                image::Rgb([0, 0, 255])
+            }
+        });
+        let mut out = std::io::Cursor::new(vec![]);
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn a_picture_is_cropped_to_its_centre_square() {
+        let out = square_picture(&png(900, 300)).unwrap();
+        let img = image::load_from_memory(&out).unwrap().to_rgb8();
+        assert_eq!(img.dimensions(), (PICTURE_PX, PICTURE_PX));
+        assert_eq!(img.get_pixel(10, 128).0, [255, 0, 0]);
+        assert_eq!(img.get_pixel(245, 128).0, [0, 0, 255]);
+        assert!(out.len() <= MAX_PICTURE);
+    }
+
+    #[test]
+    fn other_files_are_refused_in_words() {
+        assert_eq!(square_picture(b"%PDF-1.7 not a picture"), Err(PICTURE_TYPE));
+        let mut broken = png(10, 10);
+        broken.truncate(40);
+        assert_eq!(square_picture(&broken), Err(PICTURE_UNREADABLE));
     }
 }

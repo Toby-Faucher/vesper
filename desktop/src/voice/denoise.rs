@@ -250,6 +250,13 @@ impl Capture {
         }
     }
 
+    /// The noise gate opens on a peak above `threshold` dBFS (the level marker) and closes 4 dB under it.
+    pub fn set_gate(&mut self, threshold: f32) {
+        if let Some(g) = &mut self.gate {
+            (g.open, g.close) = (db(threshold), db(threshold - 4.0));
+        }
+    }
+
     fn fall_back(&mut self, status: String) {
         self.deep = None;
         self.status = status;

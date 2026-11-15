@@ -6,6 +6,7 @@
 //! socket, as the web app's `join.ts` does. Audio comes in through `AudioInput` and goes out through `AudioOutput`, so
 //! tests run a call with no devices; the real ones are cpal (`device.rs`).
 
+pub mod check;
 pub mod denoise;
 mod device;
 pub mod echo;
@@ -67,6 +68,8 @@ pub struct Setup {
     pub echo: bool,
     pub input: Option<String>,
     pub output: Option<String>,
+    /// The level marker in dBFS: the noise gate opens above it. `None`: the gate's own -50.
+    pub gate_db: Option<f32>,
 }
 
 /// From the model to the call engine (through the network thread).
@@ -84,6 +87,10 @@ pub enum VoiceCmd {
     /// Not sending: muted, or push to talk not held.
     Muted(bool),
     Deafened(bool),
+    /// Settings > Voice shows the input level: send `VoiceEvent::Level` while on.
+    Meter(bool),
+    /// The mic test: play what is sent on the speakers too.
+    Hear(bool),
     /// 0 to 400 percent.
     Volume {
         user_id: String,
@@ -123,6 +130,8 @@ pub enum VoiceEvent {
         own: crate::link::Sample,
         links: Vec<(String, crate::link::Sample)>,
     },
+    /// The peak of what the mic sends after the filters, in dBFS (-100 for silence), every 100 ms while metered.
+    Level(f32),
     /// The call cannot go on. The text is for the user.
     Failed(String),
 }

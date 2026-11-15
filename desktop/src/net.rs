@@ -27,8 +27,9 @@ use vesper_protocol::{
 use crate::files::{self, IMAGE_MAX, Picture};
 use crate::settings::Denoise;
 use crate::store::{Saved, SessionStore};
+use crate::voice::check::Check;
 use crate::voice::denoise::{self, MODEL_MAX, MODEL_URL};
-use crate::voice::{AudioDevices, Call, VoiceCmd, VoiceEvent};
+use crate::voice::{AudioDevices, Call, Setup, VoiceCmd, VoiceEvent};
 
 /// From the UI to the network thread.
 #[derive(Debug)]
@@ -106,6 +107,11 @@ pub enum Cmd {
     },
     /// To the call engine. `Start` starts a call, ending the one before.
     Voice(VoiceCmd),
+    /// The mic test outside a call: start one with these devices and filter (ending the one before), or stop.
+    MicTest(Option<Setup>),
+    /// `PUT /api/me/avatar` with this picture (`account::square_picture`); the answer is `Event::Http` with
+    /// `account:picture`.
+    PutAvatar(Png),
     /// A message on the socket. Dropped while it is down.
     Signal(ClientMsg),
     /// `POST /api/users/{user_id}/{action}`: `force-mute` (with `muted`), `stop-share`, `kick` or `disconnect`.
@@ -125,6 +131,16 @@ pub enum Cmd {
         path: String,
         body: Option<Json>,
     },
+}
+
+/// A picture to send. `Debug` prints its size only.
+#[derive(Clone, PartialEq)]
+pub struct Png(pub Vec<u8>);
+
+impl std::fmt::Debug for Png {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} bytes", self.0.len())
+    }
 }
 
 /// A JSON body or answer that may hold a password, an invite or a reset link: `Debug` never prints it.
@@ -247,6 +263,8 @@ pub enum Event {
         tag: String,
         result: Result<Json, Fail>,
     },
+    /// From the mic test started with `Cmd::MicTest`: `Level` or `Failed`.
+    MicTest(VoiceEvent),
     /// From the call started with `VoiceCmd::Start { call, .. }`.
     Voice {
         call: u64,
@@ -624,6 +642,15 @@ impl Api {
         Ok(res)
     }
 
+    /// `PUT /api/me/avatar`: the raw picture; the answer is my `UserInfo`.
+    pub async fn put_avatar(&self, picture: Vec<u8>) -> Result<Value, Fail> {
+        let url = self
+            .base
+            .join("/api/me/avatar")
+            .map_err(|_| Fail::NotVesper)?;
+        Self::answer(self.http.put(url).body(picture)).await
+    }
+
     /// A profile picture, at most the server's 512 KiB. The id must be the server's 32 hex.
     pub async fn avatar(&self, user_id: &str, version: &str) -> Result<Vec<u8>, Fail> {
         if !files::valid_id(user_id) {
@@ -780,6 +807,7 @@ pub fn start(
                     tx,
                     conn: None,
                     call: None,
+                    check: None,
                     uploads: HashMap::new(),
                     warned: false,
                 }
@@ -808,6 +836,7 @@ struct Net {
     tx: UnboundedSender<Event>,
     conn: Option<Conn>,
     call: Option<Call>,
+    check: Option<Check>,
     /// Running uploads by tray key, so Cancel can stop them.
     uploads: HashMap<u64, JoinHandle<()>>,
     /// NotRemembered was sent.
@@ -824,13 +853,31 @@ impl Net {
         self.drop_conn();
     }
 
+    /// DeepFilterNet's model for a call or a mic test: it starts with the noise gate, and the model joins once loaded.
+    fn denoiser(&self, mode: Denoise) -> std::sync::mpsc::Receiver<denoise::Loaded> {
+        let (loaded, denoiser) = std::sync::mpsc::channel();
+        if mode == Denoise::DeepFilter {
+            let api = self.conn.as_ref().map(|c| c.api.clone());
+            tokio::spawn(async move {
+                let fetch = async {
+                    match api {
+                        Some(api) => api.model().await,
+                        None => Err("not signed in".into()),
+                    }
+                };
+                let _ = loaded.send(denoise::load(denoise::cache_path(), fetch).await);
+            });
+        }
+        denoiser
+    }
+
     fn emit(&self, ev: Event) {
         let _ = self.tx.send(ev);
     }
 
     /// Ends the socket and any call.
     fn drop_conn(&mut self) -> Option<Api> {
-        self.call = None;
+        (self.call, self.check) = (None, None);
         for (_, u) in self.uploads.drain() {
             u.abort();
         }
@@ -933,24 +980,20 @@ impl Net {
                 }
             }
             Cmd::Voice(VoiceCmd::Start { call, setup }) => {
-                self.call = None; // the old call's thread ends first
-                let (loaded, denoiser) = std::sync::mpsc::channel();
-                if setup.denoise == Denoise::DeepFilter {
-                    // The call starts now, with the noise gate; DeepFilterNet joins it once loaded.
-                    let api = self.conn.as_ref().map(|c| c.api.clone());
-                    tokio::spawn(async move {
-                        let fetch = async {
-                            match api {
-                                Some(api) => api.model().await,
-                                None => Err("not signed in".into()),
-                            }
-                        };
-                        let _ = loaded.send(denoise::load(denoise::cache_path(), fetch).await);
-                    });
-                }
+                (self.call, self.check) = (None, None); // the old call's thread ends first, and a mic test
+                let denoiser = self.denoiser(setup.denoise);
                 let tx = self.tx.clone();
                 let emit = move |ev| drop(tx.send(Event::Voice { call, ev }));
                 self.call = Some(Call::start(self.devices.clone(), setup, denoiser, emit));
+            }
+            Cmd::MicTest(setup) => {
+                self.check = None;
+                if let Some(setup) = setup {
+                    let denoiser = self.denoiser(setup.denoise);
+                    let tx = self.tx.clone();
+                    let emit = move |ev| drop(tx.send(Event::MicTest(ev)));
+                    self.check = Some(Check::start(self.devices.clone(), setup, denoiser, emit));
+                }
             }
             Cmd::Upload { key, room, path } => {
                 let Some(c) = &self.conn else { return };
@@ -1240,6 +1283,18 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
         } => {
             let r = api.call::<Value>(method, &path, body.map(|b| b.0)).await;
             let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+            (
+                res,
+                Event::Http {
+                    tag,
+                    result: r.map(Json),
+                },
+            )
+        }
+        Cmd::PutAvatar(png) => {
+            let r = api.put_avatar(png.0).await;
+            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+            let tag = "account:picture".into();
             (
                 res,
                 Event::Http {

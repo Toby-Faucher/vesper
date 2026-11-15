@@ -1,7 +1,7 @@
 //! The window: one view, `Vesper`, that owns the `Model` and draws the sign in screen or the main screen. Events from
 //! the network thread come in through `listen`; what the model asks for goes out on `cmds`.
 
-mod account;
+pub mod account;
 mod admin;
 mod banner;
 pub mod c;
@@ -624,6 +624,8 @@ impl Vesper {
     fn reset_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.drafts.clear();
         self.settings_open = false;
+        let cmds = self.model.set_mic_open(false);
+        self.run(cmds);
         self.page = Default::default();
         self.side = sidebar::Side::default();
         self.banner = Default::default();
@@ -685,7 +687,9 @@ impl Vesper {
     /// Shows or leaves the Settings view. The room behind it is not on screen meanwhile, so it is not marked read.
     fn show_settings(&mut self, open: bool) {
         self.settings_open = open;
-        let cmds = self.model.set_covered(open);
+        let mut cmds = self.model.set_covered(open);
+        let voice = open && self.page.at == settings::At::Settings(settings::Section::Voice);
+        cmds.extend(self.model.set_mic_open(voice));
         self.run(cmds);
     }
 

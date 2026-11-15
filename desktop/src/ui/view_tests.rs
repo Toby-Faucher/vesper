@@ -519,6 +519,8 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
     use crate::voice::ptt::KeyMsg;
 
     let (view, cx, mut rx) = open(cx);
+    // Tall enough for all of Settings > Voice without scrolling.
+    cx.simulate_resize(gpui::size(gpui::px(1280.), gpui::px(2400.)));
     signed_in(&view, cx);
     let (keys, watched) = std::sync::mpsc::channel();
     view.update(cx, |v, _| {
@@ -2014,5 +2016,43 @@ fn disk_bars_fill_to_their_share(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("disk-bar-Database").is_none(),
         "the database has no bar"
+    );
+}
+
+/// Settings > Voice: the input level fills its share of the meter, and the mic test starts and stops through the
+/// network thread (no call: a test of its own).
+#[gpui::test]
+fn the_meter_and_the_mic_test(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    click(cx, "open-settings");
+    drain(&mut rx);
+    click(cx, "settings-mic-test");
+    let sent = drain(&mut rx);
+    assert!(
+        matches!(sent.as_slice(), [Cmd::MicTest(Some(_))]),
+        "{sent:?}"
+    );
+    apply(&view, cx, Event::MicTest(VoiceEvent::Level(-25.0)));
+    let track = cx.debug_bounds("settings-meter").unwrap();
+    let bar = cx.debug_bounds("settings-meter-bar").unwrap();
+    let got = f32::from(bar.size.width) / f32::from(track.size.width);
+    assert!((got - 0.75).abs() < 0.02, "{got}");
+    apply(
+        &view,
+        cx,
+        Event::MicTest(VoiceEvent::Failed("No microphone was found.".into())),
+    );
+    assert!(cx.debug_bounds("settings-mic-error").is_some());
+    click(cx, "settings-mic-test");
+    drain(&mut rx);
+    click(cx, "settings-close");
+    view.read_with(cx, |v, _| {
+        assert!(!v.model.mic.testing && !v.model.mic.open)
+    });
+    let sent = drain(&mut rx);
+    assert!(
+        matches!(sent.as_slice(), [Cmd::MicTest(None)]),
+        "closing the page stops the test: {sent:?}"
     );
 }

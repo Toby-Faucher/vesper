@@ -25,6 +25,31 @@ pub fn rms(x: &[f32]) -> f32 {
     (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt()
 }
 
+/// The input level of `MicCheck.svelte`: the peak of 100 ms of 20 ms frames, in dBFS, -100 for silence.
+#[derive(Debug, Default)]
+pub struct Meter {
+    peak: f32,
+    frames: u32,
+}
+
+impl Meter {
+    /// Adds a frame; every fifth returns the level.
+    pub fn update(&mut self, frame: &[f32]) -> Option<f32> {
+        self.peak = frame.iter().fold(self.peak, |p, x| p.max(x.abs()));
+        self.frames += 1;
+        if self.frames < 5 {
+            return None;
+        }
+        self.frames = 0;
+        let peak = std::mem::take(&mut self.peak);
+        Some(if peak > 0.0 {
+            (20.0 * peak.log10()).max(-100.0)
+        } else {
+            -100.0
+        })
+    }
+}
+
 /// Adds `src` times `gain` into `out`.
 pub fn mix_into(out: &mut [f32], src: &[f32], gain: f32) {
     for (o, s) in out.iter_mut().zip(src) {
