@@ -1474,3 +1474,56 @@ fn a_lost_session_resets_the_view(cx: &mut TestAppContext) {
         assert_eq!(v.composer.read(cx).value(), "");
     });
 }
+
+/// Profile pictures: fetched once per version, a late answer for an old version is dropped, a new version shows the
+/// letters until it comes, and a removed picture is let go.
+#[gpui::test]
+fn profile_pictures_follow_their_version(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    drain(&mut rx);
+    let set = |v: Option<&str>| {
+        let mut u = user("b", "Bob");
+        u["avatar"] = json!(v);
+        Event::Server(Box::new(
+            serde_json::from_value(json!({ "type": "user_updated", "user": u })).unwrap(),
+        ))
+    };
+    let fetches = |rx: &mut UnboundedReceiver<Cmd>| -> Vec<String> {
+        drain(rx)
+            .into_iter()
+            .filter_map(|c| match c {
+                Cmd::FetchAvatar { user_id, version } => Some(format!("{user_id}@{version}")),
+                _ => None,
+            })
+            .collect()
+    };
+    let shown = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| cx.global::<super::c::Pictures>().ready("b").is_some())
+    };
+    let came = |version: &str| Event::Avatar {
+        user_id: "b".into(),
+        version: version.into(),
+        picture: Some(crate::files::Picture {
+            width: 1,
+            height: 1,
+            bgra: vec![255; 4],
+        }),
+    };
+    apply(&view, cx, set(Some("v1")));
+    assert_eq!(fetches(&mut rx), ["b@v1"]);
+    apply(&view, cx, set(Some("v1")));
+    assert!(fetches(&mut rx).is_empty(), "the same version is not fetched again");
+    apply(&view, cx, came("v1"));
+    assert!(shown(cx));
+    apply(&view, cx, set(Some("v2")));
+    assert_eq!(fetches(&mut rx), ["b@v2"]);
+    assert!(!shown(cx), "the letters show until the new picture comes");
+    apply(&view, cx, came("v1"));
+    assert!(!shown(cx), "a late answer for the old picture is dropped");
+    apply(&view, cx, came("v2"));
+    assert!(shown(cx));
+    apply(&view, cx, set(None));
+    assert!(!shown(cx));
+    assert!(fetches(&mut rx).is_empty());
+}

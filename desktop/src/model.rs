@@ -449,7 +449,7 @@ impl Model {
                 return self.tray.failed(key, fail, max);
             }
             // The view decodes nothing here; it keeps the pictures.
-            Event::Image { .. } => {}
+            Event::Image { .. } | Event::Avatar { .. } | Event::Searched { .. } => {}
             Event::Downloaded { path, open } => {
                 if !open {
                     self.saved = Some(path);

@@ -460,6 +460,15 @@ impl Vesper {
         let main = self.model.screen == Screen::Main;
         match &ev {
             Event::Image { id, picture } if main => self.image_loaded(id, picture.clone(), window),
+            Event::Avatar {
+                user_id,
+                version,
+                picture,
+            } => {
+                let image = picture.clone().and_then(chat::render_image);
+                cx.default_global::<c::Pictures>()
+                    .loaded(user_id, version, image);
+            }
             Event::Downloaded { path, open: true } if main => cx.open_with_system(path),
             Event::Latest { room, .. } => drop(self.tl.loaded.insert(*room)),
             _ => {}
@@ -467,6 +476,7 @@ impl Vesper {
         let editing = self.model.editing;
         let cmds = self.model.apply(ev);
         self.run(cmds);
+        self.sync_pictures(window, cx);
         if main && self.model.screen != Screen::Main {
             self.reset_view(window, cx);
         }
@@ -495,6 +505,19 @@ impl Vesper {
         #[cfg(debug_assertions)]
         self.dev_step(latest, window, cx);
         cx.notify();
+    }
+
+    /// Profile pictures follow the users: a new or changed one is fetched, an old one let go.
+    fn sync_pictures(&mut self, window: &mut Window, cx: &mut App) {
+        let users = self.model.state.users.values();
+        let (fetch, gone) = cx
+            .default_global::<c::Pictures>()
+            .sync(users.map(|u| (u.user_id.as_str(), u.avatar.as_deref())));
+        for i in gone {
+            let _ = window.drop_image(i);
+        }
+        let cmds = fetch.into_iter().map(|(user_id, version)| Cmd::FetchAvatar { user_id, version });
+        self.run(cmds.collect());
     }
 
     fn run(&self, cmds: Vec<Cmd>) {

@@ -1411,9 +1411,7 @@ impl Vesper {
 
     /// A picture came from the network thread: kept for drawing, the oldest let go past `IMAGE_CACHE`.
     pub(super) fn image_loaded(&mut self, id: &str, picture: Option<Picture>, window: &mut Window) {
-        let img = picture
-            .and_then(|p| image::RgbaImage::from_raw(p.width, p.height, p.bgra))
-            .map(|buf| Arc::new(RenderImage::new(vec![image::Frame::new(buf)])));
+        let img = picture.and_then(render_image);
         self.images
             .insert(id.to_string(), img.map_or(Img::Failed, Img::Ready));
         self.image_order.push_back(id.to_string());
@@ -2523,6 +2521,12 @@ impl Vesper {
                 ),
         )
     }
+}
+
+/// A decoded picture as GPUI draws it.
+pub(super) fn render_image(p: Picture) -> Option<Arc<RenderImage>> {
+    let buf = image::RgbaImage::from_raw(p.width, p.height, p.bgra)?;
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buf)])))
 }
 
 /// `.attach`, `.send` and the help IconButton: 32 px, `--radius`, a `--bg-hover` fill on hover in `--dur-1`; Attach
