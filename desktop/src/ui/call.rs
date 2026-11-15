@@ -2,16 +2,20 @@
 //! connection, mute, deafen, push to talk, the people in the call (a click opens their card), Call details and Leave,
 //! then one status line: an error or a notice, and the noise filter at its end. It rises in when the call starts
 //! (`rise`). Without a call, what ended the last one shows under the room header (`call_status`).
+//! The call timer rolls its digits; the bar can be a small pill that opens on hover ([`Bar`]).
 //!
 //! Not here: Share screen and the share card (the desktop does not send a screen), the leave fade (the web fades an
 //! inert copy out), Retry microphone and a new microphone's offer (the desktop's engine opens devices again itself).
 
-use std::time::Instant;
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AppContext, Context, Div, ElementId, Entity, InteractiveElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, px, transparent_black,
+    AppContext, Context, Div, ElementId, Entity, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Size, StatefulInteractiveElement, Styled, Task, Window, canvas, div, px, size,
+    transparent_black,
 };
 use gpui_component::slider::{SliderEvent, SliderState};
 
@@ -26,6 +30,49 @@ use crate::net::Cmd;
 
 /// The bar's height: its 1 px borders, the 52 px row and the 28 px status line (its rule inside, border-box).
 pub const BAR_H: f32 = 82.;
+/// The pill's: its borders and the 36 px row.
+pub const PILL_H: f32 = 38.;
+
+/// The pill (`CallBar.svelte`): with `call_small` the bar is the room, the mic and the timer, opened to the full bar
+/// while the pointer is on it (closed 300 ms after it leaves); a notice or an error keeps it full. A change between the
+/// two morphs the box (`morph` in motion.ts): its size and corners from the old to the new over `--dur-3`, ease-out,
+/// the content fading in over `--dur-2`.
+#[derive(Default)]
+pub struct Bar {
+    small: bool,
+    peek: bool,
+    leave: Option<Task<()>>,
+    tick: Option<Task<()>>,
+    /// Drawn as the pill last frame.
+    compact: Option<bool>,
+    /// The box last frame, and the content's own size (measured while morphing).
+    size: Rc<Cell<Size<Pixels>>>,
+    inner: Rc<Cell<Size<Pixels>>>,
+    /// From this size and radius, since then.
+    morph: Option<(Size<Pixels>, Pixels, Instant)>,
+}
+
+impl Bar {
+    /// The room the main pane keeps under its content: the pill's while small, also while it peeks.
+    pub fn room(&self) -> f32 {
+        if self.small && (self.compact == Some(true) || self.peek) {
+            PILL_H
+        } else {
+            BAR_H
+        }
+    }
+}
+
+/// The call timer: m:ss, and h:mm:ss from an hour on (`clock.ts`).
+pub fn clock(d: Duration) -> String {
+    let s = d.as_secs();
+    let (h, m) = (s / 3600, s / 60 % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{:02}", s % 60)
+    } else {
+        format!("{m}:{:02}", s % 60)
+    }
+}
 /// Avatars drawn in the bar; the rest is `+n`.
 const AVATARS: usize = 5;
 pub const FORCE_MUTED: &str = "A moderator muted you.";
@@ -94,6 +141,7 @@ impl Vesper {
         let joined = self.model.call.phase == Phase::Joined;
         if !joined {
             self.bar_since = None;
+            self.bar = Bar::default();
             return None;
         }
         let now = Instant::now();
@@ -102,6 +150,60 @@ impl Vesper {
         let pose = motion::pose(&t.motion, RISE, false, since, now);
         if pose.is_some() {
             window.request_animation_frame();
+        }
+        // The timer redraws the bar once a second, but not while a share is watched: an untaken picture with no draw
+        // is how a covered window is found (`frame_came`), and the share's own pictures redraw the bar then.
+        if self.bar.tick.is_none() {
+            self.bar.tick = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    let tick = |v: &mut Vesper, cx: &mut Context<Vesper>| {
+                        if v.model.call.frame.is_none() {
+                            cx.notify();
+                        }
+                    };
+                    if this.update(cx, tick).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+        let time = clock(now.saturating_duration_since(since));
+        // The pill, and the morph when it changes.
+        let small = self.model.settings.call_small;
+        let quiet = {
+            let c = &self.model.call;
+            c.error.is_empty()
+                && c.devices.is_empty()
+                && !c.force_muted
+                && c.echo_off.is_empty()
+                && !c.headphones
+        };
+        let compact = small && !self.bar.peek && quiet;
+        let radius = if compact {
+            px(PILL_H / 2.)
+        } else {
+            t.radius_lg
+        };
+        self.bar.small = small;
+        if self.bar.compact.is_some_and(|was| was != compact) && !t.motion.reduced {
+            let r0 = if compact {
+                t.radius_lg
+            } else {
+                px(PILL_H / 2.)
+            };
+            self.bar.inner.set(Size::default());
+            self.bar.morph = Some((self.bar.size.get(), r0, now));
+        }
+        self.bar.compact = Some(compact);
+        let morph = self.bar.morph.and_then(|(from, r0, at)| {
+            let x = motion::fraction(at, now, t.motion.dur_3);
+            (x < 1.).then_some((from, r0, x))
+        });
+        if morph.is_some() {
+            window.request_animation_frame();
+        } else {
+            self.bar.morph = None;
         }
 
         let m = &self.model;
@@ -241,12 +343,37 @@ impl Vesper {
                     .flex_shrink()
                     .child(
                         div()
+                            .flex()
                             .w_full()
-                            .ellipsis()
-                            .text_step(TEXT_SM)
-                            .font_weight(t.weight_strong)
-                            .text_color(t.fg)
-                            .child(room),
+                            .min_w_0()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .ellipsis()
+                                    .text_step(TEXT_SM)
+                                    .font_weight(t.weight_strong)
+                                    .text_color(t.fg)
+                                    .child(room.clone()),
+                            )
+                            .child(
+                                div()
+                                    .ml_auto()
+                                    .flex_none()
+                                    .text_step(TEXT_XS)
+                                    .text_color(t.fg_3)
+                                    .when(!compact, |d| {
+                                        d.child(motion::roll(
+                                            "call-time",
+                                            &time,
+                                            px(16.),
+                                            false,
+                                            window,
+                                            cx,
+                                        ))
+                                    }),
+                            ),
                     )
                     .child(
                         div()
@@ -333,6 +460,19 @@ impl Vesper {
                         .variant(c::Variant::DangerGhost)
                         .on_click(cx.listener(|this, _, _, cx| this.act(Model::leave_voice, cx))),
                 ),
+            )
+            .child(
+                div().debug_selector(|| "call-small".into()).child(
+                    IconButton::new(
+                        "call-small",
+                        if small { "chevronUp" } else { "chevronDown" },
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.bar.peek = false;
+                        this.change_settings(|s| s.call_small = !small, cx);
+                        cx.notify();
+                    })),
+                ),
             );
 
         // One status line, always the same height; the noise filter keeps the right end.
@@ -407,19 +547,104 @@ impl Vesper {
             );
         let line = div().relative().h(px(28.)).child(layer);
 
+        let content = if compact {
+            div()
+                .id("call-pill")
+                .debug_selector(|| "call-pill".into())
+                .flex()
+                .h(px(36.))
+                .min_w_0()
+                .items_center()
+                .gap(px(8.))
+                .pl(px(12.))
+                .pr(px(14.))
+                .text_step(TEXT_SM)
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| this.bar_hover(true, cx)))
+                .child(
+                    icon(if muted || forced { "micOff" } else { "mic" }).text_color(if muted {
+                        t.danger_fg
+                    } else {
+                        t.fg_2
+                    }),
+                )
+                .child(
+                    div()
+                        .max_w(px(160.))
+                        .min_w_0()
+                        .ellipsis()
+                        .font_weight(t.weight_strong)
+                        .text_color(t.fg)
+                        .child(room),
+                )
+                .child(
+                    div()
+                        .text_step(TEXT_XS)
+                        .text_color(t.fg_3)
+                        .child(motion::roll("call-time", &time, px(16.), false, window, cx)),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .child(row)
+                .child(line)
+                .into_any_element()
+        };
+        let (box_size, inner) = (self.bar.size.clone(), self.bar.inner.clone());
         let bar = div()
+            .id("call-bar")
             .debug_selector(|| "call-bar".into())
+            .relative()
             .flex()
             .flex_col()
             .min_w_0()
             .max_w_full()
-            .rounded(t.radius_lg)
             .border_1()
             .border_color(t.line)
             .bg(t.bg_raised)
             .shadow(t.shadow_float.clone())
-            .child(row)
-            .child(line);
+            .on_hover(cx.listener(|this, on: &bool, _, cx| this.bar_hover(*on, cx)))
+            .child(
+                canvas(move |b, _, _| box_size.set(b.size), |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            )
+            .map(|d| match morph {
+                None => d.rounded(radius).child(content),
+                Some((from, r0, x)) => {
+                    // The content at its own size in a layer the box clips, measured on its first frame.
+                    let e = motion::ease(t.motion.ease_out)(x);
+                    let fade = motion::ease(t.motion.ease_out)(
+                        (x * t.motion.dur_3.as_secs_f32() / t.motion.dur_2.as_secs_f32()).min(1.),
+                    );
+                    let to = inner.get();
+                    let to = if to.width > px(0.) {
+                        to + size(px(2.), px(2.))
+                    } else {
+                        from
+                    };
+                    let mid = |a: Pixels, b: Pixels| a + (b - a) * e;
+                    d.overflow_hidden()
+                        .w(mid(from.width, to.width))
+                        .h(mid(from.height, to.height))
+                        .rounded(mid(r0, radius))
+                        .child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .bottom_0()
+                                .opacity(fade)
+                                .child(
+                                    canvas(move |b, _, _| inner.set(b.size), |_, _, _, _| {})
+                                        .absolute()
+                                        .size_full(),
+                                )
+                                .child(content),
+                        )
+                }
+            });
         Some(
             div()
                 .absolute()
@@ -433,6 +658,29 @@ impl Vesper {
                 .when_some(pose, |d, p| d.opacity(p.opacity))
                 .child(bar),
         )
+    }
+}
+
+impl Vesper {
+    /// The pointer came onto the bar (it opens, as a pill) or left it (it closes 300 ms later).
+    pub(super) fn bar_hover(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.bar.leave = None;
+        if on {
+            if !self.bar.peek {
+                self.bar.peek = true;
+                cx.notify();
+            }
+            return;
+        }
+        self.bar.leave = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                v.bar.peek = false;
+                cx.notify();
+            });
+        }));
     }
 }
 
@@ -512,8 +760,19 @@ pub(super) fn link_button(
 
 #[cfg(test)]
 mod tests {
-    use super::noise_line;
+    use super::{clock, noise_line};
     use crate::voice::denoise::{DEEPFILTER, LOADING, RNNOISE};
+    use std::time::Duration;
+
+    #[test]
+    fn the_call_timer_counts_minutes_then_hours() {
+        let s = Duration::from_secs;
+        assert_eq!(clock(s(0)), "0:00");
+        assert_eq!(clock(s(61)), "1:01");
+        assert_eq!(clock(s(3599)), "59:59");
+        assert_eq!(clock(s(3600)), "1:00:00");
+        assert_eq!(clock(s(36061)), "10:01:01");
+    }
 
     #[test]
     fn the_noise_line_reads_like_the_web() {

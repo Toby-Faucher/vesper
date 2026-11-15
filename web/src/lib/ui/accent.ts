@@ -130,13 +130,8 @@ export function tint(fill: string): number[] {
 export function applyAccent(v: string | null | undefined, root: HTMLElement = document.documentElement, store: Storage | null = storage): void {
   const fill = fillOf(v);
   const amber = fill === PRESETS.amber.hex;
-  // A style with its own accent (data-own-accent, set by applyStyle) keeps it while the accent is the default amber.
-  const own = amber && root.getAttribute?.('data-own-accent') != null;
   const light = root.getAttribute?.('data-scheme') === 'light';
-  for (const [k, val] of Object.entries(roles(fill, light ? 'light' : 'dark'))) {
-    if (own) root.style.removeProperty(k);
-    else root.style.setProperty(k, val);
-  }
+  for (const [k, val] of Object.entries(roles(fill, light ? 'light' : 'dark'))) root.style.setProperty(k, val);
   root.style.setProperty('--logo-filter', amber ? 'none' : 'url(#logo-tint)'); // amber: the shipped file, untouched
   const doc = root.ownerDocument; // absent in the unit tests
   doc?.getElementById('logo-matrix')?.setAttribute('values', tint(fill).join(' '));

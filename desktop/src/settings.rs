@@ -41,9 +41,10 @@ pub struct Settings {
     pub volumes: HashMap<String, f32>,
     /// The sidebar is hidden (the web keeps this in localStorage).
     pub sidebar_collapsed: bool,
-    /// Settings > Appearance, on this device only like the web's `vesper.style` and `vesper.scheme`: a style id, and
-    /// `dark`, `light` or `system`.
-    pub style: String,
+    /// The call bar is the small pill (the web's `vesper.callbar`).
+    pub call_small: bool,
+    /// Settings > Appearance, on this device only like the web's `vesper.scheme`: `dark`, `light` or `system`. An old
+    /// file's `style` (Persona, Cozy, BBS, Aurora were removed) is an unknown key: ignored on load, dropped on save.
     pub scheme: String,
     /// Settings > Notifications: the ring of a DM call, and its volume, 0 to 100 (the web's `vesper.notify`).
     pub ring: bool,
@@ -65,7 +66,7 @@ impl Default for Settings {
             start_with_computer: false,
             volumes: HashMap::new(),
             sidebar_collapsed: false,
-            style: "vesper".into(),
+            call_small: false,
             scheme: "dark".into(),
             ring: true,
             volume: 50,
@@ -178,7 +179,7 @@ mod tests {
             start_with_computer: true,
             volumes: HashMap::from([("0123456789abcdef0123456789abcdef".into(), 250.0)]),
             sidebar_collapsed: true,
-            style: "cozy".into(),
+            call_small: true,
             scheme: "system".into(),
             ring: false,
             volume: 30,
@@ -222,6 +223,13 @@ mod tests {
             );
             assert_eq!(Settings::load(&p), s);
         }
+
+        // An old file's style is ignored: the look is Vesper with the scheme it had.
+        std::fs::write(&p, r#"{"style": "cozy", "scheme": "light"}"#).unwrap();
+        let s = Settings::load(&p);
+        assert_eq!(s.scheme, "light");
+        s.save(&p).unwrap();
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("style"));
 
         // One value this build cannot read falls back alone; the rest, volumes too, stay.
         std::fs::write(

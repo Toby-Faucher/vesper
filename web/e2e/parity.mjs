@@ -23,6 +23,10 @@ const FRAMES = [60, 150];
 const DRAFT = '## three things for friday\nbring the **good** cable, *please*\nsomeone check the `deepfilter` mode\n> last time it crackled\n- and ~~chips~~ snacks';
 let typing;
 const RING_FRAMES = [60, 150, 800];
+const REVEAL_FRAMES = [100, 250];
+let revealAt = [0, 0];
+// Pauses every animation of the page at t ms (view transitions too) for a frame.
+const pauseAt = (page, t) => page.evaluate((t) => document.getAnimations().forEach((a) => { a.pause(); a.currentTime = t; }), t);
 const OFFLINE_DRAFT = 'is the server down again?';
 
 // The upload tray's rows: name, size, MIME type, and the state the fake upload holds it in (dev.rs reads the same).
@@ -53,6 +57,19 @@ const SCENES = {
   'shell-empty': {
     web: async ({ alice }) => { await home(alice.page); return alice.page; },
     desktop: { user: 'alice' },
+  },
+  // The logo in the teal accent: the web's #logo-tint filter (accent.ts), the desktop's tinted picture (theme::tint).
+  'logo-accent': {
+    web: async ({ alice }) => {
+      await api(alice.page, 'PATCH', '/api/me', { ui_accent: 'teal' });
+      await home(alice.page);
+      return alice.page;
+    },
+    desktop: { user: 'alice' },
+    after: async ({ alice }) => {
+      await api(alice.page, 'PATCH', '/api/me', { ui_accent: 'amber' });
+      await home(alice.page);
+    },
   },
   // general with the 40 seeded messages, all from the same minute.
   'timeline-general': {
@@ -379,6 +396,74 @@ const SCENES = {
       return page;
     },
     desktop: async ({ alice }) => { await hangUp(alice.page); return { user: 'alice', scene: 'room:general', env: { VESPER_DEV_VOICE: 'music', VESPER_DEV_LINKS: '1' } }; },
+  },
+  // The call bar made small: the pill (the room, the mic, the timer). The timers differ by how long each side has
+  // been in the call.
+  'call-pill': {
+    web: async (ctx) => {
+      const page = await inCall(ctx);
+      await bar(page).getByRole('button', { name: 'Make the call bar small' }).click();
+      await rest(page);
+      await sleep(500);
+      return page;
+    },
+    desktop: async ({ alice }) => {
+      await alice.page.evaluate(() => localStorage.removeItem('vesper.callbar'));
+      await bar(alice.page).hover(); // the pill opens to the full bar, so Leave is there
+      await hangUp(alice.page);
+      return { user: 'alice', scene: 'room:general', settings: { call_small: true }, env: { VESPER_DEV_VOICE: 'music' } };
+    },
+  },
+  // Dark to Light with a click on Light: the circle at 100 and 250 ms of its 400 (the web's view transition paused
+  // there; the desktop's circle is the new page colour, see Reveal in settings.rs), then Light.
+  'motion-reveal': {
+    web: async (ctx) => {
+      await house(ctx);
+      const page = ctx.alice.page;
+      await home(page);
+      await page.goto(`${ORIGIN}/settings/appearance`);
+      await page.getByRole('heading', { level: 1 }).waitFor();
+      await sleep(1500);
+      const b = await page.locator('label').filter({ hasText: /^\s*Light\s*$/ }).boundingBox();
+      revealAt = [Math.round(b.x + b.width / 2), Math.round(b.y + b.height / 2)];
+      await page.mouse.click(...revealAt);
+      await page.waitForFunction(() => document.getAnimations().some((a) => a.effect?.pseudoElement));
+      for (const t of REVEAL_FRAMES) {
+        await pauseAt(page, t);
+        await page.screenshot({ path: `${out}motion-reveal-web-${t}ms.png` });
+      }
+      await page.evaluate(() => document.getAnimations().forEach((a) => a.finish()));
+      await sleep(300);
+      return page;
+    },
+    focus: true,
+    desktop: () => ({ user: 'alice', scene: 'settings:appearance', env: { VESPER_DEV_THEN: `scheme:light@${revealAt.join(',')}` }, frames: REVEAL_FRAMES }),
+    after: async ({ alice }) => {
+      await alice.page.evaluate(() => localStorage.setItem('vesper.scheme', 'dark'));
+      await home(alice.page);
+    },
+  },
+  // Settings, Voice to Appearance: the picked fill slides down the nav (`slides`, 160 ms), at 60 and 150 ms.
+  'motion-slide': {
+    web: async (ctx) => {
+      await house(ctx);
+      const page = ctx.alice.page;
+      await home(page);
+      await page.goto(`${ORIGIN}/settings/voice`);
+      await page.getByRole('heading', { level: 1 }).waitFor();
+      await sleep(1500);
+      await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Appearance' }).click();
+      await page.mouse.move(1439, 899);
+      for (const t of FRAMES) {
+        await pauseAt(page, t);
+        await page.screenshot({ path: `${out}motion-slide-web-${t}ms.png` });
+      }
+      await page.evaluate(() => document.getAnimations().forEach((a) => a.finish()));
+      await sleep(300);
+      return page;
+    },
+    focus: true,
+    desktop: { user: 'alice', scene: 'settings:voice', env: { VESPER_DEV_THEN: 'page:appearance' }, frames: FRAMES },
   },
   // Offline with a draft: the composer keeps it and says Send waits (the server restarts).
   'composer-offline': {

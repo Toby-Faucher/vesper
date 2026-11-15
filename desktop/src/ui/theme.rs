@@ -1,6 +1,6 @@
-//! The web app's design tokens (`web/src/styles/tokens.css`, the four styles in `web/src/styles/*.css`, the accent in
-//! `web/src/lib/ui/accent.ts`) as a runtime [`Tokens`] global. Components read roles only: `tokens(cx).fg_2`.
-//! [`set`] switches style, scheme or accent at runtime and repaints gpui-component's theme from the roles.
+//! The web app's design tokens (`web/src/styles/tokens.css`, the accent in `web/src/lib/ui/accent.ts`) as a runtime
+//! [`Tokens`] global. Components read roles only: `tokens(cx).fg_2`.
+//! [`set`] switches scheme or accent at runtime and repaints gpui-component's theme from the roles.
 //!
 //! The `pub const` colours below are the default look (Vesper, dark, amber) for older call sites; a test keeps them equal
 //! to `Tokens::default()`. New code reads the global.
@@ -76,59 +76,6 @@ pub trait TextStepExt: Styled + Sized {
 }
 impl<T: Styled> TextStepExt for T {}
 
-/// A look (`web/src/lib/ui/style.ts`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Style {
-    #[default]
-    Vesper,
-    Persona,
-    Cozy,
-    Bbs,
-    Aurora,
-}
-
-impl Style {
-    pub const ALL: [Style; 5] = [
-        Style::Vesper,
-        Style::Persona,
-        Style::Cozy,
-        Style::Bbs,
-        Style::Aurora,
-    ];
-
-    /// The id the web app stores (`vesper.style`).
-    pub fn id(self) -> &'static str {
-        match self {
-            Style::Vesper => "vesper",
-            Style::Persona => "persona",
-            Style::Cozy => "cozy",
-            Style::Bbs => "bbs",
-            Style::Aurora => "aurora",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Style {
-        Style::ALL
-            .into_iter()
-            .find(|s| s.id() == id)
-            .unwrap_or_default()
-    }
-
-    /// The scheme a style has by nature; `None` follows the choice.
-    pub fn fixed_scheme(self) -> Option<Scheme> {
-        match self {
-            Style::Vesper => None,
-            Style::Cozy => Some(Scheme::Light),
-            _ => Some(Scheme::Dark),
-        }
-    }
-
-    /// Brings its own accent, kept while the account accent is the default amber.
-    pub fn own_accent(self) -> bool {
-        self != Style::Vesper
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Scheme {
     #[default]
@@ -159,6 +106,8 @@ pub struct Motion {
     pub dur_out: Duration,
     /// Every preset's duration under reduced motion.
     pub dur_calm: Duration,
+    /// The theme switch's circle: a whole window, and rare.
+    pub dur_reveal: Duration,
     pub ease_out: [f32; 4],
     pub ease_in: [f32; 4],
     /// Overshoots a little.
@@ -176,6 +125,7 @@ impl Default for Motion {
             dur_3: Duration::from_millis(220),
             dur_out: Duration::from_millis(120),
             dur_calm: Duration::from_millis(80),
+            dur_reveal: Duration::from_millis(400),
             ease_out: [0.2, 0., 0., 1.],
             ease_in: [0.4, 0., 1., 1.],
             ease_pop: [0.34, 1.56, 0.64, 1.],
@@ -196,11 +146,12 @@ impl Motion {
     }
 }
 
-/// Every role of tokens.css for one style, scheme and accent.
+/// Every role of tokens.css for one scheme and accent.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tokens {
-    pub style: Style,
     pub scheme: Scheme,
+    /// The accent fill as chosen (`fillOf`), before the light scheme darkens it: the logo is tinted to it.
+    pub fill: u32,
     pub bg_app: Rgba,
     pub bg_sidebar: Rgba,
     pub bg_raised: Rgba,
@@ -252,7 +203,7 @@ impl Global for Tokens {}
 
 impl Default for Tokens {
     fn default() -> Self {
-        Tokens::new(Style::Vesper, Scheme::Dark, None)
+        Tokens::new(Scheme::Dark, None)
     }
 }
 
@@ -264,11 +215,6 @@ const LIGHT_GRAY: [u32; 12] = [
     0xfbfaf8, 0xf4f2ef, 0xffffff, 0xece9e5, 0xe3e0db, 0xd9d6d0, 0xc8c5bf, 0xa8a59f, 0x8d8a85,
     0x6a6763, 0x4d4b47, 0x1b1917,
 ];
-const COZY_GRAY: [u32; 12] = [
-    0xf6ecd3, 0xefe2c2, 0xfff8e6, 0xecdcb8, 0xe3cf9f, 0xdcc690, 0xd4b583, 0xb08a5c, 0x8c6f55,
-    0x745641, 0x573c2b, 0x3d2a1d,
-];
-
 fn shadow(x: f32, y: f32, blur: f32, spread: f32, color: u32) -> BoxShadow {
     BoxShadow {
         color: rgba(color).into(),
@@ -279,21 +225,19 @@ fn shadow(x: f32, y: f32, blur: f32, spread: f32, color: u32) -> BoxShadow {
 }
 
 impl Tokens {
-    /// The look for `style`, the scheme chosen (ignored by a style that is dark or light by nature) and the account's
-    /// accent (a preset id or `#rrggbb`; `None` or a refused colour is amber), as the web app paints it.
-    pub fn new(style: Style, choice: Scheme, accent: Option<&str>) -> Tokens {
-        let scheme = style.fixed_scheme().unwrap_or(choice);
-        let gray = match (style, scheme) {
-            (Style::Cozy, _) => COZY_GRAY,
-            (_, Scheme::Light) => LIGHT_GRAY,
-            (_, Scheme::Dark) => DARK_GRAY,
+    /// The look for the scheme and the account's accent (a preset id or `#rrggbb`; `None` or a refused colour is
+    /// amber), as the web app paints it.
+    pub fn new(scheme: Scheme, accent: Option<&str>) -> Tokens {
+        let gray = match scheme {
+            Scheme::Light => LIGHT_GRAY,
+            Scheme::Dark => DARK_GRAY,
         };
         let g = |i: usize| rgb(gray[i - 1]);
         let (sans, mono) = fonts();
-        // :root, with the grays of the scheme (and cozy's own).
+        // :root, with the grays of the scheme.
         let mut t = Tokens {
-            style,
             scheme,
+            fill: fill_of(accent),
             bg_app: g(1),
             bg_sidebar: g(2),
             bg_raised: g(3),
@@ -334,8 +278,8 @@ impl Tokens {
             syn_com: g(10),
             weight_strong: FontWeight(600.),
             weight_ui: FontWeight(500.),
-            font_sans: sans.clone(),
-            font_mono: mono.clone(),
+            font_sans: sans,
+            font_mono: mono,
             radius_sm: px(4.),
             radius: px(6.),
             radius_lg: px(10.),
@@ -345,18 +289,8 @@ impl Tokens {
         if scheme == Scheme::Light {
             t.light();
         }
-        match style {
-            Style::Vesper => {}
-            Style::Aurora => t.aurora(),
-            Style::Bbs => t.bbs(&mono),
-            Style::Cozy => t.cozy(),
-            Style::Persona => t.persona(),
-        }
         t.syn_com = t.fg_3;
-        let fill = fill_of(accent);
-        if !(fill == AMBER && style.own_accent()) {
-            t.set_accent(&roles(fill, scheme));
-        }
+        t.set_accent(&roles(t.fill, scheme));
         t
     }
 
@@ -397,119 +331,6 @@ impl Tokens {
         (self.syn_kw, self.syn_str, self.syn_num, self.syn_ty) =
             (rgb(0x6f4fb8), rgb(0x3f7a22), rgb(0xb0346f), rgb(0x1f6aae));
         self.shadow_float = vec![shadow(0., 4., 16., 0., 0x281e1429)];
-    }
-
-    fn surfaces(&mut self, bg: [u32; 6], line: [u32; 3], fg: [u32; 4], accent: AccentRoles) {
-        [
-            self.bg_app,
-            self.bg_sidebar,
-            self.bg_raised,
-            self.bg_element,
-            self.bg_hover,
-            self.bg_selected,
-        ] = bg.map(rgb);
-        [self.line_subtle, self.line, self.line_strong] = line.map(rgb);
-        [self.fg, self.fg_2, self.fg_3, self.fg_disabled] = fg.map(rgb);
-        self.set_accent(&accent);
-    }
-
-    fn radii(&mut self, sm: f32, r: f32, lg: f32) {
-        (self.radius_sm, self.radius, self.radius_lg) = (px(sm), px(r), px(lg));
-    }
-
-    fn aurora(&mut self) {
-        self.surfaces(
-            [0x060913, 0x0a1020, 0x0e1626, 0x121c30, 0x17233d, 0x1d2c4d],
-            [0x1f2a44, 0x2e3c5e, 0x4d5f88],
-            [0xeef3fb, 0xb4bfd3, 0xa0adc5, 0x77849f],
-            AccentRoles {
-                accent: 0x4fe0ae,
-                accent_hover: 0x7ff0c8,
-                on_accent: 0x04130e,
-                accent_fg: 0x7ff0c8,
-                accent_subtle: 0x0f3a30,
-                accent_line: 0x1f8a6a,
-                focus: 0x4fe0ae,
-            },
-        );
-        self.radii(6., 10., 16.);
-        self.shadow_float = vec![
-            shadow(0., 8., 32., 0., 0x0000008c),
-            shadow(0., 0., 0., 1., 0xffffff0f),
-        ];
-    }
-
-    fn bbs(&mut self, mono: &SharedString) {
-        self.surfaces(
-            [0x000000, 0x000000, 0x08082e, 0x000000, 0x14145a, 0x0000aa],
-            [0x22227a, 0x3333aa, 0x5555ff],
-            [0xf2f2f2, 0xc4c4c4, 0xb0b0b0, 0x858585],
-            AccentRoles {
-                accent: 0xffff55,
-                accent_hover: 0xffffaa,
-                on_accent: 0x000000,
-                accent_fg: 0x55ffff,
-                accent_subtle: 0x00005f,
-                accent_line: 0xaaaa00,
-                focus: 0xffff55,
-            },
-        );
-        (self.weight_strong, self.weight_ui) = (FontWeight(700.), FontWeight(400.));
-        self.font_sans = mono.clone();
-        self.radii(0., 0., 0.);
-        self.shadow_float = vec![shadow(6., 6., 0., 0., 0x00005fff)];
-    }
-
-    fn cozy(&mut self) {
-        self.bg_element = rgb(0xfffdf5);
-        self.set_accent(&AccentRoles {
-            accent: 0x2f7f6e,
-            accent_hover: 0x256a5c,
-            on_accent: 0xffffff,
-            accent_fg: 0x226656,
-            accent_subtle: 0xd3e8d6,
-            accent_line: 0x8cbfae,
-            focus: 0x2f7f6e,
-        });
-        (self.danger_fg, self.danger_solid, self.danger_subtle) =
-            (rgb(0xa82d39), rgb(0xb3333f), rgb(0xf8dcd8));
-        (self.warn_fg, self.warn_subtle) = (rgb(0x8a5000), rgb(0xfbe5c4));
-        (self.ok_fg, self.ok_subtle) = (rgb(0x25693c), rgb(0xd9eed9));
-        // shortcut: ui-rounded, Nunito and Quicksand are not looked for; the stack falls through to the system sans
-        // as in Chromium on a machine without them. Add the lookup if the Windows build shows a rounded face.
-        self.radii(8., 12., 20.);
-        self.shadow_float = vec![
-            shadow(0., 4., 0., 0., 0xd9bd8cff),
-            shadow(0., 10., 18., -6., 0x5f3b2259),
-        ];
-    }
-
-    fn persona(&mut self) {
-        self.surfaces(
-            [0x0b0b0b, 0x000000, 0x161616, 0x1d1d1d, 0x2a2a2a, 0x3d0810],
-            [0x3a3a3a, 0x5a5a5a, 0xa0a0a0],
-            [0xffffff, 0xd4d4d4, 0xb8b8b8, 0x8a8a8a],
-            AccentRoles {
-                accent: 0xe60012,
-                accent_hover: 0xb8000f,
-                on_accent: 0xffffff,
-                accent_fg: 0xff6674,
-                accent_subtle: 0x3d0810,
-                accent_line: 0x8a0a16,
-                focus: 0xffffff,
-            },
-        );
-        self.on_avatar = rgb(0x000000);
-        (self.weight_strong, self.weight_ui) = (FontWeight(700.), FontWeight(400.));
-        // shortcut: the web loads Rubik and Anton from woff2 files; they are not bundled here, so the system sans
-        // draws. Bundle them as TTF when the Persona style is ported.
-        self.radii(0., 0., 0.);
-        // The hard shadow is the accent colour.
-        let a = self.accent;
-        self.shadow_float = vec![BoxShadow {
-            color: a.into(),
-            ..shadow(6., 6., 0., 0., 0)
-        }];
     }
 }
 
@@ -730,6 +551,22 @@ pub fn fill_of(v: Option<&str>) -> u32 {
     }
 }
 
+/// The logo's colour matrix (`accent.ts` `tint`, the `#logo-tint` feColorMatrix): row `i` gives output channel `i`
+/// from the input r, g, b (0 to 1, sRGB). It moves amber to `fill` and keeps every grey, so the white letters and the
+/// black outline stay. The identity for amber.
+pub fn tint(fill: u32) -> [[f64; 3]; 3] {
+    let (a, t) = (
+        chans(AMBER).map(|x| x / 255.),
+        chans(fill).map(|x| x / 255.),
+    );
+    let mean = (a[0] + a[1] + a[2]) / 3.;
+    let c = a.map(|x| x - mean); // amber off the grey axis: greys give 0, amber gives 1
+    let n = c.iter().map(|x| x * x).sum::<f64>();
+    std::array::from_fn(|i| {
+        std::array::from_fn(|j| f64::from(u8::from(i == j)) + (t[i] - a[i]) * c[j] / n)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,27 +683,33 @@ mod tests {
     }
 
     #[test]
-    fn styles_fix_their_scheme_and_keep_their_accent_while_amber() {
-        let cozy = Tokens::new(Style::Cozy, Scheme::Dark, None);
-        assert_eq!(cozy.scheme, Scheme::Light);
-        assert_eq!((hex(cozy.bg_app), hex(cozy.accent)), (0xf6ecd3, 0x2f7f6e));
-        let aurora = Tokens::new(Style::Aurora, Scheme::Light, Some("sky"));
-        assert_eq!(aurora.scheme, Scheme::Dark);
-        assert_eq!(
-            hex(aurora.accent),
-            0x4db9ee,
-            "a chosen accent wins over the style's"
-        );
-        assert_eq!(
-            hex(aurora.syn_com),
-            0xa0adc5,
-            "--syn-com follows the style's --fg-3"
-        );
-        let light = Tokens::new(Style::Vesper, Scheme::Light, None);
+    fn the_logo_tint_is_the_identity_for_amber_and_moves_amber_to_the_fill() {
+        let id = tint(AMBER);
+        for (i, row) in id.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                assert!((v - f64::from(u8::from(i == j))).abs() < 1e-9);
+            }
+        }
+        let through = |m: [[f64; 3]; 3], c: u32| -> [f64; 3] {
+            let x = chans(c).map(|v| v / 255.);
+            m.map(|r| (r[0] * x[0] + r[1] * x[1] + r[2] * x[2]) * 255.)
+        };
+        for (_, _, fill) in PRESETS {
+            let got = through(tint(fill), AMBER);
+            let want = chans(fill);
+            assert!((0..3).all(|i| (got[i] - want[i]).abs() < 0.5), "{fill:06x}");
+            let grey = through(tint(fill), 0x808080);
+            assert!(grey.iter().all(|v| (v - 128.).abs() < 0.5), "greys stay");
+        }
+    }
+
+    #[test]
+    fn light_scheme_and_a_chosen_accent() {
+        let light = Tokens::new(Scheme::Light, None);
         assert_eq!(
             (hex(light.bg_raised), hex(light.accent)),
             (0xffffff, 0x976f0a)
         );
-        assert_eq!(Style::from_id("bbs").id(), "bbs");
+        assert_eq!(hex(Tokens::new(Scheme::Dark, Some("sky")).accent), 0x4db9ee);
     }
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { slides } from '../lib/ui/motion-lazy';
   import * as I from '../lib/ui/icons';
   import { tick, untrack } from 'svelte';
   import { href } from '../lib/route';
@@ -164,7 +165,7 @@
 
 <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-subtle px-4 py-2 text-xs text-fg-2">
   {#if curName}
-    <div class="seg" role="group" aria-label="Where to search">
+    <div class="seg" role="group" aria-label="Where to search" {@attach slides}>
       <button type="button" aria-pressed={parsed.room_id === null} onclick={scope(false)}>All rooms</button>
       <button type="button" aria-pressed={parsed.room_id === current} onclick={scope(true)}>This room</button>
     </div>
@@ -280,7 +281,7 @@
 
 <style>
   code { color: var(--fg-2); font-family: var(--font-mono); font-size: 12px; }
-  .seg { display: flex; padding: 2px; border-radius: var(--radius); background: var(--bg-element); }
+  .seg { position: relative; isolation: isolate; display: flex; padding: 2px; border-radius: var(--radius); background: var(--bg-element); }
   .seg button { height: 24px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--fg-2); }
   .seg button:hover { color: var(--fg); }
   .seg [aria-pressed='true'] { background: var(--bg-selected); color: var(--fg); }

@@ -1389,6 +1389,14 @@ impl Vesper {
             .text_step(TEXT_XS)
             .text_color(t.fg_2);
         if let Some(name) = cur_name.clone() {
+            // The picked scope's fill slides to the other (`slides` in motion.ts).
+            let slide = motion::Slide::new(
+                "search-scope",
+                usize::from(parsed.room_id.is_some()),
+                window,
+                cx,
+            );
+            let gliding = slide.gliding();
             let seg = |id: &'static str,
                        label: &'static str,
                        on: bool,
@@ -1403,20 +1411,20 @@ impl Vesper {
                     .px(px(8.))
                     .rounded(t.radius_sm)
                     .text_color(if on { t.fg } else { t.fg_2 })
-                    .when(on, |d| d.bg(t.bg_selected))
+                    .relative()
+                    .when(on && !gliding, |d| d.bg(t.bg_selected))
                     .cursor_pointer()
+                    .child(slide.track(usize::from(value.is_some())))
                     .on_click(cx.listener(move |this, _, w, cx| {
                         let q = searchq::set_key(&this.find_text(cx), Key::In, value.as_deref());
                         this.set_find_text(q, None, w, cx);
                     }))
                     .child(label)
             };
+            let group = div().flex().p(px(2.)).rounded(t.radius).bg(t.bg_element);
             filters = filters.child(
-                div()
-                    .flex()
-                    .p(px(2.))
-                    .rounded(t.radius)
-                    .bg(t.bg_element)
+                slide
+                    .under(group, t.radius_sm, t.bg_selected, window, cx)
                     .child(seg(
                         "search-all",
                         "All rooms",

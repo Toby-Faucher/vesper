@@ -89,7 +89,7 @@ impl Vesper {
         let empty = self.tl.loaded.contains(&room.id)
             && m.log()
                 .is_some_and(|l| l.messages.is_empty() && !l.more_before);
-        let header = self.room_header(&room, cx);
+        let header = self.room_header(&room, window, cx);
         let m = &self.model;
         let keyring = m.not_remembered.then(|| {
             h_flex()
@@ -201,7 +201,7 @@ impl Vesper {
             .flex_1()
             .h_full()
             .min_w_0()
-            .when(call.is_some(), |d| d.pb(px(super::call::BAR_H + 24.)))
+            .when(call.is_some(), |d| d.pb(px(self.bar.room() + 24.)))
             .children(call)
     }
 
@@ -291,9 +291,9 @@ impl Vesper {
     /// `--weight-strong`), a DM's or a restricted room's note, then Pins, Search and Join voice at the right. Join voice is
     /// not there in this room's call (the call bar has Leave) and is secondary while in a call elsewhere. Search opens
     /// the search dialog.
-    fn room_header(&mut self, room: &RoomInfo, cx: &mut Context<Self>) -> Div {
+    fn room_header(&mut self, room: &RoomInfo, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let t = tokens(cx).clone();
-        let popover = self.render_pins(cx);
+        let popover = self.render_pins(window, cx);
         let m = &self.model;
         let id = room.id;
         let here = m.call.room == Some(id);

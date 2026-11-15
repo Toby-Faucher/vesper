@@ -847,6 +847,8 @@ pub struct Badge {
     mention: bool,
     n: i64,
     pose: Option<motion::Pose>,
+    /// Its digits roll when the number changes (`Roll.svelte`): kept per this id; `true` changes them at once.
+    roll: Option<(ElementId, bool)>,
 }
 
 impl Badge {
@@ -855,10 +857,15 @@ impl Badge {
             mention,
             n,
             pose: None,
+            roll: None,
         }
     }
     pub fn pose(mut self, p: Option<motion::Pose>) -> Self {
         self.pose = p;
+        self
+    }
+    pub fn roll(mut self, id: impl Into<ElementId>, still: bool) -> Self {
+        self.roll = Some((id.into(), still));
         self
     }
     /// What it reads, which is also what a bump is keyed on.
@@ -869,7 +876,15 @@ impl Badge {
 }
 
 impl RenderOnce for Badge {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let digits = self.roll.clone().map(|(id, still)| {
+            let n = if self.n > 99 {
+                "99+".into()
+            } else {
+                self.n.to_string()
+            };
+            motion::roll(id, &n, px(16.), still, window, cx)
+        });
         let t = tokens(cx);
         let (bg, fg) = if self.mention {
             (t.accent, t.on_accent)
@@ -893,14 +908,17 @@ impl RenderOnce for Badge {
                 .line_height(px(16. * k))
                 .font_weight(t.weight_strong)
                 .whitespace_nowrap()
-                .child(text.clone())
         };
         match self.pose {
-            None => pill(1.).into_any_element(),
+            None if digits.is_some() => pill(1.)
+                .children(self.mention.then_some("@"))
+                .child(digits.expect("checked"))
+                .into_any_element(),
+            None => pill(1.).child(text.clone()).into_any_element(),
             Some(p) => div()
                 .relative()
                 .flex_none()
-                .child(pill(1.).invisible())
+                .child(pill(1.).child(text.clone()).invisible())
                 .child(
                     div()
                         .absolute()
@@ -909,7 +927,7 @@ impl RenderOnce for Badge {
                         .items_center()
                         .justify_center()
                         .opacity(p.opacity)
-                        .child(pill(0.6 + 0.4 * p.t)),
+                        .child(pill(0.6 + 0.4 * p.t).child(text.clone())),
                 )
                 .into_any_element(),
         }

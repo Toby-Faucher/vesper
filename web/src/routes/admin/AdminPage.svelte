@@ -1,5 +1,6 @@
 <script lang="ts">
   import { motion } from '../../lib/ui/motion';
+  import { slides } from '../../lib/ui/motion-lazy';
   import { ADMIN_NAMES as NAMES, ADMIN_OWNER_ONLY, ADMIN_SECTIONS, href, type AdminSection } from '../../lib/route';
   import { navigate, session } from '../../lib/session.svelte';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
@@ -22,7 +23,7 @@
 {:else}
   <div class="flex min-h-0 flex-1 justify-center gap-8 overflow-y-auto px-4 py-6">
     <nav aria-label="Admin sections" class="sticky top-0 w-50 shrink-0 self-start">
-      <ul class="flex flex-col gap-px">
+      <ul class="relative isolate flex flex-col gap-px" {@attach slides}>
         {#each sections as s (s)}
           <li>
             <a href={href({ name: 'admin', section: s })} aria-current={s === section ? 'page' : undefined}

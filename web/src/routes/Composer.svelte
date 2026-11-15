@@ -269,7 +269,7 @@
   <span class="sr-only" role="status">{trayLine}</span>
   <form class="box" data-composer onsubmit={submit}>
     {#if replyTo}
-      <div class="bar">
+      <div class="bar" in:motion={'swap'}>
         <Icon d={I.reply} size={16} />
         <p class="min-w-0 flex-1 truncate">
           Replying to <span class="font-medium text-fg">{name(replyTo.author_id)}</span>
