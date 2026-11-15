@@ -1474,7 +1474,7 @@ impl Vesper {
             dates = dates
                 .child(
                     div().flex().items_center().gap(px(4.)).child(label).child(
-                        div().w(px(118.)).child(
+                        div().w(px(118.)).h(px(28.)).overflow_hidden().child(
                             Input::new(&field)
                                 .h(px(28.))
                                 .px(px(6.))
