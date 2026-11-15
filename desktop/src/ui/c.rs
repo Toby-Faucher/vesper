@@ -828,10 +828,11 @@ impl RenderOnce for Badge {
 }
 
 /// `Popover.svelte`'s box: 176 to 320 px wide, 4 px padding, 1 px `--line-subtle`, `--radius-lg`, `--bg-raised`,
-/// 13/20 text, `--shadow-float`. Place it with `gpui::anchored()`.
+/// 13/20 text, `--shadow-float`. Place it with `gpui::anchored()`. A click or scroll on it never reaches what is under it.
 pub fn popover_frame(cx: &App) -> Div {
     let t = tokens(cx);
     div()
+        .occlude()
         .min_w(px(176.))
         .max_w(px(320.))
         .p(px(4.))
@@ -919,8 +920,9 @@ impl RenderOnce for MenuItem {
 /// `Dialog.svelte`: over a backdrop of `--bg-app` at 72 %, a 440 px box (1 px `--line-subtle`, `--radius-lg`,
 /// `--bg-raised`, `--shadow-float`): the title (16/24, `--weight-strong`), the body (13/20, `--fg-2`), an optional
 /// footer (right-aligned, 8 px gap, a `--line-subtle` rule above) and a Close button at the top right. Put it last in
-/// a `relative` parent the size of the window.
-/// shortcut: centred, not the web's `margin: auto` in a scrolling top layer; no focus trap or Esc yet.
+/// a `relative` parent the size of the window. The backdrop takes every click and scroll. The parent holds the focus
+/// (`Vesper::dialog_focus`), where Enter confirms and Esc closes.
+/// shortcut: centred, not the web's `margin: auto` in a scrolling top layer; Tab is not trapped in it.
 #[derive(IntoElement)]
 pub struct Dialog {
     title: SharedString,
@@ -966,6 +968,7 @@ impl RenderOnce for Dialog {
         div()
             .absolute()
             .inset_0()
+            .occlude()
             .flex()
             .items_center()
             .justify_center()

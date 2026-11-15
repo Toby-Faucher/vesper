@@ -16,6 +16,7 @@ pub mod settings;
 mod share;
 mod sidebar;
 mod sign_in;
+mod sound;
 pub mod theme;
 mod tray;
 
@@ -54,7 +55,9 @@ actions!(
         ComposerDown,
         ComposerTab,
         ComposerEscape,
-        PasteFile
+        PasteFile,
+        Dismiss,
+        ConfirmDialog
     ]
 );
 
@@ -62,6 +65,8 @@ actions!(
 const COMPOSER: &str = "Composer";
 /// The key context of a message's edit box.
 const EDIT_BOX: &str = "EditBox";
+/// The key context of an open dialog, which holds the focus.
+const DIALOG: &str = "Dialog";
 
 /// Keys for the app, bound after gpui-component's so they win over its multi-line input.
 pub fn init(cx: &mut App) {
@@ -84,6 +89,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("enter", SaveEdit, edit),
         KeyBinding::new("shift-enter", NewLine, edit),
         KeyBinding::new("escape", CancelEdit, edit),
+        // Esc anywhere closes the topmost thing (an input's own Esc goes first, and passes it on when it has nothing
+        // to close).
+        KeyBinding::new("escape", Dismiss, None),
+        KeyBinding::new("enter", ConfirmDialog, Some(DIALOG)),
     ]);
 }
 
@@ -93,7 +102,7 @@ pub fn run() {
     // The parity harness's calls run on fake devices (dev.rs).
     #[cfg(debug_assertions)]
     let audio = dev::audio().unwrap_or(audio);
-    let (cmds, events) = net::start(Arc::new(Keyring), audio);
+    let (cmds, events) = net::start(Arc::new(Keyring), audio.clone());
     crate::files::clean_pasted();
     let file = crate::settings::path();
     let saved = file
@@ -113,6 +122,8 @@ pub fn run() {
                 title: Some("Vesper".into()),
                 ..Default::default()
             }),
+            // Wayland's activation (the tray's Show Vesper) needs it, and the taskbar matches the window by it.
+            app_id: Some("vesper".into()),
             ..Default::default()
         };
         let handle = cx
@@ -131,13 +142,14 @@ pub fn run() {
                 // 0.2.2 cannot hide a window on Windows). Leave, or Quit in the tray, ends it.
                 let weak = view.downgrade();
                 window.on_window_should_close(cx, move |window, cx| {
-                    let in_call = weak
+                    let view = weak
                         .upgrade()
-                        .is_some_and(|v| v.read(cx).model.call.phase != Phase::Idle);
-                    if in_call {
+                        .filter(|v| v.read(cx).model.call.phase != Phase::Idle);
+                    if let Some(v) = &view {
+                        v.update(cx, |v, cx| v.minimised_by_close(cx));
                         window.minimize_window();
                     }
-                    !in_call
+                    view.is_none()
                 });
                 cx.new(|cx| Root::new(view, window, cx))
             })
@@ -148,7 +160,7 @@ pub fn run() {
             .and_then(|r| r.view().clone().downcast::<Vesper>().ok())
         {
             let tray = tray::start(cx, view.downgrade(), handle.into());
-            view.update(cx, |v, _| v._tray = tray);
+            view.update(cx, |v, _| (v._tray, v.audio) = (tray, Some(audio)));
         }
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -218,6 +230,22 @@ pub struct Vesper {
     /// Sends the next `watch off` when it is due.
     watch_timer: Option<(Instant, Task<()>)>,
     _tray: Option<tray_icon::TrayIcon>,
+    /// The sound devices, for the ring (none in tests).
+    audio: Option<Arc<dyn crate::voice::AudioDevices>>,
+    /// The ring sound repeating, for the ring shown.
+    ring_sound: Option<(i64, Task<()>)>,
+    /// The window was minimised by its close button, so nothing of it is on screen until it is active again.
+    minimised: bool,
+    /// Frames drawn, and the check that a picture waiting untaken means the window is not drawn.
+    draws: u64,
+    frame_check: Option<Task<()>>,
+    /// Holds the focus while a dialog is open.
+    dialog_focus: FocusHandle,
+    /// The composer's text of the other rooms, and a change that only put a draft back.
+    drafts: HashMap<i64, String>,
+    draft_put: bool,
+    /// Draws again at midnight, so the day labels move on.
+    _midnight: Task<()>,
     /// The sidebar's menu, folds and motion.
     side: sidebar::Side,
     /// The timeline's motion, New row and open menus.
@@ -274,7 +302,9 @@ impl Vesper {
             }),
             cx.observe_window_activation(window, |this, window, cx| {
                 let active = window.is_window_active();
-                if !active {
+                if active {
+                    this.minimised = false;
+                } else {
                     // The key-up never comes once focus is gone: a window-held key would leave the mic open.
                     this.window_key(None, false);
                 }
@@ -327,6 +357,15 @@ impl Vesper {
             screen: None,
             watch_timer: None,
             _tray: None,
+            audio: None,
+            ring_sound: None,
+            minimised: false,
+            draws: 0,
+            frame_check: None,
+            dialog_focus: cx.focus_handle(),
+            drafts: HashMap::new(),
+            draft_put: false,
+            _midnight: midnight(cx),
             side: sidebar::Side::default(),
             tl: chat::Tl::default(),
             placeholder_room: None,
@@ -417,15 +456,24 @@ impl Vesper {
         let signed_out = matches!(ev, Event::SignedOut { .. });
         #[cfg(debug_assertions)]
         let latest = matches!(ev, Event::Latest { .. });
+        // A late answer of a session that ended is not shown.
+        let main = self.model.screen == Screen::Main;
         match &ev {
-            Event::Image { id, picture } => self.image_loaded(id, picture.clone(), window),
-            Event::Downloaded { path, open: true } => cx.open_with_system(path),
+            Event::Image { id, picture } if main => self.image_loaded(id, picture.clone(), window),
+            Event::Downloaded { path, open: true } if main => cx.open_with_system(path),
             Event::Latest { room, .. } => drop(self.tl.loaded.insert(*room)),
             _ => {}
         }
         let editing = self.model.editing;
         let cmds = self.model.apply(ev);
         self.run(cmds);
+        if main && self.model.screen != Screen::Main {
+            self.reset_view(window, cx);
+        }
+        self.sync_ring_sound(cx);
+        if self.model.call.frame.is_some() {
+            self.frame_came(cx);
+        }
         if editing.is_some() && self.model.editing.is_none() {
             // The edit was saved: back to the composer.
             self.composer.update(cx, |i, cx| i.focus(window, cx));
@@ -478,6 +526,13 @@ impl Vesper {
     fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let cmds = self.model.sign_out();
         self.run(cmds);
+        self.reset_view(window, cx);
+    }
+
+    /// What the view holds of a session, gone when it ends (signed out, or the server ended it).
+    fn reset_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.drafts.clear();
+        self.settings_open = false;
         self.side = sidebar::Side::default();
         self.banner = Default::default();
         self.person = None;
@@ -495,9 +550,20 @@ impl Vesper {
 
     fn open_room(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         let was = self.model.active.filter(|_| !self.settings_open);
-        self.settings_open = false;
+        self.show_settings(false);
         if was.is_some_and(|w| w != id) {
             self.side.glide_from(was, theme::tokens(cx).motion.reduced);
+        }
+        // Each room keeps its own draft, like the web.
+        if let Some(old) = self.model.active.filter(|&a| a != id) {
+            let text = self.composer.read(cx).value().to_string();
+            let new = self.drafts.remove(&id).unwrap_or_default();
+            if !text.is_empty() {
+                self.drafts.insert(old, text);
+            }
+            self.draft_put = true;
+            self.composer
+                .update(cx, |i, cx| i.set_value(new, window, cx));
         }
         let cmds = self.model.open_room(id);
         self.run(cmds);
@@ -506,7 +572,7 @@ impl Vesper {
     }
 
     fn send(&mut self, _: &SendMessage, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pick_active(window, cx) {
+        if end_composition(&self.composer, window, cx) || self.pick_active(window, cx) {
             return;
         }
         let cmds = self.model.send(&self.composer.read(cx).value());
@@ -516,6 +582,128 @@ impl Vesper {
         }
         self.run(cmds);
         cx.notify();
+    }
+
+    /// Shows or leaves the Settings view. The room behind it is not on screen meanwhile, so it is not marked read.
+    fn show_settings(&mut self, open: bool) {
+        self.settings_open = open;
+        let cmds = self.model.set_covered(open);
+        self.run(cmds);
+    }
+
+    /// A dialog is drawn: it holds the focus.
+    fn dialog_open(&self) -> bool {
+        (self.model.confirm_delete.is_some() && !self.settings_open)
+            || self.person.as_ref().is_some_and(|c| c.confirm)
+    }
+
+    /// Esc: closes the topmost thing, in the web's order: a dialog, the person card, a menu or popover, the pins,
+    /// then declines the ring shown.
+    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        let m = &mut self.model;
+        if m.confirm_delete.is_some() {
+            m.cancel_delete();
+        } else if let Some(c) = self.person.as_mut().filter(|c| c.confirm) {
+            c.confirm = false;
+        } else if self.person.is_some() {
+            self.close_person(cx);
+        } else if self.side.account_open
+            || self.tl.menu.is_some()
+            || m.picking.is_some()
+            || self.tl.help
+        {
+            self.side.account_open = false;
+            (self.tl.menu, m.picking, self.tl.help) = (None, None, false);
+        } else if m.pins.is_some() {
+            m.pins = None;
+        } else if let Some(room) = self.model.rings.first().map(|r| r.0) {
+            let cmds = self.model.decline_ring(room);
+            self.run(cmds);
+        } else {
+            return cx.propagate();
+        }
+        cx.notify();
+    }
+
+    /// Enter in a dialog: its confirm button.
+    fn confirm_dialog(&mut self, _: &ConfirmDialog, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.model.confirm_delete.filter(|_| !self.settings_open) {
+            return self.act(|m| m.delete(id, true), cx);
+        }
+        if let Some(id) = self
+            .person
+            .as_ref()
+            .filter(|c| c.confirm)
+            .map(|c| c.user_id.clone())
+        {
+            self.act(|m| m.person_act(&id, "disconnect", None), cx);
+            self.person = None;
+        }
+    }
+
+    /// Keeps the ring sound going while a ring shows (every 2.5 s, the web's `RING_EVERY_MS`), keyed on its room so
+    /// a second caller does not restart it. The tray's tooltip says who calls, for a window in the tray.
+    fn sync_ring_sound(&mut self, cx: &mut Context<Self>) {
+        let ring = self.model.rings.first().map(|r| r.0);
+        if ring == self.ring_sound.as_ref().map(|r| r.0) {
+            return;
+        }
+        let tip = match self.model.rings.first() {
+            Some((_, caller)) => format!("Vesper: {} is calling", self.model.state.name_of(caller)),
+            None => "Vesper".into(),
+        };
+        if let Some(t) = &self._tray {
+            let _ = t.set_tooltip(Some(tip));
+        }
+        let (audio, speakers) = (
+            self.audio.clone(),
+            self.model.settings.output_device.clone(),
+        );
+        self.ring_sound = ring.map(|room| {
+            let task = cx.spawn(async move |_, cx| {
+                loop {
+                    if let Some(a) = &audio {
+                        sound::play_ring(a.clone(), speakers.clone());
+                    }
+                    cx.background_executor().timer(sound::RING_EVERY).await;
+                }
+            });
+            (room, task)
+        });
+    }
+
+    /// The close button minimised the window during a call: its share view is off screen from now on.
+    pub fn minimised_by_close(&mut self, cx: &mut Context<Self>) {
+        self.minimised = true;
+        self.share_hidden(cx);
+    }
+
+    /// A share picture came. If it is still untaken 2 s later with no frame drawn since, the window is not being drawn
+    /// (minimised, or covered by a game): the share counts as not shown, so its `watch off` goes out after the grace.
+    /// The next draw shows it again.
+    pub(super) fn frame_came(&mut self, cx: &mut Context<Self>) {
+        if self.frame_check.is_some() {
+            return;
+        }
+        let draws = self.draws;
+        self.frame_check = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                v.frame_check = None;
+                if v.draws == draws && v.model.call.frame.is_some() {
+                    v.share_hidden(cx);
+                }
+            });
+        }));
+    }
+
+    /// The share view is not on screen. No notify: a draw would count it as shown again.
+    fn share_hidden(&mut self, cx: &mut Context<Self>) {
+        let cmds = self.model.set_share_visible(false, Instant::now());
+        self.run(cmds);
+        self.sync_watch_timer(cx);
     }
 
     fn new_line(&mut self, _: &NewLine, window: &mut Window, cx: &mut Context<Self>) {
@@ -646,6 +834,43 @@ impl Vesper {
     }
 }
 
+/// Enter while an input method composes ends the composition (as the system would), and sends nothing. True then.
+fn end_composition(input: &Entity<InputState>, window: &mut Window, cx: &mut App) -> bool {
+    use gpui::EntityInputHandler as _;
+    input.update(cx, |i, cx| {
+        let marked = i.marked_text_range(window, cx).is_some();
+        if marked {
+            i.unmark_text(window, cx);
+        }
+        marked
+    })
+}
+
+/// A task that draws the view again at each local midnight, so "Today" and "Yesterday" move on in an idle window.
+fn midnight(cx: &mut Context<Vesper>) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        loop {
+            let wait = until_midnight(chrono::Local::now());
+            cx.background_executor().timer(wait).await;
+            if this.update(cx, |_, cx| cx.notify()).is_err() {
+                break;
+            }
+        }
+    })
+}
+
+/// From `now` to a second past the next local midnight (an hour on a day with no midnight).
+fn until_midnight(now: chrono::DateTime<chrono::Local>) -> std::time::Duration {
+    use chrono::TimeZone;
+    let next = now
+        .date_naive()
+        .succ_opt()
+        .and_then(|d| d.and_hms_opt(0, 0, 1))
+        .and_then(|t| chrono::Local.from_local_datetime(&t).earliest());
+    next.and_then(|n| (n - now).to_std().ok())
+        .unwrap_or(std::time::Duration::from_secs(3600))
+}
+
 /// What a row's height depends on: `updated_at`, (heads a group, starts a day, has the New row), (editing,
 /// confirming a delete, picking a reaction), (has Load older, is first, is last), pictures loaded.
 type RowKey = (i64, [bool; 3], [bool; 3], [bool; 3], usize);
@@ -694,9 +919,17 @@ impl Render for Vesper {
             Screen::SignIn => self.render_sign_in(window, cx),
             Screen::Main => self.render_main(window, cx),
         };
+        // A dialog holds the focus while open (so Enter is its confirm, not the composer's send), and gives it back.
+        if self.dialog_open() {
+            self.dialog_focus.focus(window);
+        } else if self.dialog_focus.is_focused(window) {
+            self.composer.update(cx, |i, cx| i.focus(window, cx));
+        }
         let t = theme::tokens(cx);
         // `body` of app.css: --bg-app, --fg, 13/20.
         div()
+            .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(Self::confirm_dialog))
             .size_full()
             .bg(t.bg_app)
             .text_color(t.fg)
@@ -715,7 +948,21 @@ impl Render for Vesper {
 
 #[cfg(test)]
 mod tests {
-    use super::splices;
+    use super::{splices, until_midnight};
+
+    #[test]
+    fn the_day_labels_redraw_just_after_midnight() {
+        use chrono::TimeZone;
+        let at = |h, m, s| {
+            let t = chrono::NaiveDate::from_ymd_opt(2026, 7, 15)
+                .unwrap()
+                .and_hms_opt(h, m, s)
+                .unwrap();
+            chrono::Local.from_local_datetime(&t).earliest().unwrap()
+        };
+        assert_eq!(until_midnight(at(23, 59, 0)).as_secs(), 61);
+        assert_eq!(until_midnight(at(0, 0, 1)).as_secs(), 24 * 3600);
+    }
 
     #[test]
     fn splices_for_older_edited_and_new_rows() {

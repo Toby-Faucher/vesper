@@ -239,14 +239,10 @@ impl Vesper {
                     .w(px(192.))
                     .min_w_0()
                     .flex_shrink()
-                    // Clipped, not `ellipsis()`: the bar sizes to its content, so its text is measured at its
-                    // narrowest first, and GPUI's truncation then keeps the cut font runs (the rest falls back to
-                    // another face). shortcut: no ellipsis on a long room name; draw one when GPUI's is fixed.
                     .child(
                         div()
                             .w_full()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
+                            .ellipsis()
                             .text_step(TEXT_SM)
                             .font_weight(t.weight_strong)
                             .text_color(t.fg)

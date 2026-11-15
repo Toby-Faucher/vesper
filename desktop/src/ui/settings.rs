@@ -37,7 +37,7 @@ fn help(text: &str) -> Div {
 
 impl Vesper {
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings_open = true;
+        self.show_settings(true);
         self.capturing_key = false;
         if self.settings_file.is_some() {
             // cpal can take a moment to list devices; not on the UI thread.
@@ -309,7 +309,8 @@ impl Vesper {
                                 .ghost()
                                 .label("Close")
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    (this.settings_open, this.capturing_key) = (false, false);
+                                    this.show_settings(false);
+                                    this.capturing_key = false;
                                     this.composer.update(cx, |i, cx| i.focus(window, cx));
                                     cx.notify();
                                 })),

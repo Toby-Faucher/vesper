@@ -160,7 +160,14 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - Push to talk needs X11 for a global key on Linux; on Wayland it works only while the window has focus. On macOS it needs
   Accessibility access. A game running as administrator on Windows may hide its keys from the app (not tried).
 - Closing the window during a call minimises it instead of hiding it (GPUI 0.2.2 cannot hide a window on Windows), so it
-  stays in the taskbar. On a Linux desktop without a tray host there is no tray icon.
+  stays in the taskbar. On a Linux desktop without a tray host there is no tray icon. On Wayland an app cannot raise its own
+  window: Show Vesper in the tray asks the compositor to activate it (by its app id, `vesper`), and the compositor may only
+  mark it as wanting attention. Not verified on GNOME or KDE; sway does not minimise windows at all.
+- An incoming DM call plays the web's ring sound every 2.5 s, and the tray's tooltip says who calls; the window is not
+  raised. The ring has no on and off switch or volume in Settings, and the other call sounds (join, leave, mute) are missing.
+  Not verified on real speakers.
+- Dialogs take the focus and every click under them, and Esc closes the topmost dialog, card, menu or ring, but Tab is not
+  kept inside a dialog.
 - Not verified: real keys, a real tray, start with the computer, real audio through DeepFilterNet, and running on Windows.
 - A server newer than the app: the app cannot update itself the way the web reloads. On a newer server version it shows
   "This server runs a newer Vesper. Update the app..." in the banner and keeps working; a `hello` it cannot read shows that it
@@ -168,12 +175,14 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - The call's UDP socket is IPv4 only, so an SFU reachable only over IPv6 does not connect.
 - Not verified on real devices or across a real network with NAT: the voice tests run on loopback with fake audio.
 - Screen share: the desktop app can watch, not share. It watches one share at a time, at fit size, without the web's layouts,
-  1:1, zoom, pop-out or pointer. It cannot tell whether its window is visible (GPUI 0.2.2), so an open share view keeps the
-  sharer sending even when the window is minimised or behind a game; Stop watching ends it. Not verified with a real browser
-  sharing, nor how a real 60 fps share looks or keeps up on a screen.
+  1:1, zoom, pop-out or pointer. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
+  shown when it minimised the window itself, or when pictures came for 2 s and no frame was drawn; the sharer is then told
+  to stop after the 10 s grace, and the next frame drawn watches again. Whether a window behind a game stops drawing
+  depends on the system (not verified). Not verified with a real browser sharing, nor how a real 60 fps share looks or keeps
+  up on a screen.
 - Chat: a reply's quote scrolls to the original only when it is loaded (the web also loads it from the server). No search,
-  no "New" row, no "Show more" for long messages, no drafts kept per room, no person cards from a mention, and no
-  "any symbol" reaction box. Code blocks are not coloured. Day labels are in English.
+  no person cards from a mention (a mention is styled but cannot be clicked), and no "any symbol" reaction box. Day labels
+  are in English. Drafts are kept per room in memory only, as on the web.
 - Files: audio and video open in the system's player; there are no inline players and no image viewer. A plain file can only
   be saved, not opened from the app. Pictures over 20 MB show as a card. A GIF shows its first frame. Not verified: dropping
   files from Explorer, pasting a picture, the save dialog and the system's viewer on Windows.

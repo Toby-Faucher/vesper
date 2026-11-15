@@ -4,7 +4,7 @@
 //! or above from the call bar, clear of the composer), clamped 8 px inside the window; it fades in (`pop`: the web
 //! also scales from 0.97, which GPUI cannot do to a box).
 //!
-//! Not here: Esc to close and focus handling (a click outside closes it), the switcher's dialog form.
+//! Esc or a click outside closes it. Not here: moving the focus into it, the switcher's dialog form.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ pub struct Card {
     top: bool,
     since: Instant,
     /// The Disconnect confirm is open.
-    confirm: bool,
+    pub confirm: bool,
 }
 
 impl Vesper {
@@ -480,7 +480,13 @@ impl Vesper {
             cx.notify();
         });
         Some(
-            div().debug_selector(|| "person-confirm".into()).absolute().inset_0().child(
+            div()
+                .debug_selector(|| "person-confirm".into())
+                .absolute()
+                .inset_0()
+                .track_focus(&self.dialog_focus)
+                .key_context(super::DIALOG)
+                .child(
                 c::Dialog::new(format!("Disconnect {name}?"))
                     .on_close(cx.listener(|this, _, _, cx| {
                         if let Some(c) = &mut this.person {
