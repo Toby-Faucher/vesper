@@ -129,6 +129,18 @@ pub fn transition(
     window: &mut Window,
     cx: &mut App,
 ) -> (f32, impl Fn(&bool, &mut Window, &mut App) + 'static) {
+    fade(id, dur, dur, window, cx)
+}
+
+/// [`transition`] with one length on the way in and another on the way out: a message row's highlight is `--dur-2`
+/// in and `--dur-3` out, so moving between rows crossfades.
+pub fn fade(
+    id: impl Into<ElementId>,
+    dur_in: Duration,
+    dur_out: Duration,
+    window: &mut Window,
+    cx: &mut App,
+) -> (f32, impl Fn(&bool, &mut Window, &mut App) + 'static) {
     let ease = tokens(cx).motion.ease_out;
     let state = window.use_keyed_state(id, cx, |_, _| Tween::new(0.));
     let now = Instant::now();
@@ -138,7 +150,7 @@ pub fn transition(
         window.request_animation_frame();
     }
     let listen = move |on: &bool, _: &mut Window, cx: &mut App| {
-        let to = if *on { 1. } else { 0. };
+        let (to, dur) = if *on { (1., dur_in) } else { (0., dur_out) };
         state.update(cx, |t, cx| {
             t.go(to, Instant::now(), dur, ease);
             cx.notify();
@@ -164,6 +176,52 @@ pub const BUMP: Preset = Preset {
     dur: |m| m.dur_2,
     ease: |m| m.ease_pop,
 };
+
+/// `rise`: a new message (and the web's timeline pills), 6 px up, `--dur-3`.
+pub const RISE: Preset = Preset {
+    dur: |m| m.dur_3,
+    ease: |m| m.ease_out,
+};
+/// `swap`: another room in the timeline, 4 px up, `--dur-2`.
+pub const SWAP: Preset = Preset {
+    dur: |m| m.dur_2,
+    ease: |m| m.ease_out,
+};
+/// `pop`: popovers, menus and the @ list, scale 0.97 to 1, `--dur-2`.
+pub const POP: Preset = Preset {
+    dur: |m| m.dur_2,
+    ease: |m| m.ease_out,
+};
+
+/// The jump flash (`flash` in motion.ts): how much of `--accent-subtle` is on the row, 0 to 1. Five `--dur-2` long,
+/// linear: in over the first fifth, held, out over the last. Under reduced motion it is on at once for 600 ms. None once
+/// it is over.
+pub fn flash(m: &Motion, start: Instant, now: Instant) -> Option<f32> {
+    let gone = now.saturating_duration_since(start);
+    if m.reduced {
+        return (gone < Duration::from_millis(600)).then_some(1.);
+    }
+    let x = fraction(start, now, m.dur_2 * 5);
+    (x < 1.).then(|| (x / 0.2).min(1.).min((1. - x) / 0.2))
+}
+
+/// The typing dots (`@keyframes dot` in Composer.svelte): opacity 0.35, up to 1 at 30 %, back down at 60 %, each step
+/// ease-out, every 1.2 s; dot `i` starts `i` x 0.15 s late and rests at 0.35 until then.
+pub fn dot(m: &Motion, since: Duration, i: usize) -> f32 {
+    let delay = Duration::from_millis(150 * i as u64);
+    let Some(t) = since.checked_sub(delay) else {
+        return 0.35;
+    };
+    let x = (t.as_secs_f32() / 1.2).fract();
+    let e = ease(m.ease_out);
+    if x < 0.3 {
+        0.35 + 0.65 * e(x / 0.3)
+    } else if x < 0.6 {
+        1. - 0.65 * e((x - 0.3) / 0.3)
+    } else {
+        0.35
+    }
+}
 
 /// Where a preset is: `opacity`, and `t`, how far the move is from its start pose (0) to its rest pose (1). Under
 /// reduced motion `t` stays 1 and only the opacity fades.
@@ -338,6 +396,32 @@ mod tests {
         let r = pose(&m, ROW, false, t0, t0 + m.dur_calm / 2).unwrap();
         assert_eq!(r.t, 1., "no move under reduced motion");
         assert!(r.opacity > 0. && r.opacity < 1.);
+    }
+
+    #[test]
+    fn the_flash_and_the_typing_dots() {
+        let mut m = Motion::default();
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        // 5 x 160 ms: in over 160, held to 640, out by 800.
+        assert!((flash(&m, t0, at(80)).unwrap() - 0.5).abs() < 0.01);
+        assert_eq!(flash(&m, t0, at(400)), Some(1.));
+        assert!((flash(&m, t0, at(720)).unwrap() - 0.5).abs() < 0.01);
+        assert_eq!(flash(&m, t0, at(800)), None);
+        m.reduced = true;
+        assert_eq!(flash(&m, t0, at(10)), Some(1.), "no fade");
+        assert_eq!(flash(&m, t0, at(600)), None);
+        let m = Motion::default();
+        let ms = Duration::from_millis;
+        assert_eq!(dot(&m, ms(0), 0), 0.35);
+        assert!((dot(&m, ms(360), 0) - 1.).abs() < 1e-4, "the top at 30 %");
+        assert_eq!(dot(&m, ms(800), 0), 0.35, "rests from 60 %");
+        assert_eq!(dot(&m, ms(100), 1), 0.35, "still waiting its 0.15 s");
+        assert!((dot(&m, ms(150 + 360), 1) - 1.).abs() < 1e-4);
+        assert!(
+            (dot(&m, ms(1200 + 300 + 360), 2) - 1.).abs() < 1e-4,
+            "it repeats"
+        );
     }
 
     #[test]

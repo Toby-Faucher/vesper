@@ -614,8 +614,8 @@ pub fn initials(name: &str) -> String {
         .to_uppercase()
 }
 
-/// `Avatar.svelte`: initials on the user's slot colour in `--on-avatar`, `--weight-ui`; 20, 32 or 40 px (12/16, 13/20,
-/// 16/24 text; one letter at 20). `speaking` draws a 2 px `--bg-sidebar` gap and a 2 px accent ring; muted or deafened
+/// `Avatar.svelte`: initials on the user's slot colour in `--on-avatar`, `--weight-ui`; 16 (the 20 scaled to 0.8), 20, 32 or 40 px
+/// (12/16, 13/20, 16/24 text; one letter at 16 and 20). `speaking` draws a 2 px `--bg-sidebar` gap and a 2 px accent ring; muted or deafened
 /// a danger glyph at the bottom right at 32 and 40.
 #[derive(IntoElement)]
 pub struct Avatar {
@@ -635,7 +635,7 @@ impl Avatar {
         accent: impl Into<SharedString>,
         size: u32,
     ) -> Self {
-        debug_assert!(matches!(size, 20 | 32 | 40));
+        debug_assert!(matches!(size, 16 | 20 | 32 | 40));
         Avatar {
             user_id: user_id.into(),
             name: name.into(),
@@ -668,7 +668,7 @@ impl RenderOnce for Avatar {
         if text.is_empty() {
             text = "?".into();
         }
-        if s == 20. {
+        if s <= 20. {
             text = text.chars().take(1).collect();
         }
         let step = match s as u32 {
@@ -677,7 +677,7 @@ impl RenderOnce for Avatar {
             _ => TEXT_LG,
         };
         let glyph = match (s as u32, self.deafened, self.muted) {
-            (20, ..) => None,
+            (16 | 20, ..) => None,
             (_, true, _) => Some("headphonesOff"),
             (_, _, true) => Some("micOff"),
             _ => None,
@@ -698,6 +698,8 @@ impl RenderOnce for Avatar {
             .bg(t.avatar[avatar_slot(&self.user_id, &self.accent) - 1])
             .text_color(t.on_avatar)
             .text_step(step)
+            // 16 is the composer's typing mark: the 20 px avatar scaled to 0.8, its text too.
+            .when(s == 16., |d| d.text_size(px(9.6)).line_height(px(12.8)))
             .font_weight(t.weight_ui)
             .when(self.speaking, |d| {
                 d.child(

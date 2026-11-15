@@ -739,6 +739,96 @@ fn markdown_reactions_links_and_files(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn new_messages_rise_a_jump_flashes_and_a_reaction_bumps(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    chat_room(&view, cx);
+    view.read_with(cx, |v, _| {
+        assert!(v.tl.rising().is_empty(), "history does not rise")
+    });
+    view.update(cx, |v, _| v.side.unsettle());
+    let live = |id: i64| -> Event {
+        let m = serde_json::from_value(msg(id, "b", "live")).unwrap();
+        Event::Server(Box::new(ServerMsg::MessageNew { message: m }))
+    };
+    apply(&view, cx, live(30));
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.tl.rising(), [30], "a live message rises")
+    });
+    // Mine rises too (my send comes back as the same push).
+    let m = serde_json::from_value(msg(31, "a", "mine")).unwrap();
+    apply(
+        &view,
+        cx,
+        Event::Server(Box::new(ServerMsg::MessageNew { message: m })),
+    );
+    view.read_with(cx, |v, _| assert_eq!(v.tl.rising(), [30, 31]));
+    // An older page does not.
+    let page: MessagePage = serde_json::from_value(json!({ "messages": [msg(5, "b", "old")],
+        "more_before": false, "more_after": false }))
+    .unwrap();
+    apply(&view, cx, Event::Older { room: 1, page });
+    view.read_with(cx, |v, _| assert!(!v.tl.rising().contains(&5)));
+    // A reply's quote jumps to the message and flashes it.
+    view.update(cx, |v, _| assert!(v.model.jump_to(10)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    view.read_with(cx, |v, _| assert_eq!(v.tl.flashing(), Some(10)));
+    // A new reaction bumps its whole pill; a new count bumps the count.
+    let mut m = msg(20, "b", "x");
+    m["updated_at"] = json!(500);
+    m["reactions"] = json!([{ "emoji": "\u{1f44d}", "user_ids": ["a", "b", "c"] },
+        { "emoji": "\u{1f602}", "user_ids": ["b"] }]);
+    apply(
+        &view,
+        cx,
+        Event::Changed(Box::new(serde_json::from_value(m).unwrap())),
+    );
+    view.read_with(cx, |v, _| {
+        let mut b = v.tl.bumped();
+        b.sort();
+        assert_eq!(
+            b,
+            [
+                (20, "\u{1f44d}".into(), false),
+                (20, "\u{1f602}".into(), true)
+            ],
+            "the count, then a new pill"
+        );
+    });
+    drain(&mut rx);
+}
+
+#[gpui::test]
+fn the_new_row_shows_until_read_then_goes(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    // hangout: read up to 1, then two from Bob.
+    let page: MessagePage =
+        serde_json::from_value(json!({ "messages": [msg(1, "a", "old"), msg(2, "b", "new"),
+        msg(3, "b", "newer")], "more_before": false, "more_after": false }))
+        .unwrap();
+    view.update_in(cx, |v, window, cx| v.open_room(2, window, cx));
+    cx.run_until_parked();
+    view.update(cx, |v, _| {
+        v.model.state.unread.get_mut(&2).unwrap().last_read_id = 1;
+    });
+    apply(&view, cx, Event::Latest { room: 2, page });
+    assert!(cx.debug_bounds("new-row").is_some());
+    view.read_with(cx, |v, _| {
+        assert!(v.heads[1].new && !v.heads[2].new, "before the first unread");
+        assert!(!v.tl.read_done());
+    });
+    // Read: the row starts its way out.
+    view.update(cx, |v, cx| {
+        v.model.state.unread.get_mut(&2).unwrap().last_read_id = 3;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |v, _| assert!(v.tl.read_done()));
+    drain(&mut rx);
+}
+
+#[gpui::test]
 fn the_upload_tray_shows_progress_cancels_and_sends(cx: &mut TestAppContext) {
     let (view, cx, mut rx) = open(cx);
     chat_room(&view, cx);
@@ -835,7 +925,9 @@ fn edit_reply_delete_mentions_and_typing(cx: &mut TestAppContext) {
     view.read_with(cx, |v, _| assert_eq!(v.model.editing, None));
     assert!(drain(&mut rx).is_empty());
 
-    // Delete asks first.
+    // Delete is in the More menu, and asks first.
+    click(cx, "more-11");
+    assert!(cx.debug_bounds("menu-11").is_some());
     click(cx, "delete-11");
     assert!(cx.debug_bounds("confirm-11").is_some());
     assert!(drain(&mut rx).is_empty());

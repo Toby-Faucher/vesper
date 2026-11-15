@@ -2,6 +2,7 @@
 //! `ui` draws it with GPUI, `voice` runs a call.
 
 pub mod files;
+pub mod highlight;
 pub mod markdown;
 pub mod model;
 pub mod net;

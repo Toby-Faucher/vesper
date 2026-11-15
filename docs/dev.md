@@ -124,16 +124,27 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   `web/src/styles/`, the styles and the accent maths of `accent.ts`), its icons (read from `web/src/lib/ui/icons.ts` at build
   time, `ui/icons.rs`) and its base components (`ui/c.rs`, after `web/src/lib/ui/c/`). The type is the web's: Segoe UI on
   Windows, and on Linux the font `fc-match sans-serif` names, which is also what Chromium draws for `system-ui`.
+- Times follow the OS locale as the web's follow the browser's: "7:41 PM" and "Mon Oct 27" for the English locales that write
+  them so (en-US and a few more, `timeline::Locale`), "19:41" and "Mon 27 Oct" for the rest. Linux reads `LANGUAGE`,
+  `LC_ALL`, `LC_MESSAGES` or `LANG` (the `sys-locale` crate), Windows the user's locale. Verified on Linux only.
 - Parity with the web app: `desktop/scripts/parity.sh [scene...]` builds what is missing, then `web/e2e/parity.mjs` starts one
   server, shoots each scene in Chromium and in the desktop app (a debug build in a headless sway of its own, 1440x900, scale 1,
   a throwaway home with no keyring) and writes `web/e2e/parity/<scene>-web.png`, `-desktop.png`, `-side.png` and `-diff.png`
-  with the share of pixels that differ. Scenes: `login`, `shell-empty`, `timeline`, `shell` (four people in voice in music, one
-  muted, one deafened, unread and mention pills; alice is not in the call, the call bar is its own scene) and `shell-collapsed`. It needs `sway` and `grim`; verified on the
+  with the share of pixels that differ. Scenes: `login`, `shell-empty`, `timeline-general` (the 40 seeded messages),
+  `timeline` (shots.mjs's plans room over three days, with the New row), `timeline-empty`, `composer` (a multi-line draft),
+  `composer-typing` (bob typing), `pins`, `message-image`, `upload-tray`, `composer-mention`, `motion-send` (also
+  `motion-send-{web,desktop}-{60,150}ms.png`: a sent message 60 and 150 ms into its rise), `shell` (four people in voice
+  in music, one muted, one deafened, unread and mention pills; alice is not in the call, the call bar is its own scene) and
+  `shell-collapsed`. The desktop runs with the web scenes' clock (7:41 PM) and an en-US locale. It needs `sway` and `grim`; verified on the
   dev machine (Arch, no X). A debug build reads `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD` and
-  `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`) to get into a scene without typing (`desktop/src/ui/dev.rs`); a
-  release build does not have that code. To add a scene, add an entry to `SCENES` in `parity.mjs`: the web steps, and the
+  `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`) to get into a scene without typing, and `VESPER_DEV_CLOCK`,
+  `VESPER_DEV_SHIFT`, `VESPER_DEV_EMPTY`, `VESPER_DEV_DRAFT`, `VESPER_DEV_PINS`, `VESPER_DEV_TYPING` and `VESPER_DEV_TRAY` for
+  the clock, older days, an empty room, a draft, the pins list, someone typing and the upload tray (`desktop/src/ui/dev.rs` says how each is written); a
+  release build does not have that code. The server takes 5 sign ins per name and then one a minute, so the app waits 13 s and signs in
+  again when it is refused. To add a scene, add an entry to `SCENES` in `parity.mjs`: the web steps, and the
   `VESPER_DEV_*` state (a new kind of state goes in `dev.rs`), and `settings` for a `settings.json` written before the app starts
-  (`shell-collapsed` sets `sidebar_collapsed`). The desktop scenes drop the no-keyring note, which no web scene has.
+  (`shell-collapsed` sets `sidebar_collapsed`). The rooms the scenes share with `shots.mjs` (plans, photos) are in
+  `web/e2e/shotlib.mjs`. The desktop scenes drop the no-keyring note, which no web scene has.
 - Its lockfile pins `libc` 0.2.189 and `mio` 1.2.4 on purpose (see the ADR). Do not `cargo update` it as a whole either.
 
 ## Check before a PR

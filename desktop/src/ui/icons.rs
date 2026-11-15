@@ -8,6 +8,8 @@ use std::sync::OnceLock;
 use gpui::{AssetSource, SharedString, Styled, Svg, px, svg};
 
 const ICONS_TS: &str = include_str!("../../../web/src/lib/ui/icons.ts");
+/// The video card's open icon, `expandIcon`, lives here on the web (to keep it out of the first load).
+const ATTACHMENTS_TS: &str = include_str!("../../../web/src/lib/ui/attachments.ts");
 
 /// Every icon: its name in icons.ts (`micOff`) and its one path.
 pub fn all() -> &'static [(&'static str, &'static str)] {
@@ -15,6 +17,7 @@ pub fn all() -> &'static [(&'static str, &'static str)] {
     ALL.get_or_init(|| {
         ICONS_TS
             .lines()
+            .chain(ATTACHMENTS_TS.lines())
             .filter_map(|l| {
                 let rest = l.strip_prefix("export const ")?;
                 let (name, rest) = rest.split_once(" = '")?;
@@ -88,7 +91,9 @@ mod tests {
             .lines()
             .filter(|l| l.starts_with("export const "))
             .count();
-        assert_eq!(all().len(), n, "a line of icons.ts did not parse");
+        // and expandIcon from attachments.ts
+        assert_eq!(all().len(), n + 1, "a line of icons.ts did not parse");
+        assert!(Assets.load("vesper/expandIcon.svg").unwrap().is_some());
         assert!(n >= 40);
         let mic = Assets.load("vesper/mic.svg").unwrap().unwrap();
         assert!(
@@ -98,6 +103,6 @@ mod tests {
         );
         assert!(Assets.load("vesper/nope.svg").unwrap().is_none());
         assert!(Assets.load("vesper/spinner.svg").unwrap().is_some());
-        assert_eq!(Assets.list("vesper").unwrap().len(), n);
+        assert_eq!(Assets.list("vesper").unwrap().len(), n + 1);
     }
 }

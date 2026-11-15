@@ -12,15 +12,29 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ORIGIN, browser, inVoice, openRoom, signup, sleep, startServer, track } from './lib.mjs';
-import { LONG_ROOM, VIEWPORT, api, cast, home, rest, shotBrowser } from './shotlib.mjs';
+import { LONG_ROOM, VIEWPORT, api, backdate, cast, home, photosRoom, plans, rest, shotBrowser } from './shotlib.mjs';
 
 const out = fileURLToPath(new URL('parity/', import.meta.url));
 const app = process.env.VESPER_DESKTOP_BIN || fileURLToPath(new URL('../../desktop/target/debug/vesper-desktop', import.meta.url));
 const TOLERANCE = 24;
 const PASSWORD = 'test-password-1'; // what signup() in lib.mjs gives every account
 
-// web(ctx) returns the page to shoot; desktop is the VESPER_DEV_* state: `user` signs in, `scene` is sign-in, room:<name>
-// or settings (src/ui/dev.rs), and `settings` is written to the app's settings.json first.
+const FRAMES = [60, 150];
+const DRAFT = '## three things for friday\nbring the **good** cable, *please*\nsomeone check the `deepfilter` mode\n> last time it crackled\n- and ~~chips~~ snacks';
+let typing;
+
+// The upload tray's rows: name, size, MIME type, and the state the fake upload holds it in (dev.rs reads the same).
+const TRAY = [
+  ['backup.zip', 180 * 1024, 'application/octet-stream', 'failed:quota'],
+  ['clip.mp4', 5 * 1024 * 1024, 'video/mp4', 'uploading:0.4'],
+  ['photo.png', 2048, 'image/png', 'uploading:0.72'],
+  ['scan.png', 2048, 'image/png', 'uploading:0.15'],
+  ['song-with-a-rather-long-file-name-for-the-tray.flac', 2 * 1024 * 1024, 'audio/flac', 'queued'],
+];
+// web(ctx) returns the page to shoot; desktop is the VESPER_DEV_* state, or an async function of ctx that returns it:
+// `user` signs in, `scene` is sign-in, room:<name> or settings (src/ui/dev.rs), `settings` is written to the app's
+// settings.json first, and `env` adds more VESPER_DEV_* variables (dev.rs lists them). `after` runs once both pictures
+// are taken, and `focus` keeps the focus where the web steps left it. Every desktop run gets the web scenes' clock (7:41 PM) and an en-US locale.
 // The desktop has no passkeys, so the web login is shot without the passkey button.
 const SCENES = {
   login: {
@@ -37,7 +51,8 @@ const SCENES = {
     web: async ({ alice }) => { await home(alice.page); return alice.page; },
     desktop: { user: 'alice' },
   },
-  timeline: {
+  // general with the 40 seeded messages, all from the same minute.
+  'timeline-general': {
     web: async ({ alice, seed }) => {
       await seed();
       await home(alice.page);
@@ -45,6 +60,154 @@ const SCENES = {
       return alice.page;
     },
     desktop: { user: 'alice', scene: 'room:general' },
+  },
+  // shots.mjs's timeline: plans over three days (the older messages moved back a day or two on both sides), groups, a
+  // code block, a reply, edited, pinned and deleted messages, reactions, the long message, a mention and the New row.
+  // alice's read marker must stay where plans() put it for the desktop's New row, so the web's mark read never reaches
+  // the server.
+  timeline: {
+    web: async (ctx) => {
+      const page = await openPlans(ctx);
+      return page;
+    },
+    desktop: async (ctx) => ({ user: 'alice', scene: 'room:plans', env: { VESPER_DEV_SHIFT: await shiftVar(ctx) } }),
+    after: (ctx) => ctx.alice.page.unrouteAll({ behavior: 'wait' }),
+  },
+  'timeline-empty': {
+    web: async ({ alice }) => {
+      await api(alice.page, 'POST', '/api/rooms', { name: 'quiet' });
+      await home(alice.page);
+      await openRoom(alice.page, 'quiet');
+      await alice.page.getByText('No messages yet.').waitFor();
+      return alice.page;
+    },
+    desktop: { user: 'alice', scene: 'room:quiet', env: { VESPER_DEV_EMPTY: '1' } },
+  },
+  // The composer with a multi-line draft (shots.mjs's composer-multiline, without the call bar).
+  composer: {
+    web: async ({ alice, seed }) => {
+      await seed();
+      await home(alice.page);
+      await openRoom(alice.page, 'general');
+      await alice.page.getByRole('textbox', { name: 'Message', exact: true }).fill(DRAFT);
+      return alice.page;
+    },
+    desktop: { user: 'alice', scene: 'room:general', env: { VESPER_DEV_DRAFT: DRAFT } },
+    focus: true, // the box keeps focus, as after typing
+    after: ({ alice }) => alice.page.getByRole('textbox', { name: 'Message', exact: true }).fill(''),
+  },
+  // The @ list with three people (carol, dave and Bartholomew from the full house).
+  'composer-mention': {
+    web: async (ctx) => {
+      await house(ctx);
+      const page = ctx.alice.page;
+      await openRoom(page, 'general');
+      const box = page.getByRole('textbox', { name: 'Message', exact: true });
+      await box.pressSequentially('can someone check @a');
+      await page.getByRole('option').nth(2).waitFor();
+      return page;
+    },
+    desktop: { user: 'alice', scene: 'room:general', env: { VESPER_DEV_DRAFT: 'can someone check @a' } },
+    focus: true, // a blur closes the @ list
+    after: ({ alice }) => alice.page.getByRole('textbox', { name: 'Message', exact: true }).fill(''),
+  },
+  // bob typing in general: his picture, the dots and "bob is typing". He keeps typing until both pictures are taken.
+  'composer-typing': {
+    web: async (ctx) => {
+      await ctx.seed();
+      const page = ctx.alice.page;
+      await home(page);
+      await openRoom(page, 'general');
+      await home(ctx.bob.page);
+      await openRoom(ctx.bob.page, 'general');
+      const box = ctx.bob.page.getByRole('textbox', { name: 'Message', exact: true });
+      typing = setInterval(() => void box.pressSequentially('a').catch(() => {}), 2000);
+      await box.pressSequentially('on my way');
+      await page.getByText('bob is typing').waitFor({ timeout: 10000 });
+      return page;
+    },
+    desktop: { user: 'alice', scene: 'room:general', env: { VESPER_DEV_TYPING: '1' } },
+    after: async ({ bob }) => {
+      clearInterval(typing);
+      await bob.page.getByRole('textbox', { name: 'Message', exact: true }).fill('');
+    },
+  },
+  // The header's pins list on plans with three pins (shots.mjs's pins).
+  pins: {
+    web: async (ctx) => {
+      const { room } = await plans(ctx);
+      const msgs = (await api(ctx.alice.page, 'GET', `/api/rooms/${room.id}/messages?limit=50`)).messages;
+      for (const body of ['anyone up for a game tonight?', 'I can do 9']) {
+        const m = msgs.find((x) => x.body === body);
+        if (!m.pinned) await api(ctx.alice.page, 'PUT', `/api/messages/${m.id}/pin`, { on: true });
+      }
+      const page = await openPlans(ctx);
+      await page.getByRole('button', { name: 'Pins', exact: true }).click();
+      await page.getByRole('dialog', { name: 'Pinned messages' }).getByText('of 50 pins').waitFor();
+      return page;
+    },
+    desktop: async (ctx) => ({ user: 'alice', scene: 'room:plans', env: { VESPER_DEV_SHIFT: await shiftVar(ctx), VESPER_DEV_PINS: '1' } }),
+    after: async ({ alice }) => { await alice.page.keyboard.press('Escape'); await alice.page.unrouteAll({ behavior: 'wait' }); },
+  },
+  // photos: a wide and a tall image and a file card, loaded.
+  'message-image': {
+    web: async (ctx) => {
+      await photosRoom(ctx);
+      const page = ctx.alice.page;
+      await home(page);
+      await openRoom(page, 'photos');
+      await page.locator('article', { hasText: 'great, thanks' }).waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('article button img')].every((i) => i.complete && i.naturalWidth));
+      return page;
+    },
+    desktop: { user: 'alice', scene: 'room:photos' },
+  },
+  // shots.mjs's upload-tray: one failed with Retry, three uploading, one waiting. The web's uploads are held by a fake
+  // XMLHttpRequest; the desktop's tray is filled by dev.rs with the same rows (no upload runs).
+  'upload-tray': {
+    web: async (ctx) => {
+      await photosRoom(ctx);
+      const page = ctx.alice.page;
+      await home(page);
+      await openRoom(page, 'photos');
+      await page.locator('article', { hasText: 'great, thanks' }).waitFor();
+      await fakeUploads(page);
+      const input = page.getByLabel('Attach a file');
+      const f = (name, size, mimeType = 'application/octet-stream') => ({ name, mimeType, buffer: Buffer.alloc(size) });
+      await input.setInputFiles([f('backup.zip', 180 * 1024)]);
+      await page.getByRole('alert').filter({ hasText: 'no room for more files' }).waitFor();
+      await input.setInputFiles(TRAY.slice(1).map(([name, size, mime]) => f(name, size, mime)));
+      await page.getByText('Waiting', { exact: true }).waitFor();
+      await sleep(300);
+      return page;
+    },
+    desktop: { user: 'alice', scene: 'room:photos', env: { VESPER_DEV_TRAY: TRAY.map((t) => t.join('|')).join(';') } },
+    after: async ({ alice }) => { await alice.page.reload(); },
+  },
+  // A sent message rising in (`rise`: 6 px up and a fade, 220 ms): alice sends on the web, bob from the desktop, in
+  // hangout. Frames at 60 and 150 ms: the web's by pausing its animations there, the desktop's by grim that long after
+  // the message is in the list (VESPER_DEV_ARRIVED); grim takes a few ms itself, the printed times are the real ones.
+  // The final pictures differ by design: the desktop's list also has bob's message.
+  'motion-send': {
+    web: async ({ alice }) => {
+      const page = alice.page;
+      await home(page);
+      await openRoom(page, 'hangout');
+      await sleep(1600); // past settle()
+      const box = page.getByRole('textbox', { name: 'Message', exact: true });
+      await box.fill('on my way');
+      await box.press('Enter');
+      const row = page.locator('article', { hasText: 'on my way' }).last();
+      await row.waitFor();
+      await page.mouse.move(1439, 899);
+      for (const t of FRAMES) {
+        await row.evaluate((el, t) => el.getAnimations().forEach((a) => { a.pause(); a.currentTime = t; }), t);
+        await page.screenshot({ path: `${out}motion-send-web-${t}ms.png` });
+      }
+      await row.evaluate((el) => el.getAnimations().forEach((a) => a.finish()));
+      return page;
+    },
+    desktop: { user: 'bob', scene: 'room:hangout', env: { VESPER_DEV_SEND: 'on my way' }, frames: FRAMES },
   },
   shell: {
     web: async (ctx) => { await house(ctx); await openRoom(ctx.alice.page, 'general'); return ctx.alice.page; },
@@ -63,6 +226,45 @@ const SCENES = {
     desktop: { user: 'alice', scene: 'room:general', settings: { sidebar_collapsed: true } },
   },
 };
+
+// shots.mjs's fake XMLHttpRequest: each upload holds at its share, backup.zip fails with the quota.
+async function fakeUploads(page) {
+  await page.evaluate(() => {
+    const at = { 'clip.mp4': 0.4, 'photo.png': 0.72, 'scan.png': 0.15 };
+    window.XMLHttpRequest = class {
+      upload = {};
+      open(_m, url) { this.name = new URL(url, location.href).searchParams.get('name'); }
+      abort() { this.onabort?.(); }
+      send() {
+        setTimeout(() => {
+          if (this.name === 'backup.zip') {
+            [this.status, this.responseText] = [507, JSON.stringify({ code: 'quota_full' })];
+            return this.onload?.();
+          }
+          this.upload.onprogress?.({ lengthComputable: true, loaded: (at[this.name] ?? 0.5) * 100, total: 100 });
+        }, 30);
+      }
+    };
+  });
+}
+
+// plans, opened in alice's page with the day shift and her mark read held back.
+async function openPlans(ctx) {
+  await ctx.seed();
+  const { shift } = await plans(ctx);
+  const page = ctx.alice.page;
+  await backdate(page, shift);
+  await page.route('**/api/rooms/*/read', (r) => (r.request().method() === 'PUT' ? r.fulfill({ status: 204 }) : r.fallback()));
+  await home(page);
+  await openRoom(page, 'plans');
+  await page.locator('article').first().waitFor();
+  return page;
+}
+// The same shift for the desktop: "id:days,id:days".
+async function shiftVar(ctx) {
+  const { shift } = await plans(ctx);
+  return [...shift].map(([id, d]) => `${id}:${d}`).join(',');
+}
 
 // shots.mjs's full house without alice in the call (the call bar is its own scene): bob, carol (muted), dave (deafened)
 // and Bartholomew in voice in music, unread counts on music and a mention in the long room. The browsers stay open.
@@ -171,6 +373,9 @@ async function shootDesktop(sway, state, path, dir) {
     XDG_RUNTIME_DIR: sway.runtime, WAYLAND_DISPLAY: sway.display, DISPLAY: '',
     DBUS_SESSION_BUS_ADDRESS: 'disabled:', // no keyring: the throwaway home never touches the real one
     VESPER_DEV_SCENE: state.scene ?? '',
+    VESPER_DEV_CLOCK: '19:41', // the web scenes' 7:41 PM (shotlib.mjs)
+    LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', LANGUAGE: 'en_US', // Playwright's Chromium is en-US
+    ...state.env,
     ...(state.user && { VESPER_DEV_SERVER: ORIGIN, VESPER_DEV_USER: state.user, VESPER_DEV_PASSWORD: PASSWORD }),
   };
   const child = track(app, [], { env, stdio: ['ignore', 'ignore', 'pipe'] });
@@ -180,10 +385,31 @@ async function shootDesktop(sway, state, path, dir) {
     child.exited.then(() => no(new Error(`the desktop app exited:\n${log.slice(-2000)}`)));
   });
   try {
-    await Promise.race([ready, sleep(60000).then(() => { throw new Error(`no VESPER_DEV_READY in 60 s:\n${log.slice(-2000)}`); })]);
+    // 180 s: past 5 sign ins a minute the server takes one a minute, and the app waits and tries again (dev.rs).
+    await Promise.race([ready, sleep(180000).then(() => { throw new Error(`no VESPER_DEV_READY in 180 s:\n${log.slice(-2000)}`); })]);
     await sleep(1500); // a few frames, the logo and the fonts
-    const grim = track('grim', [path], { env: { ...process.env, XDG_RUNTIME_DIR: sway.runtime, WAYLAND_DISPLAY: sway.display }, stdio: 'inherit' });
-    if ((await grim.exited) !== 0) throw new Error('grim failed');
+    const shoot = async (to) => {
+      const grim = track('grim', [to], { env: { ...process.env, XDG_RUNTIME_DIR: sway.runtime, WAYLAND_DISPLAY: sway.display }, stdio: 'inherit' });
+      if ((await grim.exited) !== 0) throw new Error('grim failed');
+    };
+    if (state.frames) {
+      // VESPER_DEV_SEND: grab frames that long after the message is in the list.
+      const until = performance.now() + 15000;
+      while (!log.includes('VESPER_DEV_ARRIVED')) {
+        if (performance.now() > until) throw new Error(`no VESPER_DEV_ARRIVED:\n${log.slice(-2000)}`);
+        await sleep(2);
+      }
+      const t0 = performance.now();
+      for (const t of state.frames) {
+        await sleep(t0 + t - performance.now());
+        const at = Math.round(performance.now() - t0);
+        const to = path.replace(/\.png$/, `-${t}ms.png`);
+        await shoot(to);
+        console.log(`  frame at ${at} ms (grim done at ${Math.round(performance.now() - t0)} ms): ${to}`);
+      }
+      await sleep(600);
+    }
+    await shoot(path);
   } finally {
     try { process.kill(-child.pid, 'SIGTERM'); } catch { /* gone */ }
     await Promise.race([child.exited, sleep(3000)]);
@@ -211,9 +437,11 @@ try {
   for (const name of run) {
     const s = SCENES[name];
     const page = await s.web(ctx);
-    await rest(page);
+    if (s.focus) { await page.mouse.move(1439, 899); await sleep(300); } else await rest(page);
     await page.screenshot({ path: `${out}${name}-web.png` });
-    await shootDesktop(sway, s.desktop, `${out}${name}-desktop.png`, dir);
+    const state = typeof s.desktop === 'function' ? await s.desktop(ctx) : s.desktop;
+    await shootDesktop(sway, state, `${out}${name}-desktop.png`, dir);
+    await s.after?.(ctx);
     await compare(`${out}${name}-web.png`, `${out}${name}-desktop.png`, name);
   }
 } catch (e) {

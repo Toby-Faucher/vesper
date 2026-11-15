@@ -1,8 +1,92 @@
 //! The pure parts of the web's timeline and composer (`web/src/lib/ui/timeline.ts`, `switcher.ts`, `attachments.ts`):
-//! day rows and grouping, the `@` mention being typed and who to offer, the typing line, file sizes.
+//! day rows and grouping, the clock in the reader's locale, which messages rise in, the `@` mention being typed and who
+//! to offer, the typing line, file sizes.
 
-use chrono::{Days, TimeZone};
+use std::sync::OnceLock;
+
+use chrono::{Days, Local, TimeZone, Timelike};
 use vesper_protocol::{Message, RoomInfo, UserInfo};
+
+/// How the reader's locale writes times and days, as the browser's `Intl` does for the web app: "7:41 PM" and
+/// "Mon Oct 27" in en-US, "19:41" and "Mon 27 Oct" in most others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Locale {
+    pub hour12: bool,
+    pub month_first: bool,
+}
+
+impl Locale {
+    /// From a BCP 47 tag ("en-US", "de-DE", "en").
+    /// shortcut: a short table of English locales only; other languages that write 12-hour times (Korean, Arabic) get
+    /// 24 hours, since their AM/PM words would need a translation table. Grow it when a reader asks.
+    pub fn from_tag(tag: &str) -> Locale {
+        let mut parts = tag.split(['-', '_']);
+        let lang = parts.next().unwrap_or("").to_ascii_lowercase();
+        let region = parts
+            .find(|p| p.len() == 2)
+            .map(str::to_ascii_uppercase)
+            .unwrap_or_default();
+        let en = lang == "en";
+        Locale {
+            hour12: en
+                && matches!(
+                    region.as_str(),
+                    "" | "US" | "CA" | "AU" | "NZ" | "IN" | "PH" | "PK" | "BD" | "EG" | "SA" | "MY"
+                ),
+            month_first: en && matches!(region.as_str(), "" | "US" | "CA" | "PH"),
+        }
+    }
+
+    /// The OS's locale (the browser's, for the web app), read once.
+    pub fn system() -> Locale {
+        static L: OnceLock<Locale> = OnceLock::new();
+        *L.get_or_init(|| Locale::from_tag(&sys_locale::get_locale().unwrap_or_default()))
+    }
+}
+
+/// Every clock time reads this (hour, minute) when set: the parity harness pins 7:41 PM like the web scenes
+/// (`VESPER_DEV_CLOCK`, debug builds only). Dates are left alone.
+pub static FIXED_CLOCK: OnceLock<(u32, u32)> = OnceLock::new();
+
+/// A message's time as the head row shows it: "7:41 PM" (en-US) or "19:41". `short` leaves out AM and PM, for the
+/// gutter of a grouped row ("7:41").
+pub fn clock(ms: i64, loc: Locale, short: bool) -> String {
+    let (h, m) = match FIXED_CLOCK.get() {
+        Some(&hm) => hm,
+        None => match Local.timestamp_millis_opt(ms).single() {
+            Some(t) => (t.hour(), t.minute()),
+            None => return String::new(),
+        },
+    };
+    hm(h, m, loc, short)
+}
+
+/// `h`:`m` as [`clock`] writes it.
+pub fn hm(h: u32, m: u32, loc: Locale, short: bool) -> String {
+    if !loc.hour12 {
+        return format!("{h:02}:{m:02}");
+    }
+    let h12 = if h.is_multiple_of(12) { 12 } else { h % 12 };
+    let pm = if h < 12 { "AM" } else { "PM" };
+    if short {
+        format!("{h12}:{m:02}")
+    } else {
+        format!("{h12}:{m:02} {pm}")
+    }
+}
+
+/// The messages that rise in after the list changed (`arrivals` in timeline.ts): live arrivals only, three at most.
+/// None on a room open (`since` is None), none on an older page (nothing newer than `since`), none for more than three.
+pub fn arrivals(since: Option<i64>, ids: &[i64]) -> Vec<i64> {
+    let Some(since) = since else { return vec![] };
+    let fresh: Vec<i64> = ids.iter().copied().filter(|&id| id > since).collect();
+    if fresh.len() <= 3 { fresh } else { vec![] }
+}
+
+/// Bodies above about 20 lines collapse behind "Show more" (`isLong`).
+pub fn is_long(body: &str) -> bool {
+    body.matches('\n').count() > 20 || body.chars().count() > 2000
+}
 
 const GROUP_MS: i64 = 5 * 60_000;
 
@@ -13,10 +97,12 @@ pub struct RowHead {
     pub day: Option<String>,
     /// It heads a group: the name and time are shown.
     pub head: bool,
+    /// The New row is drawn above it.
+    pub new: bool,
 }
 
-/// "Today", "Yesterday", "Mon 27 Oct", or "Wed 31 Dec 2025" for another year.
-pub fn day_label<Tz: TimeZone>(ms: i64, now_ms: i64, tz: &Tz) -> String {
+/// "Today", "Yesterday", "Mon 27 Oct", or "Wed 31 Dec 2025" for another year ("Mon Oct 27" month first).
+pub fn day_label<Tz: TimeZone>(ms: i64, now_ms: i64, tz: &Tz, loc: Locale) -> String {
     let (Some(d), Some(now)) = (
         tz.timestamp_millis_opt(ms).single(),
         tz.timestamp_millis_opt(now_ms).single(),
@@ -28,19 +114,36 @@ pub fn day_label<Tz: TimeZone>(ms: i64, now_ms: i64, tz: &Tz) -> String {
         "Today".into()
     } else if today.checked_sub_days(Days::new(1)) == Some(d) {
         "Yesterday".into()
-    } else if d.format("%Y").to_string() == today.format("%Y").to_string() {
-        d.format("%a %-d %b").to_string()
     } else {
-        d.format("%a %-d %b %Y").to_string()
+        let day = if loc.month_first {
+            "%a %b %-d"
+        } else {
+            "%a %-d %b"
+        };
+        let same_year = d.format("%Y").to_string() == today.format("%Y").to_string();
+        d.format(&if same_year {
+            day.to_string()
+        } else {
+            format!("{day} %Y")
+        })
+        .to_string()
     }
 }
 
-/// One `RowHead` per message, like the web's `rows`: a day row before the first message of each local day. A message
+/// One `RowHead` per message, like the web's `rows`: a day row before the first message of each local day; with
+/// `new_after` (a read marker and my id), the New row before the first message after it that is not mine. A message
 /// heads a group unless the one before it has the same author, is less than 5 minutes older, and neither is deleted.
-/// A reply and a new day always start a group.
-pub fn heads<Tz: TimeZone>(messages: &[Message], now_ms: i64, tz: &Tz) -> Vec<RowHead> {
+/// A reply, a new day and the New row always start a group.
+pub fn heads<Tz: TimeZone>(
+    messages: &[Message],
+    now_ms: i64,
+    tz: &Tz,
+    loc: Locale,
+    new_after: Option<(i64, &str)>,
+) -> Vec<RowHead> {
     let day_of = |ms: i64| tz.timestamp_millis_opt(ms).single().map(|t| t.date_naive());
     let mut prev: Option<&Message> = None;
+    let mut new_done = new_after.is_none();
     messages
         .iter()
         .map(|m| {
@@ -52,10 +155,13 @@ pub fn heads<Tz: TimeZone>(messages: &[Message], now_ms: i64, tz: &Tz) -> Vec<Ro
                     || m.reply_to.is_some()
             });
             let day = (prev.is_none_or(|p| day_of(p.created_at) != day_of(m.created_at)))
-                .then(|| day_label(m.created_at, now_ms, tz));
+                .then(|| day_label(m.created_at, now_ms, tz, loc));
             head |= day.is_some();
+            let new = !new_done && new_after.is_some_and(|(at, me)| m.id > at && m.author_id != me);
+            new_done |= new;
+            head |= new;
             prev = Some(m);
-            RowHead { day, head }
+            RowHead { day, head, new }
         })
         .collect()
 }
@@ -196,6 +302,26 @@ pub fn file_size(n: u64) -> String {
     }
 }
 
+/// The file card's type label (`typeLabel`): images by the type the server found, any other file by the extension
+/// of its name ("TXT file"), or empty for a name with no short extension.
+pub fn type_label(mime: &str, name: &str) -> String {
+    match mime {
+        "image/png" => return "PNG image".into(),
+        "image/jpeg" => return "JPEG image".into(),
+        "image/gif" => return "GIF image".into(),
+        "image/webp" => return "WebP image".into(),
+        _ => {}
+    }
+    match name.rsplit_once('.') {
+        Some((_, ext))
+            if (1..=5).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric()) =>
+        {
+            format!("{} file", ext.to_ascii_uppercase())
+        }
+        _ => String::new(),
+    }
+}
+
 /// The largest box an image takes in the timeline.
 pub const BOX: (u32, u32) = (360, 280);
 
@@ -230,18 +356,75 @@ mod tests {
         }
     }
 
+    const GB: Locale = Locale {
+        hour12: false,
+        month_first: false,
+    };
+
     #[test]
     fn day_labels() {
-        assert_eq!(day_label(NOW, NOW, &Utc), "Today");
-        assert_eq!(day_label(NOW - DAY, NOW, &Utc), "Yesterday");
-        assert_eq!(day_label(NOW - 2 * DAY, NOW, &Utc), "Thu 12 Nov");
-        assert_eq!(day_label(NOW - 330 * DAY, NOW, &Utc), "Fri 19 Dec 2025");
+        assert_eq!(day_label(NOW, NOW, &Utc, GB), "Today");
+        assert_eq!(day_label(NOW - DAY, NOW, &Utc, GB), "Yesterday");
+        assert_eq!(day_label(NOW - 2 * DAY, NOW, &Utc, GB), "Thu 12 Nov");
+        assert_eq!(day_label(NOW - 330 * DAY, NOW, &Utc, GB), "Fri 19 Dec 2025");
+        let us = Locale::from_tag("en-US");
+        assert_eq!(day_label(NOW - 2 * DAY, NOW, &Utc, us), "Thu Nov 12");
+        assert_eq!(day_label(NOW - 330 * DAY, NOW, &Utc, us), "Fri Dec 19 2025");
         // 23:30 UTC is already tomorrow at +01:00.
         let plus1 = FixedOffset::east_opt(3600).unwrap();
         assert_eq!(
-            day_label(NOW + 11 * 60 * MIN + 30 * MIN, NOW, &plus1),
+            day_label(NOW + 11 * 60 * MIN + 30 * MIN, NOW, &plus1, GB),
             "Sun 15 Nov"
         );
+    }
+
+    #[test]
+    fn locales_and_the_clock() {
+        let us = Locale::from_tag("en-US");
+        assert!(us.hour12 && us.month_first);
+        assert_eq!(Locale::from_tag("en_US.UTF-8"), us);
+        assert_eq!(Locale::from_tag("en"), us);
+        assert_eq!(Locale::from_tag("en-GB"), GB);
+        assert_eq!(Locale::from_tag("de-DE"), GB);
+        assert_eq!(Locale::from_tag(""), GB);
+        let au = Locale::from_tag("en-AU");
+        assert!(au.hour12 && !au.month_first);
+        // FIXED_CLOCK is never set in tests: the local time of these instants, whatever the zone.
+        let t = Local
+            .with_ymd_and_hms(2026, 11, 1, 19, 41, 0)
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(clock(t, us, false), "7:41 PM");
+        assert_eq!(clock(t, us, true), "7:41");
+        assert_eq!(clock(t, GB, false), "19:41");
+        let t = Local
+            .with_ymd_and_hms(2026, 11, 1, 0, 5, 0)
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(clock(t, us, false), "12:05 AM");
+        assert_eq!(clock(t, GB, true), "00:05");
+        let t = Local
+            .with_ymd_and_hms(2026, 11, 1, 12, 5, 0)
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(clock(t, us, false), "12:05 PM");
+    }
+
+    #[test]
+    fn which_messages_rise_in() {
+        assert!(arrivals(None, &[1, 2]).is_empty(), "a room open");
+        assert_eq!(arrivals(Some(5), &[3, 4, 5, 6]), [6], "live");
+        assert!(
+            arrivals(Some(5), &[1, 2, 3, 4, 5]).is_empty(),
+            "an older page"
+        );
+        assert_eq!(arrivals(Some(5), &[6, 7, 8]), [6, 7, 8]);
+        assert!(
+            arrivals(Some(5), &[6, 7, 8, 9]).is_empty(),
+            "a page, not live"
+        );
+        assert!(is_long(&"a\n".repeat(21)) && !is_long(&"a\n".repeat(20)));
+        assert!(is_long(&"a".repeat(2001)));
     }
 
     #[test]
@@ -266,7 +449,7 @@ mod tests {
             at(9, "a", NOW),            // 6 minutes later: head
             at(10, "a", NOW + 1),       // grouped
         ];
-        let h = heads(&list, NOW, &Utc);
+        let h = heads(&list, NOW, &Utc, GB, None);
         let got: Vec<(bool, Option<&str>)> = h.iter().map(|r| (r.head, r.day.as_deref())).collect();
         assert_eq!(
             got,
@@ -283,6 +466,18 @@ mod tests {
                 (false, None),
             ]
         );
+        // The New row goes before the first message after the marker that is not mine.
+        let h = heads(&list, NOW, &Utc, GB, Some((5, "b")));
+        let news: Vec<i64> = list
+            .iter()
+            .zip(&h)
+            .filter(|(_, r)| r.new)
+            .map(|(m, _)| m.id)
+            .collect();
+        assert_eq!(news, [6]);
+        assert!(h[5].head, "the New row starts a group");
+        let h = heads(&list, NOW, &Utc, GB, Some((5, "a")));
+        assert!(h.iter().all(|r| !r.new), "all mine after it");
     }
 
     #[test]
@@ -355,5 +550,12 @@ mod tests {
         assert_eq!(fit(720, 560), (360, 280));
         assert_eq!(fit(100, 50), (100, 50));
         assert_eq!(fit(4000, 10), (360, 48));
+        assert_eq!(type_label("image/png", "a.png"), "PNG image");
+        assert_eq!(
+            type_label("application/octet-stream", "route-notes.pdf"),
+            "PDF file"
+        );
+        assert_eq!(type_label("application/octet-stream", "README"), "");
+        assert_eq!(type_label("application/octet-stream", "a.toolong"), "");
     }
 }

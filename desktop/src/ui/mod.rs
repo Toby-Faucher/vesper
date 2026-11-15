@@ -165,6 +165,9 @@ pub struct Vesper {
     /// The edit box of the message being edited.
     edit: Entity<InputState>,
     list: ListState,
+    /// The list is top aligned: its messages fit, and start at the top as the web's do. Else it is bottom aligned,
+    /// which keeps the newest message in view as more come.
+    list_top: bool,
     /// What the list shows: the room and each row's id and what its look depends on, to tell the list which rows
     /// changed.
     shown: (Option<i64>, Vec<(i64, RowKey)>),
@@ -206,6 +209,10 @@ pub struct Vesper {
     _tray: Option<tray_icon::TrayIcon>,
     /// The sidebar's menu, folds and motion.
     side: sidebar::Side,
+    /// The timeline's motion, New row and open menus.
+    tl: chat::Tl,
+    /// The room whose name the composer's placeholder has.
+    placeholder_room: Option<i64>,
     /// Debug builds: what the parity harness asked for (`VESPER_DEV_*`).
     #[cfg(debug_assertions)]
     dev: dev::Dev,
@@ -221,8 +228,8 @@ impl Vesper {
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
         let composer = cx.new(|cx| {
             InputState::new(window, cx)
-                .auto_grow(1, 8)
-                .placeholder("Write a message")
+                .auto_grow(1, 10)
+                .placeholder("Message")
         });
         // A fixed height, so the row in the list keeps its size while the text changes.
         let edit = cx.new(|cx| InputState::new(window, cx).multi_line(true).rows(3));
@@ -255,17 +262,7 @@ impl Vesper {
                 cx.notify();
             }),
         ];
-        let list = ListState::new(0, ListAlignment::Bottom, px(400.));
-        let this = cx.weak_entity();
-        list.set_scroll_handler(move |e, _, cx| {
-            // The list is borrowed while this runs: only the model changes here, the rows update on the next render.
-            let (top, bottom) = (e.visible_range.start == 0, !e.is_scrolled);
-            let _ = this.update(cx, |v, cx| {
-                let cmds = v.model.scrolled(top, bottom);
-                v.run(cmds);
-                cx.notify();
-            });
-        });
+        let list = Self::new_list(false, cx);
         let _ = cmds.send(Cmd::Restore); // the first thing the app asks for: the stored session
         Vesper {
             model: Model::default(),
@@ -277,6 +274,7 @@ impl Vesper {
             composer,
             edit,
             list,
+            list_top: false,
             shown: (None, vec![]),
             heads: vec![],
             images: HashMap::new(),
@@ -300,6 +298,8 @@ impl Vesper {
             watch_timer: None,
             _tray: None,
             side: sidebar::Side::default(),
+            tl: chat::Tl::default(),
+            placeholder_room: None,
             #[cfg(debug_assertions)]
             dev: dev::Dev::from_env(),
             _subs: subs,
@@ -362,9 +362,12 @@ impl Vesper {
     /// One event into the model; what it asks for goes to the network.
     pub fn apply(&mut self, ev: Event, window: &mut Window, cx: &mut Context<Self>) {
         let signed_out = matches!(ev, Event::SignedOut { .. });
+        #[cfg(debug_assertions)]
+        let latest = matches!(ev, Event::Latest { .. });
         match &ev {
             Event::Image { id, picture } => self.image_loaded(id, picture.clone(), window),
             Event::Downloaded { path, open: true } => cx.open_with_system(path),
+            Event::Latest { room, .. } => drop(self.tl.loaded.insert(*room)),
             _ => {}
         }
         let editing = self.model.editing;
@@ -385,7 +388,7 @@ impl Vesper {
                 .update(cx, |i, cx| i.set_value(text, window, cx));
         }
         #[cfg(debug_assertions)]
-        self.dev_step(window, cx);
+        self.dev_step(latest, window, cx);
         cx.notify();
     }
 
@@ -418,6 +421,7 @@ impl Vesper {
         let cmds = self.model.sign_out();
         self.run(cmds);
         self.side = sidebar::Side::default();
+        self.tl = chat::Tl::default();
         for (_, i) in self.images.drain() {
             if let chat::Img::Ready(i) = i {
                 let _ = window.drop_image(i);
@@ -458,33 +462,102 @@ impl Vesper {
         self.composer.update(cx, |i, cx| i.insert("\n", window, cx));
     }
 
+    /// The message list, aligned at the top (all of it fits) or the bottom.
+    fn new_list(top: bool, cx: &mut Context<Self>) -> ListState {
+        let align = if top {
+            ListAlignment::Top
+        } else {
+            ListAlignment::Bottom
+        };
+        let list = ListState::new(0, align, px(400.));
+        let this = cx.weak_entity();
+        list.set_scroll_handler(move |e, _, cx| {
+            // The list is borrowed while this runs: only the model changes here, the rows update on the next render.
+            // A list that fits is always at its bottom.
+            let (start, bottom) = (e.visible_range.start == 0, top || !e.is_scrolled);
+            let _ = this.update(cx, |v, cx| {
+                let cmds = v.model.scrolled(start, bottom);
+                v.run(cmds);
+                cx.notify();
+            });
+        });
+        list
+    }
+
+    /// Short rooms start at the top, as on the web: the list turns top aligned when the last frame's rows fit, and
+    /// bottom aligned again when they no longer do (one frame late, like a scroll).
+    fn fit_list(&mut self, cx: &mut Context<Self>) {
+        let n = self.list.item_count();
+        if n == 0 || self.model.active != self.shown.0 {
+            return;
+        }
+        // The measured rows against the viewport. (bounds_for_item cannot tell: it ignores the bottom alignment.)
+        let fits = self.list.max_offset_for_scrollbar().height <= px(0.5)
+            && self.list.viewport_bounds().size.height > px(0.);
+        let flip = fits != self.list_top;
+        if flip {
+            self.list_top = !self.list_top;
+            self.list = Self::new_list(self.list_top, cx);
+            self.list.reset(n);
+        }
+    }
+
     /// Tells the list which rows were added or changed since the last render, so it keeps its scroll position, and
-    /// scrolls to a message asked for (a reply's quote, a pin).
-    fn sync_list(&mut self) {
+    /// scrolls to a message asked for (a reply's quote, a pin) and flashes it. Also moves the timeline's motion on.
+    fn sync_list(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let calm = self.side.calm(now);
+        self.fit_list(cx);
+        self.sync_timeline(now, calm, cx);
+        let new_after = self.new_row_after(cx);
         let room = self.model.active;
         let m = &self.model;
         let msgs = m.log().map_or(&[][..], |l| &l.messages[..]);
-        self.heads =
-            crate::timeline::heads(msgs, chrono::Utc::now().timestamp_millis(), &chrono::Local);
+        self.heads = crate::timeline::heads(
+            msgs,
+            chrono::Utc::now().timestamp_millis(),
+            &chrono::Local,
+            crate::timeline::Locale::system(),
+            new_after.map(|at| (at, m.state.my_id())),
+        );
         let images = &self.images;
+        let more_before = m.log().is_some_and(|l| l.more_before);
+        let last = msgs.len().saturating_sub(1);
         let rows: Vec<(i64, RowKey)> = msgs
             .iter()
             .zip(&self.heads)
-            .map(|(x, h)| {
+            .enumerate()
+            .map(|(i, (x, h))| {
                 let shown = x
                     .attachments
                     .iter()
                     .filter(|a| !matches!(images.get(&a.id), None | Some(chat::Img::Loading)))
                     .count();
                 let open = [m.editing, m.confirm_delete, m.picking].map(|v| v == Some(x.id));
-                (x.id, (x.updated_at, h.head, h.day.is_some(), open, shown))
+                let edge = [i == 0 && more_before, i == 0, i == last];
+                (
+                    x.id,
+                    (
+                        x.updated_at,
+                        [h.head, h.day.is_some(), h.new],
+                        open,
+                        edge,
+                        shown,
+                    ),
+                )
             })
             .collect();
         if let Some(ix) = m.jump.and_then(|id| msgs.iter().position(|x| x.id == id)) {
             self.list.scroll_to_reveal_item(ix);
+            self.tl.flash = Some((msgs[ix].id, now));
         }
         self.model.jump = None;
         if room != self.shown.0 {
+            // Another room opens at its bottom; fit_list tops a short one on the next frame.
+            if self.list_top {
+                self.list_top = false;
+                self.list = Self::new_list(false, cx);
+            }
             self.list.reset(rows.len());
         } else {
             for (range, count) in splices(&self.shown.1, &rows) {
@@ -513,9 +586,9 @@ impl Vesper {
     }
 }
 
-/// What a row's look depends on: `updated_at`, heads a group, starts a day, (editing, confirming a delete, picking
-/// a reaction), pictures loaded.
-type RowKey = (i64, bool, bool, [bool; 3], usize);
+/// What a row's height depends on: `updated_at`, (heads a group, starts a day, has the New row), (editing,
+/// confirming a delete, picking a reaction), (has Load older, is first, is last), pictures loaded.
+type RowKey = (i64, [bool; 3], [bool; 3], [bool; 3], usize);
 
 /// The list splices that turn rows `old` into `new` (each `(id, look)`, ids ascending): rows put in front (an older
 /// page), rows changed in place (an edit or delete), rows added at the end (new messages). Anything else replaces

@@ -71,6 +71,17 @@ impl Side {
         self.glide.is_some()
     }
 
+    /// The first hello is still settling (`settle` in motion.ts): nothing moves yet.
+    pub fn calm(&self, now: Instant) -> bool {
+        self.calm_until.is_none_or(|u| now < u)
+    }
+
+    /// Ends the first hello's calm now, for tests of motion.
+    #[cfg(test)]
+    pub fn unsettle(&mut self) {
+        self.calm_until = Some(Instant::now());
+    }
+
     /// How much of the sidebar shows now (0 to 1).
     pub fn shown(&self, now: Instant) -> f32 {
         self.slide.as_ref().map_or(1., |t| t.at(now))

@@ -1,13 +1,11 @@
 //! The main screen's right side: the open room's header (`RoomHeader.svelte`), messages and composer. The sidebar
 //! and the shell around both are in `sidebar.rs`.
 
-use chrono::{Local, TimeZone};
 use gpui::{
     App, Context, Div, ExternalPaths, InteractiveElement, ParentElement, Styled, Window, div, list,
     px, rgb,
 };
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::input::Input;
 use gpui_component::{h_flex, v_flex};
 use vesper_protocol::{RoomInfo, RoomKind};
 
@@ -18,23 +16,11 @@ use super::theme::{TEXT_BASE, TEXT_SM, TEXT_XS, TextStepExt, tokens};
 use super::{COMPOSER, Vesper, theme};
 use crate::model::{Model, NOT_REMEMBERED, Phase};
 
-/// `14:05` today, `2026-11-13 14:05` before.
-pub fn time_label(ms: i64) -> String {
-    let Some(t) = Local.timestamp_millis_opt(ms).single() else {
-        return String::new();
-    };
-    if t.date_naive() == Local::now().date_naive() {
-        t.format("%H:%M").to_string()
-    } else {
-        t.format("%Y-%m-%d %H:%M").to_string()
-    }
-}
-
 /// `EmptyState.svelte`: the title (16/24, `--weight-strong`), the body (13/20, `--fg-3`, at most 320 px), centred in
-/// the pane, 48 px up for the header (`.center` in Shell.svelte).
-fn empty_state(title: &'static str, body: &'static str, cx: &App) -> Div {
+/// the pane, `lift` px up (48 for the header in a page, `.center` in Shell.svelte; none in the timeline).
+fn empty_state(title: &'static str, body: &'static str, lift: f32, cx: &App) -> Div {
     let t = tokens(cx);
-    v_flex().flex_1().justify_center().pb(px(48.)).child(
+    v_flex().flex_1().justify_center().pb(px(lift)).child(
         v_flex()
             .items_center()
             .gap(px(4.))
@@ -74,16 +60,16 @@ impl Vesper {
                 .children(call);
             return self.shell(main, window, cx);
         }
-        self.sync_list();
+        self.sync_list(cx);
         self.sync_typing(cx);
         let m = &self.model;
         let room = m.active.and_then(|id| m.state.find_room(id));
         let status = if !m.notice.is_empty() {
-            m.notice.as_str()
+            m.notice.clone()
         } else if !m.online {
-            "Offline. Reconnecting..."
+            "Offline. Reconnecting...".into()
         } else {
-            ""
+            String::new()
         };
         let Some(room) = room else {
             // No room open: the web's empty states (it opens the first room itself when there is one).
@@ -91,6 +77,7 @@ impl Vesper {
                 empty_state(
                     "No rooms yet.",
                     "The owner can add one in the admin pages.",
+                    48.,
                     cx,
                 )
             });
@@ -103,10 +90,19 @@ impl Vesper {
                 .children(empty);
             return self.shell(main, window, cx);
         };
-        let start = m
-            .log()
-            .is_some_and(|l| !l.more_before && !l.messages.is_empty());
-        let header = self.room_header(room, status, cx);
+        let room = room.clone();
+        if self.placeholder_room != Some(room.id) {
+            self.placeholder_room = Some(room.id);
+            let text = format!("Message {}", room.name);
+            self.composer
+                .update(cx, |i, cx| i.set_placeholder(text, window, cx));
+        }
+        // `No messages yet. Say hello.` once the first page came empty.
+        let empty = self.tl.loaded.contains(&room.id)
+            && m.log()
+                .is_some_and(|l| l.messages.is_empty() && !l.more_before);
+        let header = self.room_header(&room, &status, cx);
+        let m = &self.model;
         let keyring = m.not_remembered.then(|| {
             h_flex()
                 .gap_3()
@@ -125,14 +121,28 @@ impl Vesper {
                         })),
                 )
         });
-        let timeline = list(
-            self.list.clone(),
-            cx.processor(|this, ix: usize, _, cx| this.message_row(ix, cx)),
-        )
-        .flex_1();
-        let error = m.error.clone();
-        let pins = self.render_pins(cx);
-        let above = self.above_composer(cx);
+        let (dy, opacity) = self.swap_pose(cx);
+        let timeline = if empty {
+            empty_state("No messages yet.", "Say hello.", 0., cx).pb(px(16.))
+        } else {
+            div().flex().flex_col().flex_1().min_h_0().child(
+                list(
+                    self.list.clone(),
+                    cx.processor(|this, ix: usize, window, cx| this.message_row(ix, window, cx)),
+                )
+                .flex_1(),
+            )
+        };
+        let timeline = div()
+            .relative()
+            .top(px(dy))
+            .opacity(opacity)
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(timeline);
+        let composer = self.render_composer(window, cx);
         let composer = v_flex()
             .key_context(COMPOSER)
             .on_action(cx.listener(Self::send))
@@ -143,54 +153,24 @@ impl Vesper {
             .on_action(cx.listener(Self::composer_escape))
             .on_action(cx.listener(Self::paste_file))
             .flex_none()
-            .p_3()
-            .gap_1()
             .debug_selector(|| "composer".into())
-            .when_some_text(&error, theme::DANGER_FG, "room-error")
-            .children(above)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_end()
-                    .child(
-                        div().debug_selector(|| "attach".into()).child(
-                            Button::new("attach")
-                                .ghost()
-                                .label("Attach")
-                                .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))),
-                        ),
-                    )
-                    .child(div().flex_1().child(Input::new(&self.composer))),
-            );
+            .children(self.saved_line(cx))
+            .child(composer);
         let call = self.render_call(cx);
         let share = self.render_share(cx);
-        let m = &self.model;
+        let dialog = self.delete_dialog(cx);
+        if self.timeline_moving() {
+            window.request_animation_frame();
+        }
         let main = v_flex()
             .flex_1()
             .h_full()
             .min_w_0()
             .child(header)
-            .children(pins)
             .children(keyring)
             .children(share)
-            .when_some_text(
-                if m.loading_older {
-                    "Loading older messages..."
-                } else {
-                    ""
-                },
-                theme::FG_3,
-                "",
-            )
-            .when_some_text(
-                if start {
-                    "This is the start of the conversation."
-                } else {
-                    ""
-                },
-                theme::FG_3,
-                "",
-            )
+            // `pt-3` over the timeline (Chat.svelte).
+            .child(div().h(px(12.)).flex_none())
             .child(timeline)
             .children(call)
             .child(composer)
@@ -199,7 +179,45 @@ impl Vesper {
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 this.attach_paths(paths.paths().to_vec(), cx)
             }));
-        self.shell(main, window, cx)
+        self.shell(main, window, cx).children(dialog)
+    }
+
+    /// Where the last saved file went, with Show in folder (the desktop's own: the web's browser shows downloads).
+    fn saved_line(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let t = tokens(cx);
+        let p = self.model.saved.as_ref()?;
+        let path = p.clone();
+        Some(
+            h_flex()
+                .debug_selector(|| "saved".into())
+                .gap(px(8.))
+                .px(px(16.))
+                .pb(px(4.))
+                .text_step(TEXT_XS)
+                .text_color(t.fg_2)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .ellipsis()
+                        .child(format!("Saved to {}.", p.display())),
+                )
+                .child(
+                    c::Button::new("saved-show", "Show in folder")
+                        .small()
+                        .variant(c::Variant::Ghost)
+                        .on_click(cx.listener(move |_, _, _, cx| cx.reveal_path(&path))),
+                )
+                .child(
+                    c::Button::new("saved-ok", "OK")
+                        .small()
+                        .variant(c::Variant::Ghost)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.model.saved = None;
+                            cx.notify();
+                        })),
+                ),
+        )
     }
 
     /// The Show sidebar button the web puts at the left of a page header while the sidebar is hidden.
@@ -235,8 +253,9 @@ impl Vesper {
     /// `--weight-strong`), a DM's or a restricted room's note, then Pins and Join voice at the right. Join voice is
     /// not there in this room's call (the call bar has Leave) and is secondary while in a call elsewhere. Search is
     /// the web's (the desktop has no message search yet). The desktop adds the status line (offline, notices).
-    fn room_header(&self, room: &RoomInfo, status: &str, cx: &mut Context<Self>) -> Div {
+    fn room_header(&mut self, room: &RoomInfo, status: &str, cx: &mut Context<Self>) -> Div {
         let t = tokens(cx).clone();
+        let popover = self.render_pins(cx);
         let m = &self.model;
         let id = room.id;
         let here = m.call.room == Some(id);
@@ -273,12 +292,17 @@ impl Vesper {
                     })),
             )
         });
+        let pins_open = m.pins.is_some();
         let pins = (room.kind == RoomKind::Room).then(|| {
-            div().debug_selector(|| "pins-button".into()).child(
-                c::IconButton::new("pins-button", "pin")
-                    .pressed(m.pins.is_some())
-                    .on_click(cx.listener(|this, _, _, cx| this.act(Model::toggle_pins, cx))),
-            )
+            div()
+                .relative()
+                .debug_selector(|| "pins-button".into())
+                .child(
+                    c::IconButton::new("pins-button", "pin")
+                        .pressed(pins_open)
+                        .on_click(cx.listener(|this, _, _, cx| this.act(Model::toggle_pins, cx))),
+                )
+                .children(popover)
         });
         h_flex()
             .h(px(48.))
