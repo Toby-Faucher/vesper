@@ -19,7 +19,6 @@
   import { roomOrder, stepRoom } from '../lib/ui/keys';
   import type { Attachment } from '../lib/gen/Attachment';
   import Button from '../lib/ui/c/Button.svelte';
-  import EmptyState from '../lib/ui/c/EmptyState.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
 
   // The viewer loads on the first image click or video open.
@@ -343,7 +342,8 @@
     {:else if loading && !log?.messages.length}
       <p class="px-4 pt-2 text-sm text-fg-3" role="status">{UI_MESSAGES.chatLoading}</p>
     {:else if empty}
-      <div class="flex h-full items-center justify-center"><EmptyState title="No messages yet." body="Say hello." /></div>
+      <!-- At the foot of the list, where the first message will land, not centred like a page. -->
+      <div class="flex h-full flex-col justify-end pr-4 pl-17"><p class="text-base font-medium text-fg">No messages yet.</p><p class="text-sm text-fg-3">Say hello.</p></div>
     {/if}
     {#if log?.moreBefore}
       <div class="py-2 pl-17"><Button size="sm" loading={loadingOlder} onclick={older}>Load older messages</Button></div>

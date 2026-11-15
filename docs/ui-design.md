@@ -31,7 +31,7 @@ the warning colour poor, all faint while measuring. Its name says "Connection to
 give the figures in words. Your own row with Settings sits at the bottom. The sidebar hides fully with `Ctrl+\`. It never
 shrinks to a row of icons. The main pane has a 48 px header with the room name, Pins, Search and Join voice. Join voice is the amber primary only when you are in no call. While you are in a
 call, a small call bar floats at the bottom centre of the main pane. The pane leaves room for it, so it covers nothing.
-Settings and Admin use the same shell: a list of sections on the left of the pane and one page of controls.
+Settings and Admin use the same shell: a list of sections on the left of the pane and one page of controls. An empty room says "No messages yet." at the foot of the list, left aligned with the message text, where the first message will land; only a missing room or page centres its empty state.
 
 **The tokens rule.** A component uses role names only (`bg-app`, `text-fg-2`, `bg-accent`, `text-danger`). Raw steps and
 hex values live only in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css). Sizes follow the 4 px scale. Text uses six
