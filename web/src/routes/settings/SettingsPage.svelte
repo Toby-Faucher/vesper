@@ -27,7 +27,7 @@
   </nav>
   {#key section}
   <div class="min-w-0 max-w-160 flex-1 pb-12" in:motion={'swap'}>
-    <h2 class="mb-6 text-lg font-medium text-fg">{NAMES[section]}</h2>
+    <h2 class="mb-6 text-xl font-medium text-fg">{NAMES[section]}</h2>
     {#if section === 'voice'}
       <Voice />
     {:else if section === 'notifications'}

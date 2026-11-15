@@ -60,25 +60,29 @@
   <fieldset class="flex flex-col gap-2" aria-describedby="style-help">
     <legend class="mb-1 text-base font-medium text-fg">Style</legend>
     <p id="style-help" class="mb-1 text-sm text-fg-2">On this device only.</p>
-    {#each STYLES as s (s.id)}
-      <label class="option flex min-h-10 cursor-pointer items-center gap-3 rounded-md px-3 py-1.5 text-sm text-fg">
-        <input type="radio" name="style" value={s.id} checked={style === s.id} onchange={() => pick(s.id)} />
-        <span class="flex flex-col"><span>{s.name}</span><span class="text-xs text-fg-2">{s.blurb}</span></span>
-      </label>
-    {/each}
+    <div class="list">
+      {#each STYLES as s (s.id)}
+        <label class="option flex min-h-12 cursor-pointer items-center gap-3 px-3 py-1.5 text-sm text-fg">
+          <input type="radio" name="style" value={s.id} checked={style === s.id} onchange={() => pick(s.id)} />
+          <span class="flex flex-col"><span>{s.name}</span><span class="text-xs text-fg-2">{s.blurb}</span></span>
+        </label>
+      {/each}
+    </div>
   </fieldset>
 
   <fieldset class="flex flex-col gap-2" aria-describedby="scheme-help" disabled={fixed !== 'both'}>
-    <legend class="mb-1 text-base font-medium text-fg">Color scheme</legend>
+    <legend class="mb-1 text-base font-medium text-fg">Colour scheme</legend>
     <p id="scheme-help" class="mb-1 text-sm text-fg-2">
       {fixed === 'both' ? 'On this device only. System follows your device setting.' : `This style is ${fixed} only, so the choice does not apply to it.`}
     </p>
-    {#each CHOICES as c (c.id)}
-      <label class="option flex h-10 cursor-pointer items-center gap-3 rounded-md px-3 text-sm text-fg">
-        <input type="radio" name="scheme" value={c.id} checked={scheme === c.id} onchange={() => pickScheme(c.id)} />
-        {c.name}
-      </label>
-    {/each}
+    <div class="list">
+      {#each CHOICES as c (c.id)}
+        <label class="option flex h-10 cursor-pointer items-center gap-3 px-3 text-sm text-fg">
+          <input type="radio" name="scheme" value={c.id} checked={scheme === c.id} onchange={() => pickScheme(c.id)} />
+          {c.name}
+        </label>
+      {/each}
+    </div>
   </fieldset>
 
   <fieldset class="flex max-w-120 flex-col gap-3" aria-describedby="accent-help">
@@ -119,11 +123,16 @@
 </div>
 
 <style>
-  .option { max-width: 320px; border: 1px solid var(--line); }
+  .option { border: 1px solid var(--line); border-radius: var(--radius); }
   fieldset:disabled .option { cursor: not-allowed; opacity: 0.6; }
   .option:hover { background: var(--bg-hover); }
   .option:has(:checked) { border-color: var(--line-strong); background: var(--bg-selected); }
   .option:has(:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+  /* Style and scheme: one bordered list with hairlines between the rows, not a stack of boxes. */
+  .list { display: flex; max-width: 320px; flex-direction: column; overflow: clip; border: 1px solid var(--line); border-radius: var(--radius); }
+  .list .option { border: 0; border-radius: 0; }
+  .list .option + .option { border-top: 1px solid var(--line-subtle); }
+  .list .option:has(:focus-visible) { outline-offset: -2px; }
   input[type='radio'] { margin: 0; accent-color: var(--accent); outline: none; }
   .dot { width: 16px; height: 16px; flex: none; border-radius: 50%; background: var(--c); }
   .pick { width: 32px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-element); cursor: pointer; }
