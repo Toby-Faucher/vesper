@@ -1,0 +1,14 @@
+gpui-component 0.5.1 from crates.io (Apache-2.0, LICENSE-APACHE), vendored for one fix. Everything else is the
+published crate: src/ and locales/ unchanged, except the lines marked "vesper patch". Left out: tests/, README.md and
+the readme entry in Cargo.toml. The [lints.rust] table at the end of Cargo.toml is ours: it keeps upstream warnings
+out of our builds.
+
+The fix (src/input/state.rs, InputState::new): an input redrew itself on every caret blink (every 500 ms), focused or
+not. Only a blur stops the blink loop, and a blur never comes when the input was focused and lost the focus before a
+frame drew it (opening a room focuses the composer before the composer is drawn), or when it never had focus (a text
+change pauses the blink, and the pause restarts the loop: the password cleared after sign in). Then the whole window
+redrew twice a second with no caret to show. Now a blink redraws only an input that is focused in an active window,
+which is when show_cursor() draws the caret. The loop's timer still runs (a wake-up every 500 ms, no drawing).
+
+To update gpui-component: drop this folder and its [patch.crates-io] entry in desktop/Cargo.toml once a release
+fixes it, or copy the new release here and apply the marked lines again.

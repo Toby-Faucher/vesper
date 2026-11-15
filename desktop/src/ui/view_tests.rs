@@ -212,12 +212,22 @@ fn the_room_view_shows_rooms_and_messages_and_sends(cx: &mut TestAppContext) {
     // Hide the sidebar: the room's header gets Show sidebar, and the choice is in the settings.
     click(cx, "hide-sidebar");
     view.read_with(cx, |v, _| assert!(v.model.settings.sidebar_collapsed));
+    settle(cx);
     click(cx, "show-sidebar");
     view.read_with(cx, |v, _| assert!(!v.model.settings.sidebar_collapsed));
+    settle(cx);
 
     // The account menu: Log out.
     click(cx, "account");
     assert!(cx.debug_bounds("account-menu").is_some());
+}
+
+/// Waits out a 220 ms slide and draws once. The test window draws no animation frames, so without this the last
+/// frame is the slide's first and the sidebar still covers what is under it. (A caret blink drew a frame by accident.)
+fn settle(cx: &mut VisualTestContext) {
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
 }
 
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
@@ -1100,4 +1110,43 @@ fn the_connection_banner_retries_now(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("connection-banner").is_some());
     click(cx, "retry-now");
     assert!(matches!(drain(&mut rx).as_slice(), [Cmd::RetryNow]));
+}
+
+// Idle means no redraws: nothing the user can see moves, so no view or input asks to be drawn again. A caret blink
+// used to keep going on inputs that were not focused (vendor/gpui-component/PATCHED.txt): the password cleared after
+// sign in, and the composer focused by a room that opened and lost the focus before it was drawn.
+#[gpui::test]
+fn an_idle_window_asks_for_no_redraws(cx: &mut TestAppContext) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        v.password.update(cx, |i, cx| i.set_value("", window, cx));
+        v.open_room(2, window, cx);
+        v.key_focus.focus(window);
+    });
+    // Past every animation (the longest is the 1.5 s sidebar calm).
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(3));
+    cx.run_until_parked();
+    let notes = Rc::new(Cell::new(0));
+    let watched = view.read_with(cx, |v, _| {
+        [&v.server, &v.username, &v.password, &v.composer, &v.edit].map(|e| e.clone())
+    });
+    cx.update(|_, cx| {
+        let n = notes.clone();
+        cx.observe(&view, move |_, _| n.set(n.get() + 1)).detach();
+        for e in watched {
+            let n = notes.clone();
+            cx.observe(&e, move |_, _| n.set(n.get() + 1)).detach();
+        }
+    });
+    // The caret's blink runs on smol's real-time timer, not the test clock: wait for real, past two blinks.
+    for _ in 0..3 {
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        cx.run_until_parked();
+    }
+    assert_eq!(notes.get(), 0, "redraws asked for while idle");
+    drain(&mut rx);
 }

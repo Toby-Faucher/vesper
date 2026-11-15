@@ -1,6 +1,8 @@
 # The v2 desktop client (GPUI). Its own workspace and lockfile, so GPUI's dependency tree never moves the server's
 # pins (tract, sqlx, time). Shares wire types with the server through the vesper-protocol path dependency.
 [workspace]
+# vendor/ holds patched copies of upstream crates (each says why in its PATCHED.txt); they are not members.
+exclude = ["vendor"]
 
 [package]
 name = "vesper-desktop"
@@ -78,3 +80,11 @@ opt-level = 3
 
 [profile.dev.package.sonora-fft]
 opt-level = 3
+
+# GPUI 0.2.2 with one fix: on Wayland its frame loop committed the window 60 times a second even when nothing changed.
+# vendor/gpui/PATCHED.txt says what changed. Drop this once a gpui release on crates.io parks the loop itself.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
+# gpui-component 0.5.1 with one fix: an input that was not focused still redrew the window on every caret blink.
+gpui-component = { path = "vendor/gpui-component" }
+

@@ -88,6 +88,13 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   job). Arch: `opus` and `alsa-lib`; Debian and Ubuntu: `libopus-dev` and `libasound2-dev`. The `opus` crate links the system
   libopus through pkg-config. Watching a screen share needs nothing more: the VP8 decoder (`vp8-decoder`) is pure Rust.
 - Check: `scripts/check-desktop.sh` (fmt, clippy `-D warnings`, tests). It is not part of `scripts/check.sh`; CI runs it as its own job.
+- `desktop/vendor/` holds patched copies of `gpui` 0.2.2 and `gpui-component` 0.5.1 (`[patch.crates-io]` in
+  `desktop/Cargo.toml`). Each `PATCHED.txt` says what changed and when to drop it. Both patches stop redraws in an idle
+  window: GPUI's Wayland frame loop committed about 60 times a second, and an input that was not focused redrew the
+  window on every caret blink. Measured in a headless sway with `WAYLAND_DEBUG=1` (surface commits per 10 idle seconds):
+  sign in 616 before, 0 after; a room with no focused input 577 before (29 real draws), 13 after (one 0.5 s animation);
+  a room in voice 569 before, 15 after (a stats redraw every 2 s). A focused input still blinks: 2 redraws a second.
+  Windows was not measured.
 - Windows is the main target (the friends use it). CI's `desktop-windows` job builds the app and runs the unit and headless GPUI tests
   on Windows; the real-server tests in `desktop/tests/` are Unix only, because the server crates use Unix file permissions.
   Running the app on Windows is not verified by CI.
