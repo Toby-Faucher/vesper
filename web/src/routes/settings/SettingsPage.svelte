@@ -6,6 +6,7 @@
   import Diagnostics from '../Diagnostics.svelte';
   import Account from './Account.svelte';
   import Appearance from './Appearance.svelte';
+  import DesktopApp from './DesktopApp.svelte';
   import Notifications from './Notifications.svelte';
   import Voice from './Voice.svelte';
   // A lazy chunk: the section list and the open section. A move inside Settings replaces the history entry (navigate), so
@@ -36,6 +37,8 @@
         status={voice.joined ? 'joined' : 'not joined'} />
     {:else if section === 'appearance'}
       <Appearance />
+    {:else if section === 'desktop'}
+      <DesktopApp />
     {:else}
       <Account />
     {/if}

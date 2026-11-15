@@ -78,6 +78,96 @@ The link is printed once and never logged; the server keeps only a hash of it.
 For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPER_UDP_BIND=0.0.0.0:40000` and
 `VESPER_PUBLIC_HOST=<address they can reach>`, and put HTTPS in front (their mic needs it). See [deploy.md](deploy.md).
 
+## Desktop client (v2, in progress)
+
+`desktop/` is the GPUI desktop client, a Cargo workspace of its own with its own `Cargo.lock`
+([ADR 0010](decisions/0010-gpui-desktop-client.md), [design](superpowers/specs/2026-11-14-desktop-client-design.md)).
+
+- Build: `cd desktop && ../scripts/capped.sh cargo build`. Run: `cargo run` there, on a machine with a display.
+- Linux needs the X11, Wayland, Vulkan, fontconfig, ALSA and Opus development headers (the package list is in the `desktop` CI
+  job). Arch: `opus` and `alsa-lib`; Debian and Ubuntu: `libopus-dev` and `libasound2-dev`. The `opus` crate links the system
+  libopus through pkg-config. Watching a screen share needs nothing more: the VP8 decoder (`vp8-decoder`) is pure Rust.
+- Check: `scripts/check-desktop.sh` (fmt, clippy `-D warnings`, tests). It is not part of `scripts/check.sh`; CI runs it as its own job.
+- `desktop/vendor/` holds patched copies of `gpui` 0.2.2 and `gpui-component` 0.5.1 (`[patch.crates-io]` in
+  `desktop/Cargo.toml`). Each `PATCHED.txt` says what changed and when to drop it. Both patches stop redraws in an idle
+  window: GPUI's Wayland frame loop committed about 60 times a second, and an input that was not focused redrew the
+  window on every caret blink. Measured in a headless sway with `WAYLAND_DEBUG=1` (surface commits per 10 idle seconds):
+  sign in 616 before, 0 after; a room with no focused input 577 before (29 real draws), 13 after (one 0.5 s animation);
+  a room in voice 569 before, 15 after (a stats redraw every 2 s). A focused input still blinks: 2 redraws a second.
+  Windows was not measured.
+- Windows is the main target (the friends use it). CI's `desktop-windows` job builds the app and runs the unit and headless GPUI tests
+  on Windows; the real-server tests in `desktop/tests/` are Unix only, because the server crates use Unix file permissions.
+  Running the app on Windows is not verified by CI.
+- Builds to try: the `desktop-package` workflow uploads `vesper-desktop-windows-x64-<commit>` (a zip with `Vesper.exe`) and
+  `vesper-desktop-linux-x64-<commit>` (a tarball built on Ubuntu 24.04, glibc 2.39 or newer) for every push to `v2/desktop`. Download it from the workflow run's Artifacts. `desktop/package/README.txt` and `README-linux.txt` are what each package's README says.
+  The tests start a real `vesper-server` in process (a path dev-dependency, so the first build compiles the server too) on a free
+  loopback port over plain http, and draw the views in GPUI's headless test window. No display, keyring or network is needed.
+  The voice tests (`desktop/tests/voice.rs`) run whole calls through that server's SFU with a sine for a microphone and a
+  recorder for speakers, so no audio devices are needed either. The share test (`desktop/tests/share.rs`) has a fake sharer
+  send VP8 made by `vp8-encoder` (a dev-dependency), so it needs no screen or video file.
+  The chat tests (`desktop/tests/chat.rs`) run two clients through edits, deletes, reactions, replies, typing and files,
+  with the files in a temp folder.
+- Files from chat: Save opens the system's save dialog in the Downloads folder. Open (images, audio and video only) downloads
+  to `Vesper/open/<id>.<ext>` in the user's cache folder (`%LOCALAPPDATA%`, `~/Library/Caches`, `$XDG_CACHE_HOME`) and hands it
+  to the system's app. A download goes to `<name>.part` and is renamed when whole; it is capped at the server's upload limit.
+  A pasted picture is first written to `Vesper/paste/` in the cache folder and deleted once uploaded (one never sent goes
+  after a day).
+- Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
+  Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
+- Settings (the gear next to your name; Log out is in the menu on your name) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
+  `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets. It also keeps whether the sidebar is hidden
+  (the web keeps that in localStorage). It is written to a temporary file and renamed. A value the app cannot read falls
+  back to its default alone; a file that is not JSON is kept as `settings.json.bad`.
+- DeepFilterNet runs natively (`vesper-dsp` with tract, the same `=0.21.4` pin and debug-assertions override as the root
+  workspace). The app does not ship the model: at the first call it downloads `/dsp/model.tar.gz` from the server it is signed
+  in to (the file the web app loads), checks its sha256 against the pin in `scripts/fetch-model.sh`, and keeps it as
+  `Vesper/DeepFilterNet3_onnx.tar.gz` in the OS data dir. A server without `/dsp/` (a dev server without `scripts/build-dsp.sh`)
+  gives a call with the noise gate and a note in the call bar.
+- The DeepFilterNet test with the real model runs only when `crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz` exists
+  (`scripts/fetch-model.sh`); without it the test prints `SKIPPED` and passes. CI has no model, so it skips there.
+- Push to talk watches its key globally on Windows, macOS (with Accessibility access) and X11, only during a call. On Wayland it
+  works only while the window has focus. As on the web, a press while a text field in Vesper has focus is ignored, and a
+  release always counts. The tray uses KSNI on Linux (no GTK headers needed); a desktop without a tray host shows none.
+- Sign in: the app asks for the server address (the one you open Vesper at in a browser, e.g. `https://vesper.example.com`), a
+  username and a password. Accounts are made in the web app. The session is kept in the OS keyring (Secret Service on Linux,
+  for example GNOME Keyring or KWallet); without one the app works but asks you to sign in at every start.
+- Look: the desktop app draws the web app's tokens (`desktop/src/ui/theme.rs`, a `Tokens` global with every role of
+  `web/src/styles/`, the styles and the accent maths of `accent.ts`), its icons (read from `web/src/lib/ui/icons.ts` at build
+  time, `ui/icons.rs`) and its base components (`ui/c.rs`, after `web/src/lib/ui/c/`). The type is the web's: Segoe UI on
+  Windows, and on Linux the font `fc-match sans-serif` names, which is also what Chromium draws for `system-ui`.
+- Times follow the OS locale as the web's follow the browser's: "7:41 PM" and "Mon Oct 27" for the English locales that write
+  them so (en-US and a few more, `timeline::Locale`), "19:41" and "Mon 27 Oct" for the rest. Linux reads `LANGUAGE`,
+  `LC_ALL`, `LC_MESSAGES` or `LANG` (the `sys-locale` crate), Windows the user's locale. Verified on Linux only.
+- Parity with the web app: `desktop/scripts/parity.sh [scene...]` builds what is missing, then `web/e2e/parity.mjs` starts one
+  server, shoots each scene in Chromium and in the desktop app (a debug build in a headless sway of its own, 1440x900, scale 1,
+  a throwaway home with no keyring) and writes `web/e2e/parity/<scene>-web.png`, `-desktop.png`, `-side.png` and `-diff.png`
+  with the share of pixels that differ. Scenes: `login`, `shell-empty`, `timeline-general` (the 40 seeded messages),
+  `timeline` (shots.mjs's plans room over three days, with the New row), `timeline-empty`, `composer` (a multi-line draft),
+  `composer-typing` (bob typing), `pins`, `message-image`, `upload-tray`, `composer-mention`, `motion-send` (also
+  `motion-send-{web,desktop}-{60,150}ms.png`: a sent message 60 and 150 ms into its rise), `shell` (four people in voice
+  in music, one muted, one deafened, unread and mention pills; alice is not in the call, the call bar is its own scene),
+  shots.mjs's call scenes `call-bar`, `call-ptt` (the key held), `call-force-muted` (shot from bob), `call-weak` (420 ms
+  round trip), `call-mic-lost`, `person-card` (bob opens alice's card from the call bar at 140 %), `person-card-mod` (dave,
+  a moderator, opens carol's from the sidebar) and `voice-quality` (the connection icons), `composer-offline` and
+  `reconnecting` (both stop the server for each picture), `motion-ring` (bob calls alice in their DM: also
+  `motion-ring-{web,desktop}-{60,150,800}ms.png`, the prompt's rise and its pulse half way) and `shell-collapsed`. One
+  account is in one call at a time, so in the call scenes the web account leaves the call after its picture and the
+  desktop's same account joins it. The desktop runs with the web scenes' clock (7:41 PM) and an en-US locale. It needs `sway` and `grim`; verified on the
+  dev machine (Arch, no X). A debug build reads `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD` and
+  `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`) to get into a scene without typing, and `VESPER_DEV_CLOCK`,
+  `VESPER_DEV_SHIFT`, `VESPER_DEV_EMPTY`, `VESPER_DEV_DRAFT`, `VESPER_DEV_PINS`, `VESPER_DEV_TYPING` and `VESPER_DEV_TRAY` for
+  the clock, older days, an empty room, a draft, the pins list, someone typing and the upload tray, and `VESPER_DEV_VOICE`
+  (join voice in a room on a silent fake microphone and speakers that play nothing: a real call through the server, no
+  audio device opened), `VESPER_DEV_LINKS`, `VESPER_DEV_RTT`, `VESPER_DEV_MIC_LOST`, `VESPER_DEV_DEAFEN`,
+  `VESPER_DEV_PTT_HELD`, `VESPER_DEV_PERSON`, `VESPER_DEV_VOLUME` and `VESPER_DEV_RING` for the call scenes
+  (`desktop/src/ui/dev.rs` says how each is written); a
+  release build does not have that code. The server takes 5 sign ins per name and then one a minute, so the app waits 13 s and signs in
+  again when it is refused. To add a scene, add an entry to `SCENES` in `parity.mjs`: the web steps, and the
+  `VESPER_DEV_*` state (a new kind of state goes in `dev.rs`), and `settings` for a `settings.json` written before the app starts
+  (`shell-collapsed` sets `sidebar_collapsed`). The rooms the scenes share with `shots.mjs` (plans, photos) are in
+  `web/e2e/shotlib.mjs`. The desktop scenes drop the no-keyring note, which no web scene has.
+- Its lockfile pins `libc` 0.2.189 and `mio` 1.2.4 on purpose (see the ADR). Do not `cargo update` it as a whole either.
+
 ## Check before a PR
 
 ```bash

@@ -1,0 +1,20 @@
+gpui 0.2.2 from crates.io (Apache-2.0, LICENSE-APACHE), vendored for two fixes. Everything else is the published
+crate: src/, build.rs and resources/ unchanged, except the lines marked "vesper patch". Left out: examples/, docs/,
+tests/ and README.md (src/gpui.rs line 1 included README.md as the crate doc; it is a plain comment now), and their
+entries in Cargo.toml.
+
+The first fix (src/platform/linux/wayland/window.rs and client.rs): 0.2.2 asked for a new wl_surface frame callback and
+committed the surface on every frame callback, drawn or not, so an idle window committed about 60 times a second and
+kept the app and the compositor awake. Now a frame that draws nothing parks the loop: no new callback, no commit. After
+each batch of events the event loop runs one frame for a parked window (it draws only if the window is dirty, which
+also runs request_animation_frame callbacks), and a frame that draws asks for the next callback again.
+Upstream Zed later fixed the same thing in its own way (a parked frame loop that schedule_frame wakes).
+
+To update gpui: drop this folder and the [patch.crates-io] entry in desktop/Cargo.toml once a release parks the loop
+itself, or copy the new release here and apply the marked lines again.
+
+A second fix (src/elements/text.rs, TextLayout::layout): the measure closure handed its text runs to truncate_line,
+which shortens them in place. Taffy measures a text more than once, so after a narrow measure had truncated it, a
+wider one shaped the whole text with runs that covered only its start, and the rest (the ellipsis too) fell back to
+the platform's default font. The closure now truncates a copy of the runs on each measure. When updating, apply it
+again unless the new release no longer changes the runs in place.

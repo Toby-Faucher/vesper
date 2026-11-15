@@ -1,0 +1,90 @@
+# The v2 desktop client (GPUI). Its own workspace and lockfile, so GPUI's dependency tree never moves the server's
+# pins (tract, sqlx, time). Shares wire types with the server through the vesper-protocol path dependency.
+[workspace]
+# vendor/ holds patched copies of upstream crates (each says why in its PATCHED.txt); they are not members.
+exclude = ["vendor"]
+
+[package]
+name = "vesper-desktop"
+version = "2.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+auto-launch = "0.6"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+cpal = "0.18"
+device_query = "4.0.1"
+dirs = "6"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+gpui = "=0.2.2"
+gpui-component = "=0.5.1"
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+keyring = "4.2"
+opus = "0.3"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "cookies", "rustls-no-provider", "charset", "http2", "system-proxy", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sonora = "0.3.0"
+str0m = { version = "0.24", default-features = false, features = ["aws-lc-rs"] }
+sys-locale = "0.3"
+tokio = { version = "1", features = ["rt", "time", "sync", "macros", "fs", "io-util"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+# Do NOT `cargo update` tract: the same pin as crates/vesper-dsp (newer 0.21.x breaks the deep_filter build).
+tract-core = "=0.21.4"
+tray-icon = { version = "0.26", default-features = false, features = ["ksni"] }
+url = "2"
+vesper-dsp = { version = "2.1.0", path = "../crates/vesper-dsp", features = ["tract"] }
+vesper-protocol = { version = "2.1.0", path = "../crates/vesper-protocol" }
+vp8-decoder = "=0.1.1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dev-dependencies]
+gpui = { version = "=0.2.2", features = ["test-support"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+vp8-encoder = "=0.1.1"
+
+# The real-server tests (tests/server.rs, tests/voice.rs) need the server crates, which use Unix file permissions.
+# Windows CI runs the unit and headless GPUI tests only.
+[target.'cfg(unix)'.dev-dependencies]
+vesper-server = { path = "../crates/vesper-server" }
+vesper-sfu = { path = "../crates/vesper-sfu" }
+vesper-store = { path = "../crates/vesper-store" }
+
+# tract 0.21.4 trips a debug-only assertion on the DeepFilterNet3 model ("duplicate name /convt3/Conv.bias"); the
+# same override as the root Cargo.toml. Remove both once tract is upgraded past the bug.
+[profile.release]
+lto = "thin"
+strip = true
+
+[profile.dev.package.tract-core]
+debug-assertions = false
+
+# A debug build decodes a 1080p share too slowly to keep up; optimise the decoder alone.
+[profile.dev.package.vp8-decoder]
+opt-level = 3
+
+# The same for the echo canceller, which runs on every 10 ms of the microphone.
+[profile.dev.package.sonora]
+opt-level = 3
+
+[profile.dev.package.sonora-aec3]
+opt-level = 3
+
+[profile.dev.package.sonora-fft]
+opt-level = 3
+
+# GPUI 0.2.2 with one fix: on Wayland its frame loop committed the window 60 times a second even when nothing changed.
+# vendor/gpui/PATCHED.txt says what changed. Drop this once a gpui release on crates.io parks the loop itself.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
+# gpui-component 0.5.1 with one fix: an input that was not focused still redrew the window on every caret blink.
+gpui-component = { path = "vendor/gpui-component" }
+

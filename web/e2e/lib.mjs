@@ -33,7 +33,7 @@ let dev = null; // the Vite dev server's URL, a Promise<string>
 
 // Every process the harness spawns, each the leader of its own process group, so killing the group also ends its children.
 const children = new Set();
-function track(cmd, args, opts) {
+export function track(cmd, args, opts) {
   const child = spawn(cmd, args, { ...opts, detached: true });
   child.exited = new Promise((r) => child.once('exit', r).once('error', r)); // 'error': ENOENT etc., no exit follows
   children.add(child);

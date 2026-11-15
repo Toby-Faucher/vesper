@@ -21,7 +21,7 @@
   import MenuItem from '../lib/ui/c/MenuItem.svelte';
   import RoomRow from './RoomRow.svelte';
   // The one sidebar: the mark, the rooms in the owner's order with who is in voice, and you with the account menu (Admin,
-  // Log out) and the Settings gear.
+  // Desktop app, Log out) and the Settings gear.
   let { current }: { current: number | null } = $props();
 
   const rooms = $derived([...session.state.rooms].sort((a, b) => a.position - b.position));
@@ -96,6 +96,7 @@
       <span class="cog flex" {@attach intent(() => import('./settings/SettingsPage.svelte').catch(() => {}))}><IconButton icon={I.settings} label="Settings" tip onclick={() => navigate(href({ name: 'settings', section: 'voice' }))} /></span>
       <Menu anchor={accountEl} open={menuOpen} onclose={() => (menuOpen = false)} label="Account">
         {#if staff}<MenuItem icon={I.shield} onselect={() => navigate(href({ name: 'admin', section: 'invites' }))}>Admin</MenuItem>{/if}
+        <MenuItem icon={I.download} onselect={() => navigate(href({ name: 'settings', section: 'desktop' }))}>Desktop app</MenuItem>
         <MenuItem icon={I.logOut} onselect={() => session.logout()}>Log out</MenuItem>
       </Menu>
     </div>

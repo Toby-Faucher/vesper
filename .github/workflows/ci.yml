@@ -73,6 +73,45 @@ jobs:
       # bindings reruns the vesper-protocol export tests and diffs web/src/lib/gen against the commit.
       - run: scripts/check.sh test bindings
 
+  # The v2 desktop client (desktop/, its own workspace). GPUI needs the X11, Wayland, Vulkan and font headers.
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - run: >-
+          sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+          libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libopus-dev libssl-dev
+          pkg-config
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: scripts/check-desktop.sh
+
+  # The desktop client on Windows, where the friends are. Builds the app and runs the unit and headless GPUI tests;
+  # the real-server tests are Unix only (the server crates use Unix file permissions).
+  desktop-windows:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: desktop
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked
+        working-directory: desktop
+      - run: cargo clippy --all-targets --locked -- -D warnings
+        working-directory: desktop
+      - run: cargo test --locked
+        working-directory: desktop
+
   supply-chain:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

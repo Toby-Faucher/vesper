@@ -16,6 +16,13 @@ export function whatsNew(seen: string | null, current: string, notes: readonly N
 
 export const RELEASE_NOTES: readonly Note[] = [
   {
+    version: '2.1.0',
+    items: [
+      'Vesper now has a desktop app for Windows and Linux.',
+      'Get it in Settings, Desktop app. Push to talk works while you play.',
+    ],
+  },
+  {
     version: '1.8.3',
     items: [
       'A sound plays when someone joins or leaves your call.',

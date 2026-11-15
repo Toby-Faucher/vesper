@@ -1,0 +1,382 @@
+//! Watching a screen share through a real `vesper-server` and its SFU on loopback: a fake sharer sends VP8 (made by
+//! the pure Rust `vp8-encoder`) and a desktop client watches it, decodes it and stops.
+#![cfg(unix)] // the server crates use Unix file permissions; Windows CI runs the unit tests
+
+mod common;
+
+use std::net::{SocketAddr, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use common::{Client, two};
+use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
+use str0m::format::Codec;
+use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid};
+use str0m::net::{Protocol, Receive};
+use str0m::{Candidate, Event as RtcEvent, Input, Output, Rtc};
+use vesper_desktop::model::{Phase, WATCH_GRACE};
+use vesper_desktop::net::{Cmd, Event};
+use vesper_desktop::voice::Frame;
+use vesper_protocol::{ClientMsg, ServerMsg};
+
+const W: u32 = 160;
+const H: u32 = 90;
+/// BT.601 limited range: red and blue.
+const RED: (u8, u8, u8) = (81, 90, 240);
+const BLUE: (u8, u8, u8) = (41, 240, 110);
+
+/// What the sharer's media thread and the test share.
+struct Media {
+    rtc: Rtc,
+    pending: Option<SdpPendingOffer>,
+    video: Mid,
+    connected: bool,
+    colour: (u8, u8, u8),
+    keyframe_requests: usize,
+    /// Video m-lines the SFU offered the sharer: one would mean the desktop client sends video.
+    remote_video: usize,
+}
+
+/// A browser-like sharer: a str0m peer with a send-only Opus and VP8 m-line, sending a solid colour at 30 fps,
+/// with a keyframe whenever the SFU asks for one. Its socket is a desktop `Client` (for sign in and signaling).
+struct Sharer {
+    client: Client,
+    media: Arc<Mutex<Media>>,
+    offer: String,
+    stop: Arc<AtomicBool>,
+    watchers: u32,
+}
+
+impl Sharer {
+    fn new(client: Client) -> Sharer {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = socket.local_addr().unwrap();
+        let mut rtc = Rtc::builder()
+            .clear_codecs()
+            .enable_opus(true, false)
+            .enable_vp8(true)
+            .build(Instant::now());
+        rtc.add_local_candidate(Candidate::host(addr, "udp").unwrap());
+        let mut change = rtc.sdp_api();
+        change.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
+        let video = change.add_media(MediaKind::Video, Direction::SendOnly, None, None, None);
+        let (offer, pending) = change.apply().unwrap();
+        let media = Arc::new(Mutex::new(Media {
+            rtc,
+            pending: Some(pending),
+            video,
+            connected: false,
+            colour: RED,
+            keyframe_requests: 0,
+            remote_video: 0,
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (m, s) = (media.clone(), stop.clone());
+        std::thread::spawn(move || drive(socket, addr, &m, &s));
+        Sharer {
+            client,
+            media,
+            offer: offer.to_sdp_string(),
+            stop,
+            watchers: 0,
+        }
+    }
+
+    fn signal(&self, m: ClientMsg) {
+        self.client.run(vec![Cmd::Signal(m)]);
+    }
+
+    /// Its socket's events: the SFU's answer and offers go to the media, the watcher count is kept.
+    fn pump(&mut self) {
+        let media = self.media.clone();
+        let mut watchers = None;
+        self.client.pump_with(|ev| {
+            let Event::Server(m) = ev else { return vec![] };
+            let mut md = media.lock().unwrap();
+            match &**m {
+                ServerMsg::Joined { answer, .. } => {
+                    let pending = md.pending.take().unwrap();
+                    let answer = SdpAnswer::from_sdp_string(answer).unwrap();
+                    md.rtc.sdp_api().accept_answer(pending, answer).unwrap();
+                    vec![]
+                }
+                ServerMsg::Offer { sdp } => {
+                    let offer = SdpOffer::from_sdp_string(sdp).unwrap();
+                    let answer = md.rtc.sdp_api().accept_offer(offer).unwrap();
+                    vec![Cmd::Signal(ClientMsg::Answer {
+                        sdp: answer.to_sdp_string(),
+                    })]
+                }
+                ServerMsg::Watchers { count } => {
+                    watchers = Some(*count);
+                    vec![]
+                }
+                _ => vec![],
+            }
+        });
+        if let Some(n) = watchers {
+            self.watchers = n;
+        }
+    }
+
+    fn media(&self) -> std::sync::MutexGuard<'_, Media> {
+        self.media.lock().unwrap()
+    }
+}
+
+impl Drop for Sharer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+fn drive(socket: UdpSocket, addr: SocketAddr, media: &Mutex<Media>, stop: &AtomicBool) {
+    let pic = |c: (u8, u8, u8)| {
+        let n = (W.div_ceil(2) * H.div_ceil(2)) as usize;
+        let mut i420 = vec![c.0; (W * H) as usize];
+        i420.extend(std::iter::repeat_n(c.1, n));
+        i420.extend(std::iter::repeat_n(c.2, n));
+        i420
+    };
+    let config = vp8_encoder::EncoderConfig::new(W, H, 30, 300_000).with_keyframe_interval(None);
+    let mut enc = vp8_encoder::Encoder::new(config).unwrap();
+    let (mut sent, mut next) = (0u64, Instant::now());
+    let mut buf = vec![0; 2000];
+    while !stop.load(Ordering::Relaxed) {
+        let timeout = {
+            let mut m = media.lock().unwrap();
+            loop {
+                match m.rtc.poll_output() {
+                    Ok(Output::Timeout(t)) => break t,
+                    Ok(Output::Transmit(t)) => {
+                        let _ = socket.send_to(&t.contents, t.destination);
+                    }
+                    Ok(Output::Event(RtcEvent::Connected)) => m.connected = true,
+                    Ok(Output::Event(RtcEvent::KeyframeRequest(_))) => {
+                        m.keyframe_requests += 1;
+                        enc.request_keyframe();
+                    }
+                    Ok(Output::Event(RtcEvent::MediaAdded(a))) if a.kind == MediaKind::Video => {
+                        m.remote_video += 1;
+                    }
+                    Ok(_) => {}
+                    Err(_) => return,
+                }
+            }
+        };
+        let wait = timeout
+            .saturating_duration_since(Instant::now())
+            .clamp(Duration::from_millis(1), Duration::from_millis(5));
+        socket.set_read_timeout(Some(wait)).unwrap();
+        let got = socket.recv_from(&mut buf).ok();
+        let mut m = media.lock().unwrap();
+        if let Some((n, source)) = got
+            && let Ok(contents) = buf[..n].try_into()
+        {
+            let r = Receive {
+                proto: Protocol::Udp,
+                source,
+                destination: addr,
+                contents,
+            };
+            let _ = m.rtc.handle_input(Input::Receive(Instant::now(), r));
+        }
+        let now = Instant::now();
+        if m.rtc.handle_input(Input::Timeout(now)).is_err() {
+            return;
+        }
+        if !m.connected || now < next {
+            continue;
+        }
+        next = now + Duration::from_millis(33);
+        let i420 = pic(m.colour);
+        let p = vp8_encoder::Picture::from_i420(&i420, W, H).unwrap();
+        let Some(frame) = enc.encode(&p, false).unwrap() else {
+            continue;
+        };
+        let video = m.video;
+        let Some(w) = m.rtc.writer(video) else {
+            continue;
+        };
+        let pt = w
+            .payload_params()
+            .find(|p| p.spec().codec == Codec::Vp8)
+            .unwrap()
+            .pt();
+        let time = MediaTime::new(sent * 3000, Frequency::NINETY_KHZ);
+        if w.write(pt, now, time, frame.data).is_ok() {
+            sent += 1;
+        }
+    }
+}
+
+/// The newest picture the viewer got: whose, its size and its mean colour (RGB). The test takes each picture and
+/// drops it, as the view does, so the next can come.
+#[derive(Default)]
+struct Seen(Option<(String, u32, u32, [u32; 3])>);
+
+impl Seen {
+    fn take(&mut self, f: Frame) {
+        let n = u64::from(f.width * f.height);
+        let sum = |c: usize| {
+            f.bgra
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| u64::from(p[c]))
+                .sum::<u64>()
+        };
+        let rgb = [2, 1, 0].map(|c| (sum(c) / n) as u32);
+        self.0 = Some((f.user_id, f.width, f.height, rgb));
+    }
+
+    fn colour(&self) -> Option<[u32; 3]> {
+        self.0.as_ref().map(|s| s.3)
+    }
+}
+
+/// Pumps the viewer and the sharer until `done` holds.
+async fn until(
+    a: &mut Client,
+    b: &mut Sharer,
+    seen: &mut Seen,
+    what: &str,
+    done: impl Fn(&Client, &Sharer, &Seen) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        a.pump();
+        b.pump();
+        if let Some(f) = a.model.call.take_frame() {
+            seen.take(f);
+        }
+        if done(a, b, seen) {
+            return;
+        }
+        if Instant::now() > deadline {
+            let m = b.media();
+            panic!(
+                "timed out waiting for {what}: viewer frames {}, watching {:?}, phase {:?}; sharer watchers {}, \
+                 keyframe requests {}, connected {}",
+                a.model.call.frames,
+                a.model.call.watching,
+                a.model.call.phase,
+                b.watchers,
+                m.keyframe_requests,
+                m.connected
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+fn reddish(c: [u32; 3]) -> bool {
+    c[0] > 200 && c[1] < 60 && c[2] < 60
+}
+
+fn blueish(c: [u32; 3]) -> bool {
+    c[2] > 200 && c[0] < 60 && c[1] < 60
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_desktop_client_watches_decodes_and_stops_watching_a_share() {
+    let (_s, mut a, b) = two().await;
+    let room = a.room("general");
+    let bob = b.id();
+    let mut b = Sharer::new(b);
+    let mut seen = Seen::default();
+
+    // Ann (desktop) is in the call first; bob joins with video, so the SFU renegotiates ann's video m-line.
+    let cmds = a.model.join_voice(room);
+    a.run(cmds);
+    until(&mut a, &mut b, &mut seen, "ann connected", |a, _, _| {
+        a.model.call.connected
+    })
+    .await;
+    b.signal(ClientMsg::Join {
+        room_id: room,
+        offer: b.offer.clone(),
+    });
+    until(&mut a, &mut b, &mut seen, "bob connected", |_, b, _| {
+        b.media().connected
+    })
+    .await;
+    b.signal(ClientMsg::ShareStart {
+        fps: 30,
+        bitrate_kbps: 1000,
+    });
+    until(
+        &mut a,
+        &mut b,
+        &mut seen,
+        "ann sees bob share",
+        |a, _, _| !a.model.sharers().is_empty(),
+    )
+    .await;
+    assert_eq!(a.model.sharers()[0].0, bob);
+    assert!(a.model.call.watching.is_none() && seen.0.is_none());
+
+    // Watch, with the view on screen: the server's watch goes out, the SFU asks bob for a keyframe, and red
+    // pictures of bob's size come.
+    let now = Instant::now();
+    let mut cmds = a.model.set_share_visible(true, now);
+    cmds.extend(a.model.watch(Some(bob.clone()), now));
+    a.run(cmds);
+    until(&mut a, &mut b, &mut seen, "red pictures", |a, b, s| {
+        a.model.call.frames >= 5 && s.colour().is_some_and(reddish) && b.watchers == 1
+    })
+    .await;
+    let (id, w, h, _) = seen.0.clone().unwrap();
+    assert_eq!((id.as_str(), w, h), (bob.as_str(), W, H));
+    println!("red came out as {:?} (RGB)", seen.colour().unwrap());
+    assert!(
+        b.media().keyframe_requests >= 1,
+        "the watch asked for a keyframe"
+    );
+
+    // The picture follows the share.
+    b.media().colour = BLUE;
+    until(&mut a, &mut b, &mut seen, "blue pictures", |_, _, s| {
+        s.colour().is_some_and(blueish)
+    })
+    .await;
+    println!("blue came out as {:?} (RGB)", seen.colour().unwrap());
+
+    // Stop watching: after the grace the server's watch off goes, bob has no watcher, and no picture comes.
+    let cmds = a.model.watch(None, Instant::now());
+    a.run(cmds);
+    let cmds = a.model.sync_watches(Instant::now() + WATCH_GRACE);
+    a.run(cmds);
+    until(&mut a, &mut b, &mut seen, "no watcher", |_, b, _| {
+        b.watchers == 0
+    })
+    .await;
+    let (frames, then) = (a.model.call.frames, Instant::now());
+    until(&mut a, &mut b, &mut seen, "half a second", |_, _, _| {
+        then.elapsed() > Duration::from_millis(500)
+    })
+    .await;
+    assert_eq!(a.model.call.frames, frames, "no pictures once unwatched");
+    assert!(a.model.call.frame.is_none());
+
+    // Watch again (a fresh decoder waits for the keyframe the watch asks for), then bob stops: the view clears.
+    seen.0 = None;
+    let cmds = a.model.watch(Some(bob.clone()), Instant::now());
+    a.run(cmds);
+    until(&mut a, &mut b, &mut seen, "pictures again", |a, _, s| {
+        a.model.call.frames >= 2 && s.colour().is_some_and(blueish)
+    })
+    .await;
+    b.signal(ClientMsg::ShareStop);
+    until(&mut a, &mut b, &mut seen, "the view cleared", |a, _, _| {
+        a.model.call.watching.is_none()
+    })
+    .await;
+    assert_eq!(a.model.call.share_notice, "bob stopped sharing.");
+    assert!(a.model.call.frame.is_none() && a.model.call.frames == 0);
+    assert_eq!(a.model.call.phase, Phase::Joined, "the call goes on");
+
+    // The desktop client's video m-line only receives: the SFU offered bob no video from it.
+    assert_eq!(b.media().remote_video, 0);
+}

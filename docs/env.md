@@ -58,6 +58,9 @@ requests, so other GETs are not checked. Clients that are not browsers, such as 
 | `VESPER_CAP_MIB` | Memory cap for capped commands, in MiB. | `8192` | `scripts/capped.sh` |
 | `VESPER_SERVER_BIN` | Server binary the e2e tests start. Relative paths start from `web/`. `push.mjs` needs a debug build with the `test-push` feature and defaults to `../target/debug/vesper-server`. | `../target/release/vesper-server` | `web/e2e/lib.mjs`, `web/e2e/push.mjs` |
 | `E2E_CHROMIUM` | Path to a Chromium the e2e tests launch instead of the one Playwright downloaded. Local use only. | unset | `web/e2e/lib.mjs` |
+| `VESPER_DESKTOP_BIN` | Desktop app the parity harness starts. It must be a debug build (the `VESPER_DEV_*` hooks). | `../desktop/target/debug/vesper-desktop` | `web/e2e/parity.mjs` |
+| `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD` | Debug builds of the desktop app sign in with these once the sign in screen shows. The parity harness sets them; never put a real password here. | unset | `desktop/src/ui/dev.rs` |
+| `VESPER_DEV_SCENE` | Debug builds of the desktop app: `sign-in`, `room:<name>` or `settings`, then `VESPER_DEV_READY` on stderr. | unset | `desktop/src/ui/dev.rs` |
 
 ## Not environment variables
 
