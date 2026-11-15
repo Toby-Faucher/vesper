@@ -67,16 +67,17 @@
   onMount(() => heading?.focus());
 </script>
 
+<!-- The step count sits with the buttons that move between steps, not above the heading. -->
+{#snippet count()}<span class="mr-2 text-sm text-fg-3 tabular-nums">Step {step} of 3</span>{/snippet}
+
 <AuthCard wide pane>
-  <!-- The step count heads the card, so it reads with the step rather than floating outside it. -->
-  <p class="mb-2 text-sm text-fg-3 tabular-nums">Step {step} of 3</p>
   {#if step === 1}
     <form onsubmit={saveProfile} class="flex flex-col gap-5">
       <div>
         <h1 bind:this={heading} tabindex="-1" class="text-xl font-semibold text-fg outline-none">How others see you</h1>
         <p class="mt-2 text-fg-2">Your name and colour show next to your messages and in voice.</p>
       </div>
-      <div class="flex items-center gap-3 rounded-md bg-app p-3" aria-hidden="true">
+      <div class="flex items-center gap-3" aria-hidden="true">
         <Avatar user={{ user_id: me.user_id, display_name: name || me.username, accent: SLOT_HEX[slot - 1] }} size={40} />
         <span class="min-w-0 truncate text-base font-medium text-fg">{name || me.username}</span>
       </div>
@@ -86,7 +87,7 @@
       <Swatches bind:slot />
       <div class="flex items-center gap-2 pt-1">
         <span class="-ml-3"><Button variant="ghost" onclick={finish}>Skip for now</Button></span>
-        <span class="ml-auto"></span>
+        <span class="ml-auto">{@render count()}</span>
         <Button variant="primary" type="submit" loading={saving}>Next</Button>
       </div>
     </form>
@@ -99,7 +100,7 @@
       <MicCheck settings={voice.settings} onchange={updateSettings} liveStream={voice.mic} liveCapture={voice.capture} marker={false} />
       <div class="flex items-center gap-2 pt-1">
         <span class="-ml-3"><Button variant="ghost" onclick={finish}>Skip for now</Button></span>
-        <span class="ml-auto"></span>
+        <span class="ml-auto">{@render count()}</span>
         <Button onclick={() => go(1)}>Back</Button>
         <Button variant="primary" onclick={() => go(3)}>Next</Button>
       </div>
@@ -117,7 +118,7 @@
       </div>
       <div class="flex items-center gap-2 pt-1">
         <span class="-ml-3"><Button variant="ghost" onclick={finish}>Skip for now</Button></span>
-        <span class="ml-auto"></span>
+        <span class="ml-auto">{@render count()}</span>
         <Button onclick={() => go(2)}>Back</Button>
         <Button variant="primary" onclick={finish}>Open Vesper</Button>
       </div>
