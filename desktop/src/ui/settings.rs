@@ -671,8 +671,11 @@ impl Vesper {
         );
         let gliding = slide.gliding();
         let nav = (!nav.is_empty()).then(|| {
-            let list = v_flex().w(px(200.)).flex_none().gap(px(1.)).children(
-                nav.into_iter().enumerate().map(|(i, (to, name))| {
+            // The gliding fill first, so it paints under the names.
+            let list = v_flex().w(px(200.)).flex_none().gap(px(1.));
+            slide
+                .under(list, t.radius_sm, selected, window, cx)
+                .children(nav.into_iter().enumerate().map(|(i, (to, name))| {
                     let current = to == at;
                     let sel = format!("nav-{}", name.to_lowercase().replace(' ', "-"));
                     let fg = t.fg;
@@ -693,9 +696,7 @@ impl Vesper {
                         )
                         .child(slide.track(i))
                         .child(name)
-                }),
-            );
-            slide.under(list, t.radius_sm, selected, window, cx)
+                }))
         });
         let content = v_flex()
             .flex_1()

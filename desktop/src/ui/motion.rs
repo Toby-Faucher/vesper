@@ -358,7 +358,8 @@ impl Slide {
         self.0.borrow().from.is_some()
     }
 
-    /// `container` (positioned) with the gliding fill under its options: `radius` and `color` are the option's fill.
+    /// `container` with the gliding fill: call it before adding the options, so the fill paints under them.
+    /// `radius` and `color` are the option's fill.
     pub fn under(
         &self,
         container: Div,
