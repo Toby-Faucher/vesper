@@ -194,7 +194,12 @@ impl Vesper {
         let card = self.render_person(window, cx);
         let confirm = self.person_confirm(cx);
         let ring = self.render_ring(window, cx);
-        shell.children(card).children(confirm).children(ring)
+        let layer = self.render_layer(window, cx);
+        shell
+            .children(card)
+            .children(confirm)
+            .children(ring)
+            .children(layer)
     }
 
     /// Where the last saved file went, with Show in folder (the desktop's own: the web's browser shows downloads).
@@ -265,9 +270,9 @@ impl Vesper {
     }
 
     /// `RoomHeader.svelte`: 48 px, 16 px sides, 12 px gap, a `--line-subtle` rule under it. The name (16/24,
-    /// `--weight-strong`), a DM's or a restricted room's note, then Pins and Join voice at the right. Join voice is
-    /// not there in this room's call (the call bar has Leave) and is secondary while in a call elsewhere. Search is
-    /// the web's (the desktop has no message search yet).
+    /// `--weight-strong`), a DM's or a restricted room's note, then Pins, Search and Join voice at the right. Join voice is
+    /// not there in this room's call (the call bar has Leave) and is secondary while in a call elsewhere. Search opens
+    /// the search dialog.
     fn room_header(&mut self, room: &RoomInfo, cx: &mut Context<Self>) -> Div {
         let t = tokens(cx).clone();
         let popover = self.render_pins(cx);
@@ -354,6 +359,15 @@ impl Vesper {
                     .justify_end()
                     .gap(px(8.))
                     .children(pins)
+                    .child(
+                        div().debug_selector(|| "search-button".into()).child(
+                            c::IconButton::new("search-button", "search")
+                                .pressed(self.find.layer == Some(super::find::Layer::Search))
+                                .on_click(cx.listener(|this, _, w, cx| {
+                                    this.open_layer(super::find::Layer::Search, w, cx)
+                                })),
+                        ),
+                    )
                     .children(join),
             )
     }

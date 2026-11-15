@@ -64,6 +64,9 @@ struct Gate {
 }
 
 /// The server's socket error codes in plain words, as `SIGNAL_MESSAGES` in `web/src/lib/signaling.ts`.
+/// How many older pages a search hit's jump loads at most (50 messages each).
+pub const SEEK_PAGES: u8 = 40;
+
 pub fn signal_text(code: ErrorCode) -> &'static str {
     match code {
         ErrorCode::RoomFull => "This room is full.",
@@ -256,6 +259,8 @@ pub struct Model {
     pub pins: Option<(i64, Option<Vec<Message>>)>,
     /// A loaded message the list scrolls to.
     pub jump: Option<i64>,
+    /// A search hit to scroll to once loaded: room, message id, older pages it may still load.
+    seeking: Option<(i64, i64, u8)>,
     /// Where the last saved file went.
     pub saved: Option<PathBuf>,
     /// When the socket tries again, while offline.
@@ -286,6 +291,7 @@ impl Default for Model {
             focused: true,
             covered: false,
             loading_older: false,
+            seeking: None,
             draft_back: None,
             read_sent: HashMap::new(),
             call: Call::default(),
@@ -492,7 +498,9 @@ impl Model {
                 self.dm_opened = Some(room.id);
             }
         }
-        self.maybe_read()
+        let mut cmds = self.seek_step();
+        cmds.extend(self.maybe_read());
+        cmds
     }
 
     fn server_msg(&mut self, m: ServerMsg) -> Vec<Cmd> {
@@ -1292,6 +1300,50 @@ impl Model {
             self.jump = Some(id);
         }
         found
+    }
+
+    /// A search hit: opens its room and scrolls to it, loading older pages until it is there (at most `SEEK_PAGES`;
+    /// the web loads the page around it instead, which this timeline cannot hold yet).
+    pub fn seek(&mut self, room: i64, id: i64) -> Vec<Cmd> {
+        let mut cmds = self.open_room(room);
+        self.seeking = Some((room, id, SEEK_PAGES));
+        cmds.extend(self.seek_step());
+        cmds
+    }
+
+    /// The next step of `seek`: scroll there when loaded, else the next older page.
+    fn seek_step(&mut self) -> Vec<Cmd> {
+        let Some((room, id, left)) = self.seeking else {
+            return vec![];
+        };
+        let Some(log) = self
+            .chat
+            .rooms
+            .get(&room)
+            .filter(|_| self.active == Some(room))
+        else {
+            self.seeking = None;
+            return vec![];
+        };
+        if log.messages.iter().any(|m| m.id == id) {
+            (self.jump, self.seeking) = (Some(id), None);
+            return vec![];
+        }
+        let Some(first) = log.messages.first().map(|m| m.id) else {
+            return vec![]; // the first page is on its way
+        };
+        if !log.more_before || left == 0 || first < id {
+            self.seeking = None;
+            return vec![];
+        }
+        if self.loading_older {
+            return vec![]; // the page in flight comes back here
+        }
+        (self.seeking, self.loading_older) = (Some((room, id, left - 1)), true);
+        vec![Cmd::LoadOlder {
+            room,
+            before: first,
+        }]
     }
 
     /// Files (path, size) for the shown room's tray.

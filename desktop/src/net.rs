@@ -614,11 +614,19 @@ impl Api {
     }
 
     /// `GET /api/search`: the fields that are set, as query pairs.
-    pub async fn search(&self, q: &vesper_protocol::SearchQuery) -> Result<vesper_protocol::SearchPage, Fail> {
+    pub async fn search(
+        &self,
+        q: &vesper_protocol::SearchQuery,
+    ) -> Result<vesper_protocol::SearchPage, Fail> {
         let num = |v: Option<i64>| v.map(|n| n.to_string());
         let (room, from, to, before) = (num(q.room_id), num(q.from), num(q.to), num(q.before));
         let mut pairs = vec![("q", q.q.as_str())];
-        for (k, v) in [("room_id", &room), ("from", &from), ("to", &to), ("before", &before)] {
+        for (k, v) in [
+            ("room_id", &room),
+            ("from", &from),
+            ("to", &to),
+            ("before", &before),
+        ] {
             if let Some(v) = v {
                 pairs.push((k, v));
             }
@@ -1153,7 +1161,10 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
         }
         Cmd::Search { seq, q } => {
             let page = api.search(&q).await;
-            (page.as_ref().map(|_| ()).map_err(|f| *f), Event::Searched { seq, page })
+            (
+                page.as_ref().map(|_| ()).map_err(|f| *f),
+                Event::Searched { seq, page },
+            )
         }
         Cmd::Download { id, to, open } => match api.download_to(&id, &to).await {
             Ok(()) => (Ok(()), Event::Downloaded { path: to, open }),

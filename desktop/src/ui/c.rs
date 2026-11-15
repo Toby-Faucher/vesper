@@ -14,8 +14,8 @@ use gpui::{Animation, AnimationExt};
 use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, Entity, Global, Hsla, ImageSource,
     InteractiveElement, IntoElement, ObjectFit, ParentElement, RenderImage, RenderOnce,
-    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, StyledImage,
-    Transformation, Window, div, img, percentage, px, transparent_black,
+    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, StyledImage, Transformation,
+    Window, div, img, percentage, px, transparent_black,
 };
 use gpui_component::StyledExt;
 use gpui_component::input::{Input, InputState};

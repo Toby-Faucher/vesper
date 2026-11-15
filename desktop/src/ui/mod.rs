@@ -7,6 +7,7 @@ mod call;
 mod chat;
 #[cfg(debug_assertions)]
 mod dev;
+mod find;
 pub mod icons;
 mod md;
 pub mod motion;
@@ -57,7 +58,14 @@ actions!(
         ComposerEscape,
         PasteFile,
         Dismiss,
-        ConfirmDialog
+        ConfirmDialog,
+        FindUp,
+        FindDown,
+        FindEnter,
+        FindTab,
+        FindHome,
+        FindEnd,
+        FindBack
     ]
 );
 
@@ -74,6 +82,7 @@ pub fn init(cx: &mut App) {
     theme::apply(cx);
     let input = Some("Composer > Input");
     let edit = Some("EditBox > Input");
+    let find_input = Some("Find > Input");
     // A handler that does not use its key (Up with text in the box) lets it through to the input.
     cx.bind_keys([
         KeyBinding::new("enter", SendMessage, input),
@@ -93,6 +102,15 @@ pub fn init(cx: &mut App) {
         // to close).
         KeyBinding::new("escape", Dismiss, None),
         KeyBinding::new("enter", ConfirmDialog, Some(DIALOG)),
+        // The switcher's and search's field: the rows move, the field keeps the focus.
+        KeyBinding::new("up", FindUp, find_input),
+        KeyBinding::new("down", FindDown, find_input),
+        KeyBinding::new("enter", FindEnter, find_input),
+        KeyBinding::new("tab", FindTab, find_input),
+        KeyBinding::new("home", FindHome, find_input),
+        KeyBinding::new("end", FindEnd, find_input),
+        KeyBinding::new("backspace", FindBack, find_input),
+        KeyBinding::new("escape", Dismiss, find_input),
     ]);
 }
 
@@ -260,6 +278,11 @@ pub struct Vesper {
     anchors: person::Anchors,
     /// The connection banner and the ring prompt's motion.
     banner: banner::Banner,
+    /// The switcher, search or shortcuts layer, and its fields.
+    find: find::Find,
+    find_field: Entity<InputState>,
+    after_field: Entity<InputState>,
+    before_field: Entity<InputState>,
     /// Debug builds: what the parity harness asked for (`VESPER_DEV_*`).
     #[cfg(debug_assertions)]
     dev: dev::Dev,
@@ -320,6 +343,35 @@ impl Vesper {
             subs.push(cx.on_focus(&f, window, |this, w, cx| this.send_typing(w, cx)));
             subs.push(cx.on_blur(&f, window, |this, w, cx| this.send_typing(w, cx)));
         }
+        let find_field = cx.new(|cx| InputState::new(window, cx));
+        let after_field = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD"));
+        let before_field = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD"));
+        subs.push(cx.subscribe_in(
+            &find_field,
+            window,
+            |this, _, e: &InputEvent, window, cx| {
+                if matches!(e, InputEvent::Change) {
+                    this.find_changed(window, cx);
+                }
+            },
+        ));
+        for (f, key) in [
+            (&after_field, crate::searchq::Key::After),
+            (&before_field, crate::searchq::Key::Before),
+        ] {
+            subs.push(
+                cx.subscribe_in(f, window, move |this, _, e: &InputEvent, window, cx| {
+                    if matches!(e, InputEvent::Change) {
+                        this.date_changed(key, window, cx);
+                    }
+                }),
+            );
+        }
+        for i in [&find_field, &after_field, &before_field] {
+            let f = i.read(cx).focus_handle(cx);
+            subs.push(cx.on_focus(&f, window, |this, w, cx| this.send_typing(w, cx)));
+            subs.push(cx.on_blur(&f, window, |this, w, cx| this.send_typing(w, cx)));
+        }
         let list = Self::new_list(false, cx);
         let _ = cmds.send(Cmd::Restore); // the first thing the app asks for: the stored session
         Vesper {
@@ -374,6 +426,10 @@ impl Vesper {
             person_closed: None,
             anchors: Default::default(),
             banner: Default::default(),
+            find: Default::default(),
+            find_field,
+            after_field,
+            before_field,
             #[cfg(debug_assertions)]
             dev: dev::Dev::from_env(),
             _subs: subs,
@@ -435,17 +491,7 @@ impl Vesper {
 
     /// Tells the key thread whether a text input in the active window has focus.
     fn send_typing(&self, window: &Window, cx: &App) {
-        let inputs = [
-            &self.server,
-            &self.username,
-            &self.password,
-            &self.composer,
-            &self.edit,
-        ];
-        let typing = window.is_window_active()
-            && inputs
-                .iter()
-                .any(|i| i.read(cx).focus_handle(cx).is_focused(window));
+        let typing = window.is_window_active() && self.typing(window, cx);
         if let Some(tx) = &self.ptt_tx {
             let _ = tx.send(KeyMsg::Typing(typing));
         }
@@ -471,6 +517,7 @@ impl Vesper {
             }
             Event::Downloaded { path, open: true } if main => cx.open_with_system(path),
             Event::Latest { room, .. } => drop(self.tl.loaded.insert(*room)),
+            Event::Searched { seq, page } => self.searched(*seq, page.clone(), cx),
             _ => {}
         }
         let editing = self.model.editing;
@@ -516,7 +563,9 @@ impl Vesper {
         for i in gone {
             let _ = window.drop_image(i);
         }
-        let cmds = fetch.into_iter().map(|(user_id, version)| Cmd::FetchAvatar { user_id, version });
+        let cmds = fetch
+            .into_iter()
+            .map(|(user_id, version)| Cmd::FetchAvatar { user_id, version });
         self.run(cmds.collect());
     }
 
@@ -559,6 +608,7 @@ impl Vesper {
         self.side = sidebar::Side::default();
         self.banner = Default::default();
         self.person = None;
+        self.find = Default::default();
         self.tl = chat::Tl::default();
         for (_, i) in self.images.drain() {
             if let chat::Img::Ready(i) = i {
@@ -588,6 +638,7 @@ impl Vesper {
             self.composer
                 .update(cx, |i, cx| i.set_value(new, window, cx));
         }
+        crate::switcher::push_recent(&mut self.find.recent, id);
         let cmds = self.model.open_room(id);
         self.run(cmds);
         self.composer.update(cx, |i, cx| i.focus(window, cx));
@@ -622,7 +673,10 @@ impl Vesper {
 
     /// Esc: closes the topmost thing, in the web's order: a dialog, the person card, a menu or popover, the pins,
     /// then declines the ring shown.
-    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find.layer.is_some() {
+            return self.close_layer(window, cx);
+        }
         let m = &mut self.model;
         if m.confirm_delete.is_some() {
             m.cancel_delete();
@@ -953,6 +1007,16 @@ impl Render for Vesper {
         div()
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::confirm_dialog))
+            .on_action(cx.listener(|this, _: &FindUp, _, cx| this.find_move(false, cx)))
+            .on_action(cx.listener(|this, _: &FindDown, _, cx| this.find_move(true, cx)))
+            .on_action(cx.listener(|this, _: &FindEnter, w, cx| this.find_enter(false, w, cx)))
+            .on_action(cx.listener(|this, _: &FindTab, w, cx| this.find_enter(true, w, cx)))
+            .on_action(cx.listener(|this, _: &FindHome, _, cx| this.find_edge(false, cx)))
+            .on_action(cx.listener(|this, _: &FindEnd, _, cx| this.find_edge(true, cx)))
+            .on_action(cx.listener(|this, _: &FindBack, _, cx| this.find_back(cx)))
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                this.shortcut_key(e, window, cx);
+            }))
             .size_full()
             .bg(t.bg_app)
             .text_color(t.fg)

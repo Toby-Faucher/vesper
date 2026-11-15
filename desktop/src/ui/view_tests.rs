@@ -1513,7 +1513,10 @@ fn profile_pictures_follow_their_version(cx: &mut TestAppContext) {
     apply(&view, cx, set(Some("v1")));
     assert_eq!(fetches(&mut rx), ["b@v1"]);
     apply(&view, cx, set(Some("v1")));
-    assert!(fetches(&mut rx).is_empty(), "the same version is not fetched again");
+    assert!(
+        fetches(&mut rx).is_empty(),
+        "the same version is not fetched again"
+    );
     apply(&view, cx, came("v1"));
     assert!(shown(cx));
     apply(&view, cx, set(Some("v2")));
@@ -1526,4 +1529,141 @@ fn profile_pictures_follow_their_version(cx: &mut TestAppContext) {
     apply(&view, cx, set(None));
     assert!(!shown(cx));
     assert!(fetches(&mut rx).is_empty());
+}
+
+/// Ctrl+K opens the switcher over a focused composer, the typed text ranks the rows, Enter opens the room; the `r `
+/// chip scopes it and Backspace removes the chip; Esc closes.
+#[gpui::test]
+fn the_switcher_finds_and_opens_a_room(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    focus_composer(&view, cx);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-k"
+    } else {
+        "ctrl-k"
+    });
+    assert!(cx.debug_bounds("switcher").is_some());
+    cx.simulate_input("hang");
+    view.read_with(cx, |v, cx| {
+        let r = v.switcher_results(cx);
+        assert_eq!(r[0].label, "hangout", "{r:?}");
+    });
+    drain(&mut rx);
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.find.layer, None);
+        assert_eq!(v.model.active, Some(2));
+    });
+
+    view.update_in(cx, |v, w, cx| {
+        v.open_layer(super::find::Layer::Switcher, w, cx)
+    });
+    cx.simulate_input("p ");
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.find.scope_kind(), Some(crate::switcher::Kind::Person));
+        let r = v.switcher_results(cx);
+        assert!(r.iter().all(|i| i.kind == crate::switcher::Kind::Person) && !r.is_empty());
+    });
+    cx.simulate_keystrokes("backspace");
+    view.read_with(cx, |v, _| assert_eq!(v.find.scope_kind(), None));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert_eq!(v.find.layer, None));
+}
+
+/// Search waits 300 ms after typing, drops a late answer, shows the hits, and Enter jumps to the first: its room
+/// opens and older pages load until the message is there.
+#[gpui::test]
+fn search_asks_after_a_pause_and_jumps(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, w, cx| {
+        v.open_layer(super::find::Layer::Search, w, cx)
+    });
+    assert!(cx.debug_bounds("search").is_some());
+    drain(&mut rx);
+    cx.simulate_input("cable");
+    assert!(
+        !drain(&mut rx)
+            .iter()
+            .any(|c| matches!(c, Cmd::Search { .. })),
+        "not before the pause"
+    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(350));
+    cx.run_until_parked();
+    let seq = drain(&mut rx)
+        .into_iter()
+        .find_map(|c| match c {
+            Cmd::Search { seq, q } => {
+                assert_eq!(q.q, "cable");
+                Some(seq)
+            }
+            _ => None,
+        })
+        .expect("a search");
+    let page = |id: i64| -> vesper_protocol::SearchPage {
+        let mut m = msg(id, "b", "the good cable");
+        m["room_id"] = json!(2);
+        serde_json::from_value(
+            json!({ "hits": [{ "message": m, "snippet": "the good \u{2}cable\u{3}" }],
+            "next_before": null }),
+        )
+        .unwrap()
+    };
+    apply(
+        &view,
+        cx,
+        Event::Searched {
+            seq: seq - 1,
+            page: Ok(page(99)),
+        },
+    );
+    view.read_with(cx, |v, _| {
+        assert!(v.find.search.hits.is_empty(), "an older answer is dropped")
+    });
+    apply(
+        &view,
+        cx,
+        Event::Searched {
+            seq,
+            page: Ok(page(5)),
+        },
+    );
+    assert!(cx.debug_bounds("search-hit-0").is_some());
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| assert_eq!(v.find.layer, None));
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(|c| matches!(c, Cmd::LoadLatest(2))),
+        "{cmds:?}"
+    );
+    let older: MessagePage = serde_json::from_value(json!({ "messages": [msg(20, "b", "x")],
+        "more_before": true, "more_after": false }))
+    .unwrap();
+    apply(
+        &view,
+        cx,
+        Event::Latest {
+            room: 2,
+            page: older,
+        },
+    );
+    assert!(drain(&mut rx).iter().any(|c| matches!(
+        c,
+        Cmd::LoadOlder {
+            room: 2,
+            before: 20
+        }
+    )));
+    let mut found = msg(5, "b", "the good cable");
+    found["room_id"] = json!(2);
+    let page: MessagePage =
+        serde_json::from_value(json!({ "messages": [found], "more_before": false,
+        "more_after": false }))
+        .unwrap();
+    view.update_in(cx, |v, window, cx| {
+        v.apply(Event::Older { room: 2, page }, window, cx);
+        assert_eq!(v.model.jump, Some(5));
+    });
 }
