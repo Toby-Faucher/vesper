@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
-pub use device::{Cpal, Resampler, device_names};
+pub use device::{Cpal, Resampler, device_names, useful_names};
 pub use video::Frame;
 
 use crate::settings::Denoise;

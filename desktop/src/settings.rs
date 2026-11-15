@@ -38,6 +38,13 @@ pub struct Settings {
     pub volumes: HashMap<String, f32>,
     /// The sidebar is hidden (the web keeps this in localStorage).
     pub sidebar_collapsed: bool,
+    /// Settings > Appearance, on this device only like the web's `vesper.style` and `vesper.scheme`: a style id, and
+    /// `dark`, `light` or `system`.
+    pub style: String,
+    pub scheme: String,
+    /// Settings > Notifications: the ring of a DM call, and its volume, 0 to 100 (the web's `vesper.notify`).
+    pub ring: bool,
+    pub volume: u32,
 }
 
 impl Default for Settings {
@@ -54,6 +61,10 @@ impl Default for Settings {
             start_with_computer: false,
             volumes: HashMap::new(),
             sidebar_collapsed: false,
+            style: "vesper".into(),
+            scheme: "dark".into(),
+            ring: true,
+            volume: 50,
         }
     }
 }
@@ -61,6 +72,7 @@ impl Default for Settings {
 impl Settings {
     pub fn clamped(mut self) -> Settings {
         self.bitrate_kbps = self.bitrate_kbps.clamp(32, 510);
+        self.volume = self.volume.min(100);
         if crate::voice::ptt::parse_key(&self.ptt_key).is_none() {
             self.ptt_key = Settings::default().ptt_key;
         }
@@ -160,6 +172,10 @@ mod tests {
             start_with_computer: true,
             volumes: HashMap::from([("0123456789abcdef0123456789abcdef".into(), 250.0)]),
             sidebar_collapsed: true,
+            style: "cozy".into(),
+            scheme: "system".into(),
+            ring: false,
+            volume: 30,
         };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);

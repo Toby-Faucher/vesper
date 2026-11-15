@@ -2,7 +2,8 @@
 //! triangle notes 40 ms apart, each a 10 ms rise then an exponential fall, at the web's default volume (50: a peak of
 //! 0.08). It plays on the chosen speakers, on a thread of its own, apart from a call's audio.
 //!
-//! Not here: the web's other call sounds (join, leave, mute, connect) and the Settings switch and volume for them.
+//! Not here: the web's other call sounds (join, leave, mute, connect). Settings > Notifications has the ring's switch
+//! and volume.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,8 +47,9 @@ pub fn ring() -> Vec<f32> {
         .collect()
 }
 
-/// Plays the ring once on `speakers` (none: the default). A device that does not open plays nothing.
-pub fn play_ring(audio: Arc<dyn AudioDevices>, speakers: Option<String>) {
+/// Plays the ring once on `speakers` (none: the default) at `volume` (0 to 100; 50 is [`ring`]'s own level). A device
+/// that does not open plays nothing.
+pub fn play_ring(audio: Arc<dyn AudioDevices>, speakers: Option<String>, volume: u32) {
     let _ = std::thread::Builder::new()
         .name("vesper-ring".into())
         .spawn(move || {
@@ -55,7 +57,9 @@ pub fn play_ring(audio: Arc<dyn AudioDevices>, speakers: Option<String>) {
                 return;
             };
             // In 20 ms steps: the output keeps 200 ms at most.
-            for chunk in ring().chunks(FRAME) {
+            let gain = volume.min(100) as f32 / 50.;
+            let samples: Vec<f32> = ring().into_iter().map(|s| s * gain).collect();
+            for chunk in samples.chunks(FRAME) {
                 out.write(chunk);
                 std::thread::sleep(Duration::from_millis(20));
             }

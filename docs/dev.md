@@ -114,9 +114,9 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   after a day).
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
   Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
-- Settings (the gear next to your name; Log out is in the menu on your name) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
+- Settings (the gear next to your name; Admin for staff, Desktop app and Log out are in the menu on your name) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
   `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets. It also keeps whether the sidebar is hidden
-  (the web keeps that in localStorage). It is written to a temporary file and renamed. A value the app cannot read falls
+  (the web keeps that in localStorage), the style and colour scheme, and the ring's switch and volume. It is written to a temporary file and renamed. A value the app cannot read falls
   back to its default alone; a file that is not JSON is kept as `settings.json.bad`.
 - DeepFilterNet runs natively (`vesper-dsp` with tract, the same `=0.21.4` pin and debug-assertions override as the root
   workspace). The app does not ship the model: at the first call it downloads `/dsp/model.tar.gz` from the server it is signed
@@ -154,7 +154,7 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   account is in one call at a time, so in the call scenes the web account leaves the call after its picture and the
   desktop's same account joins it. The desktop runs with the web scenes' clock (7:41 PM) and an en-US locale. It needs `sway` and `grim`; verified on the
   dev machine (Arch, no X). A debug build reads `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD` and
-  `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`) to get into a scene without typing, and `VESPER_DEV_CLOCK`,
+  `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`, `settings:<section>`, `admin:<section>`) to get into a scene without typing, and `VESPER_DEV_CLOCK`,
   `VESPER_DEV_SHIFT`, `VESPER_DEV_EMPTY`, `VESPER_DEV_DRAFT`, `VESPER_DEV_PINS`, `VESPER_DEV_TYPING` and `VESPER_DEV_TRAY` for
   the clock, older days, an empty room, a draft, the pins list, someone typing and the upload tray, and `VESPER_DEV_VOICE`
   (join voice in a room on a silent fake microphone and speakers that play nothing: a real call through the server, no

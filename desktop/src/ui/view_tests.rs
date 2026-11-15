@@ -530,8 +530,9 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
     for s in [
         "settings",
         "settings-bitrate",
-        "settings-mic-0",
+        "settings-mic",
         "settings-speakers",
+        "settings-missing",
     ] {
         assert!(cx.debug_bounds(s).is_some(), "{s} is drawn");
     }
@@ -539,11 +540,22 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
         cx.debug_bounds("settings-ptt-key").is_none(),
         "voice activity: no key"
     );
+    assert!(
+        cx.debug_bounds("settings-mic-1").is_none(),
+        "the list is closed"
+    );
 
-    click(cx, "settings-gate");
-    click(cx, "settings-echo-off");
-    click(cx, "settings-mic-0");
+    // The dropdowns: open, pick, closed again.
+    click(cx, "settings-noise");
+    click(cx, "settings-noise-1");
+    view.read_with(cx, |v, _| {
+        assert!(v.page.select.is_none(), "picking closes it")
+    });
+    click(cx, "settings-echo");
+    click(cx, "settings-mic");
+    click(cx, "settings-mic-1");
     click(cx, "settings-speakers");
+    click(cx, "settings-speakers-0");
     view.read_with(cx, |v, _| {
         let s = &v.model.settings;
         assert_eq!(s.denoise, Denoise::Gate);
@@ -571,6 +583,15 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
         assert!(v.model.settings.push_to_talk && !v.capturing_key);
     });
     assert!(watched.try_iter().all(|m| m == KeyMsg::Watch(None)));
+
+    // Reset to defaults asks first, then puts Talk mode back (push to talk off), not the devices.
+    click(cx, "reset-talk-mode");
+    click(cx, "reset-confirm");
+    view.read_with(cx, |v, _| {
+        let s = &v.model.settings;
+        assert!(!s.push_to_talk && s.input_device.is_some());
+    });
+    click(cx, "settings-ptt");
 
     // Out of the settings, the window's own V presses and releases push to talk (Wayland has only these).
     click(cx, "settings-close");
@@ -1473,4 +1494,173 @@ fn a_lost_session_resets_the_view(cx: &mut TestAppContext) {
         assert!(v.images.is_empty() && v.drafts.is_empty());
         assert_eq!(v.composer.read(cx).value(), "");
     });
+}
+
+/// The device lists drop ALSA's plugins and the same card listed under several ids, and keep the order.
+#[test]
+fn device_lists_keep_only_real_devices_once() {
+    let pairs = [
+        (
+            "null",
+            "Discard all samples (playback) or generate zero samples (capture)",
+        ),
+        (
+            "lavrate",
+            "Rate Converter Plugin Using Libav/FFmpeg Library",
+        ),
+        ("jack", "JACK Audio Connection Kit"),
+        ("pipewire", "PipeWire Sound Server"),
+        (
+            "default",
+            "Default ALSA Output (currently PipeWire Media Server)",
+        ),
+        ("sysdefault:CARD=PCH", "HDA Intel PCH, ALC3234 Analog"),
+        ("front:CARD=PCH,DEV=0", "HDA Intel PCH, ALC3234 Analog"),
+        ("dmix:CARD=PCH,DEV=0", "HDA Intel PCH, ALC3234 Analog"),
+        ("hdmi:CARD=PCH,DEV=0", "HDA Intel PCH, HDMI 0"),
+        ("hw:CARD=PCH,DEV=0", "HDA Intel PCH, ALC3234 Analog"),
+        ("{0.0.1.00000000}.{abc}", "Speakers (Realtek Audio)"),
+    ];
+    let names =
+        crate::voice::useful_names(pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())));
+    assert_eq!(
+        names,
+        [
+            "PipeWire Sound Server",
+            "HDA Intel PCH, ALC3234 Analog",
+            "HDA Intel PCH, HDMI 0",
+            "Speakers (Realtek Audio)"
+        ]
+    );
+}
+
+/// Admin is in the account menu for staff only; a moderator gets Invites and Members, the owner every section, and
+/// a moderator sent to an owner page is told so.
+#[gpui::test]
+fn admin_opens_by_role(cx: &mut TestAppContext) {
+    use super::admin::{Section, sections_for};
+    use super::settings::At;
+    use vesper_protocol::Role;
+
+    assert!(sections_for(Role::Member).is_empty());
+    assert_eq!(
+        sections_for(Role::Moderator),
+        [Section::Invites, Section::Members]
+    );
+    assert_eq!(sections_for(Role::Owner).len(), 5);
+
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    click(cx, "account");
+    assert!(
+        cx.debug_bounds("menu-admin").is_none(),
+        "a member has no Admin"
+    );
+
+    view.update(cx, |v, cx| {
+        v.side.account_open = false;
+        let id = v.model.state.my_id().to_string();
+        v.model.state.users.get_mut(&id).unwrap().role = Role::Moderator;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    drain(&mut rx);
+    click(cx, "account");
+    click(cx, "menu-admin");
+    assert!(cx.debug_bounds("nav-invites").is_some() && cx.debug_bounds("nav-members").is_some());
+    assert!(
+        cx.debug_bounds("nav-rooms").is_none(),
+        "Rooms is the owner's"
+    );
+    let paths: Vec<String> = drain(&mut rx)
+        .into_iter()
+        .filter_map(|c| match c {
+            Cmd::Http { path, .. } => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths, ["/api/invites", "/api/users"]);
+
+    view.update_in(cx, |v, window, cx| {
+        v.open_page(At::Admin(Section::Server), window, cx)
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("admin-denied").is_some());
+    assert!(
+        drain(&mut rx).is_empty(),
+        "nothing asked for a page it cannot open"
+    );
+}
+
+/// An invite link comes back once: shown with Copy link, never kept past Done.
+#[gpui::test]
+fn a_new_invite_link_shows_once(cx: &mut TestAppContext) {
+    use super::admin::Section;
+    use super::settings::At;
+    use vesper_protocol::Role;
+
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        let id = v.model.state.my_id().to_string();
+        v.model.state.users.get_mut(&id).unwrap().role = Role::Owner;
+        v.open_page(At::Admin(Section::Invites), window, cx);
+    });
+    cx.run_until_parked();
+    apply(
+        &view,
+        cx,
+        Event::Http {
+            tag: "admin:invites".into(),
+            result: Ok(crate::net::Json(json!([]))),
+        },
+    );
+    drain(&mut rx);
+    click(cx, "invite-create");
+    let sent = drain(&mut rx);
+    assert!(
+        matches!(sent.as_slice(), [Cmd::Http { path, body: Some(b), .. }]
+            if path == "/api/invites" && b.0 == json!({ "role": "member", "max_uses": 1, "expires_hours": 168 })),
+        "{sent:?}"
+    );
+    let info = json!({ "id": 9, "role": "member", "uses": 0, "max_uses": 1, "expires_at": 4_000_000_000_000_i64,
+                       "created_by": "a", "revoked": false });
+    let created = json!({ "info": info, "url": "https://v.example/invite#test-code" });
+    apply(
+        &view,
+        cx,
+        Event::Http {
+            tag: "admin:create".into(),
+            result: Ok(crate::net::Json(created)),
+        },
+    );
+    assert!(cx.debug_bounds("admin-link").is_some());
+    let shown = format!("{sent:?}");
+    assert!(!shown.contains("test-code"));
+    click(cx, "link-done");
+    view.read_with(cx, |v, _| assert!(v.page.admin_link_gone()));
+}
+
+/// Settings > Account starts from your profile and saves only what changed.
+#[gpui::test]
+fn the_account_form_starts_from_the_profile(cx: &mut TestAppContext) {
+    use super::settings::{At, Section};
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        v.open_page(At::Settings(Section::Account), window, cx)
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.input_text("account-name", cx), "Ann")
+    });
+    drain(&mut rx);
+    click(cx, "swatch-3");
+    click(cx, "account-save");
+    let sent = drain(&mut rx);
+    assert!(
+        matches!(sent.as_slice(), [Cmd::Http { path, body: Some(b), .. }]
+            if path == "/api/me" && b.0 == json!({ "accent": "#99b860" })),
+        "{sent:?}"
+    );
 }

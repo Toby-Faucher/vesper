@@ -1,6 +1,8 @@
 //! The window: one view, `Vesper`, that owns the `Model` and draws the sign in screen or the main screen. Events from
 //! the network thread come in through `listen`; what the model asks for goes out on `cmds`.
 
+mod account;
+mod admin;
 mod banner;
 pub mod c;
 mod call;
@@ -216,7 +218,8 @@ pub struct Vesper {
     key_problem: &'static str,
     key_focus: FocusHandle,
     settings_error: String,
-    bitrate: Option<(Entity<SliderState>, Subscription)>,
+    /// The Settings and Admin pages' own state.
+    page: settings::Page,
     /// To the key thread (none in tests).
     pub ptt_tx: Option<Sender<KeyMsg>>,
     /// A settings save waiting for a slider to stop.
@@ -349,7 +352,7 @@ impl Vesper {
             key_problem: "",
             key_focus: cx.focus_handle(),
             settings_error: String::new(),
-            bitrate: None,
+            page: Default::default(),
             ptt_tx: None,
             watched: Default::default(),
             save_later: None,
@@ -458,6 +461,12 @@ impl Vesper {
         let latest = matches!(ev, Event::Latest { .. });
         // A late answer of a session that ended is not shown.
         let main = self.model.screen == Screen::Main;
+        if let Event::Http { tag, result } = ev {
+            if main {
+                self.http_answer(&tag, result, window, cx);
+            }
+            return;
+        }
         match &ev {
             Event::Image { id, picture } if main => self.image_loaded(id, picture.clone(), window),
             Event::Downloaded { path, open: true } if main => cx.open_with_system(path),
@@ -492,6 +501,7 @@ impl Vesper {
             self.composer
                 .update(cx, |i, cx| i.set_value(text, window, cx));
         }
+        self.sync_look(window, cx);
         #[cfg(debug_assertions)]
         self.dev_step(latest, window, cx);
         cx.notify();
@@ -533,6 +543,7 @@ impl Vesper {
     fn reset_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.drafts.clear();
         self.settings_open = false;
+        self.page = Default::default();
         self.side = sidebar::Side::default();
         self.banner = Default::default();
         self.person = None;
@@ -599,7 +610,10 @@ impl Vesper {
 
     /// Esc: closes the topmost thing, in the web's order: a dialog, the person card, a menu or popover, the pins,
     /// then declines the ring shown.
-    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page_escape(window, cx) {
+            return;
+        }
         let m = &mut self.model;
         if m.confirm_delete.is_some() {
             m.cancel_delete();
@@ -655,15 +669,16 @@ impl Vesper {
         if let Some(t) = &self._tray {
             let _ = t.set_tooltip(Some(tip));
         }
-        let (audio, speakers) = (
-            self.audio.clone(),
+        let (audio, speakers, volume) = (
+            self.audio.clone().filter(|_| self.model.settings.ring),
             self.model.settings.output_device.clone(),
+            self.model.settings.volume,
         );
         self.ring_sound = ring.map(|room| {
             let task = cx.spawn(async move |_, cx| {
                 loop {
                     if let Some(a) = &audio {
-                        sound::play_ring(a.clone(), speakers.clone());
+                        sound::play_ring(a.clone(), speakers.clone(), volume);
                     }
                     cx.background_executor().timer(sound::RING_EVERY).await;
                 }

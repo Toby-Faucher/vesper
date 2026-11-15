@@ -5,7 +5,7 @@
 //!
 //! A click on a person in voice opens their card (`person.rs`); the people in your call show their connection.
 //!
-//! Not here (no desktop feature behind them yet): the switcher button (Ctrl K), Admin in the account menu, the half-strength fill of the row the pointer heads for (`intent.ts`).
+//! Not here (no desktop feature behind them yet): the switcher button (Ctrl K), the half-strength fill of the row the pointer heads for (`intent.ts`).
 //!
 //! No `ml_auto()` here: taffy drops the flex gaps before an auto margin, so what the web pushes right with `ml-auto`
 //! sits after a `flex_1` item instead.
@@ -468,7 +468,8 @@ impl Vesper {
             .into_any_element()
     }
 
-    /// The account menu over the account button (`Menu.svelte` placed above, 4 px off): Log out. Admin is the web's.
+    /// The account menu over the account button (`Menu.svelte` placed above, 4 px off): Admin (staff only), Desktop
+    /// app, Log out.
     fn account_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         deferred(
             anchored().anchor(Corner::BottomLeft).child(
@@ -481,6 +482,32 @@ impl Vesper {
                             this.side.menu_closed_at = Some(Instant::now());
                             cx.notify();
                         }))
+                        .when(self.my_role() != vesper_protocol::Role::Member, |d| {
+                            d.child(
+                                div().debug_selector(|| "menu-admin".into()).child(
+                                    MenuItem::new("menu-admin", "Admin")
+                                        .icon("shield")
+                                        .on_select(cx.listener(|this, _, window, cx| {
+                                            this.side.account_open = false;
+                                            let to = super::settings::At::Admin(
+                                                super::admin::Section::Invites,
+                                            );
+                                            this.open_page(to, window, cx)
+                                        })),
+                                ),
+                            )
+                        })
+                        .child(
+                            MenuItem::new("menu-desktop", "Desktop app")
+                                .icon("download")
+                                .on_select(cx.listener(|this, _, window, cx| {
+                                    this.side.account_open = false;
+                                    let to = super::settings::At::Settings(
+                                        super::settings::Section::Desktop,
+                                    );
+                                    this.open_page(to, window, cx)
+                                })),
+                        )
                         .child(
                             MenuItem::new("sign-out", "Log out")
                                 .icon("logOut")

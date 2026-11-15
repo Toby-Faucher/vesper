@@ -49,14 +49,10 @@ impl Vesper {
         self.sync_share(window, cx);
         let banner = self.render_banner(window, cx);
         if self.settings_open {
-            let settings = self.render_settings(cx);
-            let collapsed = self.collapsed_header(cx);
-            let main = self
-                .main_pane(window, cx)
-                .children(banner)
-                .children(collapsed)
-                .child(settings);
-            let shell = self.shell(main, window, cx);
+            let page = self.render_page(window, cx);
+            let main = self.main_pane(window, cx).children(banner).child(page);
+            let dialog = self.page_dialog(window, cx);
+            let shell = self.shell(main, window, cx).children(dialog);
             return self.overlays(shell, window, cx);
         }
         self.sync_list(cx);
@@ -236,7 +232,7 @@ impl Vesper {
     }
 
     /// The Show sidebar button the web puts at the left of a page header while the sidebar is hidden.
-    fn show_sidebar(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn show_sidebar(&self, cx: &mut Context<Self>) -> Option<Div> {
         self.model.settings.sidebar_collapsed.then(|| {
             div()
                 .ml(px(-8.))

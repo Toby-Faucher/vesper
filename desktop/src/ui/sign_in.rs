@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Context, Div, Image, ImageFormat, InteractiveElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, img, px, rgb,
+    StatefulInteractiveElement, Styled, Window, div, img, px,
 };
 
 use super::Vesper;
@@ -158,21 +158,3 @@ impl Vesper {
         div().size_full().child(page)
     }
 }
-
-/// A line of text in `color`, left out when empty.
-pub(super) trait TextLine: ParentElement + Sized {
-    fn when_some_text(self, text: &str, color: u32, selector: &'static str) -> Self {
-        if text.is_empty() {
-            return self;
-        }
-        self.child(
-            div()
-                .debug_selector(|| selector.into())
-                .text_size(px(13.))
-                .text_color(rgb(color))
-                .child(text.to_string()),
-        )
-    }
-}
-
-impl<T: ParentElement + Sized> TextLine for T {}

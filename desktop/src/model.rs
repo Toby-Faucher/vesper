@@ -475,6 +475,8 @@ impl Model {
                 self.person_busy = "";
                 self.person_error = r.err().unwrap_or_default();
             }
+            // The pages' own requests: the view takes their answers.
+            Event::Http { .. } => {}
             Event::DmOpened(room) => {
                 self.person_busy = "";
                 if !self.state.dms.iter().any(|d| d.id == room.id) {

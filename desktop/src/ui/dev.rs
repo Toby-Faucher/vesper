@@ -3,7 +3,8 @@
 //!
 //! - `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD`: sign in with these once the sign in screen shows.
 //! - `VESPER_DEV_SCENE`: `sign-in` (stay there), or after signing in `room:<name>` (and wait for its messages),
-//!   `settings`, or anything else for the main screen as it opens.
+//!   `settings`, `settings:<section>` (`voice`, `notifications`, `appearance`, `account`, `desktop`), `admin:<section>`
+//!   (`invites`, `members`, `rooms`, `disk`, `server`), or anything else for the main screen as it opens.
 //! - `VESPER_DEV_CLOCK`: `HH:MM`, the time every message shows (the web scenes pin 7:41 PM). Dates are left alone.
 //! - `VESPER_DEV_SHIFT`: `id:days,...`, messages moved back that many days (the web harness does the same to its pages).
 //! - `VESPER_DEV_EMPTY`: the room has no messages: ready once its first page came.
@@ -278,10 +279,32 @@ impl Vesper {
                 if self.model.screen == Screen::Main && !self.model.state.rooms.is_empty() =>
             {
                 match self.dev.scene.as_deref().unwrap_or("") {
-                    "settings" => {
-                        self.open_settings(window, cx);
+                    s if s == "settings"
+                        || s.starts_with("settings:")
+                        || s.starts_with("admin:") =>
+                    {
+                        use super::settings::{At, Section};
+                        let s = s.to_string();
+                        let s = s.as_str();
+                        let (page, section) = s.split_once(':').unwrap_or((s, "voice"));
+                        let at = if page == "admin" {
+                            super::admin::Section::from_id(section).map(At::Admin)
+                        } else {
+                            Section::from_id(section).map(At::Settings)
+                        };
+                        self.model.not_remembered = false;
+                        self.open_page(at.unwrap_or_default(), window, cx);
+                        // Nothing focused, as the web scenes' rest(); the lists the page asked for come before READY.
+                        self.key_focus.focus(window);
                         self.dev.step = Step::Done;
-                        ready("settings");
+                        let s = s.to_string();
+                        cx.spawn(async move |_, cx| {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(1500))
+                                .await;
+                            ready(&s);
+                        })
+                        .detach();
                     }
                     s if s.starts_with("room:") => {
                         let name = &s["room:".len()..];

@@ -106,6 +106,23 @@ pub enum Cmd {
     OpenDm(String),
     /// Offline: try the socket now, not at the end of the wait.
     RetryNow,
+    /// Any other JSON route (the Settings and admin pages). The answer comes back as `Event::Http` with `tag`.
+    Http {
+        tag: String,
+        method: Method,
+        path: String,
+        body: Option<Json>,
+    },
+}
+
+/// A JSON body or answer that may hold a password, an invite or a reset link: `Debug` never prints it.
+#[derive(Clone, PartialEq)]
+pub struct Json(pub Value);
+
+impl std::fmt::Debug for Json {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***")
+    }
 }
 
 /// From the network thread to the UI.
@@ -198,6 +215,11 @@ pub enum Event {
     /// A moderator action's answer: the error in words when it failed.
     Moderated(Result<(), String>),
     DmOpened(Box<vesper_protocol::RoomInfo>),
+    /// The answer to `Cmd::Http` with the same `tag`.
+    Http {
+        tag: String,
+        result: Result<Json, Fail>,
+    },
     /// From the call started with `VoiceCmd::Start { call, .. }`.
     Voice {
         call: u64,
@@ -1100,6 +1122,22 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
                 Ok(room) => (Ok(()), Event::DmOpened(Box::new(room))),
                 Err(f) => (Err(f), Event::Moderated(Err(f.text().into()))),
             }
+        }
+        Cmd::Http {
+            tag,
+            method,
+            path,
+            body,
+        } => {
+            let r = api.call::<Value>(method, &path, body.map(|b| b.0)).await;
+            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+            (
+                res,
+                Event::Http {
+                    tag,
+                    result: r.map(Json),
+                },
+            )
         }
         Cmd::MarkRead { room, id } => match api.mark_read(room, id).await {
             Ok(()) => return,

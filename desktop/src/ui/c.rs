@@ -12,8 +12,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{Animation, AnimationExt};
 use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, Entity, Hsla, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
-    Transformation, Window, div, percentage, px, transparent_black,
+    ParentElement, Pixels, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement,
+    Styled, Transformation, Window, anchored, deferred, div, percentage, px, transparent_black,
 };
 use gpui_component::StyledExt;
 use gpui_component::input::{Input, InputState};
@@ -412,6 +412,7 @@ pub fn text_input(state: &Entity<InputState>, cx: &App) -> Input {
     let t = tokens(cx);
     // Styled::h, not Input::h (the multi-line height).
     Styled::h(Input::new(state), px(32.))
+        .w_full()
         .px(px(10.))
         .py_0()
         .bg(t.bg_element)
@@ -453,6 +454,8 @@ impl RenderOnce for PasswordInput {
         let (hover, fg) = (t.bg_hover, t.fg);
         div()
             .relative()
+            .flex()
+            .w_full()
             .child(text_input(&self.state, cx).pr(px(64.)))
             .child(
                 div()
@@ -588,11 +591,13 @@ pub fn range(state: &Entity<SliderState>, cx: &App) -> Slider {
     Slider::new(state).bg(t.accent).text_color(t.fg)
 }
 
+/// `avatar.ts` SLOT_HEX: the avatar colour of each slot, as the server stores it.
+pub const SLOT_HEX: [&str; 8] = [
+    "#ed8d7d", "#e5955d", "#99b860", "#6fc082", "#31c3b5", "#41bae4", "#6db0f4", "#e68aaf",
+];
+
 /// `avatar.ts`: the slot (1 to 8) of a user's accent, or a hash of the id for any other accent.
 pub fn avatar_slot(user_id: &str, accent: &str) -> usize {
-    const SLOT_HEX: [&str; 8] = [
-        "#ed8d7d", "#e5955d", "#99b860", "#6fc082", "#31c3b5", "#41bae4", "#6db0f4", "#e68aaf",
-    ];
     let a = accent.trim().to_lowercase();
     if let Some(i) = SLOT_HEX.iter().position(|s| *s == a) {
         return i + 1;
@@ -1021,6 +1026,213 @@ impl RenderOnce for Dialog {
                     .child(div().absolute().top(px(12.)).right(px(12.)).child(close)),
             )
     }
+}
+
+type OnPick = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
+/// `Select.svelte`: the `.control` box (32 px, 10 px left, 32 px right for the chevron in `--fg-3`) with the chosen
+/// option. A click opens the options in a popover under it, `list_width` wide, the chosen one on `--bg-selected` (the
+/// web shows the system's own list). Which select is open is the owner's: `on_toggle` gets the new state.
+#[derive(IntoElement)]
+pub struct Select {
+    id: SharedString,
+    options: Vec<SharedString>,
+    chosen: Option<usize>,
+    open: bool,
+    disabled: bool,
+    list_width: Pixels,
+    on_toggle: Option<OnBool>,
+    on_pick: Option<OnPick>,
+}
+
+impl Select {
+    /// `id` is also the debug selector; option `i` is `<id>-<i>`.
+    pub fn new(
+        id: impl Into<SharedString>,
+        options: impl IntoIterator<Item = impl Into<SharedString>>,
+        chosen: Option<usize>,
+        open: bool,
+    ) -> Self {
+        Select {
+            id: id.into(),
+            options: options.into_iter().map(Into::into).collect(),
+            chosen,
+            open,
+            disabled: false,
+            list_width: px(240.),
+            on_toggle: None,
+            on_pick: None,
+        }
+    }
+    pub fn disabled(mut self, on: bool) -> Self {
+        self.disabled = on;
+        self
+    }
+    pub fn list_width(mut self, w: Pixels) -> Self {
+        self.list_width = w;
+        self
+    }
+    pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_toggle = Some(Rc::new(f));
+        self
+    }
+    pub fn on_pick(mut self, f: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_pick = Some(Rc::new(f));
+        self
+    }
+}
+
+impl RenderOnce for Select {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = tokens(cx);
+        let label = self
+            .chosen
+            .and_then(|i| self.options.get(i).cloned())
+            .unwrap_or_default();
+        let open = self.open && !self.disabled;
+        let toggle = self.on_toggle.clone();
+        let sel = self.id.to_string();
+        let trigger = div()
+            .id(ElementId::Name(self.id.clone()))
+            .debug_selector(move || sel)
+            .relative()
+            .flex()
+            .items_center()
+            .w_full()
+            .h(px(32.))
+            .pl(px(10.))
+            .pr(px(32.))
+            .border_1()
+            .border_color(if open { t.focus } else { t.line })
+            .rounded(t.radius)
+            .bg(t.bg_element)
+            .text_step(TEXT_SM)
+            .text_color(if self.disabled { t.fg_disabled } else { t.fg })
+            .when(self.disabled, |d| d.opacity(0.6))
+            .when_some(toggle.filter(|_| !self.disabled), |d, f| {
+                d.on_click(move |_, w, cx| f(!open, w, cx))
+            })
+            .child(div().min_w_0().ellipsis().child(label))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(8.))
+                    .flex()
+                    .items_center()
+                    .child(icon("chevronDown").text_color(t.fg_3)),
+            );
+        let list = open.then(|| {
+            let (sel, hover) = (t.bg_selected, t.bg_hover);
+            let close = self.on_toggle.clone();
+            let rows = self.options.into_iter().enumerate().map(|(i, o)| {
+                let pick = self.on_pick.clone();
+                let close = self.on_toggle.clone();
+                let selector = format!("{}-{i}", self.id);
+                div()
+                    .id(ElementId::NamedInteger("option".into(), i as u64))
+                    .debug_selector(move || selector)
+                    .flex()
+                    .items_center()
+                    .h(px(32.))
+                    .px(px(8.))
+                    .rounded(t.radius_sm)
+                    .when(self.chosen == Some(i), |d| d.bg(sel))
+                    .hover(move |s| s.bg(hover))
+                    .on_click(move |_, w, cx| {
+                        if let Some(f) = &close {
+                            f(false, w, cx);
+                        }
+                        if let Some(f) = &pick {
+                            f(i, w, cx);
+                        }
+                    })
+                    .child(div().min_w_0().ellipsis().child(o))
+            });
+            deferred(
+                anchored().snap_to_window_with_margin(px(8.)).child(
+                    div().pt(px(4.)).child(
+                        popover_frame(cx)
+                            .id(ElementId::Name(format!("{}-list", self.id).into()))
+                            .w(self.list_width)
+                            .max_w(self.list_width)
+                            .max_h(px(320.))
+                            .overflow_y_scroll()
+                            .on_mouse_down_out(move |_, w, cx| {
+                                if let Some(f) = &close {
+                                    f(false, w, cx);
+                                }
+                            })
+                            .children(rows),
+                    ),
+                ),
+            )
+            .with_priority(2)
+        });
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .child(trigger)
+            .children(list)
+    }
+}
+
+/// `Kbd.svelte`: 20 px tall, at least 20 wide, 4 px sides, `--radius-sm`, a `--line` border with a `--line-strong`
+/// bottom, `--bg-element`, 12/16 `--fg-2`.
+pub fn kbd(text: impl Into<SharedString>, cx: &App) -> Div {
+    let t = tokens(cx);
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .h(px(20.))
+        .min_w(px(20.))
+        .px(px(4.))
+        .rounded(t.radius_sm)
+        .border_1()
+        .border_color(t.line)
+        .bg(t.bg_element)
+        .text_step(TEXT_XS)
+        .text_color(t.fg_2)
+        .child(text.into())
+}
+
+/// A radio `.option` of Settings > Appearance: a 1 px `--line` box, `--radius-md`, 12 px sides, the dot at the left;
+/// checked: `--line-strong` and `--bg-selected`; hover `--bg-hover`.
+pub fn radio_row(id: impl Into<ElementId>, checked: bool, cx: &App) -> gpui::Stateful<Div> {
+    let t = tokens(cx);
+    let hover = t.bg_hover;
+    let dot = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(13.))
+        .rounded_full()
+        .border_1()
+        .border_color(if checked { t.accent } else { t.line_strong })
+        .bg(if checked { t.accent } else { t.bg_element })
+        .when(checked, |d| {
+            d.child(div().size(px(5.)).rounded_full().bg(t.on_accent))
+        });
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .max_w(px(320.))
+        .px(px(12.))
+        .rounded(t.radius)
+        .border_1()
+        .border_color(if checked { t.line_strong } else { t.line })
+        .when(checked, |d| d.bg(t.bg_selected))
+        .when(!checked, |d| d.hover(move |s| s.bg(hover)))
+        .text_step(TEXT_SM)
+        .text_color(t.fg)
+        .child(dot)
 }
 
 /// `Status.svelte`'s kinds.

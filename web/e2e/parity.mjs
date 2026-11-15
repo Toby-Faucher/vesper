@@ -439,7 +439,26 @@ const SCENES = {
     },
     desktop: { user: 'alice', scene: 'room:general', settings: { sidebar_collapsed: true } },
   },
+  ...pageScenes('settings', ['voice', 'notifications', 'appearance', 'account', 'desktop']),
+  ...pageScenes('admin', ['invites', 'members', 'rooms', 'disk', 'server']),
 };
+
+// Settings and Admin, one scene per section: alice (the owner) opens /<page>/<section> on the web, and the desktop opens
+// the same section (dev.rs `settings:<section>`, `admin:<section>`). The lists come from the same server.
+function pageScenes(name, list) {
+  return Object.fromEntries(list.map((section) => [`${name}-${section}`, {
+    web: async (ctx) => {
+      await house(ctx);
+      const page = ctx.alice.page;
+      await home(page);
+      await page.goto(`${ORIGIN}/${name}/${section}`);
+      await page.getByRole('heading', { level: 1 }).waitFor();
+      await sleep(1500); // the lazy page and its lists
+      return page;
+    },
+    desktop: { user: 'alice', scene: `${name}:${section}` },
+  }]));
+}
 
 const bar = (page) => page.getByRole('region', { name: 'Call' });
 // alice in the house's music call, reading general.

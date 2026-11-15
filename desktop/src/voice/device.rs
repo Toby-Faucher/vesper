@@ -33,16 +33,51 @@ fn on_error(failed: &Arc<AtomicBool>) -> impl FnMut(cpal::Error) + Send + 'stati
     }
 }
 
-/// The input and output device names, for the settings. Empty when there are none or the system cannot list them.
+/// The input and output device names, for the settings: [`useful_names`] of each list. Empty when there are none or
+/// the system cannot list them.
 pub fn device_names() -> (Vec<String>, Vec<String>) {
     let host = cpal::default_host();
-    let input = host
-        .input_devices()
-        .map(|d| d.map(|d| d.to_string()).collect());
-    let output = host
-        .output_devices()
-        .map(|d| d.map(|d| d.to_string()).collect());
+    let named = |d: cpal::Device| {
+        let id = d
+            .description()
+            .ok()
+            .and_then(|x| x.driver().map(String::from));
+        (id.unwrap_or_default(), d.to_string())
+    };
+    let input = host.input_devices().map(|d| useful_names(d.map(named)));
+    let output = host.output_devices().map(|d| useful_names(d.map(named)));
     (input.unwrap_or_default(), output.unwrap_or_default())
+}
+
+/// ALSA plugins that are not a device to pick: the null sink, the rate converters, the channel mixers, JACK and OSS
+/// shims, `dmix`/`dsnoop` sharing layers, and `default` (the list's own "System default" is that one).
+const NOT_A_DEVICE: [&str; 11] = [
+    "null",
+    "default",
+    "lavrate",
+    "samplerate",
+    "speexrate",
+    "jack",
+    "oss",
+    "upmix",
+    "vdownmix",
+    "dmix",
+    "dsnoop",
+];
+
+/// The names worth listing from `(pcm id, name)` pairs, in order: no ALSA plugin (by the id before its `:`), and each
+/// name once (ALSA lists one card as `sysdefault`, `front`, `hw`, `plughw` and more under the same name; opening by
+/// name takes the first, which works). Other systems' ids never match a plugin.
+pub fn useful_names(list: impl Iterator<Item = (String, String)>) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for (id, name) in list {
+        let kind = id.split(':').next().unwrap_or("");
+        if NOT_A_DEVICE.contains(&kind) || name.trim().is_empty() || out.contains(&name) {
+            continue;
+        }
+        out.push(name);
+    }
+    out
 }
 
 /// The device called `name`, else the default.
