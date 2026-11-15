@@ -31,7 +31,11 @@ the warning colour poor, all faint while measuring. Its name says "Connection to
 give the figures in words. Your own row with Settings sits at the bottom. The sidebar hides fully with `Ctrl+\`. It never
 shrinks to a row of icons. The main pane has a 48 px header with the room name, Pins, Search and Join voice. Join voice is the amber primary only when you are in no call. While you are in a
 call, a small call bar floats at the bottom centre of the main pane. The pane leaves room for it, so it covers nothing.
-Settings and Admin use the same shell: a list of sections on the left of the pane and one page of controls.
+Settings and Admin use the same shell: a list of sections on the left of the pane and one page of controls. The page
+title is 20 px, a step above its 16 px sections. A list of choices (Style, Colour scheme) is one bordered box with hairlines
+between the rows, not a stack of boxes. An empty room says "No messages yet." at the foot of the list, left aligned with the
+message text, where the first message will land; only a missing room or page centres its empty state. The welcome steps show
+"Step 1 of 3" next to their buttons, not above the heading.
 
 **The tokens rule.** A component uses role names only (`bg-app`, `text-fg-2`, `bg-accent`, `text-danger`). Raw steps and
 hex values live only in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css). Sizes follow the 4 px scale. Text uses six
@@ -67,7 +71,7 @@ change. There is no coral: it sat between the danger red and the warning orange.
 `web/src/lib/ui/style.ts` and `data-scheme` (`dark` or `light`) by `web/src/lib/ui/scheme.ts`. Components never read either.
 A new style is a block in `tokens.css` or a lazy file with the same role names, plus one entry in `STYLES`.
 
-**Color scheme.** Settings > Appearance > Color scheme: Dark, Light or System (follows `prefers-color-scheme`, and a change of the
+**Colour scheme.** Settings > Appearance > Colour scheme: Dark, Light or System (follows `prefers-color-scheme`, and a change of the
 system setting applies at once). Per device, in `localStorage` (`vesper.scheme`), no server change. The default is Dark, so the
 look people have stays. `index.html` loads `public/scheme-init.js`, a small blocking script (a file, because the CSP forbids inline script) that sets `data-scheme` and the `theme-color` meta before the first
 paint, so there is no flash; `scheme.ts` repeats the rules and keeps the tab colour right after a change. The base block of
@@ -105,9 +109,9 @@ warm grey, mint instead of amber). Each is a few lines of tokens and one or two 
 file: Cozy and BBS use the system rounded and monospace faces, so their type changes with the OS. Brisk's frosted glass, moving
 light, scanlines and page transitions are not ported. Not picked: Blueprint and Aqua (low contrast text on a pattern or a gradient), Bonfire (too close to Vesper dark).
 
-**Style and scheme.** Each style says in `STYLES` (`style.ts`) what it does with the Color scheme choice: `both` (Vesper: the
+**Style and scheme.** Each style says in `STYLES` (`style.ts`) what it does with the Colour scheme choice: `both` (Vesper: the
 choice applies), `dark` or `light` (the style is that by nature). For a fixed style the choice is ignored: Settings greys the
-Color scheme group and says "This style is dark only", and `data-scheme` is set to the style's own. The map of fixed styles is
+Colour scheme group and says "This style is dark only", and `data-scheme` is set to the style's own. The map of fixed styles is
 repeated in `public/scheme-init.js` (it must set the right scheme before the first paint); `scheme.test.ts` checks the two agree.
 
 **Style and accent.** Amber is the default accent, and the default is replaced by a style's own colour when the style sets

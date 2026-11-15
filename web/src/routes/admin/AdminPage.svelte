@@ -36,7 +36,7 @@
       {#if !sections.includes(section)}
         {@render denied(M.adminOwnerOnly)}
       {:else}
-        <h2 class="mb-6 text-lg font-medium text-fg">{NAMES[section]}</h2>
+        <h2 class="mb-6 text-xl font-medium text-fg">{NAMES[section]}</h2>
         {#if section === 'invites'}
           <Invites />
         {:else if section === 'members'}
