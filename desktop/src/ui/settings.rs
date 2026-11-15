@@ -22,8 +22,8 @@ use reqwest::Method;
 use serde_json::Value;
 use vesper_protocol::Role;
 
-use super::c::{self, Button, Dialog, Field, Select, Switch, Variant, kbd, radio_row};
-use super::theme::{self, Scheme, Style, TEXT_BASE, TEXT_LG, TEXT_SM, TEXT_XS, TextStepExt};
+use super::c::{self, Button, Dialog, Field, Select, Switch, Variant, kbd, radio_list, radio_row};
+use super::theme::{self, Scheme, Style, TEXT_BASE, TEXT_SM, TEXT_XL, TEXT_XS, TextStepExt};
 use super::{Vesper, account, admin};
 use crate::model::Phase;
 use crate::net::{Cmd, Fail, Json};
@@ -62,7 +62,7 @@ impl Section {
             Section::Desktop => "Desktop app",
         }
     }
-    fn id(self) -> &'static str {
+    pub fn id(self) -> &'static str {
         match self {
             Section::Voice => "voice",
             Section::Notifications => "notifications",
@@ -624,7 +624,7 @@ impl Vesper {
                 d.child(
                     div()
                         .mb(px(24.))
-                        .text_step(TEXT_LG)
+                        .text_step(TEXT_XL)
                         .font_weight(theme::tokens(cx).weight_strong)
                         .text_color(t.fg)
                         .child(h),
@@ -1037,7 +1037,7 @@ impl Vesper {
                     st == style,
                     cx,
                 )
-                .min_h(px(40.))
+                .min_h(px(48.))
                 .py(px(6.))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.change_settings(|s| s.style = st.id().into(), cx);
@@ -1133,14 +1133,14 @@ impl Vesper {
                     .gap(px(8.))
                     .child(legend("Style"))
                     .child(text("On this device only.", t.fg_2, false).mb(px(4.)))
-                    .children(styles),
+                    .child(radio_list(styles.collect(), cx)),
             )
             .child(
                 v_flex()
                     .gap(px(8.))
-                    .child(legend("Color scheme"))
+                    .child(legend("Colour scheme"))
                     .child(text(scheme_help, t.fg_2, false).mb(px(4.)))
-                    .children(schemes),
+                    .child(radio_list(schemes.collect(), cx)),
             )
             .child(
                 v_flex()

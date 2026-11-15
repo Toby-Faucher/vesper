@@ -111,7 +111,27 @@ impl Vesper {
         });
         let (dy, opacity) = self.swap_pose(cx);
         let timeline = if empty {
-            empty_state("No messages yet.", "Say hello.", 0., cx).pb(px(16.))
+            // At the foot of the list, where the first message will land, 68 px in like the message text.
+            let t = tokens(cx);
+            v_flex()
+                .flex_1()
+                .justify_end()
+                .pl(px(68.))
+                .pr(px(16.))
+                .pb(px(16.))
+                .child(
+                    div()
+                        .text_step(TEXT_BASE)
+                        .font_weight(t.weight_strong)
+                        .text_color(t.fg)
+                        .child("No messages yet."),
+                )
+                .child(
+                    div()
+                        .text_step(TEXT_SM)
+                        .text_color(t.fg_3)
+                        .child("Say hello."),
+                )
         } else {
             div().flex().flex_col().flex_1().min_h_0().child(
                 list(

@@ -1291,8 +1291,8 @@ pub fn kbd(text: impl Into<SharedString>, cx: &App) -> Div {
         .child(text.into())
 }
 
-/// A radio `.option` of Settings > Appearance: a 1 px `--line` box, `--radius-md`, 12 px sides, the dot at the left;
-/// checked: `--line-strong` and `--bg-selected`; hover `--bg-hover`.
+/// A radio `.list .option` of Settings > Appearance: no border of its own, 12 px sides, the dot at the left; checked
+/// `--bg-selected`, hover `--bg-hover`. `radio_list` frames the rows.
 pub fn radio_row(id: impl Into<ElementId>, checked: bool, cx: &App) -> gpui::Stateful<Div> {
     let t = tokens(cx);
     let hover = t.bg_hover;
@@ -1314,16 +1314,31 @@ pub fn radio_row(id: impl Into<ElementId>, checked: bool, cx: &App) -> gpui::Sta
         .flex()
         .items_center()
         .gap(px(12.))
-        .max_w(px(320.))
         .px(px(12.))
-        .rounded(t.radius)
-        .border_1()
-        .border_color(if checked { t.line_strong } else { t.line })
         .when(checked, |d| d.bg(t.bg_selected))
         .when(!checked, |d| d.hover(move |s| s.bg(hover)))
         .text_step(TEXT_SM)
         .text_color(t.fg)
         .child(dot)
+}
+
+/// Appearance's `.list`: one 1 px `--line` box, `--radius`, at most 320 px wide, a 1 px `--line-subtle` hairline
+/// between the rows. The end rows take the inner radius, as `overflow: clip` cuts them on the web.
+pub fn radio_list(rows: Vec<gpui::Stateful<Div>>, cx: &App) -> Div {
+    let t = tokens(cx);
+    let (n, inner) = (rows.len(), t.radius - px(1.));
+    div()
+        .flex()
+        .flex_col()
+        .max_w(px(320.))
+        .rounded(t.radius)
+        .border_1()
+        .border_color(t.line)
+        .children(rows.into_iter().enumerate().map(|(i, r)| {
+            r.when(i > 0, |d| d.border_t_1().border_color(t.line_subtle))
+                .when(i == 0, |d| d.rounded_t(inner))
+                .when(i + 1 == n, |d| d.rounded_b(inner))
+        }))
 }
 
 /// `Status.svelte`'s kinds.
