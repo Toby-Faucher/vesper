@@ -40,7 +40,7 @@
     {#if peers.length}
       <button type="button" class="meta mr-1 flex size-5 shrink-0 items-center justify-center rounded-sm"
         aria-expanded={!folded} aria-label="{folded ? 'Show' : 'Hide'} people in voice in {room.name}" onclick={() => (fold = !folded)}>
-        <Icon d={folded ? I.chevronRight : I.chevronDown} />
+        <span class="turn flex" class:folded><Icon d={I.chevronDown} /></span>
       </button>
     {/if}
   </div>
@@ -48,6 +48,9 @@
 </li>
 
 <style>
+  /* The fold chevron turns (down open, right folded) in --dur-2; reduced motion: at once (app.css). */
+  .turn { transition: transform var(--dur-2) var(--ease-out); }
+  .turn.folded { transform: rotate(-90deg); }
   .row { color: var(--fg-2); transition: background-color var(--dur-1) var(--ease-out); }
   .row:hover { background: var(--bg-hover); }
   /* the row the mouse is heading for: half the hover fill, a colour change only. :global, as intent.ts sets the attribute. */
