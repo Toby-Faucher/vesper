@@ -430,13 +430,24 @@ impl Vesper {
                     .pr(px(8.))
                     .pl(px(16.))
                     .child(img(logo()).h(px(28.)).w(px(59.)).flex_none())
-                    .child(div().flex_1().flex().justify_end().child(
-                        div().debug_selector(|| "hide-sidebar".into()).child(
-                            IconButton::new("hide-sidebar", "sidebar").on_click(
-                                cx.listener(|this, _, _, cx| this.set_collapsed(true, cx)),
-                            ),
-                        ),
-                    )),
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .justify_end()
+                            .child(div().debug_selector(|| "open-switcher".into()).child(
+                                IconButton::new("open-switcher", "command").on_click(cx.listener(
+                                    |this, _, w, cx| {
+                                        this.open_layer(super::find::Layer::Switcher, w, cx)
+                                    },
+                                )),
+                            ))
+                            .child(div().debug_selector(|| "hide-sidebar".into()).child(
+                                IconButton::new("hide-sidebar", "sidebar").on_click(
+                                    cx.listener(|this, _, _, cx| this.set_collapsed(true, cx)),
+                                ),
+                            )),
+                    ),
             )
             .child(
                 div()

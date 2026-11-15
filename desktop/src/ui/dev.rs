@@ -10,6 +10,9 @@
 //! - `VESPER_DEV_EMPTY`: the room has no messages: ready once its first page came.
 //! - `VESPER_DEV_DRAFT`: text put in the composer, with focus there, once the room is ready.
 //! - `VESPER_DEV_PINS`: opens the pins list once the room is ready.
+//! - `VESPER_DEV_VIEWER`: `<n>`: opens the image viewer on the room's n-th picture (oldest first) once ready.
+//! - `VESPER_DEV_FIND`: `switcher:<text>`, `search:<text>` or `shortcuts:`: opens that layer with the text typed, once
+//!   the room is ready.
 //! - `VESPER_DEV_SEND`: text sent from the composer 2.5 s after the room is ready (past the first hello's calm), then
 //!   `VESPER_DEV_ARRIVED` on stderr once it is in the list, for the harness's motion frames.
 //! - `VESPER_DEV_TYPING`: the room is ready only once someone is typing there (a typing push comes every few seconds).
@@ -67,6 +70,8 @@ pub struct Dev {
     empty: bool,
     draft: Option<String>,
     pins: bool,
+    find: Option<String>,
+    viewer: Option<usize>,
     typing: bool,
     tray: Option<String>,
     send: Option<String>,
@@ -176,6 +181,8 @@ impl Dev {
             empty: var("VESPER_DEV_EMPTY").is_some(),
             draft: var("VESPER_DEV_DRAFT"),
             pins: var("VESPER_DEV_PINS").is_some(),
+            find: var("VESPER_DEV_FIND"),
+            viewer: var("VESPER_DEV_VIEWER").and_then(|v| v.parse().ok()),
             typing: var("VESPER_DEV_TYPING").is_some(),
             send: var("VESPER_DEV_SEND"),
             sent_after: None,
@@ -355,6 +362,37 @@ impl Vesper {
                 if self.dev.pins {
                     let cmds = self.model.toggle_pins();
                     self.run(cmds);
+                }
+                if let Some(id) = self
+                    .dev
+                    .viewer
+                    .take()
+                    .and_then(|n| self.room_pictures().get(n).map(|a| a.id.clone()))
+                {
+                    self.open_viewer(&id, cx);
+                }
+                if let Some((layer, text)) = self
+                    .dev
+                    .find
+                    .take()
+                    .as_deref()
+                    .and_then(|f| f.split_once(':'))
+                {
+                    use super::find::Layer;
+                    let l = match layer {
+                        "search" => Layer::Search,
+                        "shortcuts" => Layer::Shortcuts,
+                        _ => Layer::Switcher,
+                    };
+                    self.open_layer(l, window, cx);
+                    let text = text.to_string();
+                    self.find_field.update(cx, |i, cx| {
+                        let end = text.len();
+                        i.set_value(text, window, cx);
+                        let pos = i.text().offset_to_position(end);
+                        i.set_cursor_position(pos, window, cx);
+                    });
+                    self.find_changed(window, cx);
                 }
                 if let (Some(rows), Some(room)) = (self.dev.tray.take(), self.model.active) {
                     self.model

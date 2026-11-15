@@ -48,7 +48,7 @@ use crate::uploads::UpState;
 
 /// Decoded pictures kept for the timeline; the oldest goes first.
 pub const IMAGE_CACHE: usize = 64;
-const IMAGE_FAILED: &str = "The image did not load.";
+pub(super) const IMAGE_FAILED: &str = "The image did not load.";
 /// The New row goes this long after the room is read (`FADE_AFTER_MS`).
 const FADE_AFTER: Duration = Duration::from_millis(4000);
 /// The server's limit of pins per room.
@@ -1240,8 +1240,8 @@ impl Vesper {
                 self.run(vec![Cmd::FetchImage(a.id.clone())]);
             }
             let open = {
-                let a = a.clone();
-                cx.listener(move |this, _, _, cx| this.open_attachment(&a, cx))
+                let id = a.id.clone();
+                cx.listener(move |this, _, _, cx| this.open_viewer(&id, cx))
             };
             let boxed = |w: f32, h: f32| {
                 div()
@@ -1365,7 +1365,7 @@ impl Vesper {
     }
 
     /// Hands a media file to the system's app. Downloaded first, named by its id and the type the server found.
-    fn open_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
+    pub(super) fn open_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
         let Some(ext) = files::media_ext(&a.mime).filter(|_| files::valid_id(&a.id)) else {
             return;
         };
@@ -1382,7 +1382,7 @@ impl Vesper {
     }
 
     /// Saves where the user picks, starting in Downloads. With no dialog (no portal on Linux) it goes to Downloads.
-    fn save_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
+    pub(super) fn save_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
         if !files::valid_id(&a.id) {
             return;
         }
@@ -1411,9 +1411,7 @@ impl Vesper {
 
     /// A picture came from the network thread: kept for drawing, the oldest let go past `IMAGE_CACHE`.
     pub(super) fn image_loaded(&mut self, id: &str, picture: Option<Picture>, window: &mut Window) {
-        let img = picture
-            .and_then(|p| image::RgbaImage::from_raw(p.width, p.height, p.bgra))
-            .map(|buf| Arc::new(RenderImage::new(vec![image::Frame::new(buf)])));
+        let img = picture.and_then(render_image);
         self.images
             .insert(id.to_string(), img.map_or(Img::Failed, Img::Ready));
         self.image_order.push_back(id.to_string());
@@ -2523,6 +2521,12 @@ impl Vesper {
                 ),
         )
     }
+}
+
+/// A decoded picture as GPUI draws it.
+pub(super) fn render_image(p: Picture) -> Option<Arc<RenderImage>> {
+    let buf = image::RgbaImage::from_raw(p.width, p.height, p.bgra)?;
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buf)])))
 }
 
 /// `.attach`, `.send` and the help IconButton: 32 px, `--radius`, a `--bg-hover` fill on hover in `--dur-1`; Attach

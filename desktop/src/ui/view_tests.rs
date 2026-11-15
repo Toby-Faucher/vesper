@@ -1664,3 +1664,247 @@ fn the_account_form_starts_from_the_profile(cx: &mut TestAppContext) {
         "{sent:?}"
     );
 }
+
+/// Profile pictures: fetched once per version, a late answer for an old version is dropped, a new version shows the
+/// letters until it comes, and a removed picture is let go.
+#[gpui::test]
+fn profile_pictures_follow_their_version(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    drain(&mut rx);
+    let set = |v: Option<&str>| {
+        let mut u = user("b", "Bob");
+        u["avatar"] = json!(v);
+        Event::Server(Box::new(
+            serde_json::from_value(json!({ "type": "user_updated", "user": u })).unwrap(),
+        ))
+    };
+    let fetches = |rx: &mut UnboundedReceiver<Cmd>| -> Vec<String> {
+        drain(rx)
+            .into_iter()
+            .filter_map(|c| match c {
+                Cmd::FetchAvatar { user_id, version } => Some(format!("{user_id}@{version}")),
+                _ => None,
+            })
+            .collect()
+    };
+    let shown = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| cx.global::<super::c::Pictures>().ready("b").is_some())
+    };
+    let came = |version: &str| Event::Avatar {
+        user_id: "b".into(),
+        version: version.into(),
+        picture: Some(crate::files::Picture {
+            width: 1,
+            height: 1,
+            bgra: vec![255; 4],
+        }),
+    };
+    apply(&view, cx, set(Some("v1")));
+    assert_eq!(fetches(&mut rx), ["b@v1"]);
+    apply(&view, cx, set(Some("v1")));
+    assert!(
+        fetches(&mut rx).is_empty(),
+        "the same version is not fetched again"
+    );
+    apply(&view, cx, came("v1"));
+    assert!(shown(cx));
+    apply(&view, cx, set(Some("v2")));
+    assert_eq!(fetches(&mut rx), ["b@v2"]);
+    assert!(!shown(cx), "the letters show until the new picture comes");
+    apply(&view, cx, came("v1"));
+    assert!(!shown(cx), "a late answer for the old picture is dropped");
+    apply(&view, cx, came("v2"));
+    assert!(shown(cx));
+    apply(&view, cx, set(None));
+    assert!(!shown(cx));
+    assert!(fetches(&mut rx).is_empty());
+}
+
+/// Ctrl+K opens the switcher over a focused composer, the typed text ranks the rows, Enter opens the room; the `r `
+/// chip scopes it and Backspace removes the chip; Esc closes.
+#[gpui::test]
+fn the_switcher_finds_and_opens_a_room(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    focus_composer(&view, cx);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-k"
+    } else {
+        "ctrl-k"
+    });
+    assert!(cx.debug_bounds("switcher").is_some());
+    cx.simulate_input("hang");
+    view.read_with(cx, |v, cx| {
+        let r = v.switcher_results(cx);
+        assert_eq!(r[0].label, "hangout", "{r:?}");
+    });
+    drain(&mut rx);
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.find.layer, None);
+        assert_eq!(v.model.active, Some(2));
+    });
+
+    view.update_in(cx, |v, w, cx| {
+        v.open_layer(super::find::Layer::Switcher, w, cx)
+    });
+    cx.simulate_input("p ");
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.find.scope_kind(), Some(crate::switcher::Kind::Person));
+        let r = v.switcher_results(cx);
+        assert!(r.iter().all(|i| i.kind == crate::switcher::Kind::Person) && !r.is_empty());
+    });
+    cx.simulate_keystrokes("backspace");
+    view.read_with(cx, |v, _| assert_eq!(v.find.scope_kind(), None));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert_eq!(v.find.layer, None));
+}
+
+/// Search waits 300 ms after typing, drops a late answer, shows the hits, and Enter jumps to the first: its room
+/// opens and older pages load until the message is there.
+#[gpui::test]
+fn search_asks_after_a_pause_and_jumps(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, w, cx| {
+        v.open_layer(super::find::Layer::Search, w, cx)
+    });
+    assert!(cx.debug_bounds("search").is_some());
+    drain(&mut rx);
+    cx.simulate_input("cable");
+    assert!(
+        !drain(&mut rx)
+            .iter()
+            .any(|c| matches!(c, Cmd::Search { .. })),
+        "not before the pause"
+    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(350));
+    cx.run_until_parked();
+    let seq = drain(&mut rx)
+        .into_iter()
+        .find_map(|c| match c {
+            Cmd::Search { seq, q } => {
+                assert_eq!(q.q, "cable");
+                Some(seq)
+            }
+            _ => None,
+        })
+        .expect("a search");
+    let page = |id: i64| -> vesper_protocol::SearchPage {
+        let mut m = msg(id, "b", "the good cable");
+        m["room_id"] = json!(2);
+        serde_json::from_value(
+            json!({ "hits": [{ "message": m, "snippet": "the good \u{2}cable\u{3}" }],
+            "next_before": null }),
+        )
+        .unwrap()
+    };
+    apply(
+        &view,
+        cx,
+        Event::Searched {
+            seq: seq - 1,
+            page: Ok(page(99)),
+        },
+    );
+    view.read_with(cx, |v, _| {
+        assert!(v.find.search.hits.is_empty(), "an older answer is dropped")
+    });
+    apply(
+        &view,
+        cx,
+        Event::Searched {
+            seq,
+            page: Ok(page(5)),
+        },
+    );
+    assert!(cx.debug_bounds("search-hit-0").is_some());
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| assert_eq!(v.find.layer, None));
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(|c| matches!(c, Cmd::LoadLatest(2))),
+        "{cmds:?}"
+    );
+    let older: MessagePage = serde_json::from_value(json!({ "messages": [msg(20, "b", "x")],
+        "more_before": true, "more_after": false }))
+    .unwrap();
+    apply(
+        &view,
+        cx,
+        Event::Latest {
+            room: 2,
+            page: older,
+        },
+    );
+    assert!(drain(&mut rx).iter().any(|c| matches!(
+        c,
+        Cmd::LoadOlder {
+            room: 2,
+            before: 20
+        }
+    )));
+    let mut found = msg(5, "b", "the good cable");
+    found["room_id"] = json!(2);
+    let page: MessagePage =
+        serde_json::from_value(json!({ "messages": [found], "more_before": false,
+        "more_after": false }))
+        .unwrap();
+    view.update_in(cx, |v, window, cx| {
+        v.apply(Event::Older { room: 2, page }, window, cx);
+        assert_eq!(v.model.jump, Some(5));
+    });
+}
+
+/// A click on a picture opens the viewer in the app (not the system's), which fetches the full size once; Esc closes
+/// it and lets the picture go.
+#[gpui::test]
+fn a_picture_opens_in_the_viewer(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    chat_room(&view, cx);
+    apply(
+        &view,
+        cx,
+        Event::Image {
+            id: IMAGE_ID.into(),
+            picture: Some(crate::files::Picture {
+                width: 2,
+                height: 2,
+                bgra: vec![255; 16],
+            }),
+        },
+    );
+    drain(&mut rx);
+    let b = cx
+        .debug_bounds(tagged(format!("image-{IMAGE_ID}")))
+        .unwrap();
+    cx.simulate_click(b.center(), Modifiers::none());
+    cx.run_until_parked();
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchFull(id) if id == IMAGE_ID)),
+        "{cmds:?}"
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::Download { .. })),
+        "not the system's viewer"
+    );
+    apply(
+        &view,
+        cx,
+        Event::Full {
+            id: IMAGE_ID.into(),
+            picture: Some(crate::files::Picture {
+                width: 4,
+                height: 2,
+                bgra: vec![255; 32],
+            }),
+        },
+    );
+    assert!(cx.debug_bounds("viewer").is_some());
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert!(v.viewer.is_none()));
+}

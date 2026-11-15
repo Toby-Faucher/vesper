@@ -4,7 +4,8 @@
 //! or above from the call bar, clear of the composer), clamped 8 px inside the window; it fades in (`pop`: the web
 //! also scales from 0.97, which GPUI cannot do to a box).
 //!
-//! Esc or a click outside closes it. Not here: moving the focus into it, the switcher's dialog form.
+//! Esc or a click outside closes it. From the switcher (no opener, `anchor` empty) it is a dialog titled with the
+//! name, as the web's `asDialog`. Not here: moving the focus into it.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -98,13 +99,30 @@ impl Vesper {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let card = self.person.as_ref()?;
-        let b = *self.anchors.borrow().get(&card.anchor)?;
         let t = tokens(cx).clone();
         let now = Instant::now();
         let pose = motion::pose(&t.motion, POP, false, card.since, now);
         if pose.is_some() {
             window.request_animation_frame();
         }
+        if card.anchor.is_empty() {
+            let name = self.model.state.name_of(&card.user_id);
+            let body = self.person_body(window, cx)?;
+            let close = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.close_person(cx));
+            return Some(
+                deferred(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .debug_selector(|| "person-card".into())
+                        .opacity(pose.map_or(1., |p| p.opacity))
+                        .child(c::Dialog::new(name).child(body).on_close(close)),
+                )
+                .with_priority(2)
+                .into_any_element(),
+            );
+        }
+        let b = *self.anchors.borrow().get(&card.anchor)?;
         let (pos, corner) = if card.top {
             // Above the opener and above the composer too.
             let composer = self.anchors.borrow().get("composer").map(|c| c.origin.y);

@@ -25,6 +25,14 @@ impl std::fmt::Debug for Picture {
 /// Decodes a png, jpeg, gif (first frame) or webp. A picture past 16384 on a side or 256 MB decoded is refused, so a
 /// small file cannot ask for a huge buffer.
 pub fn decode_picture(bytes: &[u8]) -> Option<Picture> {
+    decode_within(bytes, (BOX.0 * 2, BOX.1 * 2))
+}
+
+/// The image viewer's picture: at most 2048 a side (the viewer is at most 1040 by 640, sharp on a 2x screen).
+pub const FULL: (u32, u32) = (2048, 2048);
+
+/// [`decode_picture`] made smaller to fit `max` (w, h) when larger.
+pub fn decode_within(bytes: &[u8], max: (u32, u32)) -> Option<Picture> {
     let mut r = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
@@ -35,7 +43,7 @@ pub fn decode_picture(bytes: &[u8]) -> Option<Picture> {
     r.limits(limits);
     let img = r.decode().ok()?;
     // `thumbnail` also scales up: only a large picture is made smaller.
-    let (w, h) = (BOX.0 * 2, BOX.1 * 2);
+    let (w, h) = max;
     let img = if img.width() > w || img.height() > h {
         img.thumbnail(w, h)
     } else {

@@ -2,18 +2,20 @@
 //! colour comes from the [`Tokens`](super::theme::Tokens) global, so a style or accent change repaints them.
 //!
 //! Button and IconButton fade their hover colours in `--dur-1` (`motion::hover`). Not ported yet: focus-visible
-//! rings (GPUI 0.2.2 has no focus-visible), the press scale (GPUI scales only an svg), tooltips (`data-tip`), avatar
-//! pictures.
+//! rings (GPUI 0.2.2 has no focus-visible), the press scale (GPUI scales only an svg), tooltips (`data-tip`).
 
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{Animation, AnimationExt};
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, Entity, Hsla, InteractiveElement, IntoElement,
-    ParentElement, Pixels, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement,
-    Styled, Transformation, Window, anchored, deferred, div, percentage, px, transparent_black,
+    AnyElement, App, ClickEvent, Div, ElementId, Entity, Global, Hsla, ImageSource,
+    InteractiveElement, IntoElement, ObjectFit, ParentElement, Pixels, RenderImage, RenderOnce,
+    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, StyledImage, Transformation,
+    Window, anchored, deferred, div, img, percentage, px, transparent_black,
 };
 use gpui_component::StyledExt;
 use gpui_component::input::{Input, InputState};
@@ -619,9 +621,76 @@ pub fn initials(name: &str) -> String {
         .to_uppercase()
 }
 
+/// A profile picture: asked for, drawn, or not to be had (the letters stay).
+pub enum Pic {
+    Loading,
+    Ready(Arc<RenderImage>),
+    Failed,
+}
+
+/// Profile pictures by user id, each with the version (`UserInfo.avatar`) it is for. Kept in step with the users by
+/// [`Pictures::sync`]; [`Avatar`] draws a ready one over its letters, as `Avatar.svelte` puts the `<img>` over them.
+#[derive(Default)]
+pub struct Pictures(pub HashMap<String, (String, Pic)>);
+
+impl Global for Pictures {}
+
+impl Pictures {
+    /// Brings the cache in step with `want` (user id, picture version): a new or changed version is asked for (its
+    /// user id and version returned), a user with no picture any more is dropped. A changed version drops the old
+    /// picture at once, so the letters show until the new one comes. Returns the images let go too.
+    pub fn sync<'a>(
+        &mut self,
+        want: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    ) -> (Vec<(String, String)>, Vec<Arc<RenderImage>>) {
+        let (mut fetch, mut keep, mut gone) = (vec![], HashMap::new(), vec![]);
+        let mut let_go = |p: Pic| {
+            if let Pic::Ready(i) = p {
+                gone.push(i);
+            }
+        };
+        for (id, v) in want {
+            let Some(v) = v else { continue };
+            let entry = match self.0.remove(id) {
+                Some((had, pic)) if had == v => (had, pic),
+                old => {
+                    if let Some((_, p)) = old {
+                        let_go(p);
+                    }
+                    fetch.push((id.to_string(), v.to_string()));
+                    (v.to_string(), Pic::Loading)
+                }
+            };
+            keep.insert(id.to_string(), entry);
+        }
+        for (_, (_, p)) in std::mem::replace(&mut self.0, keep) {
+            let_go(p);
+        }
+        (fetch, gone)
+    }
+
+    /// A picture came: kept only when it is still the version wanted for that user.
+    pub fn loaded(&mut self, user_id: &str, version: &str, image: Option<Arc<RenderImage>>) {
+        if let Some((v, pic)) = self.0.get_mut(user_id)
+            && v == version
+        {
+            *pic = image.map_or(Pic::Failed, Pic::Ready);
+        }
+    }
+
+    /// The picture to draw for a user, once it is there.
+    pub fn ready(&self, user_id: &str) -> Option<Arc<RenderImage>> {
+        match self.0.get(user_id) {
+            Some((_, Pic::Ready(i))) => Some(i.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// `Avatar.svelte`: initials on the user's slot colour in `--on-avatar`, `--weight-ui`; 16 (the 20 scaled to 0.8), 20, 32 or 40 px
 /// (12/16, 13/20, 16/24 text; one letter at 16 and 20). `speaking` draws a 2 px `--bg-sidebar` gap and a 2 px accent ring; muted or deafened
-/// a danger glyph at the bottom right at 32 and 40.
+/// a danger glyph at the bottom right at 32 and 40. The user's picture ([`Pictures`]), once loaded, covers the
+/// initials: the same circle, `object-fit: cover`.
 #[derive(IntoElement)]
 pub struct Avatar {
     user_id: SharedString,
@@ -735,6 +804,21 @@ impl RenderOnce for Avatar {
                 )
             })
             .child(text)
+            .when_some(
+                cx.try_global::<Pictures>()
+                    .and_then(|p| p.ready(&self.user_id)),
+                |d, i| {
+                    d.child(
+                        img(ImageSource::Render(i))
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size(px(s))
+                            .rounded_full()
+                            .object_fit(ObjectFit::Cover),
+                    )
+                },
+            )
             .when_some(glyph, |d, g| {
                 d.child(
                     div()
@@ -934,6 +1018,7 @@ pub struct Dialog {
     body: Vec<AnyElement>,
     footer: Option<AnyElement>,
     on_close: Option<OnClick>,
+    width: f32,
 }
 
 impl Dialog {
@@ -943,7 +1028,13 @@ impl Dialog {
             body: vec![],
             footer: None,
             on_close: None,
+            width: 440.,
         }
+    }
+    /// Another width than 440 px (the image viewer's `wide`: as wide as its picture).
+    pub fn width(mut self, w: f32) -> Self {
+        self.width = w;
+        self
     }
     pub fn footer(mut self, f: impl IntoElement) -> Self {
         self.footer = Some(f.into_any_element());
@@ -984,7 +1075,7 @@ impl RenderOnce for Dialog {
                     .relative()
                     .flex()
                     .flex_col()
-                    .w(px(440.))
+                    .w(px(self.width))
                     .border_1()
                     .border_color(t.line_subtle)
                     .rounded(t.radius_lg)

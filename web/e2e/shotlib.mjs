@@ -64,6 +64,24 @@ export const LINES = [
   'the co-op one again?', 'sure', 'I fixed my mic, tell me if it still crackles', 'sounds fine to me', 'link to the patch notes: https://example.com/notes',
 ];
 
+// A 256 px picture drawn in the page (a disc on a field, two colours) and saved as the account's picture.
+async function picture(page, [field, disc]) {
+  const status = await page.evaluate(async ([field, disc]) => {
+    const c = new OffscreenCanvas(256, 256);
+    const g = c.getContext('2d');
+    g.fillStyle = field;
+    g.fillRect(0, 0, 256, 256);
+    g.fillStyle = disc;
+    g.beginPath();
+    g.arc(128, 150, 70, 0, Math.PI * 2);
+    g.fill();
+    g.fillRect(40, 40, 60, 30);
+    const body = await c.convertToBlob({ type: 'image/png' });
+    return (await fetch('/api/me/avatar', { method: 'PUT', body })).status;
+  }, [field, disc]);
+  if (status >= 400) throw new Error(`PUT /api/me/avatar: ${status}`);
+}
+
 // Signs up alice (the owner, whose fake mic plays speech) and bob. `open(url)` is a fresh signed-out page;
 // `seed()` (once) makes two more rooms and 40 messages in general.
 export async function cast() {
@@ -79,6 +97,9 @@ export async function cast() {
   const bobLink = (await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url;
   const bob = await shotBrowser('bob', [], { viewport: VIEWPORT });
   await signup(bob.page, bobLink, 'bob');
+  // Profile pictures for both, so every avatar of theirs shows a picture; the house's others keep their letters.
+  await picture(alice.page, ['#e5955d', '#2a1a10']);
+  await picture(bob.page, ['#41bae4', '#0d2633']);
   let seeded;
   const seed = () => (seeded ??= (async () => {
     for (const name of ['music', LONG_ROOM]) await api(alice.page, 'POST', '/api/rooms', { name });

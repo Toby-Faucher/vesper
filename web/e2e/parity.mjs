@@ -165,6 +165,25 @@ const SCENES = {
     },
     desktop: { user: 'alice', scene: 'room:photos' },
   },
+  // The first picture of photos open in the viewer: its name, the picture at fit size, Previous, Next and "1 of 2".
+  'image-viewer': {
+    web: async (ctx) => {
+      await photosRoom(ctx);
+      const page = ctx.alice.page;
+      await home(page);
+      await openRoom(page, 'photos');
+      await page.locator('article', { hasText: 'great, thanks' }).waitFor();
+      await page.locator('article button img').first().click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByRole('link', { name: 'Download' }).waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('dialog img')].every((i) => i.complete && i.naturalWidth));
+      await sleep(400);
+      return page;
+    },
+    focus: true,
+    desktop: { user: 'alice', scene: 'room:photos', env: { VESPER_DEV_VIEWER: '0' } },
+    after: ({ alice }) => alice.page.keyboard.press('Escape'),
+  },
   // shots.mjs's upload-tray: one failed with Retry, three uploading, one waiting. The web's uploads are held by a fake
   // XMLHttpRequest; the desktop's tray is filled by dev.rs with the same rows (no upload runs).
   'upload-tray': {
@@ -426,6 +445,44 @@ const SCENES = {
       return { user: 'alice', scene: 'room:general', frames: RING_FRAMES, trigger: () => ringAlice(ctx) };
     },
     after: ({ bob }) => hangUp(bob.page),
+  },
+  // Ctrl+K over general in the full house: unread rooms first, people in voice first, then the actions. The rooms'
+  // recent list is cleared on the web, as the desktop starts with none.
+  switcher: {
+    web: async (ctx) => {
+      await house(ctx);
+      const page = ctx.alice.page;
+      await openRoom(page, 'music');
+      await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('vesper.recent.')).forEach((k) => localStorage.removeItem(k)));
+      await openRoom(page, 'general');
+      await page.keyboard.press('Control+k');
+      await page.getByRole('combobox', { name: 'Switch to' }).waitFor();
+      await sleep(400);
+      return page;
+    },
+    focus: true,
+    desktop: { user: 'alice', scene: 'room:general', env: { VESPER_DEV_FIND: 'switcher:' } },
+    after: ({ alice }) => alice.page.keyboard.press('Escape'),
+  },
+  // Message search for a word in general's seeded lines: four hits today, from alice and bob (with pictures).
+  search: {
+    web: async (ctx) => {
+      await ctx.seed();
+      const page = ctx.alice.page;
+      await home(page);
+      await openRoom(page, 'general');
+      await page.keyboard.press('Control+Shift+F');
+      const box = page.getByRole('combobox', { name: 'Search messages' });
+      await box.waitFor();
+      await box.fill('crackles');
+      await page.getByText(/^\d+\+? messages?$/).first().waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('dialog img')].every((i) => i.complete));
+      await sleep(400);
+      return page;
+    },
+    focus: true,
+    desktop: { user: 'alice', scene: 'room:general', env: { VESPER_DEV_FIND: 'search:crackles' } },
+    after: ({ alice }) => alice.page.keyboard.press('Escape'),
   },
   'shell-collapsed': {
     web: async (ctx) => {

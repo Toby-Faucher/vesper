@@ -82,6 +82,18 @@ pub enum Cmd {
     CancelUpload(u64),
     /// An image attachment, decoded small for the timeline.
     FetchImage(String),
+    /// An image attachment for the viewer, decoded up to `files::FULL`.
+    FetchFull(String),
+    /// `GET /api/users/{user_id}/avatar?v={version}`: a profile picture.
+    FetchAvatar {
+        user_id: String,
+        version: String,
+    },
+    /// `GET /api/search`; the answer comes back with `seq`.
+    Search {
+        seq: u64,
+        q: vesper_protocol::SearchQuery,
+    },
     /// An attachment written to `to`; `open` hands it to the system's app after.
     Download {
         id: String,
@@ -206,6 +218,21 @@ pub enum Event {
     Image {
         id: String,
         picture: Option<Picture>,
+    },
+    /// The viewer's picture; `None` when it did not load or decode.
+    Full {
+        id: String,
+        picture: Option<Picture>,
+    },
+    /// `None` when it did not load or decode.
+    Avatar {
+        user_id: String,
+        version: String,
+        picture: Option<Picture>,
+    },
+    Searched {
+        seq: u64,
+        page: Result<vesper_protocol::SearchPage, Fail>,
     },
     Downloaded {
         path: PathBuf,
@@ -570,10 +597,15 @@ impl Api {
         if !files::valid_id(id) {
             return Err(Fail::NotVesper);
         }
-        let url = self
-            .base
-            .join(&format!("/api/uploads/{id}"))
-            .map_err(|_| Fail::NotVesper)?;
+        self.get_ok(&format!("/api/uploads/{id}"), &[]).await
+    }
+
+    /// A GET answered with success, with the query pairs `query` encoded.
+    async fn get_ok(&self, path: &str, query: &[(&str, &str)]) -> Result<reqwest::Response, Fail> {
+        let mut url = self.base.join(path).map_err(|_| Fail::NotVesper)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
         let res = self
             .http
             .get(url)
@@ -590,6 +622,49 @@ impl Api {
             return Err(Fail::Api { status, code });
         }
         Ok(res)
+    }
+
+    /// A profile picture, at most the server's 512 KiB. The id must be the server's 32 hex.
+    pub async fn avatar(&self, user_id: &str, version: &str) -> Result<Vec<u8>, Fail> {
+        if !files::valid_id(user_id) {
+            return Err(Fail::NotVesper);
+        }
+        let mut res = self
+            .get_ok(&format!("/api/users/{user_id}/avatar"), &[("v", version)])
+            .await?;
+        let mut bytes = vec![];
+        while let Some(chunk) = res.chunk().await.map_err(|_| Fail::Network)? {
+            if bytes.len() + chunk.len() > 512 * 1024 {
+                return Err(TOO_LARGE);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
+    /// `GET /api/search`: the fields that are set, as query pairs.
+    pub async fn search(
+        &self,
+        q: &vesper_protocol::SearchQuery,
+    ) -> Result<vesper_protocol::SearchPage, Fail> {
+        let num = |v: Option<i64>| v.map(|n| n.to_string());
+        let (room, from, to, before) = (num(q.room_id), num(q.from), num(q.to), num(q.before));
+        let mut pairs = vec![("q", q.q.as_str())];
+        for (k, v) in [
+            ("room_id", &room),
+            ("from", &from),
+            ("to", &to),
+            ("before", &before),
+        ] {
+            if let Some(v) = v {
+                pairs.push((k, v));
+            }
+        }
+        if let Some(a) = &q.author_id {
+            pairs.push(("author_id", a));
+        }
+        let res = self.get_ok("/api/search", &pairs).await?;
+        res.json().await.map_err(|_| Fail::NotVesper)
     }
 
     pub async fn mark_read(&self, room: i64, id: i64) -> Result<(), Fail> {
@@ -975,6 +1050,26 @@ fn changed(
     }
 }
 
+/// Downloaded bytes decoded off the UI thread (to fit `max`, else the timeline's size): the request's outcome and
+/// the picture, `None` when it did not load or decode.
+async fn decoded(
+    r: Result<Vec<u8>, Fail>,
+    max: Option<(u32, u32)>,
+) -> (Result<(), Fail>, Option<Picture>) {
+    let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+    let picture = match r {
+        Ok(bytes) => tokio::task::spawn_blocking(move || match max {
+            Some(m) => files::decode_within(&bytes, m),
+            None => files::decode_picture(&bytes),
+        })
+        .await
+        .ok()
+        .flatten(),
+        Err(_) => None,
+    };
+    (res, picture)
+}
+
 /// One REST call; a 401 ends the session.
 async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
     let (res, ev) = match cmd {
@@ -1085,16 +1180,30 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
             )
         }
         Cmd::FetchImage(id) => {
-            let r = api.download(&id, IMAGE_MAX).await;
-            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
-            let picture = match r {
-                Ok(bytes) => tokio::task::spawn_blocking(move || files::decode_picture(&bytes))
-                    .await
-                    .ok()
-                    .flatten(),
-                Err(_) => None,
-            };
+            let (res, picture) = decoded(api.download(&id, IMAGE_MAX).await, None).await;
             (res, Event::Image { id, picture })
+        }
+        Cmd::FetchFull(id) => {
+            let r = api.download(&id, IMAGE_MAX).await;
+            let (res, picture) = decoded(r, Some(files::FULL)).await;
+            (res, Event::Full { id, picture })
+        }
+        Cmd::FetchAvatar { user_id, version } => {
+            let r = api.avatar(&user_id, &version).await;
+            let (res, picture) = decoded(r, None).await;
+            let ev = Event::Avatar {
+                user_id,
+                version,
+                picture,
+            };
+            (res, ev)
+        }
+        Cmd::Search { seq, q } => {
+            let page = api.search(&q).await;
+            (
+                page.as_ref().map(|_| ()).map_err(|f| *f),
+                Event::Searched { seq, page },
+            )
         }
         Cmd::Download { id, to, open } => match api.download_to(&id, &to).await {
             Ok(()) => (Ok(()), Event::Downloaded { path: to, open }),
