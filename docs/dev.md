@@ -114,7 +114,7 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   after a day).
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
   Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
-- Settings (the gear next to your name; Admin for staff, Desktop app and Log out are in the menu on your name) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
+- Settings (the gear next to your name; Admin for staff and Log out are in the menu on your name; Settings > App holds Start with the computer) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
   `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets. It also keeps whether the sidebar is hidden
   (the web keeps that in localStorage), the style and colour scheme, and the ring's switch and volume. It is written to a temporary file and renamed. A value the app cannot read falls
   back to its default alone; a file that is not JSON is kept as `settings.json.bad`.

@@ -479,8 +479,8 @@ impl Vesper {
             .into_any_element()
     }
 
-    /// The account menu over the account button (`Menu.svelte` placed above, 4 px off): Admin (staff only), Desktop
-    /// app, Log out.
+    /// The account menu over the account button (`Menu.svelte` placed above, 4 px off): Admin (staff only) and Log out.
+    /// The web's Desktop app item (the download page) is left out: this is the desktop app.
     fn account_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         deferred(
             anchored().anchor(Corner::BottomLeft).child(
@@ -508,17 +508,6 @@ impl Vesper {
                                 ),
                             )
                         })
-                        .child(
-                            MenuItem::new("menu-desktop", "Desktop app")
-                                .icon("download")
-                                .on_select(cx.listener(|this, _, window, cx| {
-                                    this.side.account_open = false;
-                                    let to = super::settings::At::Settings(
-                                        super::settings::Section::Desktop,
-                                    );
-                                    this.open_page(to, window, cx)
-                                })),
-                        )
                         .child(
                             MenuItem::new("sign-out", "Log out")
                                 .icon("logOut")

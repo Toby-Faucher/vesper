@@ -1,7 +1,7 @@
 //! The Settings and Admin pages, framed like `SettingsPage.svelte` and `AdminPage.svelte`: a 48 px header with the
 //! title and Close, then a 200 px section list beside the open section (at most 640 px wide, 800 for Admin), centred.
 //!
-//! Settings has Voice, Notifications, Appearance, Account and Desktop app. Voice holds what the desktop's own audio
+//! Settings has Voice, Notifications, Appearance, Account and App (the web's Desktop app section less its downloads). Voice holds what the desktop's own audio
 //! does (the noise filter, echo cancellation, the devices, the bitrate, push to talk). Not here, as the desktop has no
 //! such feature yet: the web's input meter, level marker, mic test, DeepFilterNet tuning, auto gain, DTX, levelling,
 //! the shortcut list, mention notifications, Web Push, the custom accent colour, the profile picture, adding a
@@ -59,7 +59,8 @@ impl Section {
             Section::Notifications => "Notifications",
             Section::Appearance => "Appearance",
             Section::Account => "Account",
-            Section::Desktop => "Desktop app",
+            // The web's "Desktop app" is its download page; here it only holds Start with the computer.
+            Section::Desktop => "App",
         }
     }
     pub fn id(self) -> &'static str {
@@ -1195,12 +1196,6 @@ impl Vesper {
         let error = self.settings_error.clone();
         v_flex()
             .gap(px(16.))
-            .child(text(
-                "This is the desktop app. It has the same rooms, chat and calls as the web app, and a push to talk key \
-                 that works while a game has focus.",
-                t.fg_2,
-                false,
-            ))
             .child(
                 div().debug_selector(|| "settings-autostart".into()).child(
                     Switch::new("settings-autostart", "Start with the computer", on)
