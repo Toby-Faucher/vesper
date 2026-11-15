@@ -10,6 +10,10 @@ use ts_rs::TS;
 
 pub const MAX_MSG_BYTES: usize = 64 * 1024;
 
+/// The release these types belong to (the workspace version, as the server's `ServerBuild::version`). The desktop
+/// app compares it with the server's to say when the server is newer.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// WebSocket close code: the session is over (logout, revoked device, password change, ban).
 /// The client should go back to the login page instead of reconnecting.
 pub const CLOSE_SESSION_ENDED: u16 = 4001;

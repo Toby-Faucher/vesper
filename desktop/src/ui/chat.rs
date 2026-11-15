@@ -1369,9 +1369,7 @@ impl Vesper {
         let Some(ext) = files::media_ext(&a.mime).filter(|_| files::valid_id(&a.id)) else {
             return;
         };
-        let path = std::env::temp_dir()
-            .join("vesper-open")
-            .join(format!("{}.{ext}", a.id));
+        let path = files::cache_dir("open").join(format!("{}.{ext}", a.id));
         if path.exists() {
             cx.open_with_system(&path);
         } else {
@@ -1605,7 +1603,7 @@ impl Vesper {
             ImageFormat::Bmp => "bmp",
             ImageFormat::Tiff => "tiff",
         };
-        let dir = std::env::temp_dir().join("vesper-paste");
+        let dir = files::cache_dir("paste"); // the network thread deletes it once uploaded
         let name = format!(
             "Pasted image {}.{ext}",
             Local::now().format("%Y-%m-%d %H.%M")

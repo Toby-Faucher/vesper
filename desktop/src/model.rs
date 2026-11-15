@@ -26,12 +26,18 @@ pub const DISCONNECTED: &str = "A moderator disconnected you. Sign out and in ag
 pub const NOT_REMEMBERED: &str = "There is no keyring on this computer, so Vesper will not remember this sign in after it closes.";
 pub const HEADPHONES: &str =
     "Echo cancellation is off. Use headphones, or the others may hear themselves.";
+pub const INSECURE: &str = "This address uses plain http, so your password and messages cross the network unencrypted. Use https unless the server is on this computer or your home network.";
 pub const NOT_ONLINE: &str = "Not connected to the server. Wait a moment and try again.";
 pub const CALL_ENDED: &str =
     "Your call ended. You may have joined from another device, or a moderator removed you.";
 pub const ROOM_GONE: &str = "You no longer have access to that room.";
 pub const REJOINING: &str = "Connection lost. You rejoin the call as soon as it is back.";
 pub const CALL_DROPPED: &str = "Disconnected from the server.";
+/// The web reloads on a new server build; a desktop app cannot, so it says so.
+pub const UPDATE_APP: &str =
+    "This server runs a newer Vesper. Update the app to use everything it has.";
+pub const TOO_NEW: &str =
+    "This server runs a newer Vesper that this app cannot talk to. Update the app.";
 /// How long a call whose socket dropped waits for it to come back, like the web's `REJOIN_MS`.
 pub const REJOIN_FOR: Duration = Duration::from_secs(60);
 /// A share stops being watched this long after its view went away, like the web's `WATCH_GRACE_MS`, so a quick
@@ -67,6 +73,15 @@ pub fn signal_text(code: ErrorCode) -> &'static str {
         ErrorCode::ShareCap => "Too many screens are being shared right now.",
         ErrorCode::Internal => "Something went wrong on the server. Try again in a moment.",
     }
+}
+
+/// Whether release `theirs` (`1.9.0`) is newer than `ours`. A pre-release tag is ignored; what does not parse is not newer.
+pub fn newer(theirs: &str, ours: &str) -> bool {
+    let nums = |v: &str| -> Option<Vec<u64>> {
+        let core = v.split(['-', '+']).next()?;
+        core.split('.').map(|n| n.parse().ok()).collect()
+    };
+    matches!((nums(theirs), nums(ours)), (Some(t), Some(o)) if t > o)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -352,6 +367,9 @@ impl Model {
             }
             Event::Offline { retry_in } => {
                 self.online = false;
+                if self.notice == UPDATE_APP || self.notice == TOO_NEW {
+                    self.notice.clear(); // the next hello says it again
+                }
                 self.retry_at = Some(Instant::now() + retry_in);
                 // The media goes with the socket; the call is joined again once a new one is up.
                 let Some(room) = self.call.room else {
@@ -407,13 +425,15 @@ impl Model {
                 }
                 return self.server_msg(ServerMsg::MessageUpdated { message: *m });
             }
-            Event::ChangeFailed(e) => {
+            Event::ChangeFailed(e) => self.error = e,
+            Event::EditFailed(e) => {
                 if self.editing.is_some() {
                     self.edit_error = e;
                 } else {
                     self.error = e;
                 }
             }
+            Event::Incompatible => self.notice = TOO_NEW.into(),
             Event::Pins { room, pins } => match (&mut self.pins, pins) {
                 (Some((r, list)), Ok(p)) if *r == room => *list = Some(p),
                 (_, Ok(_)) => {}
@@ -433,7 +453,13 @@ impl Model {
                 }
             }
             Event::DownloadFailed(e) => self.error = e,
-            Event::SendFailed { room, body, error } => {
+            Event::SendFailed {
+                room,
+                body,
+                error,
+                keys,
+            } => {
+                self.tray.set_sending(&keys, false);
                 self.error = error;
                 if self.active == Some(room) {
                     self.draft_back = Some(body);
@@ -497,7 +523,13 @@ impl Model {
         let shown = self.active.filter(|id| self.state.find_room(*id).is_some());
         if let ServerMsg::Hello { .. } = m {
             (self.online, self.notice, self.retry_at) = (true, String::new(), None);
+            let theirs = self.state.me.as_ref().map(|m| m.server.version.as_str());
+            if theirs.is_some_and(|v| newer(v, vesper_protocol::VERSION)) {
+                self.notice = UPDATE_APP.into();
+            }
             self.typing.clear();
+            // A ring_stop may have been lost while the socket was down (the web's ring store does the same).
+            self.rings.clear();
             // Like resync(): events may have been missed while the socket was down, so drop the other rooms and
             // fetch the shown one's newest page again, merged into what is held.
             let keep = shown.or_else(|| self.state.rooms.first().map(|r| r.id));
@@ -804,6 +836,7 @@ impl Model {
         if self.call.phase != Phase::Idle && self.call.room == Some(room) {
             return vec![];
         }
+        self.rings.retain(|r| r.0 != room);
         let mut cmds = self.end_call("", true);
         self.call.end(""); // a new call starts unmuted; the server sends a force mute again if it holds
         let c = &mut self.call;
@@ -835,6 +868,10 @@ impl Model {
 
     /// Accept the first ring: leave any call, and join the DM's. The view opens the room.
     pub fn accept_ring(&mut self, room: i64) -> Vec<Cmd> {
+        if !self.online {
+            self.call.error = NOT_ONLINE.into(); // the current call stays
+            return vec![];
+        }
         self.rings.retain(|r| r.0 != room);
         let mut cmds = self.leave_voice();
         cmds.extend(self.join_voice(room));
@@ -888,7 +925,14 @@ impl Model {
             return vec![];
         }
         c.muted = !c.muted;
-        vec![self.sending(), self.voice_state()]
+        let mut cmds = vec![self.sending()];
+        cmds.extend(self.voice_state_once_joining());
+        cmds
+    }
+
+    /// The server answers a voice state before `join` with an error that ends the call; `Joined` sends it then.
+    fn voice_state_once_joining(&self) -> Option<Cmd> {
+        (self.call.phase != Phase::Starting).then(|| self.voice_state())
     }
 
     /// Deafen silences everyone; it does not mute the microphone, as in the web app.
@@ -898,10 +942,9 @@ impl Model {
             return vec![];
         }
         c.deafened = !c.deafened;
-        vec![
-            Cmd::Voice(VoiceCmd::Deafened(c.deafened)),
-            self.voice_state(),
-        ]
+        let mut cmds = vec![Cmd::Voice(VoiceCmd::Deafened(c.deafened))];
+        cmds.extend(self.voice_state_once_joining());
+        cmds
     }
 
     /// One person's volume in percent, 100 when not set.
@@ -1030,7 +1073,7 @@ impl Model {
             let names: Vec<&str> = self
                 .tray
                 .of(room)
-                .filter(|i| i.attachment.is_some())
+                .filter(|i| attachments.iter().any(|a| a.0 == i.key))
                 .map(|i| i.name.as_str())
                 .collect();
             names.join(", ")
@@ -1041,6 +1084,8 @@ impl Model {
             return vec![];
         }
         self.error.clear();
+        let keys: Vec<u64> = attachments.iter().map(|a| a.0).collect();
+        self.tray.set_sending(&keys, true);
         vec![Cmd::Send {
             room,
             body,
@@ -1171,6 +1216,9 @@ impl Model {
 
     /// Delete asks first; `confirmed` sends it.
     pub fn delete(&mut self, id: i64, confirmed: bool) -> Vec<Cmd> {
+        if confirmed {
+            self.confirm_delete = None; // also when it was deleted elsewhere meanwhile
+        }
         if !self.find(id).is_some_and(|m| self.can_delete(m)) {
             return vec![];
         }
@@ -1178,7 +1226,6 @@ impl Model {
             (self.confirm_delete, self.picking) = (Some(id), None);
             return vec![];
         }
-        self.confirm_delete = None;
         vec![Cmd::Delete(id)]
     }
 
@@ -1823,6 +1870,7 @@ mod tests {
             room: 1,
             body: "hi".into(),
             error: "Too many tries.".into(),
+            keys: vec![],
         });
         assert_eq!(m.draft_back.as_deref(), Some("hi"));
     }
@@ -2053,7 +2101,13 @@ mod tests {
         assert!(
             matches!(m.save_edit(" fixed ").as_slice(), [Cmd::Edit { id: 14, body }] if body == "fixed")
         );
-        m.apply(Event::ChangeFailed(
+        m.apply(Event::ChangeFailed("A reaction failed.".into()));
+        assert_eq!(
+            (m.edit_error.as_str(), m.error.as_str()),
+            ("", "A reaction failed."),
+            "a failed reaction is not the edit's error"
+        );
+        m.apply(Event::EditFailed(
             "Too many tries. Wait a minute and try again.".into(),
         ));
         assert_eq!(m.editing, Some(14));
@@ -2158,5 +2212,137 @@ mod tests {
         // The server's upload_max is checked before sending.
         assert!(m.attach(vec![("/tmp/big".into(), 2 << 20)]).is_empty());
         assert_eq!(m.tray.items[0].error, "Files can be up to 1 MB.");
+    }
+
+    #[test]
+    fn a_newer_server_is_named_and_an_unreadable_hello_too() {
+        assert!(newer("1.9.0", "1.8.3") && newer("2.0.0", "1.8.3"));
+        assert!(!newer("1.8.3", "1.8.3") && !newer("1.8.2", "1.8.3"));
+        assert!(!newer("1.8.4-rc1", "1.8.4") && !newer("dev", "1.8.3"));
+
+        let mut m = signed_in();
+        server(&mut m, hello());
+        assert!(m.notice.is_empty(), "the test server is older");
+        let mut hi = hello();
+        if let ServerMsg::Hello { me, .. } = &mut hi {
+            me.server.version = "99.0.0".into();
+        }
+        server(&mut m, hi);
+        assert_eq!((m.online, m.notice.as_str()), (true, UPDATE_APP));
+        m.apply(Event::Offline {
+            retry_in: Duration::from_secs(1),
+        });
+        assert!(
+            m.notice.is_empty(),
+            "the banner says the connection is lost"
+        );
+        m.apply(Event::Incompatible);
+        assert_eq!(m.notice, TOO_NEW);
+    }
+
+    #[test]
+    fn a_reconnect_and_a_join_drop_old_rings() {
+        let mut m = signed_in();
+        server(&mut m, hello());
+        let ring = |room| ServerMsg::RingStart {
+            room_id: room,
+            user_id: "b".into(),
+        };
+        server(&mut m, ring(3));
+        server(&mut m, hello());
+        assert!(m.rings.is_empty(), "its ring_stop may have been lost");
+        server(&mut m, ring(3));
+        server(&mut m, ring(4));
+        m.join_voice(3);
+        assert_eq!(m.rings, [(4, "b".to_string())]);
+    }
+
+    #[test]
+    fn accepting_a_ring_offline_keeps_the_call() {
+        let mut m = in_call();
+        server(
+            &mut m,
+            ServerMsg::RingStart {
+                room_id: 3,
+                user_id: "b".into(),
+            },
+        );
+        m.online = false;
+        assert!(m.accept_ring(3).is_empty());
+        assert_eq!((m.call.phase, m.call.room), (Phase::Joined, Some(1)));
+        assert_eq!(m.call.error, NOT_ONLINE);
+    }
+
+    #[test]
+    fn mute_before_the_join_waits_for_joined() {
+        let mut m = signed_in();
+        server(&mut m, hello());
+        m.join_voice(1);
+        assert_eq!(m.call.phase, Phase::Starting);
+        let sent = |c: &[Cmd]| {
+            c.iter()
+                .any(|c| matches!(c, Cmd::Signal(ClientMsg::SetVoiceState { .. })))
+        };
+        assert!(
+            !sent(&m.toggle_mute()),
+            "the server would answer join first"
+        );
+        assert!(!sent(&m.toggle_deafen()));
+        voice(&mut m, VoiceEvent::Offer("o".into()));
+        let joined = ServerMsg::Joined {
+            user_id: "a".into(),
+            answer: "ans".into(),
+            peers: vec![],
+        };
+        assert!(sent(&server(&mut m, joined)), "Joined sends it");
+        assert!(sent(&m.toggle_mute()));
+    }
+
+    #[test]
+    fn a_delete_confirm_closes_when_the_message_went_elsewhere() {
+        let mut m = chat();
+        m.delete(11, false);
+        assert_eq!(m.confirm_delete, Some(11));
+        let mut gone = msg(11, 1, "a", "");
+        gone.deleted = true;
+        server(&mut m, ServerMsg::MessageUpdated { message: gone });
+        assert!(m.delete(11, true).is_empty());
+        assert_eq!(m.confirm_delete, None);
+    }
+
+    #[test]
+    fn a_second_send_does_not_attach_the_same_files() {
+        let mut m = chat();
+        m.state.me.as_mut().unwrap().upload_max = 1 << 20;
+        m.attach(vec![("/tmp/a.txt".into(), 3)]);
+        let att = vesper_protocol::Attachment {
+            id: "u1".into(),
+            name: "a.txt".into(),
+            mime: "text/plain".into(),
+            size: 3,
+            kind: vesper_protocol::AttachmentKind::File,
+        };
+        m.apply(Event::Uploaded {
+            key: 1,
+            attachment: att,
+        });
+        assert!(
+            matches!(m.send("one").as_slice(), [Cmd::Send { attachments, .. }] if attachments.len() == 1)
+        );
+        assert!(
+            matches!(m.send("two").as_slice(), [Cmd::Send { attachments, .. }] if attachments.is_empty()),
+            "the files are in the first send"
+        );
+        assert!(m.send("").is_empty(), "no files left to send alone");
+        m.apply(Event::SendFailed {
+            room: 1,
+            body: "one".into(),
+            error: "x".into(),
+            keys: vec![1],
+        });
+        assert!(
+            matches!(m.send("again").as_slice(), [Cmd::Send { attachments, .. }] if attachments.len() == 1),
+            "a failed send gives them back"
+        );
     }
 }

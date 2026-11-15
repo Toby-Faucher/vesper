@@ -108,13 +108,16 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   The chat tests (`desktop/tests/chat.rs`) run two clients through edits, deletes, reactions, replies, typing and files,
   with the files in a temp folder.
 - Files from chat: Save opens the system's save dialog in the Downloads folder. Open (images, audio and video only) downloads
-  to `vesper-open/<id>.<ext>` in the temp folder and hands it to the system's app. A pasted picture is first written to
-  `vesper-paste/` in the temp folder.
+  to `Vesper/open/<id>.<ext>` in the user's cache folder (`%LOCALAPPDATA%`, `~/Library/Caches`, `$XDG_CACHE_HOME`) and hands it
+  to the system's app. A download goes to `<name>.part` and is renamed when whole; it is capped at the server's upload limit.
+  A pasted picture is first written to `Vesper/paste/` in the cache folder and deleted once uploaded (one never sent goes
+  after a day).
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
   Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
 - Settings (the gear next to your name; Log out is in the menu on your name) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
   `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets. It also keeps whether the sidebar is hidden
-  (the web keeps that in localStorage).
+  (the web keeps that in localStorage). It is written to a temporary file and renamed. A value the app cannot read falls
+  back to its default alone; a file that is not JSON is kept as `settings.json.bad`.
 - DeepFilterNet runs natively (`vesper-dsp` with tract, the same `=0.21.4` pin and debug-assertions override as the root
   workspace). The app does not ship the model: at the first call it downloads `/dsp/model.tar.gz` from the server it is signed
   in to (the file the web app loads), checks its sha256 against the pin in `scripts/fetch-model.sh`, and keeps it as
@@ -122,8 +125,9 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   gives a call with the noise gate and a note in the call bar.
 - The DeepFilterNet test with the real model runs only when `crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz` exists
   (`scripts/fetch-model.sh`); without it the test prints `SKIPPED` and passes. CI has no model, so it skips there.
-- Push to talk watches its key globally on Windows, macOS (with Accessibility access) and X11. On Wayland it works only while the
-  window has focus. The tray uses KSNI on Linux (no GTK headers needed); a desktop without a tray host shows none.
+- Push to talk watches its key globally on Windows, macOS (with Accessibility access) and X11, only during a call. On Wayland it
+  works only while the window has focus. As on the web, a press while a text field in Vesper has focus is ignored, and a
+  release always counts. The tray uses KSNI on Linux (no GTK headers needed); a desktop without a tray host shows none.
 - Sign in: the app asks for the server address (the one you open Vesper at in a browser, e.g. `https://vesper.example.com`), a
   username and a password. Accounts are made in the web app. The session is kept in the OS keyring (Secret Service on Linux,
   for example GNOME Keyring or KWallet); without one the app works but asks you to sign in at every start.

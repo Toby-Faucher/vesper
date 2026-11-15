@@ -100,6 +100,33 @@ pub fn media_ext(mime: &str) -> Option<&'static str> {
     })
 }
 
+/// `<cache dir>/Vesper/<sub>`: this user's own folder for media to open (`open`) and pasted pictures (`paste`), never
+/// the shared temp folder, where another user could make the folder first or plant a file in it.
+pub fn cache_dir(sub: &str) -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Vesper")
+        .join(sub)
+}
+
+/// Removes pasted pictures a day old: one that was sent is already gone, one never sent is left over.
+pub fn clean_pasted() {
+    let day = std::time::Duration::from_secs(24 * 3600);
+    for e in std::fs::read_dir(cache_dir("paste"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t.elapsed().is_ok_and(|a| a > day));
+        if old {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 /// `dir/name`, or `dir/stem (2).ext` and so on when that is taken. Never an existing file.
 pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let name = safe_name(name);

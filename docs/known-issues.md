@@ -158,11 +158,13 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   `/dsp/` (a dev server without `scripts/build-dsp.sh`), the noise gate runs and the call bar says so. The fallback after slow
   frames is one way for the rest of the call, as on the web. The noise gate has no threshold setting (fixed at -50 dBFS).
 - Push to talk needs X11 for a global key on Linux; on Wayland it works only while the window has focus. On macOS it needs
-  Accessibility access. A game running as administrator on Windows may hide its keys from the app (not tried). The key also
-  opens the mic while typing it in Vesper's own composer.
+  Accessibility access. A game running as administrator on Windows may hide its keys from the app (not tried).
 - Closing the window during a call minimises it instead of hiding it (GPUI 0.2.2 cannot hide a window on Windows), so it
   stays in the taskbar. On a Linux desktop without a tray host there is no tray icon.
 - Not verified: real keys, a real tray, start with the computer, real audio through DeepFilterNet, and running on Windows.
+- A server newer than the app: the app cannot update itself the way the web reloads. On a newer server version it shows
+  "This server runs a newer Vesper. Update the app..." in the banner and keeps working; a `hello` it cannot read shows that it
+  cannot talk to the server. A socket message of a kind it does not know is skipped.
 - The call's UDP socket is IPv4 only, so an SFU reachable only over IPv6 does not connect.
 - Not verified on real devices or across a real network with NAT: the voice tests run on loopback with fake audio.
 - Screen share: the desktop app can watch, not share. It watches one share at a time, at fit size, without the web's layouts,

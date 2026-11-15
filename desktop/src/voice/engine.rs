@@ -43,6 +43,10 @@ const STRUGGLE_FOR: Duration = Duration::from_secs(6);
 const STRUGGLE_LOSS: f32 = 0.02;
 /// How often a lost device is tried again.
 const REOPEN: Duration = Duration::from_secs(1);
+/// ICE may come back from Disconnected (missed consent checks: a short Wi-Fi drop); a browser waits too.
+const ICE_GRACE: Duration = Duration::from_secs(10);
+/// A person with no audio this long is forgotten (left, or muted with nothing sent); a new packet starts them afresh.
+const PEER_IDLE: Duration = Duration::from_secs(10);
 
 pub const NO_CONNECT: &str = "Could not reach the voice server. A firewall may block UDP.";
 pub const LOST: &str = "The voice connection was lost.";
@@ -54,6 +58,14 @@ struct Peer {
     jitter: Jitter,
     decoder: Decoder,
     speaking: Speaking,
+    /// When their last packet came.
+    heard: Instant,
+}
+
+/// Drops the people not heard from in `PEER_IDLE`, so a long call with people coming and going does not keep
+/// decoding the gone ones every 20 ms.
+fn forget_quiet(peers: &mut HashMap<String, Peer>, now: Instant) {
+    peers.retain(|_, p| now.duration_since(p.heard) < PEER_IDLE);
 }
 
 struct Engine<'a> {
@@ -65,6 +77,8 @@ struct Engine<'a> {
     pending: Option<SdpPendingOffer>,
     answered: Option<Instant>,
     connected: bool,
+    /// Since when ICE is Disconnected; the call ends after `ICE_GRACE` of it.
+    ice_lost: Option<Instant>,
     muted: bool,
     deafened: bool,
     devices: &'a dyn AudioDevices,
@@ -165,6 +179,7 @@ impl<'a> Engine<'a> {
             pending: Some(pending),
             answered: None,
             connected: false,
+            ice_lost: None,
             muted: false,
             deafened: false,
             devices,
@@ -237,6 +252,9 @@ impl<'a> Engine<'a> {
             }
             if !self.connected && self.answered.is_some_and(|t| t.elapsed() > CONNECT_TIMEOUT) {
                 return Err(NO_CONNECT);
+            }
+            if self.ice_lost.is_some_and(|t| t.elapsed() > ICE_GRACE) {
+                return Err(LOST);
             }
         }
     }
@@ -344,11 +362,15 @@ impl<'a> Engine<'a> {
                     self.connected = true;
                     (self.emit)(VoiceEvent::Connected);
                 }
-                Output::Event(Event::IceConnectionStateChange(
-                    IceConnectionState::Disconnected,
-                )) => {
-                    return Err(LOST);
-                }
+                Output::Event(Event::IceConnectionStateChange(state)) => match state {
+                    IceConnectionState::Disconnected => {
+                        self.ice_lost.get_or_insert_with(Instant::now);
+                    }
+                    IceConnectionState::Connected | IceConnectionState::Completed => {
+                        self.ice_lost = None;
+                    }
+                    _ => {}
+                },
                 Output::Event(Event::MediaData(d)) => {
                     // The SFU labels each forwarded track with the sender's user_id as its MSID stream id.
                     let Some((kind, user)) = self
@@ -367,6 +389,7 @@ impl<'a> Engine<'a> {
                         continue;
                     };
                     let rtp = d.time.rebase(Frequency::FORTY_EIGHT_KHZ).numer();
+                    peer.heard = Instant::now();
                     peer.jitter.push(rtp, d.data.to_vec());
                 }
                 // Every 2 s: the call's own round trip and loss, and each person's audio, for the quality icons.
@@ -494,6 +517,7 @@ impl<'a> Engine<'a> {
                 jitter: Jitter::default(),
                 decoder,
                 speaking: Speaking::default(),
+                heard: Instant::now(),
             };
             self.peers.insert(user.to_string(), peer);
         }
@@ -535,6 +559,7 @@ impl<'a> Engine<'a> {
 
     /// 20 ms: play one frame of everyone, send what was captured, tell the model who speaks.
     fn tick(&mut self) {
+        forget_quiet(&mut self.peers, Instant::now());
         let mut mix = [0f32; FRAME];
         let mut pcm = [0f32; FRAME];
         let mut speaking = vec![];
@@ -644,6 +669,23 @@ mod tests {
 
     use super::*;
     use crate::settings::Denoise;
+
+    #[test]
+    fn a_person_not_heard_for_a_while_is_forgotten() {
+        let t = Instant::now();
+        let peer = |heard| Peer {
+            jitter: Jitter::default(),
+            decoder: Decoder::new(RATE, Channels::Mono).unwrap(),
+            speaking: Speaking::default(),
+            heard,
+        };
+        let mut peers = HashMap::from([
+            ("gone".to_string(), peer(t)),
+            ("here".to_string(), peer(t + PEER_IDLE)),
+        ]);
+        forget_quiet(&mut peers, t + PEER_IDLE + Duration::from_millis(20));
+        assert_eq!(peers.keys().collect::<Vec<_>>(), ["here"]);
+    }
 
     /// Devices that can be unplugged (`mic` and `speakers` false) and refuse to open (`refuse`). Each open is logged.
     #[derive(Default)]

@@ -27,10 +27,10 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use gpui::{
-    App, AppContext, Application, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement, Render,
-    RenderImage, Styled, Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions,
-    actions, div, px, rgb, size,
+    App, AppContext, Application, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement,
+    Render, RenderImage, Styled, Subscription, Task, TitlebarOptions, Window, WindowBounds,
+    WindowOptions, actions, div, px, rgb, size,
 };
 use gpui_component::Root;
 use gpui_component::input::{InputEvent, InputState};
@@ -94,6 +94,7 @@ pub fn run() {
     #[cfg(debug_assertions)]
     let audio = dev::audio().unwrap_or(audio);
     let (cmds, events) = net::start(Arc::new(Keyring), audio);
+    crate::files::clean_pasted();
     let file = crate::settings::path();
     let saved = file
         .as_deref()
@@ -206,6 +207,10 @@ pub struct Vesper {
     bitrate: Option<(Entity<SliderState>, Subscription)>,
     /// To the key thread (none in tests).
     pub ptt_tx: Option<Sender<KeyMsg>>,
+    /// A settings save waiting for a slider to stop.
+    save_later: Option<Task<()>>,
+    /// The key the key thread was last told to watch.
+    watched: std::cell::Cell<Option<Option<device_query::Keycode>>>,
     /// Why push to talk works only while the window has focus.
     pub ptt_note: Option<&'static str>,
     /// The watched screen's newest picture, by sharer.
@@ -252,11 +257,13 @@ impl Vesper {
                      e: &InputEvent,
                      window: &mut Window,
                      cx: &mut Context<Self>| {
-            if matches!(e, InputEvent::PressEnter { .. }) {
-                this.submit_sign_in(window, cx);
+            match e {
+                InputEvent::PressEnter { .. } => this.submit_sign_in(window, cx),
+                InputEvent::Change => cx.notify(), // the plain http warning follows the address
+                _ => {}
             }
         };
-        let subs = vec![
+        let mut subs = vec![
             cx.subscribe_in(&server, window, enter),
             cx.subscribe_in(&username, window, enter),
             cx.subscribe_in(&password, window, enter),
@@ -271,11 +278,18 @@ impl Vesper {
                     // The key-up never comes once focus is gone: a window-held key would leave the mic open.
                     this.window_key(None, false);
                 }
+                this.send_typing(window, cx);
                 let cmds = this.model.set_focused(active);
                 this.run(cmds);
                 cx.notify();
             }),
         ];
+        // Push to talk ignores a press while one of these has focus.
+        for i in [&server, &username, &password, &composer, &edit] {
+            let f = i.read(cx).focus_handle(cx);
+            subs.push(cx.on_focus(&f, window, |this, w, cx| this.send_typing(w, cx)));
+            subs.push(cx.on_blur(&f, window, |this, w, cx| this.send_typing(w, cx)));
+        }
         let list = Self::new_list(false, cx);
         let _ = cmds.send(Cmd::Restore); // the first thing the app asks for: the stored session
         Vesper {
@@ -307,6 +321,8 @@ impl Vesper {
             settings_error: String::new(),
             bitrate: None,
             ptt_tx: None,
+            watched: Default::default(),
+            save_later: None,
             ptt_note: None,
             screen: None,
             watch_timer: None,
@@ -378,6 +394,24 @@ impl Vesper {
         }
     }
 
+    /// Tells the key thread whether a text input in the active window has focus.
+    fn send_typing(&self, window: &Window, cx: &App) {
+        let inputs = [
+            &self.server,
+            &self.username,
+            &self.password,
+            &self.composer,
+            &self.edit,
+        ];
+        let typing = window.is_window_active()
+            && inputs
+                .iter()
+                .any(|i| i.read(cx).focus_handle(cx).is_focused(window));
+        if let Some(tx) = &self.ptt_tx {
+            let _ = tx.send(KeyMsg::Typing(typing));
+        }
+    }
+
     /// One event into the model; what it asks for goes to the network.
     pub fn apply(&mut self, ev: Event, window: &mut Window, cx: &mut Context<Self>) {
         let signed_out = matches!(ev, Event::SignedOut { .. });
@@ -419,6 +453,7 @@ impl Vesper {
         for c in cmds {
             let _ = self.cmds.send(c);
         }
+        self.watch_key(); // a call started or ended
     }
 
     fn submit_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
