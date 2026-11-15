@@ -3,7 +3,6 @@ import './app.css';
 import App from './App.svelte';
 import { preloadDenoiserAssets } from './lib/audio/preload';
 import { applyScheme, loadScheme, watchScheme } from './lib/ui/scheme';
-import { applyStyle, loadStyle, useStyle } from './lib/ui/style';
 import { watchTips } from './lib/ui/tip';
 import { navigate } from './lib/session.svelte';
 
@@ -11,11 +10,13 @@ let storage: Storage | null = null;
 try {
   storage = localStorage;
 } catch {
-  // storage blocked: the default style
+  // storage blocked: nothing kept between visits
 }
-const style = loadStyle(storage);
-// A lazy style loads its CSS first (at most 2 s), so the page never shows it without its tokens.
-const ready = style === 'vesper' ? Promise.resolve(applyStyle(style)) : Promise.race([useStyle(style), new Promise((r) => setTimeout(r, 2000))]);
+try {
+  storage?.removeItem('vesper.style'); // the old Style choice (Persona, Cozy, BBS, Aurora): only Vesper is left
+} catch {
+  // storage blocked
+}
 watchScheme(storage);
 watchTips();
 
@@ -25,10 +26,8 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
   if (typeof url === 'string' && /^\/(r\/\d+)?$/.test(url)) navigate(url);
 });
 
-void ready.then(() => {
-  applyScheme(loadScheme(storage)); // also paints the last account's accent, so sign in shows it; App paints the real one from /api/me
-  mount(App, { target: document.getElementById('app')! });
-});
+applyScheme(loadScheme(storage)); // also paints the last account's accent, so sign in shows it; App paints the real one from /api/me
+mount(App, { target: document.getElementById('app')! });
 
 // Start the denoiser download (about 10 MB) while the sign in or join form is shown.
 void preloadDenoiserAssets();

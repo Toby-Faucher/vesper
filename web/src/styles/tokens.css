@@ -1,5 +1,5 @@
-/* Design tokens. This base block is the Vesper look, dark. A style is another block under html[data-style='x'] (a lazy file in
-   src/styles/, see src/lib/ui/style.ts); the light scheme is html[data-scheme='light'] at the end of this file (src/lib/ui/scheme.ts).
+/* Design tokens. This base block is the Vesper look, dark; the light scheme is html[data-scheme='light'] at the end of this
+   file (src/lib/ui/scheme.ts).
    Raw steps are hex so src/lib/ui/tokens.test.ts can check contrast; components use only the roles. */
 :root {
   color-scheme: dark;

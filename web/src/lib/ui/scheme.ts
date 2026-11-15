@@ -1,8 +1,7 @@
 // Color scheme: dark, light, or follow the system. Per device (vesper.scheme), default dark so the look people have stays.
 // The result is data-scheme="dark|light" on <html>; tokens.css reads only that. index.html sets it before the first paint with
-// the same rules (scheme.test.ts keeps the two in step). A style that is dark or light by nature (STYLES[].scheme) ignores the choice.
+// the same rules (scheme.test.ts keeps the two in step).
 import { applyAccent, loadAccent, type Scheme } from './accent';
-import { STYLES } from './style';
 
 export const SCHEME_KEY = 'vesper.scheme';
 export const CHOICES = [
@@ -23,16 +22,14 @@ export function loadScheme(store: Storage | null): Choice {
   return CHOICES.find((c) => c.id === v)?.id ?? 'dark';
 }
 
-/** The scheme to draw: the style's own when it has one, else the choice (System asks the browser). */
-export function resolveScheme(choice: Choice, fixed: 'both' | Scheme, systemLight: boolean): Scheme {
-  if (fixed !== 'both') return fixed;
+/** The scheme to draw: the choice (System asks the browser). */
+export function resolveScheme(choice: Choice, systemLight: boolean): Scheme {
   return choice === 'system' ? (systemLight ? 'light' : 'dark') : choice;
 }
 
-/** Sets data-scheme for the style now on <html>, the browser's tab colour, and repaints the accent for the scheme. */
+/** Sets data-scheme on <html>, the browser's tab colour, and repaints the accent for the scheme. */
 export function applyScheme(choice: Choice, root: HTMLElement = document.documentElement): Scheme {
-  const fixed = STYLES.find((s) => s.id === root.getAttribute('data-style'))?.scheme ?? 'both';
-  const scheme = resolveScheme(choice, fixed, typeof matchMedia === 'function' && matchMedia(QUERY).matches);
+  const scheme = resolveScheme(choice, typeof matchMedia === 'function' && matchMedia(QUERY).matches);
   root.setAttribute('data-scheme', scheme);
   applyAccent(loadAccent(), root);
   const doc = root.ownerDocument;

@@ -23,7 +23,7 @@ use serde_json::Value;
 use vesper_protocol::Role;
 
 use super::c::{self, Button, Dialog, Field, Select, Switch, Variant, kbd, radio_list, radio_row};
-use super::theme::{self, Scheme, Style, TEXT_BASE, TEXT_SM, TEXT_XL, TEXT_XS, TextStepExt};
+use super::theme::{self, Scheme, TEXT_BASE, TEXT_SM, TEXT_XL, TEXT_XS, TextStepExt};
 use super::{Vesper, account, admin};
 use crate::model::Phase;
 use crate::net::{Cmd, Fail, Json};
@@ -130,7 +130,7 @@ pub struct Page {
     pub account: account::State,
     pub admin: admin::State,
     /// The look last painted: style, scheme, accent.
-    look: Option<(Style, Scheme, Option<String>)>,
+    look: Option<(Scheme, Option<String>)>,
 }
 
 impl Page {
@@ -464,10 +464,9 @@ impl Vesper {
         cx.notify();
     }
 
-    /// The look from the settings (style, scheme) and the account (accent), painted when it changed.
+    /// The look from the settings (scheme) and the account (accent), painted when it changed.
     pub(super) fn sync_look(&mut self, window: &Window, cx: &mut App) {
         let s = &self.model.settings;
-        let style = Style::from_id(&s.style);
         let scheme = match s.scheme.as_str() {
             "light" => Scheme::Light,
             "system" => match window.appearance() {
@@ -477,12 +476,12 @@ impl Vesper {
             _ => Scheme::Dark,
         };
         let accent = self.my_user().and_then(|u| u.ui_accent.clone());
-        let look = (style, scheme, accent);
+        let look = (scheme, accent);
         if self.page.look.as_ref() == Some(&look) {
             return;
         }
         let motion = theme::tokens(cx).motion.clone();
-        let mut t = theme::Tokens::new(look.0, look.1, look.2.as_deref());
+        let mut t = theme::Tokens::new(look.0, look.1.as_deref());
         t.motion = motion;
         self.page.look = Some(look);
         theme::set(t, cx);
@@ -1013,45 +1012,6 @@ impl Vesper {
     fn render_appearance(&mut self, cx: &mut Context<Self>) -> Div {
         let t = theme::tokens(cx).clone();
         let s = self.model.settings.clone();
-        let style = Style::from_id(&s.style);
-        let fixed = style.fixed_scheme();
-        const BLURBS: [(&str, &str); 5] = [
-            ("Vesper", "The default look, dark or light."),
-            (
-                "Persona",
-                "Red, black and white, with sharp cuts. Dark only.",
-            ),
-            ("Cozy", "Warm cream paper and round shapes. Light only."),
-            ("BBS", "A dial-up board: monospace on black. Dark only."),
-            (
-                "Aurora",
-                "A deep blue night sky with a mint accent. Dark only.",
-            ),
-        ];
-        let styles = Style::ALL
-            .into_iter()
-            .zip(BLURBS)
-            .map(|(st, (name, blurb))| {
-                radio_row(
-                    SharedString::from(format!("style-{}", st.id())),
-                    st == style,
-                    cx,
-                )
-                .min_h(px(48.))
-                .py(px(6.))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.change_settings(|s| s.style = st.id().into(), cx);
-                    this.sync_look(window, cx);
-                }))
-                .child(
-                    // shortcut: a fixed text width (320 less the border, the sides, the dot and the gap), as GPUI
-                    // measured the wrapped blurb one line tall in a flex_1 column; revisit if the list width changes.
-                    v_flex()
-                        .w(px(269.))
-                        .child(name)
-                        .child(text(blurb, t.fg_2, true)),
-                )
-            });
         let schemes = [("dark", "Dark"), ("light", "Light"), ("system", "System")]
             .into_iter()
             .map(|(id, name)| {
@@ -1061,13 +1021,10 @@ impl Vesper {
                     cx,
                 )
                 .h(px(40.))
-                .when(fixed.is_some(), |d| d.opacity(0.6))
-                .when(fixed.is_none(), |d| {
-                    d.on_click(cx.listener(move |this, _, window, cx| {
-                        this.change_settings(|s| s.scheme = id.into(), cx);
-                        this.sync_look(window, cx);
-                    }))
-                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.change_settings(|s| s.scheme = id.into(), cx);
+                    this.sync_look(window, cx);
+                }))
                 .child(name)
             });
         let accent = self
@@ -1123,15 +1080,7 @@ impl Vesper {
                 ),
             );
         }
-        let scheme_help = match fixed {
-            None => "On this device only. System follows your device setting.".to_string(),
-            Some(Scheme::Light) => {
-                "This style is light only, so the choice does not apply to it.".into()
-            }
-            Some(Scheme::Dark) => {
-                "This style is dark only, so the choice does not apply to it.".into()
-            }
-        };
+        let scheme_help = "On this device only. System follows your device setting.";
         // A fieldset's legend is outside its flex gap: 4 px under it, then the gap between the rest.
         let fieldset = |name: &'static str, gap: f32, rest: Div| {
             v_flex()
@@ -1141,13 +1090,6 @@ impl Vesper {
         let err = self.page.account.accent_error.clone();
         v_flex()
             .gap(px(32.))
-            .child(fieldset(
-                "Style",
-                8.,
-                v_flex()
-                    .child(text("On this device only.", t.fg_2, false).mb(px(4.)))
-                    .child(radio_list(styles.collect(), cx)),
-            ))
             .child(fieldset(
                 "Colour scheme",
                 8.,
