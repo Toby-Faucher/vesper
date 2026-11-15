@@ -112,3 +112,59 @@ async fn the_table_refuses_values_out_of_range() {
     assert!(s.add_call(&a, &long, 1).await.is_err());
     assert!(s.calls_of(&a).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn every_mode_round_trips() {
+    let (_t, s) = open().await;
+    let a = account(&s, "ann").await;
+    let modes = [
+        CallMode::Deepfilter,
+        CallMode::Rnnoise,
+        CallMode::Browser,
+        CallMode::Off,
+    ];
+    for (i, mode) in modes.into_iter().enumerate() {
+        let c = CallSummary { mode, ..call(10) };
+        s.add_call(&a, &c, 1_000_000 + i as i64).await.unwrap();
+        assert_eq!(s.calls_of(&a).await.unwrap()[0].summary, c);
+    }
+}
+
+/// Migration 0014 rebuilds `call_stats` to allow rnnoise: the rows of an older database stay as they were.
+#[tokio::test]
+async fn calls_from_before_rnnoise_survive_the_migration() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("v.db");
+    Store::create_at_schema(&path, 13).await.unwrap();
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    let id = "a".repeat(32);
+    sqlx::query("INSERT INTO accounts (id, username, display_name, role, created_at) VALUES (?1, 'ann', 'ann', 'member', 0)")
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO call_stats (account_id, started_at, ended_at, mode, fallback_reason, loss_pct, jitter_ms, concealed_pct, rtt_ms, browser_ns_loading) VALUES (?1, 940000, 1000000, 'browser', 'denoiser stalled', 1.5, 12.0, NULL, 40.0, 1)")
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let rnnoise = sqlx::query("INSERT INTO call_stats (account_id, started_at, ended_at, mode, fallback_reason, browser_ns_loading) VALUES (?1, 0, 0, 'rnnoise', '', 0)")
+        .bind(&id)
+        .execute(&pool)
+        .await;
+    assert!(rnnoise.is_err(), "schema 13 refuses rnnoise");
+    pool.close().await;
+
+    let s = Store::open(&path).await.unwrap();
+    let calls = s.calls_of(&id).await.unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].summary, call(60));
+    let c = CallSummary {
+        mode: CallMode::Rnnoise,
+        ..call(5)
+    };
+    s.add_call(&id, &c, 2_000_000).await.unwrap();
+    assert_eq!(s.calls_of(&id).await.unwrap()[0].summary, c);
+}

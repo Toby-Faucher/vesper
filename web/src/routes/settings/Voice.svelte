@@ -25,6 +25,7 @@
 
   const MODES: Record<AudioSettings['mode'], string> = {
     deepfilter: 'Strongest. Runs on your computer.',
+    rnnoise: 'Lighter on your computer. Takes out less noise than DeepFilterNet.',
     browser: "Your browser's own filter. Lighter.",
     off: 'No filtering.',
   };
@@ -71,6 +72,7 @@
     <Field label="Noise suppression" help={MODES[settings.mode]}>
       <Select value={settings.mode} onchange={(e) => set({ mode: e.currentTarget.value as AudioSettings['mode'] })}>
         <option value="deepfilter">DeepFilterNet (best)</option>
+        <option value="rnnoise">RNNoise</option>
         <option value="browser">Browser built-in</option>
         <option value="off">Off</option>
       </Select>

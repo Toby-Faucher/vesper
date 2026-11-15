@@ -85,7 +85,7 @@ async fn values_out_of_range_are_refused_and_unknown_fields_ignored() {
     let refused = [
         with("duration_s", json!(24 * 3600 + 1)),
         with("duration_s", json!(-1)),
-        with("mode", json!("rnnoise")),
+        with("mode", json!("speex")),
         with("fallback_reason", json!("x".repeat(121))),
         with("fallback_reason", json!("line\nbreak")),
         with("loss_pct", json!(100.5)),

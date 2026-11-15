@@ -1,4 +1,7 @@
-export type DenoiseMode = 'deepfilter' | 'browser' | 'off';
+export type DenoiseMode = 'deepfilter' | 'rnnoise' | 'browser' | 'off';
+/** The modes that run a denoiser in the worklet and the DSP worker. */
+export type Engine = 'deepfilter' | 'rnnoise';
+export const isEngine = (m: DenoiseMode): m is Engine => m === 'deepfilter' || m === 'rnnoise';
 
 /**
  * Trips to 'browser' once `maxLate` of the last `windowFrames` frames took longer than `budgetMs`.

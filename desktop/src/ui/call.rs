@@ -439,10 +439,11 @@ impl Vesper {
 /// The web's status line wording for the engine's noise filter status: `Noise suppression: <mode>`, and why it is not
 /// DeepFilterNet in brackets.
 pub fn noise_line(filter: &str) -> String {
-    use crate::voice::denoise::{DEEPFILTER, GATE, LOADING, OFF};
+    use crate::voice::denoise::{DEEPFILTER, GATE, LOADING, OFF, RNNOISE};
     let (mode, why) = match filter {
         "" => return String::new(),
         DEEPFILTER => ("deepfilter", ""),
+        RNNOISE => ("rnnoise", ""),
         GATE => ("gate", ""),
         OFF => ("off", ""),
         LOADING => ("gate", "DeepFilterNet is loading"),
@@ -512,11 +513,12 @@ pub(super) fn link_button(
 #[cfg(test)]
 mod tests {
     use super::noise_line;
-    use crate::voice::denoise::{DEEPFILTER, LOADING};
+    use crate::voice::denoise::{DEEPFILTER, LOADING, RNNOISE};
 
     #[test]
     fn the_noise_line_reads_like_the_web() {
         assert_eq!(noise_line(DEEPFILTER), "Noise suppression: deepfilter");
+        assert_eq!(noise_line(RNNOISE), "Noise suppression: rnnoise");
         assert_eq!(
             noise_line(LOADING),
             "Noise suppression: gate (DeepFilterNet is loading)"

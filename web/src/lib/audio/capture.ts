@@ -1,6 +1,6 @@
 import type { DspOut } from './dsp-handler';
 import type { PipelineStats } from './denoise-core';
-import type { DenoiseMode } from './mode';
+import { isEngine, type DenoiseMode, type Engine } from './mode';
 import type { AudioSettings } from './settings';
 import { deviceGone } from '../devices';
 import { captureContext } from './context';
@@ -63,7 +63,7 @@ type Pipe = {
   stats?: PipelineStats;
   statsAt?: number;
 };
-/** pipeline is null outside deepfilter mode or before the worklet's first report (every 500 ms). */
+/** pipeline is null outside deepfilter and rnnoise mode or before the worklet's first report (every 500 ms). */
 export interface CaptureStats {
   pipeline: PipelineStats | null;
   /** ms since that snapshot arrived; a growing age means the worklet stopped running. null with no pipeline. */
@@ -79,7 +79,7 @@ const MUTE_GRACE_MS = 3000;
 const stopAll = (m: MediaStream) => m.getTracks().forEach((t) => t.stop());
 
 /**
- * deepfilter: mic -> gain -> AudioWorklet <-MessageChannel-> DSP worker, gain -> worklet, worklet -> MediaStreamDestination.
+ * deepfilter and rnnoise: mic -> gain -> AudioWorklet <-MessageChannel-> DSP worker, gain -> worklet, worklet -> MediaStreamDestination.
  * Inside the worklet (dynamics.ts): a soft limiter on the boosted input (only with a boost) before the denoiser, and the optional noise gate
  * (settings.vad.gate, at the level marker) on the denoised output. Neither exists in browser or off mode.
  * The boost sits before the denoiser, so the model and the worklet's input meter (and the mic-silent banner) see the boosted signal.
@@ -106,7 +106,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
   let live = d.startLive; // applied to every new track, so mute/PTT survive swaps and rebuilds
   let opens = 0;
 
-  // deepfilter asks with the browser filter on (while the model loads); `deep` asks again without it once the model is ready.
+  // deepfilter and rnnoise ask with the browser filter on (while the model loads); `deep` asks again without it once the model is ready.
   const ask = (mode: DenoiseMode, id: string | null, ns: ConstrainBoolean = mode !== 'off') =>
     d.getUserMedia({
       audio: {
@@ -178,9 +178,11 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     return me;
   }
 
-  async function deep(): Promise<Pipe> {
-    if (ctx.sampleRate !== 48000) throw new Error(`AudioContext runs at ${ctx.sampleRate} Hz, DeepFilterNet needs 48000`);
-    let m = await mic('deepfilter');
+  // RNNoise runs in the same graph, without the input boost, the limiter and the gate (DeepFilterNet only, like the UI says).
+  async function deep(engine: Engine): Promise<Pipe> {
+    if (ctx.sampleRate !== 48000) throw new Error(`AudioContext runs at ${ctx.sampleRate} Hz, the denoiser needs 48000`);
+    const boost = (n: AudioSettings) => (engine === 'deepfilter' ? n.inputBoostDb : 0);
+    let m = await mic(engine);
     let me: Pipe | undefined;
     let unwatch = watch(m.getAudioTracks()[0], () => me);
     let dead = false;
@@ -217,7 +219,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       node = await d.createWorkletNode(ctx);
       let src = ctx.createMediaStreamSource(m);
       const gain = ctx.createGain();
-      gain.gain.value = 10 ** (s.inputBoostDb / 20);
+      gain.gain.value = 10 ** (boost(s) / 20);
       out = ctx.createMediaStreamDestination();
       nodes.push(src, gain, node);
       src.connect(gain).connect(node).connect(out);
@@ -225,7 +227,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       const n = node;
       const set = () => w.postMessage({ type: 'set', atten: s.attenDb, beta: s.postFilter });
       // The limiter only with a boost: at 0 dB the default path stays bit-identical to the mic.
-      const dyn = () => n.port.postMessage({ type: 'dynamics', limit: s.inputBoostDb > 0, gate: s.vad.gate, thresholdDb: s.vad.thresholdDb });
+      const dyn = () => n.port.postMessage({ type: 'dynamics', limit: boost(s) > 0, gate: s.vad.gate && engine === 'deepfilter', thresholdDb: s.vad.thresholdDb });
       dyn(); // before the model is ready too: the passthrough is limited and the boost already applies
       timer = setTimeout(() => fail(`denoiser not ready after ${d.readyTimeoutMs / 1000} s`), d.readyTimeoutMs);
       w.onmessage = ({ data }: MessageEvent<DspOut>) => {
@@ -240,12 +242,12 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         me!.status = !s.noiseSuppression && swapSkipped ? SWAP_SKIPPED : '';
         if (me!.status) me!.swap = 'skipped: earlier this session';
         if (!s.noiseSuppression && !swapSkipped) void unfiltered().catch((e) => skip(msg(e)));
-        if (pipe === me) notify('deepfilter', me!.status);
+        if (pipe === me) notify(engine, me!.status);
       };
       const skip = (why: string) => {
         me!.status = `swap skipped: ${why}`;
         me!.swap = `skipped: ${why}`;
-        if (pipe === me) notify('deepfilter', me!.status);
+        if (pipe === me) notify(engine, me!.status);
       };
       // DeepFilterNet takes over at ready, so the browser filter goes off and the two never stack. Nothing depends on a
       // second getUserMedia working (Edge on Windows was seen to hand back a live track of zeros): the filtered track keeps
@@ -290,7 +292,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       // Chromium gives a second track of the same mic its own unfiltered source while the first runs only for an exact false.
       const second = async () => {
         const id = m.getAudioTracks()[0].getSettings().deviceId ?? null;
-        const asked = ask('deepfilter', id, { exact: false });
+        const asked = ask(engine, id, { exact: false });
         let timer: ReturnType<typeof setTimeout> | undefined;
         const late = new Promise<never>((_, no) => (timer = setTimeout(() => no(new Error(`no answer in ${REOPEN_TIMEOUT_MS / 1000} s`)), REOPEN_TIMEOUT_MS)));
         return Promise.race([asked, late]).catch((e) => {
@@ -340,15 +342,15 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         const snap = pipe === me ? getStats() : null;
         if (snap) statCbs.forEach((cb) => cb(snap));
       };
-      w.postMessage({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: s.attenDb, beta: s.postFilter });
+      w.postMessage({ type: 'init', engine, modelUrl: '/dsp/model.tar.gz', atten: s.attenDb, beta: s.postFilter });
       me = {
-        mode: 'deepfilter',
+        mode: engine,
         status: s.noiseSuppression ? 'loading' : LOADING, // with the filter on top it stays on after loading too
         track: out.stream.getAudioTracks()[0],
         raw: m.getAudioTracks()[0],
         stop,
         set: (n) => {
-          gain.gain.value = 10 ** (n.inputBoostDb / 20);
+          gain.gain.value = 10 ** (boost(n) / 20);
           dyn();
           if (ready) set();
         },
@@ -393,9 +395,9 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     let next: Pipe;
     try {
       try {
-        next = mode === 'deepfilter' ? await deep() : await plain(mode);
+        next = isEngine(mode) ? await deep(mode) : await plain(mode);
       } catch (e) {
-        if (mode !== 'deepfilter') throw e;
+        if (!isEngine(mode)) throw e;
         reason = `denoiser unavailable: ${msg(e)}`;
         next = await plain('browser');
       }
@@ -470,7 +472,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     },
     /** The latest snapshot, or null when there is no pipeline. */
     getStats,
-    /** Called with each new snapshot from the worklet (deepfilter mode only). Returns an unsubscribe function. */
+    /** Called with each new snapshot from the worklet (deepfilter and rnnoise mode only). Returns an unsubscribe function. */
     onStats(cb: (s: CaptureStats) => void) {
       statCbs.add(cb);
       return () => void statCbs.delete(cb);

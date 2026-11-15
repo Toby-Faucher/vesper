@@ -549,7 +549,7 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
 
     // The dropdowns: open, pick, closed again.
     click(cx, "settings-noise");
-    click(cx, "settings-noise-1");
+    click(cx, "settings-noise-2");
     view.read_with(cx, |v, _| {
         assert!(v.page.select.is_none(), "picking closes it")
     });

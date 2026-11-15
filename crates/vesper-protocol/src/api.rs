@@ -690,6 +690,7 @@ pub struct PushPayload {
 #[ts(export)]
 pub enum CallMode {
     Deepfilter,
+    Rnnoise,
     Browser,
     Off,
 }

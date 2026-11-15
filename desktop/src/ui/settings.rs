@@ -848,11 +848,15 @@ impl Vesper {
         );
         let mode = match s.denoise {
             Denoise::DeepFilter => 0,
-            Denoise::Gate => 1,
-            Denoise::Off => 2,
+            Denoise::Rnnoise => 1,
+            Denoise::Gate => 2,
+            Denoise::Off => 3,
         };
         let mode_help = match s.denoise {
             Denoise::DeepFilter => "Strongest. Runs on your computer.",
+            Denoise::Rnnoise => {
+                "Lighter on your computer. Takes out less noise than DeepFilterNet."
+            }
             Denoise::Gate => {
                 "Lighter. Mutes your mic between words, when it is under the level marker."
             }
@@ -862,6 +866,7 @@ impl Vesper {
             "settings-noise",
             vec![
                 "DeepFilterNet (best)".into(),
+                "RNNoise".into(),
                 "Noise gate".into(),
                 "Off".into(),
             ],
@@ -869,7 +874,12 @@ impl Vesper {
             640.,
             cx,
             |this, i, _, cx| {
-                let d = [Denoise::DeepFilter, Denoise::Gate, Denoise::Off][i.min(2)];
+                let d = [
+                    Denoise::DeepFilter,
+                    Denoise::Rnnoise,
+                    Denoise::Gate,
+                    Denoise::Off,
+                ][i.min(3)];
                 this.change_settings(|s| s.denoise = d, cx);
             },
         );

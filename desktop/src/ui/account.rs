@@ -159,6 +159,7 @@ pub fn call_line(c: &CallRecord) -> (String, String) {
     };
     let mode = match s.mode {
         CallMode::Deepfilter => "DeepFilterNet",
+        CallMode::Rnnoise => "RNNoise",
         CallMode::Browser => "browser filter",
         CallMode::Off => "no filter",
     };

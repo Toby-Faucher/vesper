@@ -96,7 +96,7 @@ describe('createCapture', () => {
     expect(t.mics[0].c).toMatchObject({ echoCancellation: true, noiseSuppression: true, autoGainControl: false });
     expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
     const w = t.workers[0];
-    expect(w.postMessage).toHaveBeenCalledWith({ type: 'init', modelUrl: '/dsp/model.tar.gz', atten: 100, beta: 0.02 });
+    expect(w.postMessage).toHaveBeenCalledWith({ type: 'init', engine: 'deepfilter', modelUrl: '/dsp/model.tar.gz', atten: 100, beta: 0.02 });
     // Before ready only the dynamics settings, no frame port. No boost by default, so no limiter.
     expect(t.worklets[0].port.postMessage.mock.calls).toEqual([[{ type: 'dynamics', limit: false, gate: false, thresholdDb: -50 }]]);
     const cb = vi.fn();
@@ -129,6 +129,27 @@ describe('createCapture', () => {
     expect(transfer).toHaveLength(1);
     expect(wtransfer).toHaveLength(1);
     expect(transfer[0]).not.toBe(wtransfer[0]); // the two ends of one channel
+    cap.close();
+  });
+
+  it('rnnoise: the same graph with the rnnoise engine, without boost, limiter or gate; a slow worker falls back to browser', async () => {
+    const t = setup();
+    const s = clampSettings({ ...DEFAULT_AUDIO_SETTINGS, mode: 'rnnoise', inputBoostDb: 6, vad: { thresholdDb: -40, gate: true } });
+    const cap = await createCapture(s, t.deps);
+    expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
+    const w = t.workers[0];
+    expect(w.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'init', engine: 'rnnoise' }));
+    expect(t.worklets[0].port.postMessage.mock.calls).toEqual([[{ type: 'dynamics', limit: false, gate: false, thresholdDb: -40 }]]);
+    const cb = vi.fn();
+    cap.onModeChange(cb);
+    const boost = 'input boost applies only in deepfilter mode'; // the boost is saved but not used here
+    expect(cb).toHaveBeenLastCalledWith('rnnoise', `${LOADING}; ${boost}`);
+    w.onmessage({ data: { type: 'ready' } });
+    expect(cb).toHaveBeenLastCalledWith('rnnoise', boost);
+    t.worklets[0].port.onmessage({ data: { type: 'error', message: 'denoiser too slow for real time' } });
+    await flush();
+    expect(cb).toHaveBeenLastCalledWith('browser', `denoiser too slow for real time; ${boost}`);
+    expect(cap.stream.getAudioTracks()).toEqual([t.mics.at(-1)!.t]);
     cap.close();
   });
 

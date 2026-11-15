@@ -23,7 +23,7 @@ use str0m::media::{Direction, Frequency, KeyframeRequestKind, MediaKind, MediaTi
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
-use super::denoise::{Capture, Late, Loaded, deep_filter};
+use super::denoise::{Capture, Late, Loaded, deep_filter, rnnoise};
 use super::echo::{self, Echo};
 use super::jitter::{Jitter, Pop};
 use super::mix::{Limiter, Meter, Speaking, mix_into, rms, volume_to_gain};
@@ -196,7 +196,11 @@ impl<'a> Engine<'a> {
             encoder,
             echo: Echo::new(setup.echo, echo::late()),
             capture: {
-                let mut c = Capture::new(setup.denoise, denoiser, deep_filter, Late::default());
+                let worker = match setup.denoise {
+                    crate::settings::Denoise::Rnnoise => rnnoise,
+                    _ => deep_filter,
+                };
+                let mut c = Capture::new(setup.denoise, denoiser, worker, Late::default());
                 if let Some(g) = setup.gate_db {
                     c.set_gate(g);
                 }
