@@ -119,6 +119,18 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 - Sign in: the app asks for the server address (the one you open Vesper at in a browser, e.g. `https://vesper.example.com`), a
   username and a password. Accounts are made in the web app. The session is kept in the OS keyring (Secret Service on Linux,
   for example GNOME Keyring or KWallet); without one the app works but asks you to sign in at every start.
+- Look: the desktop app draws the web app's tokens (`desktop/src/ui/theme.rs`, a `Tokens` global with every role of
+  `web/src/styles/`, the styles and the accent maths of `accent.ts`), its icons (read from `web/src/lib/ui/icons.ts` at build
+  time, `ui/icons.rs`) and its base components (`ui/c.rs`, after `web/src/lib/ui/c/`). The type is the web's: Segoe UI on
+  Windows, and on Linux the font `fc-match sans-serif` names, which is also what Chromium draws for `system-ui`.
+- Parity with the web app: `desktop/scripts/parity.sh [scene...]` builds what is missing, then `web/e2e/parity.mjs` starts one
+  server, shoots each scene in Chromium and in the desktop app (a debug build in a headless sway of its own, 1440x900, scale 1,
+  a throwaway home with no keyring) and writes `web/e2e/parity/<scene>-web.png`, `-desktop.png`, `-side.png` and `-diff.png`
+  with the share of pixels that differ. Scenes: `login`, `shell-empty`, `timeline`. It needs `sway` and `grim`; verified on the
+  dev machine (Arch, no X). A debug build reads `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD` and
+  `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`) to get into a scene without typing (`desktop/src/ui/dev.rs`); a
+  release build does not have that code. To add a scene, add an entry to `SCENES` in `parity.mjs`: the web steps, and the
+  `VESPER_DEV_*` state (a new kind of state goes in `dev.rs`).
 - Its lockfile pins `libc` 0.2.189 and `mio` 1.2.4 on purpose (see the ADR). Do not `cargo update` it as a whole either.
 
 ## Check before a PR

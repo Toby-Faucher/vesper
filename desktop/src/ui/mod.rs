@@ -1,9 +1,14 @@
 //! The window: one view, `Vesper`, that owns the `Model` and draws the sign in screen or the main screen. Events from
 //! the network thread come in through `listen`; what the model asks for goes out on `cmds`.
 
+pub mod c;
 mod call;
 mod chat;
+#[cfg(debug_assertions)]
+mod dev;
+pub mod icons;
 mod md;
+pub mod motion;
 mod room;
 pub mod settings;
 mod share;
@@ -91,7 +96,8 @@ pub fn run() {
     let keys = ptt::spawn(ptt::global_source, move |open| {
         let _ = open_tx.send(open);
     });
-    Application::new().run(move |cx: &mut App| {
+    let app = Application::new().with_assets(icons::Assets);
+    app.run(move |cx: &mut App| {
         init(cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
@@ -152,6 +158,8 @@ pub struct Vesper {
     server: Entity<InputState>,
     username: Entity<InputState>,
     password: Entity<InputState>,
+    /// The password is shown in clear (the Show toggle).
+    password_shown: bool,
     composer: Entity<InputState>,
     /// The edit box of the message being edited.
     edit: Entity<InputState>,
@@ -195,6 +203,9 @@ pub struct Vesper {
     /// Sends the next `watch off` when it is due.
     watch_timer: Option<(Instant, Task<()>)>,
     _tray: Option<tray_icon::TrayIcon>,
+    /// Debug builds: what the parity harness asked for (`VESPER_DEV_*`).
+    #[cfg(debug_assertions)]
+    dev: dev::Dev,
     _subs: Vec<Subscription>,
     _pump: Option<Task<()>>,
 }
@@ -259,6 +270,7 @@ impl Vesper {
             server,
             username,
             password,
+            password_shown: false,
             composer,
             edit,
             list,
@@ -284,6 +296,8 @@ impl Vesper {
             screen: None,
             watch_timer: None,
             _tray: None,
+            #[cfg(debug_assertions)]
+            dev: dev::Dev::from_env(),
             _subs: subs,
             _pump: None,
         }
@@ -366,6 +380,8 @@ impl Vesper {
             self.composer
                 .update(cx, |i, cx| i.set_value(text, window, cx));
         }
+        #[cfg(debug_assertions)]
+        self.dev_step(window, cx);
         cx.notify();
     }
 
@@ -383,9 +399,12 @@ impl Vesper {
         );
         let cmds = self.model.sign_in(&server, &user, &pass);
         if !cmds.is_empty() {
-            // The password is not kept in the field once it is on its way.
-            self.password
-                .update(cx, |i, cx| i.set_value("", window, cx));
+            // The password is not kept in the field once it is on its way, and a retry is never typed in clear.
+            self.password_shown = false;
+            self.password.update(cx, |i, cx| {
+                i.set_value("", window, cx);
+                i.set_masked(true, window, cx);
+            });
         }
         self.run(cmds);
         cx.notify();
@@ -532,11 +551,15 @@ impl Render for Vesper {
             Screen::SignIn => self.render_sign_in(window, cx),
             Screen::Main => self.render_main(window, cx),
         };
+        let t = theme::tokens(cx);
+        // `body` of app.css: --bg-app, --fg, 13/20.
         div()
             .size_full()
-            .bg(rgb(theme::BG_APP))
-            .text_color(rgb(theme::FG))
-            .text_size(px(14.))
+            .bg(t.bg_app)
+            .text_color(t.fg)
+            .font_family(t.font_sans.clone())
+            .text_size(px(theme::TEXT_SM.size))
+            .line_height(px(theme::TEXT_SM.line))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, _| {
                 this.window_key(Some(&e.keystroke.key), true);
             }))

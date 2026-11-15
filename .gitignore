@@ -31,3 +31,4 @@ __pycache__/
 research/experiments/*/prompt.md
 research/listen-v2/
 web/e2e/shots/
+web/e2e/parity/

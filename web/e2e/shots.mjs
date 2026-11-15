@@ -6,31 +6,10 @@
 import { mkdir } from 'node:fs/promises';
 import { crc32, deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { ORIGIN, browser, cli, devServer, inVoice, openRoom, signedIn, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, devServer, inVoice, openRoom, signedIn, signup, sleep, startServer } from './lib.mjs';
+import { LINES, LONG_ROOM, VIEWPORT, api, cast, home, rest, shotBrowser, speech } from './shotlib.mjs';
 
-const VIEWPORT = { width: 1440, height: 900 };
 const out = fileURLToPath(new URL('shots/', import.meta.url));
-const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
-
-// Every clock time in the pictures reads 7:41 PM, so two runs give the same pixels (the seeded messages carry the real
-// time). Dates and relative times ("in 7 days") are left alone.
-const fixedTimes = () => {
-  const Real = Intl.DateTimeFormat;
-  const at = new Date(2026, 10, 1, 19, 41);
-  function Fixed(locale, o = {}) {
-    const f = new Real(locale, o);
-    if (!('hour' in o) || 'day' in o || 'dateStyle' in o) return f;
-    return Object.create(f, { format: { value: () => f.format(at) }, formatToParts: { value: () => f.formatToParts(at) } }); // format is a getter: define, not assign
-  }
-  Fixed.prototype = Real.prototype;
-  Fixed.supportedLocalesOf = Real.supportedLocalesOf;
-  Intl.DateTimeFormat = Fixed;
-};
-const shotBrowser = async (...args) => {
-  const b = await browser(...args);
-  await b.page.addInitScript(fixedTimes);
-  return b;
-};
 
 const scenes = new Map();
 // fn({ alice, bob, api, open, shot, seed, server }) returns the page to shoot. alice and bob are signed-in { page, errors }; api(page, method,
@@ -38,39 +17,10 @@ const scenes = new Map();
 // A scene that takes more than one picture calls shot(page, name, { fullPage }) itself and returns nothing.
 const scene = (name, fn) => scenes.set(name, fn);
 
-async function api(page, method, path, body) {
-  for (;;) {
-    const r = await page.evaluate(
-      async ([method, path, body]) => {
-        const r = await fetch(path, {
-          method,
-          headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-        return { status: r.status, json: r.status === 204 ? null : await r.json().catch(() => null) };
-      },
-      [method, path, body],
-    );
-    if (r.status === 429) { await sleep(500); continue; } // the message limit: 10, then 1 a second
-    if (r.status >= 400) throw new Error(`${method} ${path}: ${r.status}`);
-    return r.json;
-  }
-}
 
-async function home(page) {
-  await page.goto(`${ORIGIN}/`);
-  await signedIn(page);
-  await page.waitForURL(/\/r\/\d+$/);
-}
 async function joinVoice(page) {
   await page.getByRole('button', { name: 'Join' }).click();
   await page.getByRole('button', { name: 'Leave' }).waitFor();
-}
-// Shows the page with nothing focused and the pointer out of the way, so no hover or focus ring is in the picture.
-async function rest(page) {
-  await page.evaluate(() => document.activeElement?.blur());
-  await page.mouse.move(1439, 899);
-  await sleep(300);
 }
 
 scene('tokens', async ({ open }) => {
@@ -198,7 +148,6 @@ scene('shell-empty', async ({ alice }) => {
 // on the other rooms, and a long room name. Alice is in the call and reads general.
 let house;
 let extra = []; // carol, dave and Bartholomew, in the music call with alice and bob
-const LONG_ROOM = 'weekend plans and the games list'; // 32 characters, the server's limit
 function fullHouse({ alice, bob, api, seed }) {
   house ??= (async () => {
     await seed();
@@ -1553,10 +1502,6 @@ scene('reconnecting', async ({ alice, server, shot }) => {
   await alice.page.getByText('Connection lost').waitFor({ state: 'detached', timeout: 30000 });
 });
 
-const LINES = [
-  'morning all', 'anyone up for a game tonight?', 'I can do 9', 'same, after dinner', 'what are we playing',
-  'the co-op one again?', 'sure', 'I fixed my mic, tell me if it still crackles', 'sounds fine to me', 'link to the patch notes: https://example.com/notes',
-];
 
 // npm run shots -- uploads, -- admin, or -- all (every scene in order)
 const GROUPS = {
@@ -1572,27 +1517,7 @@ const stop = await startServer();
 let failed = false;
 try {
   await mkdir(out, { recursive: true });
-  const fresh = [];
-  const open = async (url) => {
-    const b = await shotBrowser(`fresh${fresh.length}`, [], { viewport: VIEWPORT });
-    fresh.push(b);
-    await b.page.goto(url);
-    return b.page;
-  };
-  const alice = await shotBrowser('alice', [`--use-file-for-fake-audio-capture=${speech}`], { viewport: VIEWPORT });
-  await signup(alice.page, await cli(['create-owner']), 'alice');
-  const bobLink = (await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url;
-  const bob = await shotBrowser('bob', [], { viewport: VIEWPORT });
-  await signup(bob.page, bobLink, 'bob');
-  let seeded;
-  const seed = () => (seeded ??= (async () => {
-    for (const name of ['music', LONG_ROOM]) await api(alice.page, 'POST', '/api/rooms', { name });
-    const general = (await api(alice.page, 'GET', '/api/rooms')).find((r) => r.name === 'general');
-    for (let i = 0; i < 40; i++) {
-      const from = i % 3 === 2 ? bob : alice;
-      await api(from.page, 'POST', `/api/rooms/${general.id}/messages`, { body: LINES[i % LINES.length] });
-    }
-  })());
+  const { alice, bob, open, seed, fresh } = await cast();
 
   const shot = async (page, name, { fullPage = true } = {}) => {
     const path = `${out}${name}.png`;
