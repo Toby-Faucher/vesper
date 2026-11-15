@@ -1043,7 +1043,14 @@ impl Vesper {
                     this.change_settings(|s| s.style = st.id().into(), cx);
                     this.sync_look(window, cx);
                 }))
-                .child(v_flex().child(name).child(text(blurb, t.fg_2, true)))
+                .child(
+                    // shortcut: a fixed text width (320 less the border, the sides, the dot and the gap), as GPUI
+                    // measured the wrapped blurb one line tall in a flex_1 column; revisit if the list width changes.
+                    v_flex()
+                        .w(px(269.))
+                        .child(name)
+                        .child(text(blurb, t.fg_2, true)),
+                )
             });
         let schemes = [("dark", "Dark"), ("light", "Light"), ("system", "System")]
             .into_iter()
@@ -1110,9 +1117,10 @@ impl Vesper {
                 break;
             }
             grid = grid.child(
-                h_flex()
-                    .gap(px(8.))
-                    .children(row.into_iter().map(|s| div().flex_1().min_w_0().child(s))),
+                h_flex().gap(px(8.)).children(
+                    row.into_iter()
+                        .map(|s| v_flex().flex_1().min_w_0().child(s)),
+                ),
             );
         }
         let scheme_help = match fixed {
@@ -1124,47 +1132,55 @@ impl Vesper {
                 "This style is dark only, so the choice does not apply to it.".into()
             }
         };
-        let legend = |s: &'static str| h3(s, cx).mb(px(4.));
+        // A fieldset's legend is outside its flex gap: 4 px under it, then the gap between the rest.
+        let fieldset = |name: &'static str, gap: f32, rest: Div| {
+            v_flex()
+                .child(h3(name, cx).mb(px(4.)))
+                .child(rest.gap(px(gap)))
+        };
         let err = self.page.account.accent_error.clone();
         v_flex()
             .gap(px(32.))
-            .child(
+            .child(fieldset(
+                "Style",
+                8.,
                 v_flex()
-                    .gap(px(8.))
-                    .child(legend("Style"))
                     .child(text("On this device only.", t.fg_2, false).mb(px(4.)))
                     .child(radio_list(styles.collect(), cx)),
-            )
-            .child(
+            ))
+            .child(fieldset(
+                "Colour scheme",
+                8.,
                 v_flex()
-                    .gap(px(8.))
-                    .child(legend("Colour scheme"))
                     .child(text(scheme_help, t.fg_2, false).mb(px(4.)))
                     .child(radio_list(schemes.collect(), cx)),
-            )
+            ))
             .child(
-                v_flex()
-                    .max_w(px(480.))
-                    .gap(px(12.))
-                    .child(legend("Accent"))
-                    .child(text(
-                        "Buttons, focus, selection and mentions use it, on every device you sign in on.",
-                        t.fg_2,
-                        false,
-                    ))
-                    .child(grid)
-                    .when(!err.is_empty(), |d| d.child(c::status(c::StatusKind::Error, err, cx)))
-                    .child(
-                        h_flex().child(
-                            Button::new("accent-reset", "Reset to amber")
-                                .disabled(accent == "amber")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.save_accent(Some("amber"));
-                                    this.sync_look(window, cx);
-                                    cx.notify();
-                                })),
+                fieldset(
+                    "Accent",
+                    12.,
+                    v_flex()
+                        .child(text(
+                            "Buttons, focus, selection and mentions use it, on every device you sign in on.",
+                            t.fg_2,
+                            false,
+                        ))
+                        .child(grid)
+                        .when(!err.is_empty(), |d| d.child(c::status(c::StatusKind::Error, err, cx)))
+                        .child(
+                            h_flex().child(
+                                Button::new("accent-reset", "Reset to amber")
+                                    .disabled(accent == "amber")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.save_accent(Some("amber"));
+                                        this.sync_look(window, cx);
+                                        cx.notify();
+                                    })),
+                            ),
                         ),
-                    ),
+                )
+                .w_full()
+                .max_w(px(480.)),
             )
             .child(text(
                 "When your system asks for less motion, Vesper fades panels in place of sliding them.",

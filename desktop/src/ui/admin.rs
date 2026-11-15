@@ -1039,7 +1039,8 @@ impl Vesper {
                     Field::new("Room name").help("1 to 32 characters.").child(
                         h_flex()
                             .gap(px(8.))
-                            .child(div().flex_1().min_w_0().child(text_input(&new_name, cx)))
+                            // A flex column, so the input fills it (a plain div left it padding-wide).
+                            .child(v_flex().flex_1().min_w_0().child(text_input(&new_name, cx)))
                             .child(
                                 div().debug_selector(|| "room-create".into()).child(
                                     Button::new("room-create", "Create room")
@@ -1062,16 +1063,18 @@ impl Vesper {
                             ),
                     ),
                 )
-                .when(
-                    !a.room_error.is_empty() || !a.created_room.is_empty(),
-                    |d| {
-                        d.child(if a.room_error.is_empty() {
-                            text(format!("Created {}.", a.created_room), t.fg_2, false).mt(px(-4.))
-                        } else {
-                            text(a.room_error.clone(), t.danger_fg, false).mt(px(-4.))
-                        })
-                    },
-                ),
+                // The web's status line is always there: empty, it still adds its gap less 4 px.
+                .map(|d| {
+                    if !a.room_error.is_empty() {
+                        d.child(text(a.room_error.clone(), t.danger_fg, false).mt(px(-4.)))
+                    } else if !a.created_room.is_empty() {
+                        d.child(
+                            text(format!("Created {}.", a.created_room), t.fg_2, false).mt(px(-4.)),
+                        )
+                    } else {
+                        d.pb(px(8.))
+                    }
+                }),
         );
         let ids: Vec<i64> = rooms.iter().map(|r| r.id).collect();
         let n = rooms.len();
@@ -1117,7 +1120,8 @@ impl Vesper {
                 .gap(px(12.))
                 .opacity(dim)
                 .child(
-                    div().w(px(40.)).child(
+                    // `-ml-4` on the web.
+                    div().ml(px(-16.)).w(px(40.)).child(
                         Switch::new(SharedString::from(format!("restrict-{id}")), "", restricted)
                             .on_change(on_bool(cx, move |this, on, _, cx| {
                                 this.page.admin.list_error.clear();

@@ -495,6 +495,11 @@ const SCENES = {
       return page;
     },
     desktop: { user: 'alice', scene: 'room:general', settings: { sidebar_collapsed: true } },
+    // The later scenes look for the room list.
+    after: async ({ alice }) => {
+      await alice.page.getByRole('button', { name: 'Show sidebar' }).click();
+      await alice.page.getByRole('button', { name: 'Hide sidebar' }).waitFor();
+    },
   },
   ...pageScenes('settings', ['voice', 'notifications', 'appearance', 'account', 'desktop']),
   ...pageScenes('admin', ['invites', 'members', 'rooms', 'disk', 'server']),
