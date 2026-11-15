@@ -150,7 +150,10 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   round trip), `call-mic-lost`, `person-card` (bob opens alice's card from the call bar at 140 %), `person-card-mod` (dave,
   a moderator, opens carol's from the sidebar) and `voice-quality` (the connection icons), `composer-offline` and
   `reconnecting` (both stop the server for each picture), `motion-ring` (bob calls alice in their DM: also
-  `motion-ring-{web,desktop}-{60,150,800}ms.png`, the prompt's rise and its pulse half way) and `shell-collapsed`. One
+  `motion-ring-{web,desktop}-{60,150,800}ms.png`, the prompt's rise and its pulse half way), `shell-collapsed`,
+  `logo-accent` (alice in teal: the logo follows the accent), `call-pill` (the call bar made small), `motion-reveal` (Dark
+  to Light with a click: also `motion-reveal-{web,desktop}-{100,250}ms.png`) and `motion-slide` (Settings, Voice to
+  Appearance: also `motion-slide-{web,desktop}-{60,150}ms.png`), and one per Settings and Admin section. One
   account is in one call at a time, so in the call scenes the web account leaves the call after its picture and the
   desktop's same account joins it. The desktop runs with the web scenes' clock (7:41 PM) and an en-US locale. It needs `sway` and `grim`; verified on the
   dev machine (Arch, no X). A debug build reads `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD` and
@@ -159,7 +162,8 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   the clock, older days, an empty room, a draft, the pins list, someone typing and the upload tray, and `VESPER_DEV_VOICE`
   (join voice in a room on a silent fake microphone and speakers that play nothing: a real call through the server, no
   audio device opened), `VESPER_DEV_LINKS`, `VESPER_DEV_RTT`, `VESPER_DEV_MIC_LOST`, `VESPER_DEV_DEAFEN`,
-  `VESPER_DEV_PTT_HELD`, `VESPER_DEV_PERSON`, `VESPER_DEV_VOLUME` and `VESPER_DEV_RING` for the call scenes
+  `VESPER_DEV_PTT_HELD`, `VESPER_DEV_PERSON`, `VESPER_DEV_VOLUME` and `VESPER_DEV_RING` for the call scenes, and
+  `VESPER_DEV_THEN` for a step a motion scene films on a Settings page
   (`desktop/src/ui/dev.rs` says how each is written); a
   release build does not have that code. The server takes 5 sign ins per name and then one a minute, so the app waits 13 s and signs in
   again when it is refused. To add a scene, add an entry to `SCENES` in `parity.mjs`: the web steps, and the

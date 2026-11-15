@@ -8,12 +8,13 @@
 //! passkey, the welcome steps and Diagnostics. Account is in `account.rs`, Admin in `admin.rs`.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Div, Entity, InteractiveElement, KeyDownEvent, ParentElement,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, Subscription, Window,
-    WindowAppearance, div, px,
+    App, AppContext, Bounds, ClickEvent, Context, Div, Entity, InteractiveElement, KeyDownEvent,
+    ParentElement, Pixels, Point, Rgba, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    Subscription, Window, WindowAppearance, div, point, px,
 };
 use gpui_component::input::{InputState, RopeExt};
 use gpui_component::slider::{SliderEvent, SliderState};
@@ -24,7 +25,7 @@ use vesper_protocol::Role;
 
 use super::c::{self, Button, Dialog, Field, Select, Switch, Variant, kbd, radio_list, radio_row};
 use super::theme::{self, Scheme, TEXT_BASE, TEXT_SM, TEXT_XL, TEXT_XS, TextStepExt};
-use super::{Vesper, account, admin};
+use super::{Vesper, account, admin, motion};
 use crate::model::Phase;
 use crate::net::{Cmd, Fail, Json};
 use crate::settings::{self, Denoise, Settings};
@@ -129,8 +130,22 @@ pub struct Page {
     pub sliders: HashMap<&'static str, (Entity<SliderState>, Subscription)>,
     pub account: account::State,
     pub admin: admin::State,
-    /// The look last painted: style, scheme, accent.
+    /// The look last painted: scheme, accent.
     look: Option<(Scheme, Option<String>)>,
+    /// Where the pointer picked a colour scheme: the next look change spreads from there.
+    pub(super) reveal_from: Option<Point<Pixels>>,
+    reveal: Option<Reveal>,
+}
+
+/// The theme switch (`reveal` in motion.ts): a circle grows from the click in the new page colour over the old look
+/// (`--dur-reveal`, ease-out), then the new look is painted under it and it fades out (`--dur-out`, ease-in). The web
+/// clips the new page itself to the circle; GPUI cannot draw the window twice, so here the circle is the new colour.
+struct Reveal {
+    at: Point<Pixels>,
+    start: Instant,
+    fill: Rgba,
+    /// The look to paint once the circle covers the window.
+    next: Option<theme::Tokens>,
 }
 
 impl Page {
@@ -483,8 +498,62 @@ impl Vesper {
         let motion = theme::tokens(cx).motion.clone();
         let mut t = theme::Tokens::new(look.0, look.1.as_deref());
         t.motion = motion;
+        let new_scheme = self.page.look.as_ref().is_some_and(|l| l.0 != look.0);
         self.page.look = Some(look);
+        if let Some(r) = self.page.reveal.as_mut().filter(|r| r.next.is_some()) {
+            r.next = Some(t); // changed again while the circle grows: paint the latest at its end
+            return;
+        }
+        let from = self.page.reveal_from.take();
+        if let Some(at) = from.filter(|_| new_scheme && !t.motion.reduced) {
+            self.page.reveal = Some(Reveal {
+                at,
+                start: Instant::now(),
+                fill: t.bg_app,
+                next: Some(t),
+            });
+            return;
+        }
         theme::set(t, cx);
+    }
+
+    /// The theme switch's layer over the window while it runs (see [`Reveal`]).
+    pub(super) fn reveal_layer(&mut self, window: &mut Window, cx: &mut App) -> Option<Div> {
+        let r = self.page.reveal.as_mut()?;
+        let m = theme::tokens(cx).motion.clone();
+        let now = Instant::now();
+        window.request_animation_frame();
+        if r.next.is_some() {
+            let x = motion::fraction(r.start, now, m.dur_reveal);
+            if x < 1. {
+                let view = Bounds::new(point(px(0.), px(0.)), window.viewport_size());
+                let rad = motion::reveal_radius(&m, r.at, view, x);
+                return Some(
+                    div()
+                        .absolute()
+                        .left(r.at.x - rad)
+                        .top(r.at.y - rad)
+                        .size(rad * 2.)
+                        .rounded_full()
+                        .bg(r.fill),
+                );
+            }
+            theme::set(r.next.take().expect("checked"), cx);
+            r.start = now;
+        }
+        let y = motion::fraction(r.start, now, m.dur_out);
+        if y >= 1. {
+            self.page.reveal = None;
+            return None;
+        }
+        let fill = r.fill;
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .bg(fill)
+                .opacity(1. - motion::ease(m.ease_in)(y)),
+        )
     }
 
     /// You, as the user list has you (it follows `user_updated`), else as signed in.
@@ -588,12 +657,22 @@ impl Vesper {
                 ),
             );
         let (hover, selected) = (t.bg_hover, t.bg_selected);
+        // The picked section's fill slides to the next one (`slides` in motion.ts).
+        let picked = nav.iter().position(|(to, _)| *to == at).unwrap_or(0);
+        let slide = super::motion::Slide::new(
+            if matches!(at, At::Settings(_)) {
+                "nav-settings"
+            } else {
+                "nav-admin"
+            },
+            picked,
+            window,
+            cx,
+        );
+        let gliding = slide.gliding();
         let nav = (!nav.is_empty()).then(|| {
-            v_flex()
-                .w(px(200.))
-                .flex_none()
-                .gap(px(1.))
-                .children(nav.into_iter().map(|(to, name)| {
+            let list = v_flex().w(px(200.)).flex_none().gap(px(1.)).children(
+                nav.into_iter().enumerate().map(|(i, (to, name))| {
                     let current = to == at;
                     let sel = format!("nav-{}", name.to_lowercase().replace(' ', "-"));
                     let fg = t.fg;
@@ -604,15 +683,19 @@ impl Vesper {
                         .items_center()
                         .h(px(32.))
                         .px(px(8.))
+                        .relative()
                         .rounded(t.radius_sm)
                         .text_color(if current { t.fg } else { t.fg_2 })
-                        .when(current, |d| d.bg(selected))
+                        .when(current && !gliding, |d| d.bg(selected))
                         .when(!current, |d| d.hover(move |s| s.bg(hover).text_color(fg)))
                         .on_click(
                             cx.listener(move |this, _, window, cx| this.open_page(to, window, cx)),
                         )
+                        .child(slide.track(i))
                         .child(name)
-                }))
+                }),
+            );
+            slide.under(list, t.radius_sm, selected, window, cx)
         });
         let content = v_flex()
             .flex_1()
@@ -1021,7 +1104,8 @@ impl Vesper {
                     cx,
                 )
                 .h(px(40.))
-                .on_click(cx.listener(move |this, _, window, cx| {
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    this.page.reveal_from = e.mouse_position(); // keys switch at once
                     this.change_settings(|s| s.scheme = id.into(), cx);
                     this.sync_look(window, cx);
                 }))

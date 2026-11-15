@@ -278,8 +278,10 @@ pub struct Vesper {
     tl: chat::Tl,
     /// The room whose name the composer's placeholder has.
     placeholder_room: Option<i64>,
-    /// Since when the call bar shows, for its rise.
+    /// Since when the call bar shows, for its rise and the call timer.
     bar_since: Option<Instant>,
+    /// The call bar's pill, peek, morph and timer.
+    bar: call::Bar,
     /// The open person card, the opener a press outside closed it on (and when), and where openers were drawn.
     person: Option<person::Card>,
     person_closed: Option<(String, Instant)>,
@@ -432,6 +434,7 @@ impl Vesper {
             tl: chat::Tl::default(),
             placeholder_room: None,
             bar_since: None,
+            bar: Default::default(),
             person: None,
             person_closed: None,
             anchors: Default::default(),
@@ -1034,6 +1037,7 @@ impl Render for Vesper {
         } else if self.dialog_focus.is_focused(window) {
             self.composer.update(cx, |i, cx| i.focus(window, cx));
         }
+        let reveal = self.reveal_layer(window, cx);
         let t = theme::tokens(cx);
         // `body` of app.css: --bg-app, --fg, 13/20.
         div()
@@ -1064,6 +1068,7 @@ impl Render for Vesper {
                 this.window_key(Some(&e.keystroke.key), false);
             }))
             .child(body)
+            .children(reveal)
     }
 }
 

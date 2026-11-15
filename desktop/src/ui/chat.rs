@@ -1672,7 +1672,7 @@ impl Vesper {
             mix(t.line.into(), t.line_strong.into(), h)
         };
         let slot = self.composer_slot(over, &t, now, cx);
-        let reply = self.reply_bar(&t, cx);
+        let reply = self.reply_bar(&t, window, cx);
         let away = self.away_line(room, &t);
         let tray = self.upload_tray(room, &t, window, cx);
         let people = self.mention_list(&t, now, cx);
@@ -1834,9 +1834,16 @@ impl Vesper {
 
     /// `.bar`: 32 px, 12 px left and 4 px right, an 8 px gap, a `--line-subtle` rule under it, 12/16 `--fg-2`:
     /// "Replying to <name>" and the text, and a 24 px Cancel reply.
-    fn reply_bar(&self, t: &Tokens, cx: &mut Context<Self>) -> Option<Div> {
+    fn reply_bar(&self, t: &Tokens, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
         let m = &self.model;
         let r = m.reply_to.as_ref()?;
+        // `swap` in: 4 px up and a fade, as the web's reply bar.
+        let came = motion::since(SharedString::from(format!("reply-{}", r.id)), window, cx);
+        let pose = motion::pose(&t.motion, motion::SWAP, false, came, Instant::now());
+        if pose.is_some() {
+            window.request_animation_frame();
+        }
+        let (dy, alpha) = pose.map_or((0., 1.), |p| (4. * (1. - p.t), p.opacity));
         let ex = plain(&parse(&r.body));
         let ex = if ex.is_empty() {
             "a message with a file".into()
@@ -1850,6 +1857,9 @@ impl Vesper {
         Some(
             div()
                 .debug_selector(|| "reply-bar".into())
+                .relative()
+                .top(px(dy))
+                .opacity(alpha)
                 .flex()
                 .items_center()
                 .gap(px(8.))
@@ -2321,7 +2331,11 @@ impl Vesper {
 
     /// The pins list under the header's Pins button (`PinsPopover.svelte`): "Pinned messages", then per pin a
     /// picture, the name and when, the text, and Unpin; "n of 50 pins" under them.
-    pub(super) fn render_pins(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_pins(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let t = tokens(cx).clone();
         let now = Instant::now();
         let at = self.tl.shown_since("pins".into(), now);
@@ -2423,7 +2437,10 @@ impl Vesper {
                         .py(px(4.))
                         .text_step(TEXT_XS)
                         .text_color(t.fg_2)
-                        .child(format!("{} of {MAX_PINS} pins", l.len()))
+                        .flex()
+                        // The count rolls its digits (`Roll.svelte`) when a pin goes.
+                        .child(motion::roll("pins-count", &l.len().to_string(), px(16.), false, window, cx))
+                        .child(format!(" of {MAX_PINS} pins"))
                         .into_any_element(),
                 );
                 v

@@ -106,6 +106,8 @@ pub struct Motion {
     pub dur_out: Duration,
     /// Every preset's duration under reduced motion.
     pub dur_calm: Duration,
+    /// The theme switch's circle: a whole window, and rare.
+    pub dur_reveal: Duration,
     pub ease_out: [f32; 4],
     pub ease_in: [f32; 4],
     /// Overshoots a little.
@@ -123,6 +125,7 @@ impl Default for Motion {
             dur_3: Duration::from_millis(220),
             dur_out: Duration::from_millis(120),
             dur_calm: Duration::from_millis(80),
+            dur_reveal: Duration::from_millis(400),
             ease_out: [0.2, 0., 0., 1.],
             ease_in: [0.4, 0., 1., 1.],
             ease_pop: [0.34, 1.56, 0.64, 1.],

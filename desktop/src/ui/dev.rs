@@ -16,6 +16,9 @@
 //! - `VESPER_DEV_SEND`: text sent from the composer 2.5 s after the room is ready (past the first hello's calm), then
 //!   `VESPER_DEV_ARRIVED` on stderr once it is in the list, for the harness's motion frames.
 //! - `VESPER_DEV_TYPING`: the room is ready only once someone is typing there (a typing push comes every few seconds).
+//! - `VESPER_DEV_THEN`: with a `settings:` scene, 2.5 s after READY: `scheme:<id>@<x>,<y>` picks that colour scheme
+//!   with a click at x, y (the theme reveal), or `page:<section>` opens that section (the nav's slide); then
+//!   `VESPER_DEV_ARRIVED`, for the harness's motion frames.
 //! - `VESPER_DEV_TRAY`: `name|size|mime|state;...` rows put in the room's upload tray (no upload runs). The state is
 //!   `queued`, `uploading:<share>` or `failed:quota`.
 //!
@@ -75,6 +78,7 @@ pub struct Dev {
     typing: bool,
     tray: Option<String>,
     send: Option<String>,
+    then: Option<String>,
     /// The newest message id when the send went: ARRIVED is printed once a newer one is in.
     sent_after: Option<i64>,
     voice: Option<String>,
@@ -185,6 +189,7 @@ impl Dev {
             viewer: var("VESPER_DEV_VIEWER").and_then(|v| v.parse().ok()),
             typing: var("VESPER_DEV_TYPING").is_some(),
             send: var("VESPER_DEV_SEND"),
+            then: var("VESPER_DEV_THEN"),
             sent_after: None,
             tray: var("VESPER_DEV_TRAY"),
             voice: var("VESPER_DEV_VOICE"),
@@ -214,6 +219,27 @@ impl Dev {
                 }
             }
         }
+    }
+}
+
+impl Vesper {
+    /// `VESPER_DEV_THEN`: one step a motion scene films.
+    fn dev_then(&mut self, then: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(rest) = then.strip_prefix("scheme:") {
+            let (id, at) = rest.split_once('@').unwrap_or((rest, ""));
+            let at = at
+                .split_once(',')
+                .and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)));
+            self.page.reveal_from = at.map(|(x, y)| gpui::point(gpui::px(x), gpui::px(y)));
+            let id = id.to_string();
+            self.change_settings(|s| s.scheme = id, cx);
+            self.sync_look(window, cx);
+        } else if let Some(section) = then.strip_prefix("page:") {
+            let at = super::settings::Section::from_id(section).map(super::settings::At::Settings);
+            self.open_page(at.unwrap_or_default(), window, cx);
+        }
+        cx.notify();
+        eprintln!("VESPER_DEV_ARRIVED");
     }
 }
 
@@ -312,6 +338,16 @@ impl Vesper {
                             ready(&s);
                         })
                         .detach();
+                        if let Some(then) = self.dev.then.take() {
+                            cx.spawn_in(window, async move |this, cx| {
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(4000))
+                                    .await;
+                                let _ = this
+                                    .update_in(cx, |v, window, cx| v.dev_then(&then, window, cx));
+                            })
+                            .detach();
+                        }
                     }
                     s if s.starts_with("room:") => {
                         let name = &s["room:".len()..];

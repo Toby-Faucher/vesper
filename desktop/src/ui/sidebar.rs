@@ -54,7 +54,7 @@ pub struct Side {
     rows: Rc<RefCell<(Pixels, HashMap<i64, Pixels>)>>,
     /// Per room, so a leaver's place is its index in that room.
     people: HashMap<i64, Roster<String, Peer>>,
-    badges: Roster<(i64, bool, String), ()>,
+    badges: Roster<(i64, bool), ()>,
     settled: bool,
     calm_until: Option<Instant>,
 }
@@ -220,10 +220,11 @@ impl Vesper {
                 [(false, u.unread as i64), (true, u.mentions as i64)]
                     .into_iter()
                     .filter(|(_, n)| *n > 0)
-                    .map(move |(mention, n)| ((id, mention, Badge::text(mention, n)), ()))
+                    .map(move |(mention, _)| ((id, mention), ()))
             })
             .collect();
         self.side.badges.sync(now, Duration::ZERO, badges);
+        let calm = self.side.calm(now);
         let mut moving = false;
         let mut pose_of = |came: Option<Instant>, p, out| {
             let r = came.and_then(|at| motion::pose(&mo, p, out, at, now));
@@ -265,8 +266,14 @@ impl Vesper {
                     motion::Preset,
                     bool,
                 ) -> Option<Pose>| {
-                    let key = (r.id, mention, Badge::text(mention, n));
-                    Badge::new(mention, n).pose(pose_of(self.side.badges.came(&key), BUMP, false))
+                    // It pops in when it comes; then its digits roll (still while the first hello settles).
+                    let key = (r.id, mention);
+                    Badge::new(mention, n)
+                        .pose(pose_of(self.side.badges.came(&key), BUMP, false))
+                        .roll(
+                            SharedString::from(format!("badge-{}-{mention}", r.id)),
+                            calm,
+                        )
                 };
                 let badges = [
                     (unread > 0).then(|| badge(false, unread, pose_of)),
@@ -572,6 +579,14 @@ impl Vesper {
         let chevron_id = ElementId::Name(format!("fold-{id}").into());
         let (ch, chevron_hover) =
             motion::transition(chevron_id.clone(), Duration::ZERO, window, cx);
+        let turn_dur = t.motion.or(t.motion.dur_2, Duration::ZERO);
+        let turn = motion::follow(
+            ElementId::Name(format!("turn-{id}").into()),
+            if folded { 1. } else { 0. },
+            turn_dur,
+            window,
+            cx,
+        );
         let rows = self.side.rows.clone();
         let row = div()
             .id(row_id.clone())
@@ -654,16 +669,12 @@ impl Vesper {
                             cx.notify();
                         }))
                         .child(
-                            icon(if folded {
-                                "chevronRight"
-                            } else {
-                                "chevronDown"
-                            })
-                            .text_color(mix(
-                                meta.into(),
-                                t.fg.into(),
-                                ch,
-                            )),
+                            // It turns (down open, right folded) over `--dur-2`, as the web's .turn.
+                            icon("chevronDown")
+                                .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                                    -std::f32::consts::FRAC_PI_2 * turn,
+                                )))
+                                .text_color(mix(meta.into(), t.fg.into(), ch)),
                         ),
                 )
             });

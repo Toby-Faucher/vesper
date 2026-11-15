@@ -38,6 +38,8 @@ pub struct Settings {
     pub volumes: HashMap<String, f32>,
     /// The sidebar is hidden (the web keeps this in localStorage).
     pub sidebar_collapsed: bool,
+    /// The call bar is the small pill (the web's `vesper.callbar`).
+    pub call_small: bool,
     /// Settings > Appearance, on this device only like the web's `vesper.scheme`: `dark`, `light` or `system`. An old
     /// file's `style` (Persona, Cozy, BBS, Aurora were removed) is an unknown key: ignored on load, dropped on save.
     pub scheme: String,
@@ -60,6 +62,7 @@ impl Default for Settings {
             start_with_computer: false,
             volumes: HashMap::new(),
             sidebar_collapsed: false,
+            call_small: false,
             scheme: "dark".into(),
             ring: true,
             volume: 50,
@@ -170,6 +173,7 @@ mod tests {
             start_with_computer: true,
             volumes: HashMap::from([("0123456789abcdef0123456789abcdef".into(), 250.0)]),
             sidebar_collapsed: true,
+            call_small: true,
             scheme: "system".into(),
             ring: false,
             volume: 30,
