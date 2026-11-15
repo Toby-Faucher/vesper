@@ -2281,7 +2281,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.3",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2560,7 +2560,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3850,7 +3850,7 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
- "windows-registry 0.4.0",
+ "windows-registry 0.5.3",
 ]
 
 [[package]]
@@ -3865,7 +3865,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.57.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -5257,7 +5257,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6567,7 +6567,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7239,7 +7239,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7306,7 +7306,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8813,7 +8813,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9902,7 +9902,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vesper-desktop"
-version = "2.0.0-alpha.0"
+version = "2.1.0"
 dependencies = [
  "auto-launch",
  "chrono",
@@ -9941,7 +9941,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-dsp"
-version = "1.8.3"
+version = "2.1.0"
 dependencies = [
  "deep_filter",
  "ndarray",
@@ -9950,7 +9950,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-protocol"
-version = "1.8.3"
+version = "2.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -9959,7 +9959,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-server"
-version = "1.8.3"
+version = "2.1.0"
 dependencies = [
  "argon2 0.6.0",
  "aws-lc-rs",
@@ -9989,7 +9989,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-sfu"
-version = "1.8.3"
+version = "2.1.0"
 dependencies = [
  "str0m",
  "tokio",
@@ -9998,7 +9998,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-store"
-version = "1.8.3"
+version = "2.1.0"
 dependencies = [
  "getrandom 0.3.4",
  "serde_json",
@@ -10408,7 +10408,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10993,7 +10993,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

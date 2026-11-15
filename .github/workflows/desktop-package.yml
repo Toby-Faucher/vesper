@@ -1,10 +1,11 @@
 name: desktop-package
 # Builds of the desktop client people can download, kept as workflow artifacts for 30 days: Windows (a release
-# Vesper.exe in a zip) and Linux (a tarball). Runs on pushes to the v2 branch and on desktop tags, or by hand.
+# Vesper.exe in a zip) and Linux (a tarball). Runs on pushes to the v2 branch, on release and desktop tags, or by
+# hand. A release attaches its tag's builds to the GitHub release by hand (docs/versions.md).
 on:
   push:
     branches: [v2/desktop]
-    tags: ['desktop-v*']
+    tags: ['desktop-v*', 'v*']
   workflow_dispatch:
 
 permissions:
