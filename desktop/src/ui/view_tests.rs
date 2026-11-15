@@ -553,9 +553,9 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
     });
 
     click(cx, "settings-ptt");
-    assert_eq!(
-        watched.try_iter().last(),
-        Some(KeyMsg::Watch(Some(device_query::Keycode::Grave)))
+    assert!(
+        watched.try_iter().all(|m| m == KeyMsg::Watch(None)),
+        "no call: the key thread does not poll"
     );
     click(cx, "settings-ptt-key");
     assert!(cx.debug_bounds("settings-capturing").is_some());
@@ -570,10 +570,7 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
         assert_eq!(v.model.settings.ptt_key, "V");
         assert!(v.model.settings.push_to_talk && !v.capturing_key);
     });
-    assert_eq!(
-        watched.try_iter().last(),
-        Some(KeyMsg::Watch(Some(device_query::Keycode::V)))
-    );
+    assert!(watched.try_iter().all(|m| m == KeyMsg::Watch(None)));
 
     // Out of the settings, the window's own V presses and releases push to talk (Wayland has only these).
     click(cx, "settings-close");
@@ -582,10 +579,11 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
     cx.simulate_event(gpui::KeyUpEvent {
         keystroke: gpui::Keystroke::parse("v").unwrap(),
     });
-    let got: Vec<KeyMsg> = watched.try_iter().collect();
+    let not_typing = |m: &KeyMsg| !matches!(m, KeyMsg::Typing(_));
+    let got: Vec<KeyMsg> = watched.try_iter().filter(not_typing).collect();
     assert_eq!(got, [KeyMsg::Window(true), KeyMsg::Window(false)]);
     cx.simulate_keystrokes("b");
-    assert!(watched.try_iter().next().is_none(), "another key");
+    assert!(watched.try_iter().find(not_typing).is_none(), "another key");
 
     // The call starts with these settings, closed until the key.
     drain(&mut rx);
@@ -599,12 +597,55 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
         ),
         "{cmds:?}"
     );
+    assert_eq!(
+        watched.try_iter().filter(not_typing).last(),
+        Some(KeyMsg::Watch(Some(device_query::Keycode::V))),
+        "the call watches the key"
+    );
     view.update(cx, |v, cx| v.act(|m| m.set_ptt(true), cx));
     cx.run_until_parked();
     assert!(matches!(
         drain(&mut rx).as_slice(),
         [Cmd::Voice(VoiceCmd::Muted(false))]
     ));
+}
+
+/// Push to talk ignores a press while typing: the key thread hears when a text input gains and loses focus.
+#[gpui::test]
+fn the_key_thread_hears_when_an_input_has_focus(cx: &mut TestAppContext) {
+    use crate::voice::ptt::KeyMsg;
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    let (keys, heard) = std::sync::mpsc::channel();
+    view.update(cx, |v, _| v.ptt_tx = Some(keys));
+    cx.update(|window, _| window.activate_window()); // GPUI's focus events need an active window
+    cx.run_until_parked();
+    let typing = |heard: &std::sync::mpsc::Receiver<KeyMsg>| {
+        heard
+            .try_iter()
+            .filter_map(|m| match m {
+                KeyMsg::Typing(t) => Some(t),
+                _ => None,
+            })
+            .last()
+    };
+    view.update_in(cx, |v, window, cx| {
+        v.composer.update(cx, |i, cx| i.focus(window, cx))
+    });
+    cx.run_until_parked();
+    assert_eq!(typing(&heard), Some(true), "the composer has focus");
+    cx.deactivate_window();
+    assert_eq!(
+        typing(&heard),
+        Some(false),
+        "another window has the keyboard"
+    );
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert_eq!(typing(&heard), Some(true), "back");
+    view.update_in(cx, |v, window, _| v.key_focus.focus(window));
+    cx.run_until_parked();
+    assert_eq!(typing(&heard), Some(false), "it lost it");
 }
 
 // GPUI 0.2.2 never clears `debug_bounds` between frames, so whether something went away is checked in the model.

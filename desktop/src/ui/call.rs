@@ -54,7 +54,7 @@ impl Vesper {
                 let SliderEvent::Change(v) = e;
                 let v = v.start();
                 this.act(|m| m.set_volume(&user, v), cx);
-                this.save_settings();
+                this.save_settings_soon(cx);
             });
             self.sliders.insert(id.to_string(), (state, sub));
         }

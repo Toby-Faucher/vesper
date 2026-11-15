@@ -12,6 +12,7 @@ use gpui_component::{Selectable, h_flex, v_flex};
 
 use super::sign_in::TextLine;
 use super::{Vesper, theme};
+use crate::model::Phase;
 use crate::settings::{self, Denoise, Settings};
 use crate::voice::ptt::{self, KeyMsg};
 
@@ -87,10 +88,26 @@ impl Vesper {
         }
     }
 
-    /// Tells the key thread which key to watch, if push to talk is on.
+    /// Saves once a slider stops moving, not at each of its steps.
+    pub(super) fn save_settings_soon(&mut self, cx: &mut Context<Self>) {
+        self.save_later = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(400))
+                .await;
+            let _ = this.update(cx, |v, _| v.save_settings());
+        }));
+    }
+
+    /// Tells the key thread which key to watch, if push to talk is on and a call runs (else it does not poll), when
+    /// that changed.
     pub(super) fn watch_key(&self) {
         let s = &self.model.settings;
-        let key = s.push_to_talk.then(|| ptt::parse_key(&s.ptt_key)).flatten();
+        let key = (s.push_to_talk && self.model.call.phase != Phase::Idle)
+            .then(|| ptt::parse_key(&s.ptt_key))
+            .flatten();
+        if self.watched.replace(Some(key)) == Some(key) {
+            return;
+        }
         if let Some(tx) = &self.ptt_tx {
             let _ = tx.send(KeyMsg::Watch(key));
         }

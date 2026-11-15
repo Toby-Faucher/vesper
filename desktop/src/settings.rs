@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// What runs on the microphone before Opus. The web's modes are `deepfilter`, `browser` and `off`; the desktop has no
 /// browser filter, so its light mode is the web's noise gate on the raw microphone.
@@ -71,21 +72,46 @@ impl Settings {
         self
     }
 
-    /// The settings file, or defaults when it is missing or unreadable.
+    /// The settings file, or defaults when it is missing. A value this build cannot read (a newer build's mode, a
+    /// typo) falls back on its own, keeping the rest. A file that is not JSON at all is kept as `settings.json.bad`.
     pub fn load(path: &Path) -> Settings {
-        std::fs::read(path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
+        let Ok(bytes) = std::fs::read(path) else {
+            return Settings::default();
+        };
+        let Ok(Value::Object(mut file)) = serde_json::from_slice::<Value>(&bytes) else {
+            let _ = std::fs::write(path.with_extension("json.bad"), &bytes);
+            return Settings::default();
+        };
+        if let Some(Value::Object(v)) = file.get_mut("volumes") {
+            v.retain(|_, n| n.is_number());
+        }
+        let Ok(Value::Object(mut s)) = serde_json::to_value(Settings::default()) else {
+            unreachable!("settings are a JSON object");
+        };
+        for (k, v) in file {
+            let old = s.insert(k.clone(), v);
+            if serde_json::from_value::<Settings>(Value::Object(s.clone())).is_err() {
+                match old {
+                    Some(o) => s.insert(k, o),
+                    None => s.remove(&k),
+                };
+            }
+        }
+        serde_json::from_value::<Settings>(Value::Object(s))
             .unwrap_or_default()
             .clamped()
     }
 
+    /// Written to a temporary file and renamed over the old one, so a crash mid-write never leaves half a file.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let json = serde_json::to_vec_pretty(self).expect("settings are JSON");
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        std::fs::write(path, json).map_err(|e| e.to_string())
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)
+            .and_then(|()| std::fs::rename(&tmp, path))
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -154,7 +180,28 @@ mod tests {
             "volumes clamped"
         );
         assert!(s.echo_cancel, "on when the file does not say");
+
+        // One value this build cannot read falls back alone; the rest, volumes too, stay.
+        std::fs::write(
+            &p,
+            r#"{"denoise": "future", "bitrate_kbps": -1, "push_to_talk": true, "volumes": {"a": 50, "b": "x"}}"#,
+        )
+        .unwrap();
+        let s = Settings::load(&p);
+        assert_eq!(
+            (s.denoise, s.bitrate_kbps, s.push_to_talk),
+            (Denoise::DeepFilter, 64, true)
+        );
+        assert_eq!(s.volumes, HashMap::from([("a".into(), 50.0)]));
+
         std::fs::write(&p, "not json").unwrap();
         assert_eq!(Settings::load(&p), Settings::default());
+        assert_eq!(
+            std::fs::read_to_string(p.with_extension("json.bad")).unwrap(),
+            "not json",
+            "kept for the user"
+        );
+        Settings::default().save(&p).unwrap();
+        assert!(!p.with_extension("json.tmp").exists());
     }
 }

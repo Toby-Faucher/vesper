@@ -49,6 +49,8 @@ pub struct Item {
 pub struct Tray {
     pub items: Vec<Item>,
     next: u64,
+    /// Keys of finished files in a send that has not been answered yet: a second send does not attach them again.
+    sending: std::collections::HashSet<u64>,
 }
 
 impl Tray {
@@ -62,11 +64,23 @@ impl Tray {
             .any(|i| matches!(i.state, UpState::Queued | UpState::Uploading))
     }
 
-    /// The finished files of a room, as (key, upload id).
+    /// The finished files of a room not in a send yet, as (key, upload id).
     pub fn done(&self, room: i64) -> Vec<(u64, String)> {
         self.of(room)
+            .filter(|i| !self.sending.contains(&i.key))
             .filter_map(|i| Some((i.key, i.attachment.as_ref()?.id.clone())))
             .collect()
+    }
+
+    /// A send with these files went out (`on`), or failed and gives them back.
+    pub fn set_sending(&mut self, keys: &[u64], on: bool) {
+        for k in keys {
+            if on {
+                self.sending.insert(*k);
+            } else {
+                self.sending.remove(k);
+            }
+        }
     }
 
     /// Adds files (path, size). One past `max` bytes fails here and is never sent.
@@ -124,6 +138,7 @@ impl Tray {
     /// After a send: the files it attached leave. A file that finished meanwhile stays for the next one.
     pub fn sent(&mut self, keys: &[u64]) {
         self.items.retain(|i| !keys.contains(&i.key));
+        self.set_sending(keys, false);
     }
 
     /// Sign out: every upload stops and goes.
@@ -135,6 +150,7 @@ impl Tray {
             .map(|i| Cmd::CancelUpload(i.key))
             .collect();
         self.items.clear();
+        self.sending.clear();
         cmds
     }
 

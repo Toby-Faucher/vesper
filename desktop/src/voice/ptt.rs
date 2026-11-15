@@ -142,6 +142,9 @@ pub enum KeyMsg {
     Watch(Option<Keycode>),
     /// The key went down or up in the Vesper window.
     Window(bool),
+    /// A text input in the active Vesper window has focus: a press is typing, not talking (the web's
+    /// `pttKeyEvent`). A release always counts.
+    Typing(bool),
 }
 
 /// Starts the key thread. `source` runs on it (an X11 connection must stay on one thread). `emit` gets whether the
@@ -160,6 +163,7 @@ pub fn spawn(
 
 fn watch(mut source: Option<Box<dyn KeySource>>, rx: &Receiver<KeyMsg>, emit: &dyn Fn(bool)) {
     let (mut key, mut window, mut ptt) = (None, false, Ptt::default());
+    let (mut typing, mut held) = (false, false);
     loop {
         let msg = if key.is_some() {
             rx.recv_timeout(POLL)
@@ -168,18 +172,22 @@ fn watch(mut source: Option<Box<dyn KeySource>>, rx: &Receiver<KeyMsg>, emit: &d
         };
         match msg {
             Ok(KeyMsg::Watch(k)) => {
-                (key, window) = (k, false);
+                (key, window, held) = (k, false, false);
                 if k.is_none() {
                     ptt = Ptt::default(); // off closes at once, without the delay
                     emit(false);
                 }
             }
             Ok(KeyMsg::Window(d)) => window = d,
+            Ok(KeyMsg::Typing(t)) => typing = t,
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
         let Some(k) = key else { continue };
-        let down = window || source.as_mut().is_some_and(|s| s.down(k));
+        let raw = window || source.as_mut().is_some_and(|s| s.down(k));
+        // A press that starts while typing is ignored; one held from before stays until its release.
+        let down = raw && (held || !typing);
+        held = down;
         if let Some(open) = ptt.update(down, Instant::now()) {
             emit(open);
         }
@@ -280,5 +288,43 @@ mod tests {
         assert!(next().0);
         tx.send(KeyMsg::Watch(None)).unwrap();
         assert!(!next().0, "turning push to talk off closes at once");
+    }
+
+    #[test]
+    fn a_press_while_typing_is_ignored_and_a_release_always_counts() {
+        let held = Arc::new(AtomicBool::new(false));
+        let (etx, erx) = mpsc::channel();
+        let fake = held.clone();
+        let tx = spawn(
+            move || Some(Box::new(Fake(fake)) as Box<dyn KeySource>),
+            move |open| {
+                let _ = etx.send(open);
+            },
+        );
+        let quiet = |why| {
+            assert!(
+                erx.recv_timeout(Duration::from_millis(100)).is_err(),
+                "{why}"
+            )
+        };
+        let next = || erx.recv_timeout(Duration::from_secs(2)).expect("an event");
+        tx.send(KeyMsg::Typing(true)).unwrap();
+        tx.send(KeyMsg::Watch(Some(Keycode::V))).unwrap();
+        held.store(true, Ordering::SeqCst);
+        quiet("a global press while typing");
+        tx.send(KeyMsg::Window(true)).unwrap();
+        quiet("a window press while typing");
+        tx.send(KeyMsg::Window(false)).unwrap();
+        held.store(false, Ordering::SeqCst);
+        quiet("nothing to release");
+
+        // Held before the typing began: still open, and the release closes it.
+        tx.send(KeyMsg::Typing(false)).unwrap();
+        held.store(true, Ordering::SeqCst);
+        assert!(next());
+        tx.send(KeyMsg::Typing(true)).unwrap();
+        quiet("still held");
+        held.store(false, Ordering::SeqCst);
+        assert!(!next(), "the release closes it while typing");
     }
 }

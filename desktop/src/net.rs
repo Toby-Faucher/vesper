@@ -4,7 +4,7 @@
 //! socket upgrade send `Origin` equal to the server's origin, which the server checks (ADR 0007).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -153,6 +153,8 @@ pub enum Event {
         room: i64,
         body: String,
         error: String,
+        /// The tray keys the send attached, given back.
+        keys: Vec<u64>,
     },
     ReadFailed {
         room: i64,
@@ -160,8 +162,12 @@ pub enum Event {
     /// The new copy after a reaction or pin.
     Changed(Box<Message>),
     Edited(Box<Message>),
-    /// An edit, delete, reaction or pin failed.
+    /// A delete, reaction or pin failed.
     ChangeFailed(String),
+    /// An edit failed: the edit box says why.
+    EditFailed(String),
+    /// A `hello` this build cannot read: the server runs a newer Vesper.
+    Incompatible,
     Pins {
         room: i64,
         pins: Result<Vec<Message>, String>,
@@ -269,6 +275,29 @@ pub fn origin_of(input: &str) -> Option<Url> {
     Url::parse(&u.origin().ascii_serialization()).ok()
 }
 
+/// Plain `http` to a host that is not this computer or a home network: the password and the session cross the
+/// network in clear. The sign in says so; it does not refuse, so a LAN or a dev server still works.
+pub fn insecure(input: &str) -> bool {
+    use url::Host;
+    let Some(u) = origin_of(input) else {
+        return false;
+    };
+    let local = match u.host() {
+        Some(Host::Domain(d)) => {
+            d == "localhost"
+                || [".localhost", ".local", ".lan", ".home.arpa"]
+                    .iter()
+                    .any(|s| d.ends_with(s))
+        }
+        Some(Host::Ipv4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        Some(Host::Ipv6(ip)) => {
+            ip.is_loopback() || ip.is_unicast_link_local() || (ip.segments()[0] & 0xfe00) == 0xfc00
+        }
+        None => true,
+    };
+    u.scheme() == "http" && !local
+}
+
 /// One server, one cookie jar.
 #[derive(Clone)]
 pub struct Api {
@@ -277,6 +306,8 @@ pub struct Api {
     base: Url,
     /// `base` without the trailing slash: the `Origin` header.
     pub origin: String,
+    /// The server's largest upload, once signed in: no download is larger.
+    pub upload_max: u64,
 }
 
 impl Api {
@@ -314,6 +345,7 @@ impl Api {
             jar,
             base,
             origin,
+            upload_max: u64::MAX,
         }
     }
 
@@ -342,10 +374,22 @@ impl Api {
         let res = req.send().await.map_err(|_| Fail::Network)?;
         let status = res.status();
         if !status.is_success() {
-            let e = res.json::<ApiError>().await.map_err(|_| Fail::NotVesper)?;
+            let body = res.bytes().await.unwrap_or_default();
+            let code = match serde_json::from_slice::<ApiError>(&body) {
+                Ok(e) => e.code,
+                // A newer server's error code, or a 401 with a body this build cannot read: still a lost session.
+                Err(_) if status == StatusCode::UNAUTHORIZED => ApiErrorCode::Unauthorized,
+                Err(_)
+                    if serde_json::from_slice::<Value>(&body)
+                        .is_ok_and(|v| v["code"].is_string()) =>
+                {
+                    ApiErrorCode::Internal
+                }
+                Err(_) => return Err(Fail::NotVesper),
+            };
             return Err(Fail::Api {
                 status: status.as_u16(),
-                code: e.code,
+                code,
             });
         }
         if status == StatusCode::NO_CONTENT {
@@ -454,6 +498,53 @@ impl Api {
 
     /// An uploaded file, at most `max` bytes. The id must be the server's 32 hex.
     pub async fn download(&self, id: &str, max: u64) -> Result<Vec<u8>, Fail> {
+        let mut res = self.get_upload(id).await?;
+        let mut bytes = vec![];
+        while let Some(chunk) = res.chunk().await.map_err(|_| Fail::Network)? {
+            if (bytes.len() + chunk.len()) as u64 > max {
+                return Err(TOO_LARGE);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
+    /// An uploaded file written to `to` as it comes, at most `upload_max` bytes. It goes to `<to>.part` first and is
+    /// renamed when whole, so a broken download leaves nothing. `Err(None)`: the file could not be written.
+    pub async fn download_to(&self, id: &str, to: &Path) -> Result<(), Option<Fail>> {
+        use tokio::io::AsyncWriteExt;
+        let mut res = self.get_upload(id).await.map_err(Some)?;
+        if let Some(dir) = to.parent() {
+            tokio::fs::create_dir_all(dir).await.map_err(|_| None)?;
+        }
+        let mut part = to.as_os_str().to_owned();
+        part.push(".part");
+        let mut f = tokio::fs::File::create(&part).await.map_err(|_| None)?;
+        let wrote = async {
+            let mut n = 0u64;
+            while let Some(chunk) = res.chunk().await.map_err(|_| Some(Fail::Network))? {
+                n += chunk.len() as u64;
+                if n > self.upload_max {
+                    return Err(Some(TOO_LARGE));
+                }
+                f.write_all(&chunk).await.map_err(|_| None)?;
+            }
+            f.flush().await.map_err(|_| None)
+        }
+        .await;
+        drop(f);
+        let done = match wrote {
+            Ok(()) => tokio::fs::rename(&part, to).await.map_err(|_| None),
+            Err(e) => Err(e),
+        };
+        if done.is_err() {
+            let _ = tokio::fs::remove_file(&part).await;
+        }
+        done
+    }
+
+    /// `GET /api/uploads/{id}`, answered with success. The id must be the server's 32 hex.
+    async fn get_upload(&self, id: &str) -> Result<reqwest::Response, Fail> {
         if !files::valid_id(id) {
             return Err(Fail::NotVesper);
         }
@@ -461,7 +552,7 @@ impl Api {
             .base
             .join(&format!("/api/uploads/{id}"))
             .map_err(|_| Fail::NotVesper)?;
-        let mut res = self
+        let res = self
             .http
             .get(url)
             .timeout(Duration::from_secs(600))
@@ -476,17 +567,7 @@ impl Api {
                 .map_or(ApiErrorCode::Internal, |e| e.code);
             return Err(Fail::Api { status, code });
         }
-        let mut bytes = vec![];
-        while let Some(chunk) = res.chunk().await.map_err(|_| Fail::Network)? {
-            if (bytes.len() + chunk.len()) as u64 > max {
-                return Err(Fail::Api {
-                    status: 413,
-                    code: ApiErrorCode::TooLarge,
-                });
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        Ok(bytes)
+        Ok(res)
     }
 
     pub async fn mark_read(&self, room: i64, id: i64) -> Result<(), Fail> {
@@ -545,7 +626,13 @@ impl Api {
         if let Some(c) = self.jar.cookies(&self.base) {
             h.insert(COOKIE, c);
         }
-        match tokio_tungstenite::connect_async(req).await {
+        // A handshake that hangs would leave no Offline banner and nothing for Try now to cut short.
+        let Ok(r) =
+            tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(req)).await
+        else {
+            return Err(Fail::Network);
+        };
+        match r {
             Ok((ws, _)) => Ok(ws),
             Err(tungstenite::Error::Http(r)) => Err(Fail::Api {
                 status: r.status().as_u16(),
@@ -560,6 +647,9 @@ impl Api {
 pub const PAGE: u32 = 50;
 /// The retry count starts over only after a socket stayed up this long.
 const STABLE: Duration = Duration::from_secs(10);
+/// The server pings every 25 s, so a socket silent this long is dead (laptop sleep, a NAT timeout).
+const READ_TIMEOUT: Duration = Duration::from_millis(if cfg!(test) { 300 } else { 60_000 });
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(if cfg!(test) { 300 } else { 15_000 });
 
 /// Retry `n` waits a random 50 to 100% of min(30 s, 2 s * 2^n), like the web app.
 pub fn backoff(n: u32) -> Duration {
@@ -610,6 +700,9 @@ struct Conn {
     retry: Arc<tokio::sync::Notify>,
     /// Messages for the socket.
     out: UnboundedSender<ClientMsg>,
+    /// REST requests in flight: aborted with the session, so a late answer (a 401, another server's messages) never
+    /// reaches the next one.
+    requests: Vec<JoinHandle<()>>,
 }
 
 struct Net {
@@ -646,6 +739,9 @@ impl Net {
         }
         let c = self.conn.take()?;
         c.socket.abort();
+        for r in &c.requests {
+            r.abort();
+        }
         Some(c.api)
     }
 
@@ -666,8 +762,9 @@ impl Net {
         }
     }
 
-    fn signed_in(&mut self, api: Api, me: Me) {
+    fn signed_in(&mut self, mut api: Api, me: Me) {
         self.drop_conn();
+        api.upload_max = me.upload_max.try_into().unwrap_or(0);
         let (out, out_rx) = unbounded_channel();
         let retry = Arc::new(tokio::sync::Notify::new());
         let socket = tokio::spawn(socket(api.clone(), self.tx.clone(), out_rx, retry.clone()));
@@ -677,6 +774,7 @@ impl Net {
             socket,
             retry,
             out,
+            requests: vec![],
         });
         self.emit(Event::SignedIn {
             me: Box::new(me),
@@ -774,7 +872,13 @@ impl Net {
                             }
                         };
                         let ev = match api.upload(room, &path, progress).await {
-                            Ok(attachment) => Event::Uploaded { key, attachment },
+                            Ok(attachment) => {
+                                // A pasted picture was ours to make; it is on the server now.
+                                if path.starts_with(files::cache_dir("paste")) {
+                                    let _ = tokio::fs::remove_file(&path).await;
+                                }
+                                Event::Uploaded { key, attachment }
+                            }
                             Err(Some(f)) if f.unauthorized() => Event::SessionEnded,
                             Err(fail) => Event::UploadFailed { key, fail },
                         };
@@ -795,8 +899,10 @@ impl Net {
                 }
             }
             cmd => {
-                if let Some(c) = &self.conn {
-                    tokio::spawn(request(c.api.clone(), self.tx.clone(), cmd));
+                if let Some(c) = &mut self.conn {
+                    c.requests.retain(|h| !h.is_finished());
+                    let h = tokio::spawn(request(c.api.clone(), self.tx.clone(), cmd));
+                    c.requests.push(h);
                 }
             }
         }
@@ -826,6 +932,11 @@ impl Net {
         }
     }
 }
+
+const TOO_LARGE: Fail = Fail::Api {
+    status: 413,
+    code: ApiErrorCode::TooLarge,
+};
 
 pub const ATTACH_FAILED: &str = "That file could not be attached. Upload it again.";
 pub const PINS_FULL: &str = "This room has 50 pins, the most it can hold. Unpin one first.";
@@ -903,15 +1014,22 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
                         f => f.text(),
                     };
                     let error = error.into();
-                    (Err(f), Event::SendFailed { room, body, error })
+                    let ev = Event::SendFailed {
+                        room,
+                        body,
+                        error,
+                        keys,
+                    };
+                    (Err(f), ev)
                 }
             }
         }
         Cmd::Edit { id, body } => {
             let b = serde_json::to_value(EditMessage { body }).expect("json");
-            changed(api.change(Method::PATCH, id, "", Some(b)).await, |m| {
-                Event::Edited(Box::new(m))
-            })
+            match api.change(Method::PATCH, id, "", Some(b)).await {
+                Ok(m) => (Ok(()), Event::Edited(Box::new(m))),
+                Err(f) => (Err(f), Event::EditFailed(f.text().into())),
+            }
         }
         Cmd::Delete(id) => match api.change::<()>(Method::DELETE, id, "", None).await {
             // The server pushes the deleted copy.
@@ -956,22 +1074,10 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
             };
             (res, Event::Image { id, picture })
         }
-        Cmd::Download { id, to, open } => match api.download(&id, u64::MAX).await {
-            Ok(bytes) => {
-                let path = to.clone();
-                let wrote = tokio::task::spawn_blocking(move || {
-                    if let Some(dir) = path.parent() {
-                        std::fs::create_dir_all(dir)?;
-                    }
-                    std::fs::write(&path, bytes)
-                })
-                .await;
-                match wrote {
-                    Ok(Ok(())) => (Ok(()), Event::Downloaded { path: to, open }),
-                    _ => (Ok(()), Event::DownloadFailed(SAVE_FAILED.into())),
-                }
-            }
-            Err(f) => (Err(f), Event::DownloadFailed(f.text().into())),
+        Cmd::Download { id, to, open } => match api.download_to(&id, &to).await {
+            Ok(()) => (Ok(()), Event::Downloaded { path: to, open }),
+            Err(None) => (Ok(()), Event::DownloadFailed(SAVE_FAILED.into())),
+            Err(Some(f)) => (Err(f), Event::DownloadFailed(f.text().into())),
         },
         Cmd::Moderate {
             user_id,
@@ -1024,9 +1130,15 @@ async fn socket(
                 // What was asked while the socket was down belonged to the old one's call.
                 while out.try_recv().is_ok() {}
                 let mut code = None;
+                let idle = tokio::time::sleep(READ_TIMEOUT);
+                tokio::pin!(idle);
                 loop {
                     let frame = tokio::select! {
-                        f = ws.next() => f,
+                        f = ws.next() => {
+                            idle.as_mut().reset(tokio::time::Instant::now() + READ_TIMEOUT);
+                            f
+                        }
+                        () = &mut idle => break,
                         Some(m) = out.recv() => {
                             let text = serde_json::to_string(&m).expect("json");
                             if ws.send(WsMsg::text(text)).await.is_err() {
@@ -1038,10 +1150,16 @@ async fn socket(
                     let Some(frame) = frame else { break };
                     match frame {
                         Ok(WsMsg::Text(t)) => {
-                            // shortcut: a message kind this build does not know is skipped; the web app instead stops
-                            // on a server build change. Revisit when a protocol change lands.
-                            if let Ok(m) = serde_json::from_str::<ServerMsg>(&t)
-                                && tx.send(Event::Server(Box::new(m))).is_err()
+                            // A message kind this build does not know is skipped. A hello it cannot read means a
+                            // newer server: the app would wait for it forever, so it says so instead.
+                            let ev = match serde_json::from_str::<ServerMsg>(&t) {
+                                Ok(m) => Some(Event::Server(Box::new(m))),
+                                Err(_) => serde_json::from_str::<Value>(&t)
+                                    .is_ok_and(|v| v["type"] == "hello")
+                                    .then_some(Event::Incompatible),
+                            };
+                            if let Some(ev) = ev
+                                && tx.send(ev).is_err()
                             {
                                 return;
                             }
@@ -1107,6 +1225,31 @@ mod tests {
     }
 
     #[test]
+    fn plain_http_is_insecure_off_this_computer_and_the_home_network() {
+        for s in [
+            "http://vesper.example.com",
+            "http://8.8.8.8:8080",
+            "http://[2001:db8::1]",
+        ] {
+            assert!(insecure(s), "{s}");
+        }
+        for s in [
+            "vesper.example.com",
+            "https://vesper.example.com",
+            "http://localhost:8080",
+            "http://127.0.0.1:9",
+            "http://192.168.1.20",
+            "http://10.0.0.5",
+            "http://nas.local",
+            "http://[::1]:8080",
+            "http://[fd00::5]",
+            "",
+        ] {
+            assert!(!insecure(s), "{s}");
+        }
+    }
+
+    #[test]
     fn a_restored_cookie_is_secure_on_https() {
         let https = Api::new(
             origin_of("https://v.example").unwrap(),
@@ -1149,6 +1292,112 @@ mod tests {
                 .contains("refused this address")
         );
         assert!(api(401, ApiErrorCode::Unauthorized).unauthorized());
+    }
+
+    /// A loopback "server" that does `serve` with each connection and then goes silent.
+    async fn silent<F: Future<Output = ()> + Send + 'static>(
+        serve: fn(tokio::net::TcpStream) -> F,
+    ) -> Api {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = l.accept().await {
+                tokio::spawn(serve(s));
+            }
+        });
+        Api::new(origin_of(&format!("http://{addr}")).unwrap(), None)
+    }
+
+    async fn first_event(api: Api) -> Event {
+        let (tx, mut rx) = unbounded_channel();
+        let (_out, out_rx) = unbounded_channel();
+        let h = tokio::spawn(socket(
+            api,
+            tx,
+            out_rx,
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the dead socket is noticed")
+            .unwrap();
+        h.abort();
+        ev
+    }
+
+    #[tokio::test]
+    async fn a_silent_socket_and_a_hung_handshake_go_offline() {
+        let upgraded = silent(|s| async move {
+            let _ws = tokio_tungstenite::accept_async(s).await.unwrap();
+            std::future::pending::<()>().await;
+        })
+        .await;
+        assert!(matches!(first_event(upgraded).await, Event::Offline { .. }));
+        let hung = silent(|s| async move {
+            let _s = s;
+            std::future::pending::<()>().await;
+        })
+        .await;
+        assert!(matches!(first_event(hung).await, Event::Offline { .. }));
+    }
+
+    /// A loopback "server" that answers one request with `status` and `body`.
+    async fn serve_once(status: &str, body: &'static str) -> Api {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let head = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut buf = [0; 4096];
+            let _ = s.read(&mut buf).await;
+            s.write_all(head.as_bytes()).await.unwrap();
+            s.write_all(body.as_bytes()).await.unwrap();
+        });
+        Api::new(origin_of(&format!("http://{addr}")).unwrap(), None)
+    }
+
+    #[tokio::test]
+    async fn downloads_go_to_disk_whole_or_not_at_all() {
+        let id = "0123456789abcdef0123456789abcdef";
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("sub").join("f.bin");
+        let mut api = serve_once("200 OK", "0123456789").await;
+        api.upload_max = 10;
+        api.download_to(id, &to).await.unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"0123456789");
+
+        let to = dir.path().join("big.bin");
+        let mut api = serve_once("200 OK", "0123456789!").await;
+        api.upload_max = 10;
+        assert_eq!(api.download_to(id, &to).await, Err(Some(TOO_LARGE)));
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(left, ["sub"], "no file and no .part");
+    }
+
+    #[tokio::test]
+    async fn a_newer_servers_errors_still_read_right() {
+        async fn answer(status: &str, body: &'static str) -> Fail {
+            serve_once(status, body).await.me().await.unwrap_err()
+        }
+        let new_code = r#"{"code":"brand_new","message":"x"}"#;
+        assert!(answer("401 Unauthorized", new_code).await.unauthorized());
+        assert!(answer("401 Unauthorized", "<html>").await.unauthorized());
+        assert_eq!(
+            answer("500 Internal Server Error", new_code).await,
+            Fail::Api {
+                status: 500,
+                code: ApiErrorCode::Internal
+            }
+        );
+        assert_eq!(answer("404 Not Found", "<html>").await, Fail::NotVesper);
     }
 
     #[test]

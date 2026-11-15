@@ -12,7 +12,7 @@ use gpui::{
 use super::Vesper;
 use super::c::{Button, Field, PasswordInput, text_input};
 use super::theme::{SEMIBOLD, TEXT_SM, TEXT_XL, TextStepExt, tokens};
-use crate::model::NOT_REMEMBERED;
+use crate::model::{INSECURE, NOT_REMEMBERED};
 
 /// The web's logo (`Mark.svelte`): the wordmark, 235x112, drawn at half size.
 pub(super) fn logo() -> Arc<Image> {
@@ -30,6 +30,7 @@ impl Vesper {
     pub(super) fn render_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let t = tokens(cx).clone();
         let m = &self.model;
+        let insecure = crate::net::insecure(&self.server.read(cx).value());
         let line = |text: &str, color| {
             div()
                 .text_step(TEXT_SM)
@@ -41,11 +42,19 @@ impl Vesper {
             .flex_col()
             .gap_4()
             .child(
-                Field::new("Server address").child(
-                    div()
-                        .debug_selector(|| "sign-in-server".into())
-                        .child(text_input(&self.server, cx)),
-                ),
+                Field::new("Server address")
+                    .child(
+                        div()
+                            .debug_selector(|| "sign-in-server".into())
+                            .child(text_input(&self.server, cx)),
+                    )
+                    .when(insecure, |f| {
+                        f.child(
+                            line(INSECURE, t.warn_fg)
+                                .mt_1()
+                                .debug_selector(|| "sign-in-insecure".into()),
+                        )
+                    }),
             )
             .child(Field::new("Username").child(text_input(&self.username, cx)))
             .child(Field::new("Password").child(PasswordInput::new(
