@@ -3,6 +3,7 @@
 
 pub mod files;
 pub mod highlight;
+pub mod link;
 pub mod markdown;
 pub mod model;
 pub mod net;

@@ -71,6 +71,14 @@ async fn two_engines_hear_each_other_mute_and_leave() {
     .await;
     let (rms, hz) = analyse(&b.audio.last(200));
     println!("bob hears {rms:.3} rms at {hz:.0} Hz");
+    // The engine's 2 s stats: the call's round trip, and a grade for the other person once two windows came.
+    until_all(&mut [&mut a, &mut b], "stats", |c| {
+        c.iter().all(|c| {
+            c.model.call.quality.is_some_and(|q| q.rtt_ms.is_some())
+                && c.model.call.links.values().any(|l| l.grade.is_some())
+        })
+    })
+    .await;
     assert!(a.model.call.me_speaking && !b.model.call.me_speaking);
 
     // B to A: a 660 Hz tone; ann goes quiet at bob.

@@ -96,6 +96,16 @@ pub enum Cmd {
     Voice(VoiceCmd),
     /// A message on the socket. Dropped while it is down.
     Signal(ClientMsg),
+    /// `POST /api/users/{user_id}/{action}`: `force-mute` (with `muted`), `stop-share`, `kick` or `disconnect`.
+    Moderate {
+        user_id: String,
+        action: &'static str,
+        muted: Option<bool>,
+    },
+    /// `POST /api/dms`: the DM with this person, made the first time.
+    OpenDm(String),
+    /// Offline: try the socket now, not at the end of the wait.
+    RetryNow,
 }
 
 /// From the network thread to the UI.
@@ -179,6 +189,9 @@ pub enum Event {
         open: bool,
     },
     DownloadFailed(String),
+    /// A moderator action's answer: the error in words when it failed.
+    Moderated(Result<(), String>),
+    DmOpened(Box<vesper_protocol::RoomInfo>),
     /// From the call started with `VoiceCmd::Start { call, .. }`.
     Voice {
         call: u64,
@@ -593,6 +606,8 @@ pub fn start(
 struct Conn {
     api: Api,
     socket: JoinHandle<()>,
+    /// Cuts the socket's wait before its next try.
+    retry: Arc<tokio::sync::Notify>,
     /// Messages for the socket.
     out: UnboundedSender<ClientMsg>,
 }
@@ -654,9 +669,15 @@ impl Net {
     fn signed_in(&mut self, api: Api, me: Me) {
         self.drop_conn();
         let (out, out_rx) = unbounded_channel();
-        let socket = tokio::spawn(socket(api.clone(), self.tx.clone(), out_rx));
+        let retry = Arc::new(tokio::sync::Notify::new());
+        let socket = tokio::spawn(socket(api.clone(), self.tx.clone(), out_rx, retry.clone()));
         let server = api.origin.clone();
-        self.conn = Some(Conn { api, socket, out });
+        self.conn = Some(Conn {
+            api,
+            socket,
+            retry,
+            out,
+        });
         self.emit(Event::SignedIn {
             me: Box::new(me),
             server,
@@ -709,6 +730,11 @@ impl Net {
             Cmd::Signal(m) => {
                 if let Some(c) = &self.conn {
                     let _ = c.out.send(m);
+                }
+            }
+            Cmd::RetryNow => {
+                if let Some(c) = &self.conn {
+                    c.retry.notify_one();
                 }
             }
             Cmd::Voice(VoiceCmd::Start { call, setup }) => {
@@ -947,6 +973,28 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
             }
             Err(f) => (Err(f), Event::DownloadFailed(f.text().into())),
         },
+        Cmd::Moderate {
+            user_id,
+            action,
+            muted,
+        } => {
+            let body = muted.map(|m| serde_json::json!({ "muted": m }));
+            let r = api
+                .call::<()>(
+                    Method::POST,
+                    &format!("/api/users/{user_id}/{action}"),
+                    body,
+                )
+                .await;
+            (r, Event::Moderated(r.map_err(|f| f.text().into())))
+        }
+        Cmd::OpenDm(user_id) => {
+            let body = serde_json::json!({ "user_id": user_id });
+            match api.call(Method::POST, "/api/dms", Some(body)).await {
+                Ok(room) => (Ok(()), Event::DmOpened(Box::new(room))),
+                Err(f) => (Err(f), Event::Moderated(Err(f.text().into()))),
+            }
+        }
         Cmd::MarkRead { room, id } => match api.mark_read(room, id).await {
             Ok(()) => return,
             Err(f) => (Err(f), Event::ReadFailed { room }),
@@ -962,7 +1010,12 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
 }
 
 /// Keeps one socket open while signed in, reconnecting with backoff, like `session.svelte.ts`. Sends what comes on `out`.
-async fn socket(api: Api, tx: UnboundedSender<Event>, mut out: UnboundedReceiver<ClientMsg>) {
+async fn socket(
+    api: Api,
+    tx: UnboundedSender<Event>,
+    mut out: UnboundedReceiver<ClientMsg>,
+    retry: Arc<tokio::sync::Notify>,
+) {
     let mut tries = 0;
     loop {
         let up = Instant::now();
@@ -1019,7 +1072,10 @@ async fn socket(api: Api, tx: UnboundedSender<Event>, mut out: UnboundedReceiver
         if tx.send(Event::Offline { retry_in: wait }).is_err() {
             return;
         }
-        tokio::time::sleep(wait).await;
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = retry.notified() => {}
+        }
         // A refused upgrade looks like a network drop, so ask /api/me first.
         if api.me().await.is_err_and(Fail::unauthorized) {
             return drop(tx.send(Event::SessionEnded));

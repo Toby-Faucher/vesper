@@ -3,8 +3,9 @@
 //! the Settings gear. Also the sidebar's motion: the selected room's glide, the hide and show slide, people joining
 //! and leaving voice (`row`) and badges popping in (`bump`).
 //!
-//! Not here (no desktop feature behind them yet): the switcher button (Ctrl K), Admin in the account menu, a
-//! person's card on a click, the half-strength fill of the row the pointer heads for (`intent.ts`).
+//! A click on a person in voice opens their card (`person.rs`); the people in your call show their connection.
+//!
+//! Not here (no desktop feature behind them yet): the switcher button (Ctrl K), Admin in the account menu, the half-strength fill of the row the pointer heads for (`intent.ts`).
 //!
 //! No `ml_auto()` here: taffy drops the flex gaps before an auto margin, so what the web pushes right with `ml-auto`
 //! sits after a `flex_1` item instead.
@@ -665,6 +666,17 @@ impl Vesper {
                 .get(&p.user_id)
                 .map_or(String::new(), |u| u.accent.clone())
         };
+        let link = |p: &Peer| {
+            (m.call.room == Some(room) && m.call.phase == Phase::Joined)
+                .then(|| {
+                    if p.user_id == s.my_id() {
+                        m.call.quality.map(|_| m.call.own_link)
+                    } else {
+                        m.call.links.get(&p.user_id).copied()
+                    }
+                })
+                .flatten()
+        };
         let posed = |el: gpui::Div, pose: Option<Pose>| match pose {
             Some(p) => el.relative().left(px(-8. * (1. - p.t))).opacity(p.opacity),
             None => el,
@@ -678,10 +690,25 @@ impl Vesper {
                 .pr(px(8.))
                 .pl(px(28.))
                 .children(people.into_iter().take(STACK).map(|(p, pose, _)| {
+                    let key = format!("stack-{room}-{}", p.user_id);
+                    let uid = p.user_id.clone();
+                    let k = key.clone();
                     posed(
                         div().flex().mr(px(4.)).child(
-                            Avatar::new(p.user_id.clone(), p.name.clone(), accent(&p), 20)
-                                .speaking(speaking(&p)),
+                            div()
+                                .id(ElementId::Name(key.clone().into()))
+                                .relative()
+                                .flex()
+                                .rounded_full()
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_person(uid.clone(), k.clone(), false, cx)
+                                }))
+                                .child(self.probe(key))
+                                .child(
+                                    Avatar::new(p.user_id.clone(), p.name.clone(), accent(&p), 20)
+                                        .speaking(speaking(&p)),
+                                ),
                         ),
                         pose,
                     )
@@ -711,8 +738,24 @@ impl Vesper {
                     None
                 };
                 let sp = speaking(&p);
+                let key = format!("person-{room}-{}", p.user_id);
+                let uid = p.user_id.clone();
+                let k = key.clone();
+                let lk = link(&p);
                 let row = div()
                     .id(pid)
+                    .debug_selector({
+                        let k = key.clone();
+                        move || k
+                    })
+                    .relative()
+                    .cursor_pointer()
+                    .when(!leaving, |d| {
+                        d.on_click(cx.listener(move |this, _, _, cx| {
+                            this.open_person(uid.clone(), k.clone(), false, cx)
+                        }))
+                    })
+                    .child(self.probe(key))
                     .flex()
                     .h(px(28.))
                     .min_w_0()
@@ -735,6 +778,16 @@ impl Vesper {
                     })
                     .when(p.share.is_some(), |d| {
                         d.child(icon("monitor").text_color(t.fg_3))
+                    })
+                    // `ml-auto`: at the right end.
+                    .when_some(lk, |d, l| {
+                        d.child(
+                            div()
+                                .flex()
+                                .flex_1()
+                                .justify_end()
+                                .child(super::person::link_icon(&l, &t)),
+                        )
                     });
                 posed(div().flex().min_w_0().child(row), pose).into_any_element()
             })

@@ -305,16 +305,28 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
         "call-leave",
         "call-person-a",
         "call-person-b",
-        "volume-b",
+        "call-quality",
         "speaking-b",
     ] {
         assert!(cx.debug_bounds(s).is_some(), "{s} is drawn");
     }
+    assert!(cx.debug_bounds("speaking-a").is_none());
+    // Bob's card from the bar: above his avatar, with his volume.
+    click(cx, "call-person-b");
+    cx.run_until_parked();
+    let avatar = cx.debug_bounds("call-person-b").unwrap();
+    let card = cx.debug_bounds("person-card").expect("the card opens");
+    assert!(cx.debug_bounds("volume-b").is_some(), "his volume");
+    assert!(
+        card.bottom() <= avatar.top() && (card.left() - avatar.left()).abs() < gpui::px(1.),
+        "above the avatar, left edges lined up: {card:?} {avatar:?}"
+    );
+    click(cx, "call-person-a");
     assert!(
         cx.debug_bounds("volume-a").is_none(),
         "no slider for myself"
     );
-    assert!(cx.debug_bounds("speaking-a").is_none());
+    view.update(cx, |v, cx| v.close_person(cx));
     view.read_with(cx, |v, _| {
         assert_eq!(v.model.call.phase, Phase::Joined);
         assert!(
@@ -579,7 +591,6 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
     );
     view.update(cx, |v, cx| v.act(|m| m.set_ptt(true), cx));
     cx.run_until_parked();
-    assert!(cx.debug_bounds("call-ptt").is_some());
     assert!(matches!(
         drain(&mut rx).as_slice(),
         [Cmd::Voice(VoiceCmd::Muted(false))]
@@ -965,4 +976,128 @@ fn edit_reply_delete_mentions_and_typing(cx: &mut TestAppContext) {
         })),
     );
     assert!(cx.debug_bounds("typing").is_some());
+}
+
+/// A name in the sidebar's voice list opens the person card to its right; a moderator's card acts on a member, and
+/// Disconnect asks first.
+#[gpui::test]
+fn the_person_card_opens_from_the_sidebar_and_moderates(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update(cx, |v, _| {
+        v.model.state.me.as_mut().unwrap().user.role = vesper_protocol::Role::Moderator;
+    });
+    drain(&mut rx);
+    click(cx, "person-2-b");
+    let row = cx.debug_bounds("person-2-b").unwrap();
+    let card = cx.debug_bounds("person-card").expect("the card opens");
+    assert!(
+        (card.left() - row.right() - gpui::px(4.)).abs() < gpui::px(1.)
+            && (card.top() - row.top()).abs() < gpui::px(1.),
+        "4 px right of the row, tops lined up: {card:?} {row:?}"
+    );
+    click(cx, "person-force-mute");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(cmds.as_slice(), [Cmd::Moderate { user_id, action: "force-mute", muted: Some(true) }] if user_id == "b"),
+        "{cmds:?}"
+    );
+    apply(&view, cx, Event::Moderated(Err("Not allowed.".into())));
+    assert!(cx.debug_bounds("person-error").is_some());
+    click(cx, "person-disconnect");
+    assert!(cx.debug_bounds("person-confirm").is_some());
+    click(cx, "person-confirm-disconnect");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(
+            cmds.as_slice(),
+            [Cmd::Moderate {
+                action: "disconnect",
+                muted: None,
+                ..
+            }]
+        ),
+        "{cmds:?}"
+    );
+
+    apply(&view, cx, Event::Moderated(Ok(())));
+    // Message opens the DM the server answers with.
+    click(cx, "person-2-b");
+    click(cx, "person-message");
+    assert!(matches!(drain(&mut rx).as_slice(), [Cmd::OpenDm(u)] if u == "b"));
+    let dm = serde_json::from_value(json!({ "kind": "dm", "id": 3, "name": "x", "position": 3,
+        "restricted": false, "members": ["a", "b"], "archived": false }))
+    .unwrap();
+    apply(&view, cx, Event::DmOpened(Box::new(dm)));
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.active, Some(3));
+        assert!(v.person.is_none());
+    });
+}
+
+/// A name in the timeline opens its author's card.
+#[gpui::test]
+fn a_name_in_the_timeline_opens_the_card(cx: &mut TestAppContext) {
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    // The list settles its alignment a frame after the page: draw again, so the bounds are the settled ones.
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
+    click(cx, "name-10");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.person.as_ref().map(|c| c.user_id.as_str()), Some("b"))
+    });
+    click(cx, "name-10");
+    view.read_with(cx, |v, _| {
+        assert!(v.person.is_none(), "a second click closes it")
+    });
+}
+
+/// A DM call rings: Accept joins it, Decline tells the server.
+#[gpui::test]
+fn a_ring_is_accepted_or_declined(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    let ring = |room| ServerMsg::RingStart {
+        room_id: room,
+        user_id: "b".into(),
+    };
+    apply(&view, cx, Event::Server(Box::new(ring(3))));
+    assert!(cx.debug_bounds("ring-prompt").is_some());
+    drain(&mut rx);
+    click(cx, "ring-decline");
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [Cmd::Signal(ClientMsg::DeclineRing { room_id: 3 })]
+    ));
+    apply(&view, cx, Event::Server(Box::new(ring(3))));
+    click(cx, "ring-accept");
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::Voice(VoiceCmd::Start { .. }))),
+        "{cmds:?}"
+    );
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.active, Some(3));
+        assert!(v.model.rings.is_empty());
+    });
+}
+
+/// Offline: the banner counts down and Try now asks the socket to try at once.
+#[gpui::test]
+fn the_connection_banner_retries_now(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    drain(&mut rx);
+    apply(
+        &view,
+        cx,
+        Event::Offline {
+            retry_in: std::time::Duration::from_secs(4),
+        },
+    );
+    assert!(cx.debug_bounds("connection-banner").is_some());
+    click(cx, "retry-now");
+    assert!(matches!(drain(&mut rx).as_slice(), [Cmd::RetryNow]));
 }

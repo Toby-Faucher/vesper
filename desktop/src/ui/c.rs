@@ -626,6 +626,7 @@ pub struct Avatar {
     speaking: bool,
     muted: bool,
     deafened: bool,
+    surface: Option<Hsla>,
 }
 
 impl Avatar {
@@ -644,7 +645,14 @@ impl Avatar {
             speaking: false,
             muted: false,
             deafened: false,
+            surface: None,
         }
+    }
+    /// The colour behind it, for the ring's gap and the glyph's disc: `--bg-sidebar` unless set (the call bar's
+    /// `--bg-raised`).
+    pub fn surface(mut self, c: impl Into<Hsla>) -> Self {
+        self.surface = Some(c.into());
+        self
     }
     pub fn speaking(mut self, on: bool) -> Self {
         self.speaking = on;
@@ -663,6 +671,7 @@ impl Avatar {
 impl RenderOnce for Avatar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = tokens(cx);
+        let gap = self.surface.unwrap_or(t.bg_sidebar.into());
         let s = self.size;
         let mut text = initials(&self.name);
         if text.is_empty() {
@@ -716,7 +725,7 @@ impl RenderOnce for Avatar {
                                 .size_full()
                                 .rounded_full()
                                 .border_2()
-                                .border_color(t.bg_sidebar),
+                                .border_color(gap),
                         ),
                 )
             })
@@ -732,7 +741,7 @@ impl RenderOnce for Avatar {
                         .items_center()
                         .justify_center()
                         .rounded_full()
-                        .bg(t.bg_sidebar)
+                        .bg(gap)
                         .text_color(t.danger_fg)
                         .child(icon(g).size(px(iw)).text_color(t.danger_fg)),
                 )
@@ -1009,6 +1018,76 @@ impl RenderOnce for Dialog {
                     .child(div().absolute().top(px(12.)).right(px(12.)).child(close)),
             )
     }
+}
+
+/// `Status.svelte`'s kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusKind {
+    Info,
+    Warn,
+    Error,
+}
+
+/// `Status.svelte`: the icon (in a 20 px row) and the text, 8 px apart, 13/20 `--fg`. Warn and error sit on their
+/// subtle surface, 6 px by 10, `--radius`; info is `--fg-2` with the icon in `--fg-3`.
+pub fn status(kind: StatusKind, text: impl Into<SharedString>, cx: &App) -> Div {
+    let t = tokens(cx);
+    let (name, mark) = match kind {
+        StatusKind::Info => ("info", t.fg_3),
+        StatusKind::Warn => ("warn", t.warn_fg),
+        StatusKind::Error => ("error", t.danger_fg),
+    };
+    div()
+        .flex()
+        .items_start()
+        .gap(px(8.))
+        .text_step(TEXT_SM)
+        .text_color(if kind == StatusKind::Info {
+            t.fg_2
+        } else {
+            t.fg
+        })
+        .when(kind != StatusKind::Info, |d| {
+            d.py(px(6.))
+                .px(px(10.))
+                .rounded(t.radius)
+                .bg(if kind == StatusKind::Warn {
+                    t.warn_subtle
+                } else {
+                    t.danger_subtle
+                })
+        })
+        .child(
+            div()
+                .flex()
+                .h(px(20.))
+                .flex_none()
+                .items_center()
+                .child(icon(name).text_color(mark)),
+        )
+        .child(div().min_w_0().child(text.into()))
+}
+
+/// The three connection bars of `LinkIcon.svelte` and the call bar: 12 px, bars 3 px wide at x 0, 4 and 8, 4, 7 and
+/// 10 px tall from the bottom less 1, rounded 0.5; `lit` of them full, the rest at 0.3.
+pub fn bars(lit: u8, color: impl Into<Hsla>) -> Div {
+    let c = color.into();
+    div()
+        .relative()
+        .flex_none()
+        .size(px(12.))
+        .children((1..=3u8).map(|n| {
+            let n_f = n as f32;
+            div()
+                .absolute()
+                .left(px(n_f * 4. - 4.))
+                .top(px(10. - n_f * 3.))
+                .w(px(3.))
+                .h(px(n_f * 3. + 1.))
+                .rounded(px(0.5))
+                .bg(c)
+                .opacity(if n <= lit { 1. } else { 0.3 })
+        }))
 }
 
 /// `a` moved `t` of the way to `b`, in sRGB (CSS transitions mix legacy colours there too).

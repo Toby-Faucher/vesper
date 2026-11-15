@@ -1,6 +1,7 @@
 //! The main screen's right side: the open room's header (`RoomHeader.svelte`), messages and composer. The sidebar
 //! and the shell around both are in `sidebar.rs`.
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, Div, ExternalPaths, InteractiveElement, ParentElement, Styled, Window, div, list,
     px, rgb,
@@ -11,7 +12,6 @@ use vesper_protocol::{RoomInfo, RoomKind};
 
 use super::c::{self, Ellipsis};
 use super::icons::icon;
-use super::sign_in::TextLine;
 use super::theme::{TEXT_BASE, TEXT_SM, TEXT_XS, TextStepExt, tokens};
 use super::{COMPOSER, Vesper, theme};
 use crate::model::{Model, NOT_REMEMBERED, Phase};
@@ -47,30 +47,22 @@ fn empty_state(title: &'static str, body: &'static str, lift: f32, cx: &App) -> 
 impl Vesper {
     pub(super) fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.sync_share(window, cx);
+        let banner = self.render_banner(window, cx);
         if self.settings_open {
             let settings = self.render_settings(cx);
-            let call = self.render_call(cx);
             let collapsed = self.collapsed_header(cx);
-            let main = v_flex()
-                .flex_1()
-                .h_full()
-                .min_w_0()
+            let main = self
+                .main_pane(window, cx)
+                .children(banner)
                 .children(collapsed)
-                .child(settings)
-                .children(call);
-            return self.shell(main, window, cx);
+                .child(settings);
+            let shell = self.shell(main, window, cx);
+            return self.overlays(shell, window, cx);
         }
         self.sync_list(cx);
         self.sync_typing(cx);
         let m = &self.model;
         let room = m.active.and_then(|id| m.state.find_room(id));
-        let status = if !m.notice.is_empty() {
-            m.notice.clone()
-        } else if !m.online {
-            "Offline. Reconnecting...".into()
-        } else {
-            String::new()
-        };
         let Some(room) = room else {
             // No room open: the web's empty states (it opens the first room itself when there is one).
             let empty = (m.state.rooms.is_empty() && m.online).then(|| {
@@ -82,13 +74,13 @@ impl Vesper {
                 )
             });
             let collapsed = self.collapsed_header(cx);
-            let main = v_flex()
-                .flex_1()
-                .h_full()
-                .min_w_0()
+            let main = self
+                .main_pane(window, cx)
+                .children(banner)
                 .children(collapsed)
                 .children(empty);
-            return self.shell(main, window, cx);
+            let shell = self.shell(main, window, cx);
+            return self.overlays(shell, window, cx);
         };
         let room = room.clone();
         if self.placeholder_room != Some(room.id) {
@@ -101,7 +93,7 @@ impl Vesper {
         let empty = self.tl.loaded.contains(&room.id)
             && m.log()
                 .is_some_and(|l| l.messages.is_empty() && !l.more_before);
-        let header = self.room_header(&room, &status, cx);
+        let header = self.room_header(&room, cx);
         let m = &self.model;
         let keyring = m.not_remembered.then(|| {
             h_flex()
@@ -154,32 +146,55 @@ impl Vesper {
             .on_action(cx.listener(Self::paste_file))
             .flex_none()
             .debug_selector(|| "composer".into())
+            .relative()
+            .child(self.probe("composer".into()))
             .children(self.saved_line(cx))
             .child(composer);
-        let call = self.render_call(cx);
-        let share = self.render_share(cx);
+        let call_status = self.call_status(cx);
+        let share = self.render_share(window, cx);
         let dialog = self.delete_dialog(cx);
         if self.timeline_moving() {
             window.request_animation_frame();
         }
-        let main = v_flex()
-            .flex_1()
-            .h_full()
-            .min_w_0()
+        let main = self
+            .main_pane(window, cx)
+            .children(banner)
             .child(header)
             .children(keyring)
+            .children(call_status)
             .children(share)
             // `pt-3` over the timeline (Chat.svelte).
             .child(div().h(px(12.)).flex_none())
             .child(timeline)
-            .children(call)
             .child(composer)
             // Files dropped anywhere on the room go to the tray.
             .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgb(theme::ACCENT_SUBTLE)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 this.attach_paths(paths.paths().to_vec(), cx)
             }));
-        self.shell(main, window, cx).children(dialog)
+        let shell = self.shell(main, window, cx).children(dialog);
+        self.overlays(shell, window, cx)
+    }
+
+    /// The main pane's column: while in a call it keeps the call bar's height and 24 px free at its bottom, and the
+    /// bar floats there.
+    fn main_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let call = self.render_call(window, cx);
+        v_flex()
+            .relative()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .when(call.is_some(), |d| d.pb(px(super::call::BAR_H + 24.)))
+            .children(call)
+    }
+
+    /// What floats over the whole window: the person card, its confirm, the ring prompt.
+    fn overlays(&mut self, shell: Div, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let card = self.render_person(window, cx);
+        let confirm = self.person_confirm(cx);
+        let ring = self.render_ring(window, cx);
+        shell.children(card).children(confirm).children(ring)
     }
 
     /// Where the last saved file went, with Show in folder (the desktop's own: the web's browser shows downloads).
@@ -252,8 +267,8 @@ impl Vesper {
     /// `RoomHeader.svelte`: 48 px, 16 px sides, 12 px gap, a `--line-subtle` rule under it. The name (16/24,
     /// `--weight-strong`), a DM's or a restricted room's note, then Pins and Join voice at the right. Join voice is
     /// not there in this room's call (the call bar has Leave) and is secondary while in a call elsewhere. Search is
-    /// the web's (the desktop has no message search yet). The desktop adds the status line (offline, notices).
-    fn room_header(&mut self, room: &RoomInfo, status: &str, cx: &mut Context<Self>) -> Div {
+    /// the web's (the desktop has no message search yet).
+    fn room_header(&mut self, room: &RoomInfo, cx: &mut Context<Self>) -> Div {
         let t = tokens(cx).clone();
         let popover = self.render_pins(cx);
         let m = &self.model;
@@ -276,6 +291,8 @@ impl Vesper {
                         c::Variant::Primary
                     })
                     .loading(joining)
+                    // As the web's: no join while offline.
+                    .disabled(!m.online)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.act(
                             |m| {
@@ -330,7 +347,6 @@ impl Vesper {
                     .child(icon("shield").text_color(t.fg_2))
                     .child(n)
             }))
-            .when_some_text(status, theme::WARN_FG, "status")
             .child(
                 // flex_1 and justify_end, not ml_auto: taffy drops the gaps before an auto margin.
                 h_flex()

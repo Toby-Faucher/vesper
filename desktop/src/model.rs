@@ -123,6 +123,12 @@ pub struct Call {
     pub struggling: HashSet<String>,
     /// Why the watched share went away.
     pub share_notice: String,
+    /// The call's last round trip and loss, for the call bar's quality line; none before the first stats.
+    pub quality: Option<crate::link::Sample>,
+    /// Each other person's connection grade, by user id.
+    pub links: HashMap<String, crate::link::Link>,
+    /// Your own row's grade, from `quality`.
+    pub own_link: crate::link::Link,
 }
 
 impl Default for Call {
@@ -151,6 +157,9 @@ impl Default for Call {
             frames: 0,
             struggling: HashSet::new(),
             share_notice: String::new(),
+            quality: None,
+            links: HashMap::new(),
+            own_link: crate::link::Link::default(),
         }
     }
 }
@@ -232,6 +241,15 @@ pub struct Model {
     pub jump: Option<i64>,
     /// Where the last saved file went.
     pub saved: Option<PathBuf>,
+    /// When the socket tries again, while offline.
+    pub retry_at: Option<Instant>,
+    /// Incoming DM calls (room, caller), oldest first: the first one shows.
+    pub rings: Vec<(i64, String)>,
+    /// A person card's request runs (`dm`, `force-mute`, ...), and why the last one failed.
+    pub person_busy: &'static str,
+    pub person_error: String,
+    /// A DM the person card asked for is there: the view opens it.
+    pub dm_opened: Option<i64>,
 }
 
 impl Default for Model {
@@ -266,6 +284,11 @@ impl Default for Model {
             pins: None,
             jump: None,
             saved: None,
+            retry_at: None,
+            rings: vec![],
+            person_busy: "",
+            person_error: String::new(),
+            dm_opened: None,
         }
     }
 }
@@ -327,8 +350,9 @@ impl Model {
                 (self.online, self.notice) = (false, DISCONNECTED.into());
                 return self.end_call(CALL_DROPPED, false);
             }
-            Event::Offline { .. } => {
+            Event::Offline { retry_in } => {
                 self.online = false;
+                self.retry_at = Some(Instant::now() + retry_in);
                 // The media goes with the socket; the call is joined again once a new one is up.
                 let Some(room) = self.call.room else {
                     return vec![];
@@ -418,6 +442,26 @@ impl Model {
             Event::ReadFailed { room } => {
                 self.read_sent.remove(&room);
             }
+            Event::Moderated(r) => {
+                self.person_busy = "";
+                self.person_error = r.err().unwrap_or_default();
+            }
+            Event::DmOpened(room) => {
+                self.person_busy = "";
+                if !self.state.dms.iter().any(|d| d.id == room.id) {
+                    self.state.apply(&ServerMsg::RoomsChanged {
+                        rooms: self
+                            .state
+                            .rooms
+                            .iter()
+                            .chain(&self.state.dms)
+                            .cloned()
+                            .chain([*room.clone()])
+                            .collect(),
+                    });
+                }
+                self.dm_opened = Some(room.id);
+            }
         }
         self.maybe_read()
     }
@@ -452,7 +496,7 @@ impl Model {
         }
         let shown = self.active.filter(|id| self.state.find_room(*id).is_some());
         if let ServerMsg::Hello { .. } = m {
-            (self.online, self.notice) = (true, String::new());
+            (self.online, self.notice, self.retry_at) = (true, String::new(), None);
             self.typing.clear();
             // Like resync(): events may have been missed while the socket was down, so drop the other rooms and
             // fetch the shown one's newest page again, merged into what is held.
@@ -599,6 +643,16 @@ impl Model {
                 c.share_notice = SHARE_STOPPED.into();
                 vec![]
             }
+            ServerMsg::RingStart { room_id, user_id } => {
+                if !self.rings.iter().any(|r| r.0 == *room_id) {
+                    self.rings.push((*room_id, user_id.clone()));
+                }
+                vec![]
+            }
+            ServerMsg::RingStop { room_id } => {
+                self.rings.retain(|r| r.0 != *room_id);
+                vec![]
+            }
             ServerMsg::RoomsChanged { rooms }
                 if c.room
                     .is_some_and(|id| !rooms.iter().any(|r| r.id == id && !r.archived)) =>
@@ -663,6 +717,19 @@ impl Model {
                     c.struggling.insert(user_id);
                 } else {
                     c.struggling.remove(&user_id);
+                }
+                vec![]
+            }
+            VoiceEvent::Stats { own, links } => {
+                c.quality = Some(own);
+                c.own_link = c.own_link.step(Some(own), false);
+                let voice = &self.state.voice;
+                for (user, s) in links {
+                    let muted = voice
+                        .iter()
+                        .any(|p| p.user_id == user && (p.muted || p.force_muted));
+                    let l = c.links.entry(user).or_default();
+                    *l = l.step(Some(s), muted);
                 }
                 vec![]
             }
@@ -764,6 +831,54 @@ impl Model {
 
     pub fn leave_voice(&mut self) -> Vec<Cmd> {
         self.end_call("", true)
+    }
+
+    /// Accept the first ring: leave any call, and join the DM's. The view opens the room.
+    pub fn accept_ring(&mut self, room: i64) -> Vec<Cmd> {
+        self.rings.retain(|r| r.0 != room);
+        let mut cmds = self.leave_voice();
+        cmds.extend(self.join_voice(room));
+        cmds
+    }
+
+    /// Decline a ring: it stops here; the caller stays in the call.
+    pub fn decline_ring(&mut self, room: i64) -> Vec<Cmd> {
+        self.rings.retain(|r| r.0 != room);
+        vec![Cmd::Signal(ClientMsg::DeclineRing { room_id: room })]
+    }
+
+    /// A person card's moderator action (`force-mute`, `stop-share`, `kick`, `disconnect`) or `dm`. One at a time.
+    pub fn person_act(
+        &mut self,
+        user_id: &str,
+        what: &'static str,
+        muted: Option<bool>,
+    ) -> Vec<Cmd> {
+        if !self.person_busy.is_empty() {
+            return vec![];
+        }
+        (self.person_busy, self.person_error) = (what, String::new());
+        vec![if what == "dm" {
+            Cmd::OpenDm(user_id.into())
+        } else {
+            Cmd::Moderate {
+                user_id: user_id.into(),
+                action: what,
+                muted,
+            }
+        }]
+    }
+
+    /// The server's voice_target rule (`canModerate`): a moderator acts on members, the owner on anyone lower.
+    pub fn outranks(&self, user_id: &str) -> bool {
+        let rank = |r: vesper_protocol::Role| match r {
+            vesper_protocol::Role::Member => 0,
+            vesper_protocol::Role::Moderator => 1,
+            vesper_protocol::Role::Owner => 2,
+        };
+        let me = self.state.me.as_ref().map(|m| rank(m.user.role));
+        let them = self.state.users.get(user_id).map(|u| rank(u.role));
+        matches!((me, them), (Some(a), Some(b)) if a > b)
     }
 
     /// Mute or unmute. Not while a moderator holds a force mute.
@@ -1322,6 +1437,60 @@ mod tests {
         );
         assert_eq!(m.call.phase, Phase::Joined);
         m
+    }
+
+    #[test]
+    fn stats_grade_the_call_and_each_person_and_end_with_it() {
+        use crate::link::{Grade, Sample};
+        let mut m = in_call();
+        let own = Sample {
+            rtt_ms: Some(420.),
+            ..Sample::default()
+        };
+        let bob = Sample {
+            loss_pct: Some(0.),
+            jitter_ms: Some(4.),
+            rtt_ms: None,
+            packets: Some(50),
+        };
+        for _ in 0..2 {
+            let links = vec![("b".to_string(), bob)];
+            voice(&mut m, VoiceEvent::Stats { own, links });
+        }
+        assert_eq!(
+            crate::link::quality(m.call.quality.as_ref()),
+            Some(Grade::Poor)
+        );
+        assert_eq!(m.call.links["b"].grade, Some(Grade::Good));
+        assert_eq!(m.call.own_link.grade, Some(Grade::Poor));
+        m.leave_voice();
+        assert!(
+            m.call.quality.is_none() && m.call.links.is_empty(),
+            "a new call measures again"
+        );
+    }
+
+    #[test]
+    fn rings_come_and_go_and_moderation_waits_for_its_answer() {
+        let mut m = signed_in();
+        server(&mut m, hello());
+        let ring = |room| ServerMsg::RingStart {
+            room_id: room,
+            user_id: "b".into(),
+        };
+        server(&mut m, ring(3));
+        server(&mut m, ring(3));
+        assert_eq!(m.rings, [(3, "b".to_string())], "one per room");
+        server(&mut m, ServerMsg::RingStop { room_id: 3 });
+        assert!(m.rings.is_empty());
+
+        assert_eq!(m.person_act("b", "kick", None).len(), 1);
+        assert!(m.person_act("b", "kick", None).is_empty(), "one at a time");
+        m.apply(Event::Moderated(Err("Not allowed.".into())));
+        assert_eq!(
+            (m.person_busy, m.person_error.as_str()),
+            ("", "Not allowed.")
+        );
     }
 
     #[test]

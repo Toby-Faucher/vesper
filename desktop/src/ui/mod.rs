@@ -1,6 +1,7 @@
 //! The window: one view, `Vesper`, that owns the `Model` and draws the sign in screen or the main screen. Events from
 //! the network thread come in through `listen`; what the model asks for goes out on `cmds`.
 
+mod banner;
 pub mod c;
 mod call;
 mod chat;
@@ -9,6 +10,7 @@ mod dev;
 pub mod icons;
 mod md;
 pub mod motion;
+mod person;
 mod room;
 pub mod settings;
 mod share;
@@ -87,7 +89,11 @@ pub fn init(cx: &mut App) {
 
 /// Starts the network and key threads and opens the window. Returns when the app quits.
 pub fn run() {
-    let (cmds, events) = net::start(Arc::new(Keyring), Arc::new(Cpal));
+    let audio: Arc<dyn crate::voice::AudioDevices> = Arc::new(Cpal);
+    // The parity harness's calls run on fake devices (dev.rs).
+    #[cfg(debug_assertions)]
+    let audio = dev::audio().unwrap_or(audio);
+    let (cmds, events) = net::start(Arc::new(Keyring), audio);
     let file = crate::settings::path();
     let saved = file
         .as_deref()
@@ -213,6 +219,14 @@ pub struct Vesper {
     tl: chat::Tl,
     /// The room whose name the composer's placeholder has.
     placeholder_room: Option<i64>,
+    /// Since when the call bar shows, for its rise.
+    bar_since: Option<Instant>,
+    /// The open person card, the opener a press outside closed it on (and when), and where openers were drawn.
+    person: Option<person::Card>,
+    person_closed: Option<(String, Instant)>,
+    anchors: person::Anchors,
+    /// The connection banner and the ring prompt's motion.
+    banner: banner::Banner,
     /// Debug builds: what the parity harness asked for (`VESPER_DEV_*`).
     #[cfg(debug_assertions)]
     dev: dev::Dev,
@@ -300,6 +314,11 @@ impl Vesper {
             side: sidebar::Side::default(),
             tl: chat::Tl::default(),
             placeholder_room: None,
+            bar_since: None,
+            person: None,
+            person_closed: None,
+            anchors: Default::default(),
+            banner: Default::default(),
             #[cfg(debug_assertions)]
             dev: dev::Dev::from_env(),
             _subs: subs,
@@ -381,6 +400,10 @@ impl Vesper {
             let s = self.model.server.clone();
             self.server.update(cx, |i, cx| i.set_value(s, window, cx));
         }
+        if let Some(room) = self.model.dm_opened.take() {
+            self.person = None;
+            self.open_room(room, window, cx);
+        }
         if let Some(text) = self.model.draft_back.take()
             && self.composer.read(cx).value().is_empty()
         {
@@ -421,6 +444,8 @@ impl Vesper {
         let cmds = self.model.sign_out();
         self.run(cmds);
         self.side = sidebar::Side::default();
+        self.banner = Default::default();
+        self.person = None;
         self.tl = chat::Tl::default();
         for (_, i) in self.images.drain() {
             if let chat::Img::Ready(i) = i {

@@ -101,6 +101,9 @@ struct Engine<'a> {
     /// When each share last lost packets or frames, and the shares shown as struggling.
     trouble: HashMap<String, Instant>,
     struggling: HashSet<String>,
+    /// Packets received per audio m-line at the last stats window, and this window's samples by user.
+    packets: HashMap<Mid, u64>,
+    links: Vec<(String, crate::link::Sample)>,
     emit: &'a dyn Fn(VoiceEvent),
 }
 
@@ -187,6 +190,8 @@ impl<'a> Engine<'a> {
             asked: HashMap::new(),
             trouble: HashMap::new(),
             struggling: HashSet::new(),
+            packets: HashMap::new(),
+            links: vec![],
             emit,
         })
     }
@@ -363,6 +368,54 @@ impl<'a> Engine<'a> {
                     };
                     let rtp = d.time.rebase(Frequency::FORTY_EIGHT_KHZ).numer();
                     peer.jitter.push(rtp, d.data.to_vec());
+                }
+                // Every 2 s: the call's own round trip and loss, and each person's audio, for the quality icons.
+                Output::Event(Event::PeerStats(s)) => {
+                    let loss = [s.egress_loss_fraction, s.ingress_loss_fraction]
+                        .into_iter()
+                        .flatten()
+                        .reduce(f32::max);
+                    let own = crate::link::Sample {
+                        loss_pct: loss.map(|l| l * 100.),
+                        jitter_ms: None,
+                        rtt_ms: s.rtt.map(|d| d.as_secs_f32() * 1000.),
+                        packets: None,
+                    };
+                    let links = std::mem::take(&mut self.links);
+                    (self.emit)(VoiceEvent::Stats { own, links });
+                }
+                Output::Event(Event::MediaIngressStats(s))
+                    if self
+                        .rtc
+                        .media(s.mid)
+                        .is_some_and(|m| m.kind() == MediaKind::Audio) =>
+                {
+                    let Some(user) = self
+                        .rtc
+                        .media(s.mid)
+                        .map(|m| m.stream_id().to_string())
+                        .filter(|u| !u.is_empty())
+                    else {
+                        continue;
+                    };
+                    let got = s
+                        .packets
+                        .saturating_sub(self.packets.insert(s.mid, s.packets).unwrap_or(s.packets));
+                    self.links.push((
+                        user,
+                        crate::link::Sample {
+                            // shortcut: str0m's loss is the last receiver report's fraction, not this window's
+                            // count; it is shown only over enough packets, as the web does.
+                            loss_pct: s
+                                .loss
+                                .filter(|_| got >= crate::link::MIN_PACKETS)
+                                .map(|l| l * 100.),
+                            // RTP timestamp units of the 48 kHz Opus clock.
+                            jitter_ms: Some(s.jitter as f32 / 48.),
+                            rtt_ms: None,
+                            packets: Some(got),
+                        },
+                    ));
                 }
                 Output::Event(Event::MediaIngressStats(s))
                     if s.loss.is_some_and(|l| l > STRUGGLE_LOSS) =>

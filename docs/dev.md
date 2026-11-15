@@ -134,12 +134,22 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   `timeline` (shots.mjs's plans room over three days, with the New row), `timeline-empty`, `composer` (a multi-line draft),
   `composer-typing` (bob typing), `pins`, `message-image`, `upload-tray`, `composer-mention`, `motion-send` (also
   `motion-send-{web,desktop}-{60,150}ms.png`: a sent message 60 and 150 ms into its rise), `shell` (four people in voice
-  in music, one muted, one deafened, unread and mention pills; alice is not in the call, the call bar is its own scene) and
-  `shell-collapsed`. The desktop runs with the web scenes' clock (7:41 PM) and an en-US locale. It needs `sway` and `grim`; verified on the
+  in music, one muted, one deafened, unread and mention pills; alice is not in the call, the call bar is its own scene),
+  shots.mjs's call scenes `call-bar`, `call-ptt` (the key held), `call-force-muted` (shot from bob), `call-weak` (420 ms
+  round trip), `call-mic-lost`, `person-card` (bob opens alice's card from the call bar at 140 %), `person-card-mod` (dave,
+  a moderator, opens carol's from the sidebar) and `voice-quality` (the connection icons), `composer-offline` and
+  `reconnecting` (both stop the server for each picture), `motion-ring` (bob calls alice in their DM: also
+  `motion-ring-{web,desktop}-{60,150,800}ms.png`, the prompt's rise and its pulse half way) and `shell-collapsed`. One
+  account is in one call at a time, so in the call scenes the web account leaves the call after its picture and the
+  desktop's same account joins it. The desktop runs with the web scenes' clock (7:41 PM) and an en-US locale. It needs `sway` and `grim`; verified on the
   dev machine (Arch, no X). A debug build reads `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD` and
   `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`) to get into a scene without typing, and `VESPER_DEV_CLOCK`,
   `VESPER_DEV_SHIFT`, `VESPER_DEV_EMPTY`, `VESPER_DEV_DRAFT`, `VESPER_DEV_PINS`, `VESPER_DEV_TYPING` and `VESPER_DEV_TRAY` for
-  the clock, older days, an empty room, a draft, the pins list, someone typing and the upload tray (`desktop/src/ui/dev.rs` says how each is written); a
+  the clock, older days, an empty room, a draft, the pins list, someone typing and the upload tray, and `VESPER_DEV_VOICE`
+  (join voice in a room on a silent fake microphone and speakers that play nothing: a real call through the server, no
+  audio device opened), `VESPER_DEV_LINKS`, `VESPER_DEV_RTT`, `VESPER_DEV_MIC_LOST`, `VESPER_DEV_DEAFEN`,
+  `VESPER_DEV_PTT_HELD`, `VESPER_DEV_PERSON`, `VESPER_DEV_VOLUME` and `VESPER_DEV_RING` for the call scenes
+  (`desktop/src/ui/dev.rs` says how each is written); a
   release build does not have that code. The server takes 5 sign ins per name and then one a minute, so the app waits 13 s and signs in
   again when it is refused. To add a scene, add an entry to `SCENES` in `parity.mjs`: the web steps, and the
   `VESPER_DEV_*` state (a new kind of state goes in `dev.rs`), and `settings` for a `settings.json` written before the app starts

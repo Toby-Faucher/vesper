@@ -545,13 +545,23 @@ impl Vesper {
                 )
         });
 
+        // The name and the picture open the author's card, next to the name (PersonButton, `.face`).
+        let anchor = format!("name-{id}");
+        let open = {
+            let (uid, key) = (msg.author_id.clone(), anchor.clone());
+            move |this: &mut Self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
+                this.open_person(uid.clone(), key.clone(), false, cx)
+            }
+        };
         let gutter = if head {
-            div().w(px(40.)).flex_none().child(Avatar::new(
-                msg.author_id.clone(),
-                name.clone(),
-                accent,
-                32,
-            ))
+            div().w(px(40.)).flex_none().child(
+                div()
+                    .id(SharedString::from(format!("face-{id}")))
+                    .debug_selector(move || format!("face-{id}"))
+                    .cursor_pointer()
+                    .on_click(cx.listener(open.clone()))
+                    .child(Avatar::new(msg.author_id.clone(), name.clone(), accent, 32)),
+            )
         } else {
             div()
                 .w(px(40.))
@@ -574,7 +584,18 @@ impl Vesper {
                     .items_start()
                     .gap(px(8.))
                     // PersonButton's `font: inherit` wins over its `font-medium`: the name is in the row's weight.
-                    .child(div().text_color(t.fg).child(name))
+                    .child(
+                        div()
+                            .id(SharedString::from(anchor.clone()))
+                            .debug_selector(move || format!("name-{id}"))
+                            .relative()
+                            .text_color(t.fg)
+                            .cursor_pointer()
+                            .hover(|s| s.underline())
+                            .on_click(cx.listener(open))
+                            .child(self.probe(anchor))
+                            .child(name),
+                    )
                     // Baseline to baseline with the 14/20 name: 3 px down.
                     .child(
                         div()

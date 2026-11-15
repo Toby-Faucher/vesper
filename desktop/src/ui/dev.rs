@@ -15,17 +15,34 @@
 //! - `VESPER_DEV_TRAY`: `name|size|mime|state;...` rows put in the room's upload tray (no upload runs). The state is
 //!   `queued`, `uploading:<share>` or `failed:quota`.
 //!
-//! Prints `VESPER_DEV_READY` on stderr once the state is reached; the harness takes its picture after that.
+//! - `VESPER_DEV_VOICE`: a room name: once the scene is reached, join voice there, with a silent fake microphone and
+//!   speakers that play nothing (no audio device is opened). Ready once connected and the first stats came.
+//! - `VESPER_DEV_LINKS`: with VOICE, ready only once everyone else in the call has a connection grade.
+//! - `VESPER_DEV_RTT`: with VOICE, the call's round trip in ms, in place of the measured one (`call-weak`).
+//! - `VESPER_DEV_MIC_LOST`: with VOICE, the fake microphone is unplugged a second into the call and does not come back.
+//! - `VESPER_DEV_DEAFEN`: with VOICE, deafened once in.
+//! - `VESPER_DEV_PTT_HELD`: with VOICE, the push-to-talk key is held (push to talk is on in the scene's settings).
+//! - `VESPER_DEV_PERSON`: `<display name>@bar` or `@side`: opens that person's card from the call bar or the sidebar
+//!   once ready; `VESPER_DEV_VOLUME` sets their volume first.
+//! - `VESPER_DEV_RING`: a username: a DM call from them rings once ready (not from the server: for motion frames).
+//!
+//! Prints `VESPER_DEV_READY` on stderr once the state is reached; the harness takes its picture after that. Then
+//! `VESPER_DEV_OFFLINE` once the socket drops (the harness stops the server for the offline scenes), and
+//! `VESPER_DEV_ARRIVED` once a ring comes (`motion-ring`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use gpui::{Context, Window};
 use gpui_component::input::RopeExt;
 
 use super::Vesper;
-use crate::model::Screen;
+use crate::model::{Phase, Screen};
 use crate::uploads::{Item, UPLOAD_QUOTA, UpState};
+use crate::voice::{AudioDevices, AudioInput, AudioOutput, RATE};
 
 #[derive(Debug, Default, PartialEq)]
 enum Step {
@@ -34,6 +51,8 @@ enum Step {
     Scene,
     /// The room is open; ready once its messages are in.
     Room,
+    /// In voice; ready once connected and measured.
+    Voice,
     Done,
 }
 
@@ -52,6 +71,74 @@ pub struct Dev {
     send: Option<String>,
     /// The newest message id when the send went: ARRIVED is printed once a newer one is in.
     sent_after: Option<i64>,
+    voice: Option<String>,
+    links: bool,
+    rtt: Option<f32>,
+    ptt_held: bool,
+    deafen: bool,
+    person: Option<(String, bool)>,
+    volume: Option<f32>,
+    ring: Option<String>,
+    offline_said: bool,
+    /// A ring came after ready: ARRIVED was printed.
+    rang: bool,
+}
+
+/// A silent microphone paced by the clock, and speakers that drop what they get. `lose` unplugs the microphone a
+/// second in, for good.
+pub struct FakeAudio {
+    lose: bool,
+    opened: AtomicBool,
+}
+
+struct Mic {
+    start: Instant,
+    made: u64,
+    lose: bool,
+}
+
+impl AudioInput for Mic {
+    fn read(&mut self, out: &mut Vec<f32>) {
+        let due = (self.start.elapsed().as_secs_f64() * f64::from(RATE)) as u64;
+        out.extend((self.made..due).map(|_| 0.));
+        self.made = due;
+    }
+    fn alive(&self) -> bool {
+        !self.lose || self.start.elapsed() < Duration::from_secs(1)
+    }
+}
+
+struct Speakers;
+
+impl AudioOutput for Speakers {
+    fn write(&mut self, _: &[f32]) {}
+}
+
+impl AudioDevices for FakeAudio {
+    fn input(&self, _: Option<&str>) -> Result<Box<dyn AudioInput>, String> {
+        if self.lose && self.opened.swap(true, Ordering::Relaxed) {
+            return Err("No microphone was found.".into());
+        }
+        Ok(Box::new(Mic {
+            start: Instant::now(),
+            made: 0,
+            lose: self.lose,
+        }))
+    }
+    fn output(&self, _: Option<&str>) -> Result<Box<dyn AudioOutput>, String> {
+        Ok(Box::new(Speakers))
+    }
+}
+
+/// The fake devices when a scene joins voice, else none (the real ones).
+pub fn audio() -> Option<Arc<dyn AudioDevices>> {
+    std::env::var("VESPER_DEV_VOICE")
+        .ok()
+        .filter(|v| !v.is_empty())?;
+    Some(Arc::new(FakeAudio {
+        lose: std::env::var_os("VESPER_DEV_MIC_LOST").is_some(),
+        opened: AtomicBool::new(false),
+    }))
 }
 
 impl Dev {
@@ -92,6 +179,19 @@ impl Dev {
             send: var("VESPER_DEV_SEND"),
             sent_after: None,
             tray: var("VESPER_DEV_TRAY"),
+            voice: var("VESPER_DEV_VOICE"),
+            links: var("VESPER_DEV_LINKS").is_some(),
+            rtt: var("VESPER_DEV_RTT").and_then(|v| v.parse().ok()),
+            ptt_held: var("VESPER_DEV_PTT_HELD").is_some(),
+            deafen: var("VESPER_DEV_DEAFEN").is_some(),
+            person: var("VESPER_DEV_PERSON").and_then(|v| {
+                let (name, at) = v.rsplit_once('@')?;
+                Some((name.to_string(), at == "bar"))
+            }),
+            volume: var("VESPER_DEV_VOLUME").and_then(|v| v.parse().ok()),
+            ring: var("VESPER_DEV_RING"),
+            offline_said: false,
+            rang: false,
         }
     }
 
@@ -131,6 +231,19 @@ impl Vesper {
         {
             self.dev.sent_after = None;
             eprintln!("VESPER_DEV_ARRIVED");
+        }
+        if self.dev.step == Step::Done && !self.model.rings.is_empty() && !self.dev.rang {
+            self.dev.rang = true;
+            eprintln!("VESPER_DEV_ARRIVED");
+        }
+        if self.dev.step == Step::Done && !self.model.online && !self.dev.offline_said {
+            self.dev.offline_said = true;
+            eprintln!("VESPER_DEV_OFFLINE");
+        }
+        if let Some(rtt) = self.dev.rtt
+            && let Some(q) = &mut self.model.call.quality
+        {
+            q.rtt_ms = Some(rtt);
         }
         match self.dev.step {
             Step::SignIn if self.model.screen == Screen::SignIn => {
@@ -188,7 +301,7 @@ impl Vesper {
                     _ => {
                         self.model.not_remembered = false;
                         self.dev.step = Step::Done;
-                        ready("main");
+                        self.dev_finish("main", window, cx);
                     }
                 }
             }
@@ -266,9 +379,114 @@ impl Vesper {
                     .detach();
                 }
                 self.dev.step = Step::Done;
-                ready("room");
+                self.dev_finish("room", window, cx);
+            }
+            Step::Voice
+                if self.model.call.phase == Phase::Joined
+                    && self.model.call.connected
+                    && self.model.call.quality.is_some()
+                    && (!self.dev.links || {
+                        let c = &self.model.call;
+                        let me = self.model.state.my_id();
+                        self.model
+                            .state
+                            .voice
+                            .iter()
+                            .filter(|p| Some(p.room_id) == c.room && p.user_id != me)
+                            .all(|p| c.links.get(&p.user_id).is_some_and(|l| l.grade.is_some()))
+                    })
+                    && (self.model.call.devices.is_empty()
+                        == std::env::var_os("VESPER_DEV_MIC_LOST").is_none()) =>
+            {
+                self.dev.step = Step::Done;
+                if self.dev.ptt_held {
+                    self.act(|m| m.set_ptt(true), cx);
+                }
+                if self.dev.deafen {
+                    self.act(crate::model::Model::toggle_deafen, cx);
+                }
+                self.dev_person(window, cx);
+                ready("voice");
             }
             _ => {}
         }
+    }
+}
+
+impl Vesper {
+    /// The scene is reached: join voice when asked (ready comes later), else open what was asked and say ready.
+    fn dev_finish(&mut self, what: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(name) = self.dev.voice.clone() {
+            let Some(id) = self
+                .model
+                .state
+                .rooms
+                .iter()
+                .find(|r| r.name == name)
+                .map(|r| r.id)
+            else {
+                return ready(what);
+            };
+            self.act(|m| m.join_voice(id), cx);
+            self.dev.step = Step::Voice;
+            return;
+        }
+        if let Some(user) = self.dev.ring.take() {
+            let me = self.model.state.my_id().to_string();
+            let caller = self
+                .model
+                .state
+                .users
+                .values()
+                .find(|u| u.username == user)
+                .map(|u| u.user_id.clone());
+            let dm = caller.as_ref().and_then(|c| {
+                self.model
+                    .state
+                    .dms
+                    .iter()
+                    .find(|d| d.members.contains(c) && d.members.contains(&me))
+                    .map(|d| d.id)
+            });
+            if let (Some(c), Some(room)) = (caller, dm) {
+                self.model.rings.push((room, c));
+            }
+        }
+        self.dev_person(window, cx);
+        ready(what);
+    }
+
+    /// Opens the asked-for person card, at its volume.
+    fn dev_person(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        let Some((name, bar)) = self.dev.person.take() else {
+            return;
+        };
+        let s = &self.model.state;
+        let me = s.me.as_ref().map(|m| m.user.clone());
+        let Some(id) = s
+            .users
+            .values()
+            .chain(me.as_ref())
+            .find(|u| u.display_name == name)
+            .map(|u| u.user_id.clone())
+        else {
+            return;
+        };
+        if let Some(v) = self.dev.volume {
+            self.act(|m| m.set_volume(&id, v), cx);
+        }
+        let anchor = if bar {
+            format!("bar-{id}")
+        } else {
+            let room = self
+                .model
+                .state
+                .voice
+                .iter()
+                .find(|p| p.user_id == id)
+                .map_or(0, |p| p.room_id);
+            format!("person-{room}-{id}")
+        };
+        self.open_person(id, anchor, bar, cx);
     }
 }

@@ -22,6 +22,8 @@ const PASSWORD = 'test-password-1'; // what signup() in lib.mjs gives every acco
 const FRAMES = [60, 150];
 const DRAFT = '## three things for friday\nbring the **good** cable, *please*\nsomeone check the `deepfilter` mode\n> last time it crackled\n- and ~~chips~~ snacks';
 let typing;
+const RING_FRAMES = [60, 150, 800];
+const OFFLINE_DRAFT = 'is the server down again?';
 
 // The upload tray's rows: name, size, MIME type, and the state the fake upload holds it in (dev.rs reads the same).
 const TRAY = [
@@ -31,10 +33,11 @@ const TRAY = [
   ['scan.png', 2048, 'image/png', 'uploading:0.15'],
   ['song-with-a-rather-long-file-name-for-the-tray.flac', 2 * 1024 * 1024, 'audio/flac', 'queued'],
 ];
-// web(ctx) returns the page to shoot; desktop is the VESPER_DEV_* state, or an async function of ctx that returns it:
+// web(ctx) returns the page to shoot (or null when it shot <scene>-web.png itself); desktop is the VESPER_DEV_* state, or an async function of ctx that returns it:
 // `user` signs in, `scene` is sign-in, room:<name> or settings (src/ui/dev.rs), `settings` is written to the app's
 // settings.json first, and `env` adds more VESPER_DEV_* variables (dev.rs lists them). `after` runs once both pictures
-// are taken, and `focus` keeps the focus where the web steps left it. Every desktop run gets the web scenes' clock (7:41 PM) and an en-US locale.
+// are taken, and `focus` keeps the focus where the web steps left it. `offline` shoots the desktop while the server is
+// stopped (VESPER_DEV_OFFLINE). Every desktop run gets the web scenes' clock (7:41 PM) and an en-US locale.
 // The desktop has no passkeys, so the web login is shot without the passkey button.
 const SCENES = {
   login: {
@@ -213,6 +216,217 @@ const SCENES = {
     web: async (ctx) => { await house(ctx); await openRoom(ctx.alice.page, 'general'); return ctx.alice.page; },
     desktop: { user: 'alice', scene: 'room:general' },
   },
+  // shots.mjs's call scenes. One account can be in one call: alice (or bob, or dave) is in the music call in the web
+  // picture, leaves, and the desktop's same account joins it (fake devices, dev.rs). The others are the house's.
+  'call-bar': {
+    web: (ctx) => inCall(ctx),
+    desktop: async ({ alice }) => { await hangUp(alice.page); return { user: 'alice', scene: 'room:general', env: { VESPER_DEV_VOICE: 'music' } }; },
+  },
+  // Push to talk on, the key held.
+  'call-ptt': {
+    web: async (ctx) => {
+      const page = await inCall(ctx);
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await page.getByLabel('Push to talk').check();
+      await page.goBack();
+      await page.getByText('Push to talk: hold Space').waitFor();
+      await rest(page);
+      await page.keyboard.down('Space');
+      await bar(page).getByText('Talking').waitFor();
+      await sleep(300);
+      return page;
+    },
+    focus: true,
+    desktop: async ({ alice }) => {
+      const page = alice.page;
+      await page.keyboard.up('Space');
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await page.getByLabel('Push to talk').uncheck();
+      await page.goBack();
+      await hangUp(page);
+      return {
+        user: 'alice', scene: 'room:general', settings: { push_to_talk: true, ptt_key: 'Space' },
+        env: { VESPER_DEV_VOICE: 'music', VESPER_DEV_PTT_HELD: '1' },
+      };
+    },
+  },
+  // bob muted by the owner: Mute is disabled and the notice is in the status line. Shot from bob, in music.
+  'call-force-muted': {
+    web: async (ctx) => {
+      await house(ctx);
+      // An earlier scene may have taken bob's page out of the call (a reload ends it).
+      if (!(await bar(ctx.bob.page).count())) {
+        await openRoom(ctx.bob.page, 'music');
+        await rejoin(ctx.bob.page);
+      }
+      const id = (await api(ctx.bob.page, 'GET', '/api/me')).user.user_id;
+      await api(ctx.alice.page, 'POST', `/api/users/${id}/force-mute`, { muted: true });
+      await ctx.bob.page.getByText('A moderator muted you.').waitFor();
+      return ctx.bob.page;
+    },
+    desktop: async ({ bob }) => {
+      await hangUp(bob.page); // the force mute holds across the desktop's join
+      return { user: 'bob', scene: 'room:music', env: { VESPER_DEV_VOICE: 'music' } };
+    },
+    after: async ({ alice, bob }) => {
+      const id = (await api(bob.page, 'GET', '/api/me')).user.user_id;
+      await api(alice.page, 'POST', `/api/users/${id}/force-mute`, { muted: false });
+      await rejoin(bob.page);
+    },
+  },
+  // A weak connection: 420 ms round trip (the web's getStats wrapped, the desktop's VESPER_DEV_RTT).
+  'call-weak': {
+    web: async (ctx) => {
+      const page = await inCall(ctx);
+      await page.evaluate(() => {
+        const pc = window.__pcs.at(-1);
+        const get = pc.getStats.bind(pc);
+        pc.getStats = async () => new Map([...(await get()).entries()].map(([k, v]) => [k, v.type === 'candidate-pair' ? { ...v, currentRoundTripTime: 0.42 } : v]));
+      });
+      await bar(page).getByText('Weak connection: 420 ms delay').waitFor({ timeout: 10000 });
+      return page;
+    },
+    desktop: async ({ alice }) => { await hangUp(alice.page); return { user: 'alice', scene: 'room:general', env: { VESPER_DEV_VOICE: 'music', VESPER_DEV_RTT: '420' } }; },
+  },
+  // The microphone ended mid-call.
+  'call-mic-lost': {
+    web: async (ctx) => {
+      const page = await inCall(ctx);
+      await page.evaluate(() => {
+        const t = window.__pcs.at(-1).getSenders().find((x) => x.track?.kind === 'audio').track;
+        t.stop();
+        t.dispatchEvent(new Event('ended'));
+      });
+      await bar(page).getByRole('button', { name: 'Retry microphone' }).waitFor();
+      return page;
+    },
+    desktop: async ({ alice }) => { await hangUp(alice.page); return { user: 'alice', scene: 'room:general', env: { VESPER_DEV_VOICE: 'music', VESPER_DEV_MIC_LOST: '1' } }; },
+  },
+  // bob opens alice's card from the call bar and turns her up to 140 %.
+  'person-card': {
+    web: async (ctx) => {
+      await inCall(ctx);
+      const page = ctx.bob.page;
+      await bar(page).getByRole('button', { name: 'alice' }).click();
+      const card = page.getByRole('dialog', { name: 'alice' });
+      await card.getByRole('slider', { name: 'Volume for alice' }).fill('140');
+      await card.getByText('Can distort').waitFor();
+      await page.mouse.move(1439, 899);
+      await sleep(300);
+      return page;
+    },
+    focus: true,
+    desktop: async ({ bob }) => {
+      const card = bob.page.getByRole('dialog', { name: 'alice' });
+      await card.getByRole('button', { name: 'Reset' }).click();
+      await bob.page.keyboard.press('Escape');
+      await hangUp(bob.page);
+      return { user: 'bob', scene: 'room:music', env: { VESPER_DEV_VOICE: 'music', VESPER_DEV_PERSON: 'alice@bar', VESPER_DEV_VOLUME: '140' } };
+    },
+    after: async ({ alice, bob }) => { await rejoin(bob.page); await hangUp(alice.page); },
+  },
+  // dave, a moderator, opens carol's card from the sidebar: the voice actions.
+  'person-card-mod': {
+    web: async (ctx) => {
+      await house(ctx);
+      const users = await api(ctx.alice.page, 'GET', '/api/users');
+      const dave = users.find((u) => u.username === 'dave');
+      await api(ctx.alice.page, 'PATCH', `/api/users/${dave.user_id}/role`, { role: 'moderator' });
+      const page = housePages.dave;
+      await inVoice(page, 'carol').getByRole('button').click();
+      const card = page.getByRole('dialog', { name: 'carol' });
+      await card.getByRole('button', { name: 'Remove from voice' }).waitFor();
+      await page.mouse.move(1439, 899);
+      await sleep(300);
+      return page;
+    },
+    focus: true,
+    desktop: async () => {
+      const page = housePages.dave;
+      await page.keyboard.press('Escape');
+      await hangUp(page);
+      return { user: 'dave', scene: 'room:music', env: { VESPER_DEV_VOICE: 'music', VESPER_DEV_DEAFEN: '1', VESPER_DEV_PERSON: 'carol@side' } };
+    },
+    after: async () => {
+      await rejoin(housePages.dave);
+      await housePages.dave.getByRole('button', { name: 'Deafen', exact: true }).click();
+    },
+  },
+  // The connection icons on the call's voice rows.
+  'voice-quality': {
+    web: async (ctx) => {
+      const page = await inCall(ctx);
+      for (const n of ['bob', 'carol', 'dave']) await inVoice(page, n).getByRole('img', { name: /^Connection to .*: (good|fair|poor)$/ }).waitFor({ timeout: 15000 });
+      return page;
+    },
+    desktop: async ({ alice }) => { await hangUp(alice.page); return { user: 'alice', scene: 'room:general', env: { VESPER_DEV_VOICE: 'music', VESPER_DEV_LINKS: '1' } }; },
+  },
+  // Offline with a draft: the composer keeps it and says Send waits (the server restarts).
+  'composer-offline': {
+    web: async ({ alice, seed }) => {
+      await seed(); // the desktop's room:general waits for messages
+      const page = alice.page;
+      await home(page);
+      await openRoom(page, 'general');
+      const box = page.getByRole('textbox', { name: 'Message', exact: true });
+      await box.fill(OFFLINE_DRAFT);
+      await stopServer(async () => {
+        await page.getByText(/You are offline. Your text is kept here/).waitFor({ timeout: 10000 });
+        await page.mouse.move(1439, 899);
+        await sleep(300);
+        await page.screenshot({ path: `${out}composer-offline-web.png` });
+      });
+      await back(page);
+      await box.fill('');
+      return null;
+    },
+    desktop: { user: 'alice', scene: 'room:general', env: { VESPER_DEV_DRAFT: OFFLINE_DRAFT }, offline: true },
+  },
+  // The server goes away: the banner counts down to the next try.
+  reconnecting: {
+    web: async ({ alice, seed }) => {
+      await seed(); // the desktop's room:general waits for messages
+      const page = alice.page;
+      await home(page);
+      await openRoom(page, 'general');
+      await stopServer(async () => {
+        await page.getByText(/Connection lost\. Trying again in \d+ s\./).waitFor({ timeout: 10000 });
+        await rest(page);
+        await page.screenshot({ path: `${out}reconnecting-web.png` });
+      });
+      await back(page);
+      return null;
+    },
+    desktop: { user: 'alice', scene: 'room:general', offline: true },
+  },
+  // The ring prompt rising in, and its pulse: bob calls alice in their DM. Frames at 60 and 150 ms (`rise`) and at
+  // 800 ms (half way through the 1.6 s pulse): the web's by pausing every animation there, the desktop's by grim that
+  // long after the ring came (VESPER_DEV_ARRIVED).
+  'motion-ring': {
+    web: async (ctx) => {
+      await ctx.seed();
+      const page = ctx.alice.page;
+      await home(page);
+      await openRoom(page, 'general');
+      await sleep(1600); // past settle()
+      await ringAlice(ctx);
+      const prompt = page.getByRole('alertdialog');
+      await prompt.waitFor();
+      await page.mouse.move(1439, 899);
+      for (const t of RING_FRAMES) {
+        await page.evaluate((t) => document.getAnimations().forEach((a) => { a.pause(); a.currentTime = t; }), t);
+        await page.screenshot({ path: `${out}motion-ring-web-${t}ms.png` });
+      }
+      await page.evaluate(() => document.getAnimations().forEach((a) => a.play()));
+      return page;
+    },
+    focus: true,
+    desktop: async (ctx) => {
+      await hangUp(ctx.bob.page);
+      return { user: 'alice', scene: 'room:general', frames: RING_FRAMES, trigger: () => ringAlice(ctx) };
+    },
+    after: ({ bob }) => hangUp(bob.page),
+  },
   'shell-collapsed': {
     web: async (ctx) => {
       await house(ctx);
@@ -226,6 +440,41 @@ const SCENES = {
     desktop: { user: 'alice', scene: 'room:general', settings: { sidebar_collapsed: true } },
   },
 };
+
+const bar = (page) => page.getByRole('region', { name: 'Call' });
+// alice in the house's music call, reading general.
+async function inCall(ctx) {
+  await house(ctx);
+  const page = ctx.alice.page;
+  await home(page);
+  await openRoom(page, 'music');
+  await rejoin(page);
+  await openRoom(page, 'general');
+  await bar(page).locator('[data-speaking]').first().waitFor({ timeout: 10000 }).catch(() => {});
+  return page;
+}
+async function rejoin(page) {
+  await page.getByRole('button', { name: 'Join voice' }).click();
+  await page.getByRole('button', { name: 'Leave' }).waitFor();
+}
+async function hangUp(page) {
+  await bar(page).getByRole('button', { name: 'Leave' }).click();
+  await bar(page).waitFor({ state: 'detached' });
+}
+// The page is online again (the banner gone).
+async function back(page) {
+  await page.getByRole('button', { name: 'Try now' }).click({ timeout: 2000 }).catch(() => {});
+  await page.getByText('Connection lost').waitFor({ state: 'detached', timeout: 30000 });
+  await page.getByText(/You are offline/).waitFor({ state: 'detached', timeout: 30000 });
+}
+// bob joins voice in his DM with alice, which rings her.
+async function ringAlice({ alice, bob }) {
+  const id = (await api(alice.page, 'GET', '/api/me')).user.user_id;
+  const dm = await api(bob.page, 'POST', '/api/dms', { user_id: id });
+  await bob.page.goto(`${ORIGIN}/r/${dm.id}`);
+  await rejoin(bob.page);
+}
+let stopServer; // the server's restart(during), set at start
 
 // shots.mjs's fake XMLHttpRequest: each upload holds at its share, backup.zip fails with the quota.
 async function fakeUploads(page) {
@@ -269,6 +518,7 @@ async function shiftVar(ctx) {
 // shots.mjs's full house without alice in the call (the call bar is its own scene): bob, carol (muted), dave (deafened)
 // and Bartholomew in voice in music, unread counts on music and a mention in the long room. The browsers stay open.
 let housed;
+const housePages = {};
 function house({ alice, bob, seed }) {
   housed ??= (async () => {
     await seed();
@@ -280,6 +530,7 @@ function house({ alice, bob, seed }) {
       const b = await shotBrowser(name, [], { viewport: VIEWPORT });
       await signup(b.page, url, name, display);
       pages.push(b.page);
+      housePages[name] = b.page;
     }
     for (const p of pages) {
       await home(p);
@@ -392,8 +643,22 @@ async function shootDesktop(sway, state, path, dir) {
       const grim = track('grim', [to], { env: { ...process.env, XDG_RUNTIME_DIR: sway.runtime, WAYLAND_DISPLAY: sway.display }, stdio: 'inherit' });
       if ((await grim.exited) !== 0) throw new Error('grim failed');
     };
+    if (state.offline) {
+      // The server stops; once the app says it is offline, the picture.
+      await stopServer(async () => {
+        const until = performance.now() + 20000;
+        while (!log.includes('VESPER_DEV_OFFLINE')) {
+          if (performance.now() > until) throw new Error(`no VESPER_DEV_OFFLINE:\n${log.slice(-2000)}`);
+          await sleep(20);
+        }
+        await sleep(1000);
+        await shoot(path);
+      });
+      return;
+    }
     if (state.frames) {
-      // VESPER_DEV_SEND: grab frames that long after the message is in the list.
+      // VESPER_DEV_SEND (or the trigger): grab frames that long after the message or the ring came.
+      await state.trigger?.();
       const until = performance.now() + 15000;
       while (!log.includes('VESPER_DEV_ARRIVED')) {
         if (performance.now() > until) throw new Error(`no VESPER_DEV_ARRIVED:\n${log.slice(-2000)}`);
@@ -429,6 +694,7 @@ if (!existsSync(app)) throw new Error(`no desktop app at ${app}: cd desktop && .
 const run = args.length ? args : Object.keys(SCENES);
 
 const stop = await startServer();
+stopServer = (during) => stop.restart(during);
 const dir = await mkdtemp(join(tmpdir(), 'vesper-parity-'));
 let failed = false;
 try {
@@ -437,8 +703,10 @@ try {
   for (const name of run) {
     const s = SCENES[name];
     const page = await s.web(ctx);
-    if (s.focus) { await page.mouse.move(1439, 899); await sleep(300); } else await rest(page);
-    await page.screenshot({ path: `${out}${name}-web.png` });
+    if (page) {
+      if (s.focus) { await page.mouse.move(1439, 899); await sleep(300); } else await rest(page);
+      await page.screenshot({ path: `${out}${name}-web.png` });
+    }
     const state = typeof s.desktop === 'function' ? await s.desktop(ctx) : s.desktop;
     await shootDesktop(sway, state, `${out}${name}-desktop.png`, dir);
     await s.after?.(ctx);

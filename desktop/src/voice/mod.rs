@@ -118,6 +118,11 @@ pub enum VoiceEvent {
     Frame(Frame),
     /// A watched share loses packets or frames, or stopped doing so. Sent when it changes.
     Struggling { user_id: String, on: bool },
+    /// Every 2 s: the call's round trip and loss, and a sample of each person's audio (by user id).
+    Stats {
+        own: crate::link::Sample,
+        links: Vec<(String, crate::link::Sample)>,
+    },
     /// The call cannot go on. The text is for the user.
     Failed(String),
 }

@@ -10,6 +10,8 @@ use gpui::{AssetSource, SharedString, Styled, Svg, px, svg};
 const ICONS_TS: &str = include_str!("../../../web/src/lib/ui/icons.ts");
 /// The video card's open icon, `expandIcon`, lives here on the web (to keep it out of the first load).
 const ATTACHMENTS_TS: &str = include_str!("../../../web/src/lib/ui/attachments.ts");
+/// The screen share's icons (`eyeOff`, `monitorUp`, ...), kept out of the web's first load in their own file.
+const SHARE_TS: &str = include_str!("../../../web/src/lib/share/icons.ts");
 
 /// Every icon: its name in icons.ts (`micOff`) and its one path.
 pub fn all() -> &'static [(&'static str, &'static str)] {
@@ -18,6 +20,7 @@ pub fn all() -> &'static [(&'static str, &'static str)] {
         ICONS_TS
             .lines()
             .chain(ATTACHMENTS_TS.lines())
+            .chain(SHARE_TS.lines())
             .filter_map(|l| {
                 let rest = l.strip_prefix("export const ")?;
                 let (name, rest) = rest.split_once(" = '")?;
@@ -91,8 +94,17 @@ mod tests {
             .lines()
             .filter(|l| l.starts_with("export const "))
             .count();
+        let share = SHARE_TS
+            .lines()
+            .filter(|l| l.starts_with("export const "))
+            .count();
         // and expandIcon from attachments.ts
-        assert_eq!(all().len(), n + 1, "a line of icons.ts did not parse");
+        assert_eq!(
+            all().len(),
+            n + 1 + share,
+            "a line of icons.ts did not parse"
+        );
+        assert!(Assets.load("vesper/eyeOff.svg").unwrap().is_some());
         assert!(Assets.load("vesper/expandIcon.svg").unwrap().is_some());
         assert!(n >= 40);
         let mic = Assets.load("vesper/mic.svg").unwrap().unwrap();
@@ -103,6 +115,6 @@ mod tests {
         );
         assert!(Assets.load("vesper/nope.svg").unwrap().is_none());
         assert!(Assets.load("vesper/spinner.svg").unwrap().is_some());
-        assert_eq!(Assets.list("vesper").unwrap().len(), n + 1);
+        assert_eq!(Assets.list("vesper").unwrap().len(), n + 1 + share);
     }
 }
