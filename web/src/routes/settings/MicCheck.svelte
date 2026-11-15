@@ -126,7 +126,7 @@
   {#if hint === 'too-quiet'}<p class="text-xs text-warn">Very quiet or silent. Speak, check the mic, or try a little input boost.</p>{/if}
 </div>
 {#if marker}
-  <Field label="Level marker" value="{settings.vad.thresholdDb} dB" help="The white line on the meter. With the noise gate on, sound below it is muted.">
+  <Field label="Level marker" value="{settings.vad.thresholdDb} dB" help="The thin line across the meter. With the noise gate on, sound below it is muted.">
     <Range min={-100} max={0} aria-valuetext="{settings.vad.thresholdDb} dB" value={settings.vad.thresholdDb}
       oninput={(e) => set({ vad: { ...settings.vad, thresholdDb: +e.currentTarget.value } })} />
   </Field>
