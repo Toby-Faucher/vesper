@@ -11,6 +11,8 @@
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Button from '../lib/ui/c/Button.svelte';
   import Popover from '../lib/ui/c/Popover.svelte';
+  import Roll from '../lib/ui/c/Roll.svelte';
+  import { motion } from '../lib/ui/motion';
 
   let { roomId, anchor, open, onclose }: { roomId: number; anchor: HTMLElement | null; open: boolean; onclose: () => void } = $props();
 
@@ -79,7 +81,7 @@
       <ul class="max-h-96 overflow-y-auto">
         {#each list as m (m.id)}
           {@const a = user(m.author_id)}
-          <li class="pin">
+          <li class="pin" out:motion={'row'}>
             <Avatar user={a} size={20} />
             <button type="button" class="jump" aria-label="Jump to the message from {a.display_name}: {plain(parse(m.body))}" onclick={() => jump(m)}>
               <span class="flex items-baseline gap-2">
@@ -92,7 +94,7 @@
           </li>
         {/each}
       </ul>
-      <p class="px-2 pt-1 pb-1 text-xs text-fg-2">{list.length} of {MAX_PINS} pins</p>
+      <p class="px-2 pt-1 pb-1 text-xs text-fg-2"><Roll text={String(list.length)} /><span class="sr-only">{list.length}</span> of {MAX_PINS} pins</p>
     {/if}
   </div>
 </Popover>

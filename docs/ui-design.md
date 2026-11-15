@@ -100,7 +100,9 @@ To see every role, the type scale, the radii and the focus ring, run `npm --pref
 ## Motion
 
 Every animation goes through [`web/src/lib/ui/motion.ts`](../web/src/lib/ui/motion.ts) as a named preset, played by anime.js's WAAPI
-build (`waapi.animate` only). Only `opacity` and `transform` move, except the jump flash, which fades a background colour.
+build (`waapi.animate` only). Only `opacity` and `transform` move, except the jump flash, which fades a background colour, the
+theme reveal (a `clip-path` on the view transition) and the call bar's morph (its size); those two use the browser's own
+`element.animate`.
 anime.js is not in the first load: it loads right after start, and until it arrives every preset is instant (the jump flash
 is the instant change it has under reduced motion).
 
@@ -112,7 +114,30 @@ is the instant change it has under reduced motion).
 | `row` | 8 px from the left, 160 ms | a person joining or leaving voice |
 | `bump` | scale 0.6 with a small overshoot, 160 ms | a reaction coming, going or changing its count; a sidebar unread count |
 
-Enter eases out (`--ease-out`, `--ease-pop` for `bump`); exit runs the pose backwards in 120 ms, easing in. The selected room's fill
+Enter eases out (`--ease-out`, `--ease-pop` for `bump`); exit runs the pose backwards in 120 ms, easing in.
+
+Four effects after shadcn-labs transition-kit, rebuilt here without the package:
+
+- **Theme reveal** (`reveal`): a click on Dark, Light or System spreads the new scheme as a circle from the pointer, a view
+  transition with the new page clipped to a growing `circle()`, `--dur-reveal` (400 ms, the one whole-window motion, and rare)
+  ease-out. Arrow keys switch at once, and so does a browser without view transitions. The desktop cannot draw the window
+  twice: its circle is the new page colour over the old look, then the new look fades in under it (`--dur-out`).
+- **Sliding selectors** (`slides`, an attachment): the picked option's fill glides to the next one (`glide`, `--dur-2`
+  ease-out, place and width) in the Settings and Admin section lists and the search's All rooms / This room. It follows
+  `aria-current="page"` or `aria-pressed="true"` with a MutationObserver.
+- **Number flip** (`roll`, `Roll.svelte`): each changed digit rolls out and the new one in, both `--dur-2` ease-out, up when
+  the number grows. Sidebar unread and mention counts (the badge still pops in when it appears), the pins count and the
+  call timer. Counts that come with the first hello do not roll.
+- **Call pill and popovers from their trigger**: the call bar's chevron makes it a pill (the room, the mic, the timer; per
+  device, `vesper.callbar`, the desktop's `call_small`). Hover or focus opens it to the full bar over the timeline; it
+  closes 300 ms after the pointer and focus leave, and a notice or an error keeps it full. The change morphs the box
+  (`morph`: size and corners, `--dur-3` ease-out, content fading in over `--dur-2`); size moves here because the bar floats
+  over the pane, so only its own box lays out again. Popovers and menus scale from the middle of their anchor's facing
+  edge (`transform-origin`); dialogs stay centred. The desktop's popovers fade only (GPUI has no element scale).
+
+Also: the fold chevron of a room's people turns over `--dur-2` (one icon rotated, not two swapped), and the reply bar
+comes in with `swap`. An unpinned row leaves with `row`. The call timer counts from when the bar appeared on this
+device, m:ss, then h:mm:ss. The selected room's fill
 glides to the next room (`glide`). Buttons sink a little while pressed and hover changes colour: both plain CSS on the same tokens.
 The sidebar row the mouse is heading for (prefetch on intent) takes half the hover fill, a CSS colour change over
 `--dur-1`; hover replaces it.
@@ -122,8 +147,8 @@ A message row's highlight (hover, keyboard focus, editing, a mention) is a CSS f
 (`slide`). The grid takes its final columns once at the start and only transforms move after that; the leaving sidebar is
 inert at once and hidden when the slide ends. The saved hidden state at load does not slide.
 
-Rules: under `prefers-reduced-motion` every preset is an 80 ms opacity fade, and the glide, the jump flash, the row highlight, the intent fill and
-the sidebar are instant. Nothing
+Rules: under `prefers-reduced-motion` every preset and the number flip are an 80 ms opacity fade, and the glide, the slides,
+the theme reveal, the call bar's morph, the chevron, the jump flash, the row highlight, the intent fill and the sidebar are instant. Nothing
 animates on a speaking change; the ring toggles instantly (a fade once cost about 60 percent more CPU in a call). History, a room open and
 "Load older" do not animate; only live arrivals do, three at most. The rooms, counts and people that come with the first hello appear
 at once (`settle()`), and at most three transitions start in one task. A dialog or popover closes at once, so focus moves on; the fading

@@ -24,9 +24,9 @@ const PRESETS: Record<Preset, { move: [string, string]; dur: string; ease?: stri
 
 export const reduced = (): boolean => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+export const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 // The CSS minifier writes 220ms as .22s, so read the unit.
-const ms = (name: string) => { const v = token(name); return (parseFloat(v) || 0) * (v.endsWith('ms') ? 1 : v.endsWith('s') ? 1000 : 1); };
+export const ms = (name: string) => { const v = token(name); return (parseFloat(v) || 0) * (v.endsWith('ms') ? 1 : v.endsWith('s') ? 1000 : 1); };
 
 type Frames = { opacity: [number, number]; transform?: [string, string]; duration: number; ease: string };
 const rev = <T>([a, b]: [T, T]): [T, T] => [b, a];
@@ -58,11 +58,11 @@ export function exit(el: Element, p: Preset): Promise<void> {
 export function ghost(el: HTMLElement, p: Preset): void {
   const r = el.getBoundingClientRect();
   if (!r.width || !waapi) return;
-  const { backgroundColor, border, borderRadius, boxShadow } = getComputedStyle(el);
+  const { backgroundColor, border, borderRadius, boxShadow, transformOrigin } = getComputedStyle(el);
   const g = document.createElement('div');
   g.dataset.ghost = '';
   g.setAttribute('aria-hidden', 'true');
-  Object.assign(g.style, { position: 'fixed', left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, boxSizing: 'border-box', backgroundColor, border, borderRadius, boxShadow, pointerEvents: 'none', zIndex: '50' });
+  Object.assign(g.style, { position: 'fixed', left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, boxSizing: 'border-box', backgroundColor, border, borderRadius, boxShadow, transformOrigin, pointerEvents: 'none', zIndex: '50' });
   document.body.append(g);
   void exit(g, p).then(() => g.remove());
 }
@@ -94,7 +94,8 @@ export function motion(el: Element, p: Preset | null, { direction }: { direction
 }
 
 // The selection glides: a copy of the old selected row's fill slides to the new one, under the rows' text (the parent
-// is `isolate`), while the new row's own fill waits. Both rows share a positioned parent.
+// is `isolate`), while the new row's own fill waits. Both rows share a positioned parent. Sideways (a segmented control)
+// the fill also stretches from the old option's width to the new one's.
 export function glide(from: HTMLElement, to: HTMLElement): void {
   const parent = to.offsetParent as HTMLElement | null;
   if (!parent || from.offsetParent !== parent || from === to) return;
@@ -102,14 +103,31 @@ export function glide(from: HTMLElement, to: HTMLElement): void {
   const backgroundColor = 'var(--bg-selected)'; // not the computed one: the row's own colour transition has just begun
   const g = document.createElement('div');
   g.setAttribute('aria-hidden', 'true');
-  Object.assign(g.style, { position: 'absolute', zIndex: '-1', left: `${to.offsetLeft}px`, top: `${to.offsetTop}px`, width: `${to.offsetWidth}px`, height: `${to.offsetHeight}px`, borderRadius, backgroundColor, pointerEvents: 'none' });
+  Object.assign(g.style, { position: 'absolute', zIndex: '-1', left: `${to.offsetLeft}px`, top: `${to.offsetTop}px`, width: `${to.offsetWidth}px`, height: `${to.offsetHeight}px`, borderRadius, backgroundColor, pointerEvents: 'none', transformOrigin: '0 0' });
   parent.append(g);
   to.style.backgroundColor = 'transparent';
   const done = () => { to.style.backgroundColor = ''; g.remove(); };
   if (!waapi || reduced()) return void setTimeout(done);
   const dy = from.offsetTop - to.offsetTop;
-  const a = waapi.animate(g, { transform: [`translateY(${dy}px)`, 'translateY(0)'], duration: ms('--dur-2'), ease: token('--ease-out'), persist: true });
+  const dx = from.offsetLeft - to.offsetLeft || 0;
+  const sx = from.offsetWidth / to.offsetWidth || 1;
+  const transform = dx || sx !== 1 ? [`translate(${dx}px, ${dy}px) scaleX(${sx})`, 'translate(0, 0) scaleX(1)'] : [`translateY(${dy}px)`, 'translateY(0)'];
+  const a = waapi.animate(g, { transform, duration: ms('--dur-2'), ease: token('--ease-out'), persist: true });
   void Promise.all(a.animations.map((x) => x.finished)).then(done, done);
+}
+
+// Number flip, a Svelte transition on one digit: the old digit rolls out and the new one in, both --dur-2 ease-out, up
+// when the number grows and down when it shrinks. A count that comes with the first hello does not roll (settle).
+// Reduced motion: the --dur-calm fade in place.
+export function roll(el: Element, { up }: { up: boolean }, { direction }: { direction: 'in' | 'out' | 'both' }): { duration?: number } {
+  if (!waapi || performance.now() < calmUntil) return {};
+  const out = direction === 'out';
+  const calm = reduced();
+  const duration = ms(calm ? '--dur-calm' : '--dur-2');
+  const away = `translateY(${(up === out ? 1 : -1) * 100}%)`; // in from below when up; out to above when up
+  const f = { opacity: out ? [1, 0] : [0, 1], ...(!calm && { transform: out ? ['translateY(0)', away] : [away, 'translateY(0)'] }) };
+  waapi.animate(el as HTMLElement, { ...f, duration, ease: token('--ease-out'), persist: out });
+  return { duration };
 }
 
 // The jump flash: the message background fades in to --accent-subtle, holds and fades back (a fifth of the time each way).

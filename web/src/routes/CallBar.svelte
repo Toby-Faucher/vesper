@@ -5,9 +5,12 @@
   import { href, parse } from '../lib/route';
   import { route, session } from '../lib/session.svelte';
   import { findRoom } from '../lib/state';
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { dismissOffered, leave, retryMic, toggleDeafen, toggleMute, useOfferedMic, voice, watchShare } from '../lib/voice.svelte';
   import { enter, exit } from '../lib/ui/motion';
+  import { morph } from '../lib/ui/motion-lazy';
+  import { clock } from '../lib/ui/clock';
+  import Roll from '../lib/ui/c/Roll.svelte';
   import { togglePerson } from '../lib/ui/person.svelte';
   import { qualityText } from '../lib/ui/quality';
   import { keyName } from '../lib/ui/keys';
@@ -24,7 +27,8 @@
   import { syncWatches, tabCounts } from '../lib/share/watch';
   import Status from '../lib/ui/c/Status.svelte';
   // The call, floating at the bottom of the main pane while you are in voice. Everything here is read from the voice
-  // store; nothing animates while the call runs (the speaking ring is an instant toggle from the store's 100 ms poll).
+  // store; nothing animates while the call runs but the timer's digits, once a second (the speaking ring is an instant
+  // toggle from the store's 100 ms poll).
   let { height = $bindable(0) }: { height?: number } = $props();
 
   // Enter on mount. On leave the bar goes at once (no stale buttons or notices) and an inert copy of it fades out.
@@ -80,14 +84,76 @@
     const r = parse(route.path);
     return r.name === 'room' && r.id === voice.joinedRoom ? 0 : sharers.length;
   });
+
+  // The call timer, rolling its digits (Roll). shortcut: counts from when this bar mounted, so a rejoin after a dropped
+  // socket starts it again; keep a join time in the voice store if that matters.
+  const started = Date.now();
+  let now = $state(started);
+  onMount(() => {
+    const t = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(t);
+  });
+  const time = $derived(clock(now - started));
+
+  // The pill: on this device (vesper.callbar) the bar can be small, the room, the mic and the timer. Hover or focus opens
+  // it to the full bar over the timeline; it closes 300 ms after the pointer and focus leave. A notice or an error keeps
+  // it full, so nothing important hides. The timeline keeps the pill's room while it peeks.
+  const CALLBAR_KEY = 'vesper.callbar';
+  let small = $state((() => { try { return localStorage.getItem(CALLBAR_KEY) === 'small'; } catch { return false; } })());
+  let peek = $state(false);
+  const compact = $derived(small && !peek && !voice.error && !notice);
+  let leaving: ReturnType<typeof setTimeout> | undefined;
+  const show = () => { clearTimeout(leaving); peek = true; };
+  const hide = () => { clearTimeout(leaving); leaving = setTimeout(() => (peek = false), 300); };
+  onDestroy(() => clearTimeout(leaving));
+  function setSmall(on: boolean) {
+    [small, peek] = [on, false];
+    try { if (on) localStorage.setItem(CALLBAR_KEY, 'small'); else localStorage.removeItem(CALLBAR_KEY); } catch { /* storage blocked: this call only */ }
+  }
+  async function open(e: MouseEvent) {
+    show();
+    if (e.detail) return; // a click: the pointer already holds it open
+    await tick();
+    section?.querySelector<HTMLElement>('a, button:not(:disabled)')?.focus();
+  }
+  let barH = $state(0);
+  $effect(() => {
+    if (!small || !peek) height = barH;
+  });
+  // The morph between pill and bar: the size before the swap, then morph() after it.
+  let section = $state<HTMLElement>();
+  let from: { width: number; height: number; radius: string } | null = null;
+  let drawn: boolean | null = null; // compact as last drawn: only a real change morphs, not the mount
+  $effect.pre(() => {
+    if (compact === drawn) return;
+    const r = section?.getBoundingClientRect();
+    from = section && r && drawn !== null ? { width: r.width, height: r.height, radius: getComputedStyle(section).borderRadius } : null;
+  });
+  $effect(() => {
+    if (compact === drawn || !section) return;
+    if (from) morph(section, from);
+    [drawn, from] = [compact, null];
+  });
 </script>
 
-<div class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-4" bind:clientHeight={height} {@attach motion}>
-  <section aria-label="Call" class="bar pointer-events-auto flex max-w-full min-w-0 flex-col rounded-lg border border-line bg-raised shadow-float">
+<div class="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-4" bind:clientHeight={barH} {@attach motion}>
+  <section aria-label="Call" bind:this={section} class="bar pointer-events-auto flex max-w-full min-w-0 flex-col border border-line bg-raised shadow-float {compact ? 'rounded-full' : 'rounded-lg'}"
+    onpointerenter={show} onpointerleave={hide} onfocusin={show} onfocusout={(e) => section?.contains(e.relatedTarget as Node) || hide()}>
+    {#if compact}
+    <button type="button" class="pill flex h-9 min-w-0 items-center gap-2 rounded-full pr-3.5 pl-3 text-sm" onclick={open}>
+      <span class="flex" class:text-danger={voice.muted} class:text-fg-2={!voice.muted}><Icon d={voice.muted || voice.forceMuted ? I.micOff : I.mic} /></span>
+      <span class="max-w-40 truncate font-medium text-fg">{room?.name}</span>
+      <span class="text-xs text-fg-3"><Roll text={time} /></span>
+      <span class="sr-only">{time}{voice.muted ? ', muted' : ''}. Show the call controls</span>
+    </button>
+    {:else}
     <div class="flex h-13 min-w-0 items-center gap-1 pr-2 pl-3">
       <!-- A fixed width, so the bar does not move when the quality text changes. -->
       <div class="mr-2 flex w-48 min-w-0 flex-col">
-        <a class="truncate text-sm font-medium text-fg hover:underline" href={href({ name: 'room', id: voice.joinedRoom ?? 0 })} title={room?.name}>{room?.name}</a>
+        <span class="flex min-w-0 items-baseline gap-2">
+          <a class="truncate text-sm font-medium text-fg hover:underline" href={href({ name: 'room', id: voice.joinedRoom ?? 0 })} title={room?.name}>{room?.name}</a>
+          <span class="ml-auto shrink-0 text-xs text-fg-3"><Roll text={time} /><span class="sr-only">{time}</span></span>
+        </span>
         <!-- Only the words are live; the figure changes every 2 s poll and would be read out each time. -->
         <span class="flex min-w-0 items-center gap-1.5 text-xs" class:text-fg-3={voice.quality !== 'poor'} class:text-warn={voice.quality === 'poor'} title={qText}>
           <svg class="shrink-0" width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
@@ -138,6 +204,7 @@
       {/if}
       <a class="details flex h-8 shrink-0 items-center rounded-md px-2 text-sm text-fg-2" href={href({ name: 'settings', section: 'diagnostics' })}>Call details</a>
       <Button variant="danger-ghost" onclick={leave}>Leave</Button>
+      <IconButton icon={small ? I.chevronUp : I.chevronDown} label={small ? 'Keep the call bar open' : 'Make the call bar small'} tip="up" onclick={() => setSmall(!small)} />
     </div>
 
     <!-- One status line, always the same height, so the bar does not jump when a notice comes and goes. The noise
@@ -155,6 +222,7 @@
       {/if}
       <p class="noise min-w-0 truncate" role="status" title={noise}>{noise}</p>
     </div>
+    {/if}
   </section>
 </div>
 <svelte:document onvisibilitychange={visible} />
@@ -167,6 +235,8 @@
   .ptt.held { color: var(--fg); }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
   .who { transition: background-color var(--dur-1) var(--ease-out); }
+  .pill { transition: background-color var(--dur-1) var(--ease-out); }
+  .pill:hover { background: var(--bg-hover); }
   .who:hover, .details:hover { background: var(--bg-hover); }
   .details { transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out); }
   .details:hover { color: var(--fg); }

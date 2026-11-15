@@ -4,7 +4,8 @@
   import { EXAMPLE, PRESETS, SURFACE, applyAccent, check, contrast, fillOf, isHex, nearest } from '../../lib/ui/accent';
   import * as I from '../../lib/ui/icons';
   import { UI_MESSAGES as M } from '../../lib/ui/messages';
-  import { CHOICES, SCHEME_KEY, applyScheme, loadScheme, type Choice } from '../../lib/ui/scheme';
+  import { CHOICES, SCHEME_KEY, applyScheme, loadScheme, resolveScheme, type Choice } from '../../lib/ui/scheme';
+  import { reveal } from '../../lib/ui/motion-lazy';
   import Button from '../../lib/ui/c/Button.svelte';
   import Field from '../../lib/ui/c/Field.svelte';
   import Icon from '../../lib/ui/c/Icon.svelte';
@@ -14,10 +15,15 @@
   // Settings > Appearance: the color scheme (this browser: vesper.scheme) and the accent (the account, ui_accent on the server).
   const store = (() => { try { return localStorage; } catch { return null; } })();
   let scheme = $state<Choice>(loadScheme(store));
+  // A click spreads the new scheme as a circle from the pointer (reveal); arrow keys switch at once.
+  let press: { x: number; y: number; at: number } | null = null;
   function pickScheme(c: Choice) {
     scheme = c;
     try { store?.setItem(SCHEME_KEY, c); } catch { /* storage blocked: applied for this visit only */ }
-    applyScheme(c);
+    const same = resolveScheme(c, matchMedia('(prefers-color-scheme: light)').matches) === document.documentElement.getAttribute('data-scheme');
+    if (press && !same && performance.now() - press.at < 1000) reveal(press.x, press.y, () => applyScheme(c));
+    else applyScheme(c);
+    press = null;
   }
 
   // A preset key or #rrggbb. It paints at once (the preview), then saves; a failed save puts the saved one back.
@@ -48,7 +54,7 @@
 </script>
 
 <div class="flex flex-col gap-8">
-  <fieldset class="flex flex-col gap-2" aria-describedby="scheme-help">
+  <fieldset class="flex flex-col gap-2" aria-describedby="scheme-help" onpointerdown={(e) => (press = { x: e.clientX, y: e.clientY, at: performance.now() })}>
     <legend class="mb-1 text-base font-medium text-fg">Colour scheme</legend>
     <p id="scheme-help" class="mb-1 text-sm text-fg-2">
       On this device only. System follows your device setting.

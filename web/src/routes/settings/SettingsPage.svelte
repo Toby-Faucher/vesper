@@ -1,5 +1,6 @@
 <script lang="ts">
   import { motion } from '../../lib/ui/motion';
+  import { slides } from '../../lib/ui/motion-lazy';
   import { SETTINGS_NAMES as NAMES, SETTINGS_SECTIONS, href, type SettingsSection } from '../../lib/route';
   import { wsUrl } from '../../lib/session.svelte';
   import { voice } from '../../lib/voice.svelte';
@@ -16,7 +17,7 @@
 
 <div class="flex min-h-0 flex-1 justify-center gap-8 overflow-y-auto px-4 py-6">
   <nav aria-label="Settings sections" class="sticky top-0 w-50 shrink-0 self-start">
-    <ul class="flex flex-col gap-px">
+    <ul class="relative isolate flex flex-col gap-px" {@attach slides}>
       {#each SETTINGS_SECTIONS as s (s)}
         <li>
           <a href={href({ name: 'settings', section: s })} aria-current={s === section ? 'page' : undefined}
