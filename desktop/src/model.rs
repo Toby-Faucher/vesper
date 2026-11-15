@@ -212,6 +212,8 @@ pub struct Model {
     pub at_bottom: bool,
     /// The window has focus.
     pub focused: bool,
+    /// Something covers the shown room (the Settings view): it is not on screen.
+    covered: bool,
     pub loading_older: bool,
     /// The text of a send that failed, to put back in the composer.
     pub draft_back: Option<String>,
@@ -267,6 +269,7 @@ impl Default for Model {
             online: false,
             at_bottom: true,
             focused: true,
+            covered: false,
             loading_older: false,
             draft_back: None,
             read_sent: HashMap::new(),
@@ -924,7 +927,7 @@ impl Model {
 
     /// Marks the shown room read when its newest message is on screen in a focused window, like the web timeline.
     fn maybe_read(&mut self) -> Vec<Cmd> {
-        if self.screen != Screen::Main || !self.focused || !self.at_bottom {
+        if self.screen != Screen::Main || !self.focused || self.covered || !self.at_bottom {
             return vec![];
         }
         let Some(room) = self.active else {
@@ -1011,6 +1014,11 @@ impl Model {
 
     pub fn set_focused(&mut self, focused: bool) -> Vec<Cmd> {
         self.focused = focused;
+        self.maybe_read()
+    }
+
+    pub fn set_covered(&mut self, covered: bool) -> Vec<Cmd> {
+        self.covered = covered;
         self.maybe_read()
     }
 

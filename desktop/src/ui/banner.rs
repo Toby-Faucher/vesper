@@ -2,7 +2,8 @@
 //! it; in and out with `swap`), and `RingPrompt.svelte` at the bottom right (an incoming DM call: the caller,
 //! Accept and Decline; it rises in, and a ring pulses around the picture, 1.6 s ease-out, none under reduced motion).
 //!
-//! Not here: the first connect's calm "Connecting to the server..." line (nothing shows until the first hello), the ring sound (the web's `chime`), Esc to decline, the screen reader texts.
+//! Esc declines it (`Vesper::dismiss`); its sound is `sound.rs`. Not here: the first connect's calm "Connecting to the
+//! server..." line (nothing shows until the first hello), the screen reader texts.
 
 use std::time::{Duration, Instant};
 
@@ -193,6 +194,7 @@ impl Vesper {
         Some(
             div()
                 .debug_selector(|| "ring-prompt".into())
+                .occlude()
                 .absolute()
                 .right(px(16.))
                 .bottom(px(16. - 6. * (1. - rise.map_or(1., |p| p.t))))

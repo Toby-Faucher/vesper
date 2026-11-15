@@ -33,8 +33,11 @@ impl Vesper {
     /// the last one's GPU copy), and keeps a timer for the next `watch off`.
     pub(super) fn sync_share(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let m = &self.model;
-        let visible =
-            !self.settings_open && m.call.phase == Phase::Joined && m.call.room == m.active;
+        self.draws += 1;
+        let visible = !self.settings_open
+            && !self.minimised
+            && m.call.phase == Phase::Joined
+            && m.call.room == m.active;
         let cmds = self.model.set_share_visible(visible, Instant::now());
         self.run(cmds);
 
@@ -52,6 +55,11 @@ impl Vesper {
             cx.drop_image(old, Some(window));
         }
 
+        self.sync_watch_timer(cx);
+    }
+
+    /// Keeps a timer for the next `watch off`. Also called with no draw, for a window that is not drawn.
+    pub(super) fn sync_watch_timer(&mut self, cx: &mut Context<Self>) {
         let due = self.model.call.watch_deadline();
         if due != self.watch_timer.as_ref().map(|t| t.0) {
             self.watch_timer = due.map(|at| {
@@ -61,6 +69,7 @@ impl Vesper {
                     let _ = this.update(cx, |v, cx| {
                         v.watch_timer = None;
                         v.act(|m| m.sync_watches(Instant::now()), cx);
+                        v.sync_watch_timer(cx);
                     });
                 });
                 (at, task)

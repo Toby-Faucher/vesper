@@ -1150,3 +1150,286 @@ fn an_idle_window_asks_for_no_redraws(cx: &mut TestAppContext) {
     assert_eq!(notes.get(), 0, "redraws asked for while idle");
     drain(&mut rx);
 }
+
+fn new_msg(view: &Entity<Vesper>, cx: &mut VisualTestContext, id: i64) {
+    let m = serde_json::from_value(msg(id, "b", "live")).unwrap();
+    apply(
+        view,
+        cx,
+        Event::Server(Box::new(ServerMsg::MessageNew { message: m })),
+    );
+}
+
+fn composer_text(view: &Entity<Vesper>, cx: &mut VisualTestContext) -> String {
+    view.read_with(cx, |v, cx| v.composer.read(cx).value().to_string())
+}
+
+/// A dialog takes the focus: Enter confirms it (not the composer under it), and a click on its backdrop reaches
+/// nothing under it.
+#[gpui::test]
+fn a_dialog_takes_enter_and_blocks_clicks(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    chat_room(&view, cx);
+    focus_composer(&view, cx);
+    cx.simulate_input("half typed");
+    click(cx, "more-11");
+    click(cx, "delete-11");
+    assert!(cx.debug_bounds("confirm-11").is_some());
+    drain(&mut rx);
+    // The sidebar's room 2 under the backdrop.
+    click(cx, "room-2");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.active, Some(1), "the backdrop took the click");
+        assert_eq!(v.model.confirm_delete, Some(11));
+    });
+    cx.simulate_keystrokes("enter");
+    let cmds = drain(&mut rx);
+    assert!(matches!(cmds.as_slice(), [Cmd::Delete(11)]), "{cmds:?}");
+    assert_eq!(composer_text(&view, cx), "half typed");
+    view.read_with(cx, |v, _| assert_eq!(v.model.confirm_delete, None));
+    // The focus is back in the composer.
+    cx.simulate_input("!");
+    assert_eq!(composer_text(&view, cx), "half typed!");
+}
+
+/// Esc closes the topmost thing, like the web: a dialog, the person card, a menu, then declines a ring.
+#[gpui::test]
+fn escape_closes_dialogs_cards_menus_and_declines_a_ring(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    chat_room(&view, cx);
+    apply(
+        &view,
+        cx,
+        Event::Server(Box::new(ServerMsg::RingStart {
+            room_id: 3,
+            user_id: "b".into(),
+        })),
+    );
+    focus_composer(&view, cx);
+    click(cx, "more-11");
+    click(cx, "delete-11");
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert_eq!(v.model.confirm_delete, None));
+    assert!(drain(&mut rx).iter().all(|c| !matches!(c, Cmd::Delete(_))));
+
+    focus_composer(&view, cx);
+    click(cx, "person-2-b");
+    view.read_with(cx, |v, _| assert!(v.person.is_some()));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert!(v.person.is_none()));
+
+    click(cx, "more-11");
+    view.read_with(cx, |v, _| assert_eq!(v.tl.menu, Some(11)));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert_eq!(v.tl.menu, None));
+
+    click(cx, "account");
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert!(!v.side.account_open));
+
+    drain(&mut rx);
+    cx.simulate_keystrokes("escape");
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [Cmd::Signal(ClientMsg::DeclineRing { room_id: 3 })]
+    ));
+}
+
+/// Joins room 1's call with Bob sharing, watches him and takes a picture.
+fn watching_bob(
+    view: &Entity<Vesper>,
+    cx: &mut VisualTestContext,
+    rx: &mut UnboundedReceiver<Cmd>,
+) {
+    signed_in(view, cx);
+    click(cx, "join-voice");
+    let call = |ev| Event::Voice { call: 1, ev };
+    apply(view, cx, call(VoiceEvent::Offer("offer".into())));
+    let bob = serde_json::from_value(
+        json!({ "user_id": "b", "name": "Bob", "room_id": 1, "muted": false,
+        "deafened": false, "force_muted": false, "share": { "fps": 60, "bitrate_kbps": 8000 } }),
+    )
+    .unwrap();
+    let joined = ServerMsg::Joined {
+        user_id: "a".into(),
+        answer: "answer".into(),
+        peers: vec![bob],
+    };
+    apply(view, cx, Event::Server(Box::new(joined)));
+    click(cx, "share-watch-b");
+    drain(rx);
+}
+
+fn frame() -> crate::voice::Frame {
+    crate::voice::Frame {
+        user_id: "b".into(),
+        width: 16,
+        height: 9,
+        bgra: std::sync::Arc::new([0u8, 0, 255, 255].repeat(16 * 9)),
+    }
+}
+
+/// The share counts as not shown, and the timer for its `watch off` runs (the grace is on the real clock, which
+/// the model's tests cover).
+fn assert_off_due(view: &Entity<Vesper>, cx: &mut VisualTestContext) {
+    view.read_with(cx, |v, _| {
+        assert!(!v.model.call.share_visible);
+        assert!(v.watch_timer.is_some());
+    });
+}
+
+/// A window that is not drawn (minimised, covered) stops watching: pictures that wait untaken for 2 s say so, and
+/// the `watch off` is due after the grace, with no draw.
+#[gpui::test]
+fn a_share_nobody_draws_is_stopped(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    watching_bob(&view, cx, &mut rx);
+    // A picture comes, and no frame is drawn (the model is fed without a notify, as a hidden window would).
+    view.update(cx, |v, cx| {
+        v.model.call.frame = Some(frame());
+        v.frame_came(cx);
+    });
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(3));
+    cx.run_until_parked();
+    assert_off_due(&view, cx);
+}
+
+/// Closing the window during a call minimises it: the share counts as not shown at once.
+#[gpui::test]
+fn a_minimised_window_stops_watching(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    watching_bob(&view, cx, &mut rx);
+    view.update(cx, |v, cx| v.minimised_by_close(cx));
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
+    assert_off_due(&view, cx);
+}
+
+/// Each room keeps its own draft, like the web: text typed in one never goes to another.
+#[gpui::test]
+fn each_room_keeps_its_draft(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    focus_composer(&view, cx);
+    cx.simulate_input("for general");
+    click(cx, "room-2");
+    assert_eq!(composer_text(&view, cx), "");
+    cx.simulate_input("for hangout");
+    click(cx, "room-1");
+    assert_eq!(composer_text(&view, cx), "for general");
+    drain(&mut rx);
+    click(cx, "room-2");
+    assert_eq!(composer_text(&view, cx), "for hangout");
+    assert!(
+        !drain(&mut rx)
+            .iter()
+            .any(|c| matches!(c, Cmd::Signal(ClientMsg::Typing { .. }))),
+        "a draft put back is not typing"
+    );
+}
+
+/// Settings covers the room: what comes in the room meanwhile is not marked read until it shows again.
+#[gpui::test]
+fn the_room_behind_settings_is_not_marked_read(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update(cx, |v, _| v.model.focused = true);
+    click(cx, "open-settings");
+    drain(&mut rx);
+    new_msg(&view, cx, 13);
+    let cmds = drain(&mut rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::MarkRead { .. })),
+        "{cmds:?}"
+    );
+    click(cx, "settings-close");
+    assert!(
+        drain(&mut rx)
+            .iter()
+            .any(|c| matches!(c, Cmd::MarkRead { room: 1, id: 13 }))
+    );
+}
+
+/// A ring plays its sound every 2.5 s while it shows, like the web, minimised or not.
+#[gpui::test]
+fn a_ring_plays_until_it_ends(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    let ring = ServerMsg::RingStart {
+        room_id: 3,
+        user_id: "b".into(),
+    };
+    apply(&view, cx, Event::Server(Box::new(ring)));
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.ring_sound.as_ref().map(|r| r.0), Some(3))
+    });
+    apply(
+        &view,
+        cx,
+        Event::Server(Box::new(ServerMsg::RingStop { room_id: 3 })),
+    );
+    view.read_with(cx, |v, _| assert!(v.ring_sound.is_none()));
+    drain(&mut rx);
+}
+
+/// Late answers after a sign out change nothing: a picture is not cached, a download is not opened.
+#[gpui::test]
+fn late_pictures_after_sign_out_are_dropped(cx: &mut TestAppContext) {
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| v.sign_out(window, cx));
+    let picture = crate::files::Picture {
+        width: 2,
+        height: 2,
+        bgra: vec![255; 16],
+    };
+    apply(
+        &view,
+        cx,
+        Event::Image {
+            id: IMAGE_ID.into(),
+            picture: Some(picture),
+        },
+    );
+    view.read_with(cx, |v, _| assert!(v.images.is_empty()));
+}
+
+/// Enter while an input method is composing ends the composition; it does not send.
+#[gpui::test]
+fn enter_while_composing_does_not_send(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    focus_composer(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        v.composer.update(cx, |i, cx| {
+            i.replace_and_mark_text_in_range(None, "ka", None, window, cx)
+        })
+    });
+    drain(&mut rx);
+    cx.simulate_keystrokes("enter");
+    assert!(
+        !drain(&mut rx).iter().any(|c| matches!(c, Cmd::Send { .. })),
+        "nothing sent"
+    );
+    assert_eq!(composer_text(&view, cx), "ka");
+}
+
+/// A lost session's sign in screen and the next session start clean: no card, menu or cached pictures carry over.
+#[gpui::test]
+fn a_lost_session_resets_the_view(cx: &mut TestAppContext) {
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    click(cx, "person-2-b");
+    click(cx, "account");
+    focus_composer(&view, cx);
+    cx.simulate_input("draft");
+    apply(&view, cx, Event::SessionEnded);
+    view.read_with(cx, |v, cx| {
+        assert!(v.person.is_none());
+        assert!(!v.side.account_open);
+        assert!(v.images.is_empty() && v.drafts.is_empty());
+        assert_eq!(v.composer.read(cx).value(), "");
+    });
+}

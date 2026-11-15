@@ -1442,7 +1442,10 @@ impl Vesper {
         cx.notify();
     }
 
-    fn save_edit(&mut self, _: &SaveEdit, _: &mut Window, cx: &mut Context<Self>) {
+    fn save_edit(&mut self, _: &SaveEdit, window: &mut Window, cx: &mut Context<Self>) {
+        if super::end_composition(&self.edit, window, cx) {
+            return;
+        }
         let body = self.edit.read(cx).value();
         self.act(|m| m.save_edit(&body), cx);
     }
@@ -1484,7 +1487,10 @@ impl Vesper {
         } else {
             (self.mention, self.mention_dismissed) = (q, None);
         }
-        self.act(|m| m.typed(&text, Instant::now()), cx);
+        // A room's draft put back is not typing.
+        if !std::mem::take(&mut self.draft_put) {
+            self.act(|m| m.typed(&text, Instant::now()), cx);
+        }
     }
 
     /// Puts `@username ` in place of the @ being typed.
@@ -1587,12 +1593,9 @@ impl Vesper {
 
     /// A picture on the clipboard goes to the tray as a file; anything else pastes as text.
     pub(super) fn paste_file(&mut self, _: &PasteFile, _: &mut Window, cx: &mut Context<Self>) {
-        let image = cx.read_from_clipboard().and_then(|c| {
-            c.entries().iter().find_map(|e| match e {
-                ClipboardEntry::Image(i) => Some(i.clone()),
-                _ => None,
-            })
-        });
+        let image = cx
+            .read_from_clipboard()
+            .and_then(|c| pasted_image(c.entries()).cloned());
         let Some(image) = image else {
             return cx.propagate();
         };
@@ -2187,6 +2190,7 @@ impl Vesper {
                         anchored().anchor(Corner::BottomLeft).child(
                             div()
                                 .debug_selector(|| "mentions".into())
+                                .occlude()
                                 .w(px(320.))
                                 .max_h(px(296.))
                                 .overflow_hidden()
@@ -2487,6 +2491,8 @@ impl Vesper {
             div()
                 .absolute()
                 .inset_0()
+                .track_focus(&self.dialog_focus)
+                .key_context(super::DIALOG)
                 .debug_selector(move || format!("confirm-{id}"))
                 .child(
                     c::Dialog::new("Delete this message?")
@@ -2554,6 +2560,18 @@ fn composer_icon(
         .child(icon(name).text_color(fg))
 }
 
+/// The picture a paste attaches: only a copy with no text, as the web takes files only when the copy is one (a page's
+/// text with pictures in it pastes as text).
+fn pasted_image(entries: &[ClipboardEntry]) -> Option<&gpui::Image> {
+    let text = entries
+        .iter()
+        .any(|e| matches!(e, ClipboardEntry::String(s) if !s.text().trim().is_empty()));
+    entries.iter().find_map(|e| match e {
+        ClipboardEntry::Image(i) if !text => Some(i),
+        _ => None,
+    })
+}
+
 /// The composer's limit and where its count shows (the server's limit, in characters).
 const MAX_CHARS: usize = 4000;
 const COUNT_FROM: usize = 3600;
@@ -2576,4 +2594,26 @@ fn pin_time(ms: i64, loc: Locale) -> String {
         "{day}, {}",
         crate::timeline::hm(d.hour(), d.minute(), loc, false)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_paste_with_text_is_text() {
+        let image = gpui::Image::from_bytes(ImageFormat::Png, vec![1, 2, 3]);
+        let both = [
+            ClipboardEntry::from("some words".to_string()),
+            ClipboardEntry::Image(image.clone()),
+        ];
+        assert!(pasted_image(&both).is_none());
+        let picture = [ClipboardEntry::Image(image.clone())];
+        assert_eq!(pasted_image(&picture), Some(&image));
+        let blank = [
+            ClipboardEntry::from(" ".to_string()),
+            ClipboardEntry::Image(image.clone()),
+        ];
+        assert_eq!(pasted_image(&blank), Some(&image), "no real text");
+    }
 }
