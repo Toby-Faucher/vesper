@@ -48,7 +48,7 @@ use crate::uploads::UpState;
 
 /// Decoded pictures kept for the timeline; the oldest goes first.
 pub const IMAGE_CACHE: usize = 64;
-const IMAGE_FAILED: &str = "The image did not load.";
+pub(super) const IMAGE_FAILED: &str = "The image did not load.";
 /// The New row goes this long after the room is read (`FADE_AFTER_MS`).
 const FADE_AFTER: Duration = Duration::from_millis(4000);
 /// The server's limit of pins per room.
@@ -1240,8 +1240,8 @@ impl Vesper {
                 self.run(vec![Cmd::FetchImage(a.id.clone())]);
             }
             let open = {
-                let a = a.clone();
-                cx.listener(move |this, _, _, cx| this.open_attachment(&a, cx))
+                let id = a.id.clone();
+                cx.listener(move |this, _, _, cx| this.open_viewer(&id, cx))
             };
             let boxed = |w: f32, h: f32| {
                 div()
@@ -1365,7 +1365,7 @@ impl Vesper {
     }
 
     /// Hands a media file to the system's app. Downloaded first, named by its id and the type the server found.
-    fn open_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
+    pub(super) fn open_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
         let Some(ext) = files::media_ext(&a.mime).filter(|_| files::valid_id(&a.id)) else {
             return;
         };
@@ -1382,7 +1382,7 @@ impl Vesper {
     }
 
     /// Saves where the user picks, starting in Downloads. With no dialog (no portal on Linux) it goes to Downloads.
-    fn save_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
+    pub(super) fn save_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
         if !files::valid_id(&a.id) {
             return;
         }

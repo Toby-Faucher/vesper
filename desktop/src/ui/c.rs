@@ -1013,6 +1013,7 @@ pub struct Dialog {
     body: Vec<AnyElement>,
     footer: Option<AnyElement>,
     on_close: Option<OnClick>,
+    width: f32,
 }
 
 impl Dialog {
@@ -1022,7 +1023,13 @@ impl Dialog {
             body: vec![],
             footer: None,
             on_close: None,
+            width: 440.,
         }
+    }
+    /// Another width than 440 px (the image viewer's `wide`: as wide as its picture).
+    pub fn width(mut self, w: f32) -> Self {
+        self.width = w;
+        self
     }
     pub fn footer(mut self, f: impl IntoElement) -> Self {
         self.footer = Some(f.into_any_element());
@@ -1063,7 +1070,7 @@ impl RenderOnce for Dialog {
                     .relative()
                     .flex()
                     .flex_col()
-                    .w(px(440.))
+                    .w(px(self.width))
                     .border_1()
                     .border_color(t.line_subtle)
                     .rounded(t.radius_lg)

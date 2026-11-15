@@ -195,10 +195,12 @@ impl Vesper {
         let confirm = self.person_confirm(cx);
         let ring = self.render_ring(window, cx);
         let layer = self.render_layer(window, cx);
+        let viewer = self.render_viewer(window, cx);
         shell
             .children(card)
             .children(confirm)
             .children(ring)
+            .children(viewer)
             .children(layer)
     }
 
@@ -359,15 +361,11 @@ impl Vesper {
                     .justify_end()
                     .gap(px(8.))
                     .children(pins)
-                    .child(
-                        div().debug_selector(|| "search-button".into()).child(
-                            c::IconButton::new("search-button", "search")
-                                .pressed(self.find.layer == Some(super::find::Layer::Search))
-                                .on_click(cx.listener(|this, _, w, cx| {
-                                    this.open_layer(super::find::Layer::Search, w, cx)
-                                })),
-                        ),
-                    )
+                    .child(div().debug_selector(|| "search-button".into()).child(
+                        c::IconButton::new("search-button", "search").on_click(cx.listener(
+                            |this, _, w, cx| this.open_layer(super::find::Layer::Search, w, cx),
+                        )),
+                    ))
                     .children(join),
             )
     }

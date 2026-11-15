@@ -1667,3 +1667,54 @@ fn search_asks_after_a_pause_and_jumps(cx: &mut TestAppContext) {
         assert_eq!(v.model.jump, Some(5));
     });
 }
+
+/// A click on a picture opens the viewer in the app (not the system's), which fetches the full size once; Esc closes
+/// it and lets the picture go.
+#[gpui::test]
+fn a_picture_opens_in_the_viewer(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    chat_room(&view, cx);
+    apply(
+        &view,
+        cx,
+        Event::Image {
+            id: IMAGE_ID.into(),
+            picture: Some(crate::files::Picture {
+                width: 2,
+                height: 2,
+                bgra: vec![255; 16],
+            }),
+        },
+    );
+    drain(&mut rx);
+    let b = cx
+        .debug_bounds(tagged(format!("image-{IMAGE_ID}")))
+        .unwrap();
+    cx.simulate_click(b.center(), Modifiers::none());
+    cx.run_until_parked();
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchFull(id) if id == IMAGE_ID)),
+        "{cmds:?}"
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::Download { .. })),
+        "not the system's viewer"
+    );
+    apply(
+        &view,
+        cx,
+        Event::Full {
+            id: IMAGE_ID.into(),
+            picture: Some(crate::files::Picture {
+                width: 4,
+                height: 2,
+                bgra: vec![255; 32],
+            }),
+        },
+    );
+    assert!(cx.debug_bounds("viewer").is_some());
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert!(v.viewer.is_none()));
+}

@@ -20,6 +20,7 @@ mod sign_in;
 mod sound;
 pub mod theme;
 mod tray;
+mod viewer;
 
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -65,7 +66,9 @@ actions!(
         FindTab,
         FindHome,
         FindEnd,
-        FindBack
+        FindBack,
+        ViewerPrev,
+        ViewerNext
     ]
 );
 
@@ -111,6 +114,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("end", FindEnd, find_input),
         KeyBinding::new("backspace", FindBack, find_input),
         KeyBinding::new("escape", Dismiss, find_input),
+        KeyBinding::new("left", ViewerPrev, Some(viewer::VIEWER)),
+        KeyBinding::new("right", ViewerNext, Some(viewer::VIEWER)),
     ]);
 }
 
@@ -280,6 +285,8 @@ pub struct Vesper {
     banner: banner::Banner,
     /// The switcher, search or shortcuts layer, and its fields.
     find: find::Find,
+    /// The open image viewer.
+    viewer: Option<viewer::Viewer>,
     find_field: Entity<InputState>,
     after_field: Entity<InputState>,
     before_field: Entity<InputState>,
@@ -427,6 +434,7 @@ impl Vesper {
             anchors: Default::default(),
             banner: Default::default(),
             find: Default::default(),
+            viewer: None,
             find_field,
             after_field,
             before_field,
@@ -518,6 +526,7 @@ impl Vesper {
             Event::Downloaded { path, open: true } if main => cx.open_with_system(path),
             Event::Latest { room, .. } => drop(self.tl.loaded.insert(*room)),
             Event::Searched { seq, page } => self.searched(*seq, page.clone(), cx),
+            Event::Full { id, picture } => self.full_loaded(id, picture.clone(), window),
             _ => {}
         }
         let editing = self.model.editing;
@@ -609,6 +618,7 @@ impl Vesper {
         self.banner = Default::default();
         self.person = None;
         self.find = Default::default();
+        self.close_viewer(window, cx);
         self.tl = chat::Tl::default();
         for (_, i) in self.images.drain() {
             if let chat::Img::Ready(i) = i {
@@ -639,6 +649,9 @@ impl Vesper {
                 .update(cx, |i, cx| i.set_value(new, window, cx));
         }
         crate::switcher::push_recent(&mut self.find.recent, id);
+        if self.model.active != Some(id) {
+            self.close_viewer(window, cx);
+        }
         let cmds = self.model.open_room(id);
         self.run(cmds);
         self.composer.update(cx, |i, cx| i.focus(window, cx));
@@ -669,6 +682,7 @@ impl Vesper {
     fn dialog_open(&self) -> bool {
         (self.model.confirm_delete.is_some() && !self.settings_open)
             || self.person.as_ref().is_some_and(|c| c.confirm)
+            || self.viewer.is_some()
     }
 
     /// Esc: closes the topmost thing, in the web's order: a dialog, the person card, a menu or popover, the pins,
@@ -676,6 +690,9 @@ impl Vesper {
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
         if self.find.layer.is_some() {
             return self.close_layer(window, cx);
+        }
+        if self.viewer.is_some() {
+            return self.close_viewer(window, cx);
         }
         let m = &mut self.model;
         if m.confirm_delete.is_some() {
@@ -1014,6 +1031,8 @@ impl Render for Vesper {
             .on_action(cx.listener(|this, _: &FindHome, _, cx| this.find_edge(false, cx)))
             .on_action(cx.listener(|this, _: &FindEnd, _, cx| this.find_edge(true, cx)))
             .on_action(cx.listener(|this, _: &FindBack, _, cx| this.find_back(cx)))
+            .on_action(cx.listener(|this, _: &ViewerPrev, _, cx| this.viewer_go(-1, cx)))
+            .on_action(cx.listener(|this, _: &ViewerNext, _, cx| this.viewer_go(1, cx)))
             .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 this.shortcut_key(e, window, cx);
             }))

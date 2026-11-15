@@ -82,6 +82,8 @@ pub enum Cmd {
     CancelUpload(u64),
     /// An image attachment, decoded small for the timeline.
     FetchImage(String),
+    /// An image attachment for the viewer, decoded up to `files::FULL`.
+    FetchFull(String),
     /// `GET /api/users/{user_id}/avatar?v={version}`: a profile picture.
     FetchAvatar {
         user_id: String,
@@ -197,6 +199,11 @@ pub enum Event {
     },
     /// `None` when it did not load or decode.
     Image {
+        id: String,
+        picture: Option<Picture>,
+    },
+    /// The viewer's picture; `None` when it did not load or decode.
+    Full {
         id: String,
         picture: Option<Picture>,
     },
@@ -1021,6 +1028,26 @@ fn changed(
     }
 }
 
+/// Downloaded bytes decoded off the UI thread (to fit `max`, else the timeline's size): the request's outcome and
+/// the picture, `None` when it did not load or decode.
+async fn decoded(
+    r: Result<Vec<u8>, Fail>,
+    max: Option<(u32, u32)>,
+) -> (Result<(), Fail>, Option<Picture>) {
+    let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+    let picture = match r {
+        Ok(bytes) => tokio::task::spawn_blocking(move || match max {
+            Some(m) => files::decode_within(&bytes, m),
+            None => files::decode_picture(&bytes),
+        })
+        .await
+        .ok()
+        .flatten(),
+        Err(_) => None,
+    };
+    (res, picture)
+}
+
 /// One REST call; a 401 ends the session.
 async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
     let (res, ev) = match cmd {
@@ -1131,27 +1158,17 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
             )
         }
         Cmd::FetchImage(id) => {
-            let r = api.download(&id, IMAGE_MAX).await;
-            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
-            let picture = match r {
-                Ok(bytes) => tokio::task::spawn_blocking(move || files::decode_picture(&bytes))
-                    .await
-                    .ok()
-                    .flatten(),
-                Err(_) => None,
-            };
+            let (res, picture) = decoded(api.download(&id, IMAGE_MAX).await, None).await;
             (res, Event::Image { id, picture })
+        }
+        Cmd::FetchFull(id) => {
+            let r = api.download(&id, IMAGE_MAX).await;
+            let (res, picture) = decoded(r, Some(files::FULL)).await;
+            (res, Event::Full { id, picture })
         }
         Cmd::FetchAvatar { user_id, version } => {
             let r = api.avatar(&user_id, &version).await;
-            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
-            let picture = match r {
-                Ok(bytes) => tokio::task::spawn_blocking(move || files::decode_picture(&bytes))
-                    .await
-                    .ok()
-                    .flatten(),
-                Err(_) => None,
-            };
+            let (res, picture) = decoded(r, None).await;
             let ev = Event::Avatar {
                 user_id,
                 version,
