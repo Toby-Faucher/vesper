@@ -1969,3 +1969,50 @@ fn the_switcher_opens_settings_and_admin_sections(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |v, _| assert_eq!(v.page.at, At::Admin(Admin::Disk)));
 }
+
+/// Admin > Disk use draws each bar at its share of the track (84 % of the disk here), like `Disk.svelte`.
+#[gpui::test]
+fn disk_bars_fill_to_their_share(cx: &mut TestAppContext) {
+    use super::admin::Section;
+    use super::settings::At;
+    use vesper_protocol::Role;
+
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        let id = v.model.state.my_id().to_string();
+        v.model.state.users.get_mut(&id).unwrap().role = Role::Owner;
+        v.open_page(At::Admin(Section::Disk), window, cx);
+    });
+    cx.run_until_parked();
+    let gb = 1_000_000_000_i64;
+    let disk = json!({ "db_bytes": 1_000_000, "upload_bytes": gb, "quota_bytes": 4 * gb,
+                       "fs_total": 62 * gb, "fs_free": 10 * gb, "warn": true });
+    apply(
+        &view,
+        cx,
+        Event::Http {
+            tag: "admin:disk".into(),
+            result: Ok(crate::net::Json(disk)),
+        },
+    );
+    for (label, share) in [("Uploads", 0.25), ("Disk", 0.84)] {
+        let track = cx
+            .debug_bounds(format!("disk-track-{label}").leak())
+            .unwrap();
+        let bar = cx.debug_bounds(format!("disk-bar-{label}").leak()).unwrap();
+        let got = f32::from(bar.size.width) / f32::from(track.size.width);
+        assert!(
+            (got - share).abs() < 0.02,
+            "{label}: {got} of the track, want {share}"
+        );
+        assert!(
+            f32::from(bar.size.height) > 4.,
+            "{label}: the bar has height"
+        );
+    }
+    assert!(
+        cx.debug_bounds("disk-bar-Database").is_none(),
+        "the database has no bar"
+    );
+}

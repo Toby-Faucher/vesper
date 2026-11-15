@@ -504,6 +504,11 @@ const SCENES = {
   ...pageScenes('settings', ['voice', 'notifications', 'appearance', 'account', 'desktop']),
   ...pageScenes('admin', ['invites', 'members', 'rooms', 'disk', 'server']),
 };
+// Admin > Disk use from fixed numbers on both sides, not this machine's disk: one bar under 80 %, one over (the warning
+// colour). The web's GET is answered by Playwright, the desktop's by dev.rs (VESPER_DEV_DISK).
+const DISK = { db_bytes: 4200000, upload_bytes: 4800000000, quota_bytes: 10737418240, fs_total: 62000000000, fs_free: 10000000000, warn: true };
+SCENES['admin-disk'].route = ['**/api/admin/disk', DISK];
+SCENES['admin-disk'].desktop.env = { VESPER_DEV_DISK: JSON.stringify(DISK) };
 
 // Settings and Admin, one scene per section: alice (the owner) opens /<page>/<section> on the web, and the desktop opens
 // the same section (dev.rs `settings:<section>`, `admin:<section>`). The lists come from the same server.
@@ -513,9 +518,12 @@ function pageScenes(name, list) {
       await house(ctx);
       const page = ctx.alice.page;
       await home(page);
+      const route = SCENES[`${name}-${section}`].route;
+      if (route) await page.route(route[0], (r) => r.fulfill({ json: route[1] }));
       await page.goto(`${ORIGIN}/${name}/${section}`);
       await page.getByRole('heading', { level: 1 }).waitFor();
       await sleep(1500); // the lazy page and its lists
+      if (route) await page.unroute(route[0]);
       return page;
     },
     desktop: { user: 'alice', scene: `${name}:${section}` },

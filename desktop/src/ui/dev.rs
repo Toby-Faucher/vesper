@@ -19,6 +19,9 @@
 //! - `VESPER_DEV_TRAY`: `name|size|mime|state;...` rows put in the room's upload tray (no upload runs). The state is
 //!   `queued`, `uploading:<share>` or `failed:quota`.
 //!
+//! - `VESPER_DEV_DISK`: a `DiskUse` as JSON: Admin > Disk use shows it in place of the server's answer (the harness
+//!   answers the web's GET with the same, so the bars do not hang on this machine's disk).
+//!
 //! - `VESPER_DEV_VOICE`: a room name: once the scene is reached, join voice there, with a silent fake microphone and
 //!   speakers that play nothing (no audio device is opened). Ready once connected and the first stats came.
 //! - `VESPER_DEV_LINKS`: with VOICE, ready only once everyone else in the call has a connection grade.
@@ -85,6 +88,7 @@ pub struct Dev {
     person: Option<(String, bool)>,
     volume: Option<f32>,
     ring: Option<String>,
+    disk: Option<String>,
     offline_said: bool,
     /// A ring came after ready: ARRIVED was printed.
     rang: bool,
@@ -187,6 +191,7 @@ impl Dev {
             send: var("VESPER_DEV_SEND"),
             sent_after: None,
             tray: var("VESPER_DEV_TRAY"),
+            disk: var("VESPER_DEV_DISK"),
             voice: var("VESPER_DEV_VOICE"),
             links: var("VESPER_DEV_LINKS").is_some(),
             rtt: var("VESPER_DEV_RTT").and_then(|v| v.parse().ok()),
@@ -305,10 +310,18 @@ impl Vesper {
                         self.key_focus.focus(window);
                         self.dev.step = Step::Done;
                         let s = s.to_string();
-                        cx.spawn(async move |_, cx| {
+                        let disk = self.dev.disk.clone();
+                        cx.spawn_in(window, async move |this, cx| {
                             cx.background_executor()
                                 .timer(Duration::from_millis(1500))
                                 .await;
+                            if let Some(d) = disk.and_then(|d| serde_json::from_str(&d).ok()) {
+                                let ev = crate::net::Event::Http {
+                                    tag: "admin:disk".into(),
+                                    result: Ok(crate::net::Json(d)),
+                                };
+                                let _ = this.update_in(cx, |v, window, cx| v.apply(ev, window, cx));
+                            }
                             ready(&s);
                         })
                         .detach();

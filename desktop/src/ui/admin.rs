@@ -1320,6 +1320,9 @@ impl Vesper {
                             .when(of > 0, |v| {
                                 v.child(
                                     div()
+                                        .debug_selector(move || format!("disk-track-{label}"))
+                                        // A flex row: in GPUI's default block layout the bar's relative width came out 0.
+                                        .flex()
                                         .h(px(8.))
                                         .rounded(px(4.))
                                         .bg(t.bg_selected)
@@ -1328,6 +1331,7 @@ impl Vesper {
                                         .overflow_hidden()
                                         .child(
                                             div()
+                                                .debug_selector(move || format!("disk-bar-{label}"))
                                                 .h_full()
                                                 .min_w(px(2.))
                                                 .w(gpui::relative(p as f32 / 100.))
