@@ -48,6 +48,11 @@ impl Section {
             Section::Server => "Server",
         }
     }
+    /// The web's section id: the name's first word, lower case (`disk`).
+    pub fn id(self) -> String {
+        let n = self.name();
+        n.split(' ').next().unwrap_or(n).to_lowercase()
+    }
     pub fn from_id(id: &str) -> Option<Section> {
         [
             Section::Invites,

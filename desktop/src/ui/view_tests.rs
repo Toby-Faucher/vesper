@@ -1908,3 +1908,64 @@ fn a_picture_opens_in_the_viewer(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     view.read_with(cx, |v, _| assert!(v.viewer.is_none()));
 }
+
+/// The switcher's Settings rows open their section; Admin rows are there for staff only, a moderator's without the
+/// owner's sections, and open theirs.
+#[gpui::test]
+fn the_switcher_opens_settings_and_admin_sections(cx: &mut TestAppContext) {
+    use super::admin::Section as Admin;
+    use super::find::Layer;
+    use super::settings::{At, Section};
+    use vesper_protocol::Role;
+
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    let labels = |view: &Entity<Vesper>, cx: &mut VisualTestContext, q: &str| {
+        view.update_in(cx, |v, w, cx| v.open_layer(Layer::Switcher, w, cx));
+        cx.simulate_input(q);
+        let r: Vec<String> = view.read_with(cx, |v, cx| {
+            v.switcher_results(cx)
+                .into_iter()
+                .map(|i| i.label)
+                .collect()
+        });
+        r
+    };
+    let as_role = |view: &Entity<Vesper>, cx: &mut VisualTestContext, role: Role| {
+        view.update(cx, |v, cx| {
+            let id = v.model.state.my_id().to_string();
+            v.model.state.users.get_mut(&id).unwrap().role = role;
+            cx.notify();
+        });
+    };
+
+    assert_eq!(
+        labels(&view, cx, "settings: appea")[0],
+        "Settings: Appearance"
+    );
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| {
+        assert!(v.settings_open);
+        assert_eq!(v.page.at, At::Settings(Section::Appearance));
+    });
+    assert!(
+        !labels(&view, cx, "> ")
+            .iter()
+            .any(|l| l.starts_with("Admin: ")),
+        "a member has no Admin rows"
+    );
+    cx.simulate_keystrokes("escape");
+
+    as_role(&view, cx, Role::Moderator);
+    let admin: Vec<String> = labels(&view, cx, "> admin")
+        .into_iter()
+        .filter(|l| l.starts_with("Admin: "))
+        .collect();
+    assert_eq!(admin, ["Admin: Invites", "Admin: Members"]);
+    cx.simulate_keystrokes("escape");
+
+    as_role(&view, cx, Role::Owner);
+    assert_eq!(labels(&view, cx, "admin: disk")[0], "Admin: Disk use");
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| assert_eq!(v.page.at, At::Admin(Admin::Disk)));
+}

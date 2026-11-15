@@ -18,11 +18,12 @@ use gpui::{
 use gpui_component::input::{Input, RopeExt};
 use vesper_protocol::{SearchHit, SearchQuery};
 
-use super::Vesper;
 use super::c::{self, Avatar, Badge, Ellipsis};
 use super::icons::icon;
 use super::motion::{self, POP};
+use super::settings::{self, At};
 use super::theme::{TEXT_LG, TEXT_SM, TEXT_XS, TextStepExt, Tokens, tokens};
+use super::{Vesper, admin};
 use crate::model::Phase;
 use crate::net::{Cmd, Fail};
 use crate::searchq::{self, Key, MAX_QUERY};
@@ -305,15 +306,6 @@ fn action_icon(id: &str) -> &'static str {
         _ => "chevronRight",
     }
 }
-
-const SETTINGS: [(&str, &str); 6] = [
-    ("voice", "Voice"),
-    ("notifications", "Notifications"),
-    ("appearance", "Appearance"),
-    ("account", "Account"),
-    ("desktop", "Desktop app"),
-    ("diagnostics", "Diagnostics"),
-];
 
 fn row_hover(i: usize) -> ElementId {
     ElementId::Name(format!("find-row-{i}").into())
@@ -598,14 +590,22 @@ impl Vesper {
                 Some("next-unread"),
             ));
         }
-        for (id, name) in SETTINGS {
+        // The web's list less Diagnostics, which the desktop does not have.
+        for sec in settings::Section::ALL {
             items.push(act(
-                &format!("settings-{id}"),
-                format!("Settings: {name}"),
+                &format!("settings-{}", sec.id()),
+                format!("Settings: {}", sec.name()),
                 None,
             ));
         }
-        // shortcut: no Admin rows; the desktop has no admin pages yet. Add `admin-<section>` rows with them.
+        // Staff only; a moderator without the owner's sections (`ADMIN_OWNER_ONLY`).
+        for sec in admin::sections_for(self.my_role()) {
+            items.push(act(
+                &format!("admin-{}", sec.id()),
+                format!("Admin: {}", sec.name()),
+                None,
+            ));
+        }
         let collapsed = m.settings.sidebar_collapsed;
         items.push(act(
             "sidebar",
@@ -701,11 +701,18 @@ impl Vesper {
             }
             "shortcuts" => self.open_layer(Layer::Shortcuts, window, cx),
             "logout" => self.sign_out(window, cx),
-            // shortcut: every Settings row opens the one Settings view; it has no sections yet.
-            id if id.starts_with("settings-") => self.open_settings(window, cx),
             id => {
                 if let Some(room) = id.strip_prefix("next-unread-").and_then(|n| n.parse().ok()) {
                     self.open_room(room, window, cx);
+                } else if let Some(sec) = id
+                    .strip_prefix("settings-")
+                    .and_then(settings::Section::from_id)
+                {
+                    self.open_page(At::Settings(sec), window, cx);
+                } else if let Some(sec) =
+                    id.strip_prefix("admin-").and_then(admin::Section::from_id)
+                {
+                    self.open_page(At::Admin(sec), window, cx);
                 }
             }
         }
