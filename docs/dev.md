@@ -105,8 +105,9 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   `vesper-paste/` in the temp folder.
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
   Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
-- Settings (the button next to Sign out) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
-  `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets.
+- Settings (the gear next to your name; Log out is in the menu on your name) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
+  `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets. It also keeps whether the sidebar is hidden
+  (the web keeps that in localStorage).
 - DeepFilterNet runs natively (`vesper-dsp` with tract, the same `=0.21.4` pin and debug-assertions override as the root
   workspace). The app does not ship the model: at the first call it downloads `/dsp/model.tar.gz` from the server it is signed
   in to (the file the web app loads), checks its sha256 against the pin in `scripts/fetch-model.sh`, and keeps it as
@@ -126,11 +127,13 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 - Parity with the web app: `desktop/scripts/parity.sh [scene...]` builds what is missing, then `web/e2e/parity.mjs` starts one
   server, shoots each scene in Chromium and in the desktop app (a debug build in a headless sway of its own, 1440x900, scale 1,
   a throwaway home with no keyring) and writes `web/e2e/parity/<scene>-web.png`, `-desktop.png`, `-side.png` and `-diff.png`
-  with the share of pixels that differ. Scenes: `login`, `shell-empty`, `timeline`. It needs `sway` and `grim`; verified on the
+  with the share of pixels that differ. Scenes: `login`, `shell-empty`, `timeline`, `shell` (four people in voice in music, one
+  muted, one deafened, unread and mention pills; alice is not in the call, the call bar is its own scene) and `shell-collapsed`. It needs `sway` and `grim`; verified on the
   dev machine (Arch, no X). A debug build reads `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD` and
   `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`) to get into a scene without typing (`desktop/src/ui/dev.rs`); a
   release build does not have that code. To add a scene, add an entry to `SCENES` in `parity.mjs`: the web steps, and the
-  `VESPER_DEV_*` state (a new kind of state goes in `dev.rs`).
+  `VESPER_DEV_*` state (a new kind of state goes in `dev.rs`), and `settings` for a `settings.json` written before the app starts
+  (`shell-collapsed` sets `sidebar_collapsed`). The desktop scenes drop the no-keyring note, which no web scene has.
 - Its lockfile pins `libc` 0.2.189 and `mio` 1.2.4 on purpose (see the ADR). Do not `cargo update` it as a whole either.
 
 ## Check before a PR

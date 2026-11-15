@@ -96,12 +96,15 @@ impl Vesper {
                         self.dev.step = Step::Room;
                     }
                     _ => {
+                        self.model.not_remembered = false;
                         self.dev.step = Step::Done;
                         ready("main");
                     }
                 }
             }
             Step::Room if self.model.log().is_some_and(|l| !l.messages.is_empty()) => {
+                // The throwaway home has no keyring on purpose: its note is not part of any web scene.
+                self.model.not_remembered = false;
                 // Nothing focused, as the web scenes' rest(): no caret or focus border in the picture.
                 self.key_focus.focus(window);
                 self.dev.step = Step::Done;

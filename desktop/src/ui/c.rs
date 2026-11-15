@@ -1,8 +1,9 @@
 //! The web app's base components (`web/src/lib/ui/c/`), with the metrics and colours of their `<style>` blocks. Every
 //! colour comes from the [`Tokens`](super::theme::Tokens) global, so a style or accent change repaints them.
 //!
-//! Not ported yet (each says where it would go): focus-visible rings (GPUI 0.2.2 has no focus-visible), the press
-//! scale and colour transitions (the motion stage), tooltips (`data-tip`), avatar pictures.
+//! Button and IconButton fade their hover colours in `--dur-1` (`motion::hover`). Not ported yet: focus-visible
+//! rings (GPUI 0.2.2 has no focus-visible), the press scale (GPUI scales only an svg), tooltips (`data-tip`), avatar
+//! pictures.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -19,10 +20,21 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::slider::{Slider, SliderState};
 
 use super::icons::{icon, spinner};
+use super::motion;
 use super::theme::{TEXT_LG, TEXT_SM, TEXT_XS, TextStepExt, tokens};
 
 type OnClick = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type OnBool = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+
+/// CSS `truncate`: one line cut with an ellipsis. GPUI's own `truncate()` (no wrap) measures the text once before its
+/// width is known and keeps that size, so it clips without an ellipsis; this wraps at the width and keeps one line.
+pub trait Ellipsis: Styled + Sized {
+    fn ellipsis(self) -> Self {
+        self.overflow_hidden().text_ellipsis().line_clamp(1)
+    }
+}
+
+impl<T: Styled> Ellipsis for T {}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Variant {
@@ -101,7 +113,8 @@ impl Styled for Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let (h, on_hover) = motion::hover(self.id.clone(), window, cx);
         let t = tokens(cx);
         let none: Hsla = transparent_black();
         // (fill, border, text) at rest, then on hover.
@@ -150,6 +163,13 @@ impl RenderOnce for Button {
         };
         let live = !disabled && !self.loading;
         let on_click = self.on_click.filter(|_| live);
+        // The 100 ms transition of fill, border and text.
+        let h = if live { h } else { 0. };
+        let rest = (
+            mix(rest.0, hover.0, h),
+            mix(rest.1, hover.1, h),
+            mix(rest.2, hover.2, h),
+        );
         let text = if self.loading { none } else { rest.2 };
         div()
             .id(self.id)
@@ -169,9 +189,7 @@ impl RenderOnce for Button {
             .text_step(TEXT_SM)
             .font_weight(t.weight_ui)
             .whitespace_nowrap()
-            .when(live, |d| {
-                d.hover(move |s| s.bg(hover.0).border_color(hover.1).text_color(hover.2))
-            })
+            .when(live, |d| d.on_hover(on_hover))
             .when_some(on_click, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)))
             .refine_style(&self.style)
             .when_some(self.icon, |d, name| d.child(icon(name).text_color(text)))
@@ -205,6 +223,7 @@ pub struct IconButton {
     pressed: bool,
     danger: bool,
     disabled: bool,
+    turn: bool,
     on_click: Option<OnClick>,
 }
 
@@ -216,8 +235,15 @@ impl IconButton {
             pressed: false,
             danger: false,
             disabled: false,
+            turn: false,
             on_click: None,
         }
+    }
+    /// The Settings gear: a third of a turn on hover (its six teeth line up again), `--dur-3`, ease-out. None under
+    /// reduced motion.
+    pub fn turn(mut self) -> Self {
+        self.turn = true;
+        self
     }
     pub fn pressed(mut self, on: bool) -> Self {
         self.pressed = on;
@@ -238,7 +264,16 @@ impl IconButton {
 }
 
 impl RenderOnce for IconButton {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let (h, on_hover) = motion::hover(self.id.clone(), window, cx);
+        let turn = self.turn.then(|| {
+            let m = &tokens(cx).motion;
+            let dur = m.or(m.dur_3, Duration::ZERO);
+            let id = ElementId::NamedChild(Box::new(self.id.clone()), "turn".into());
+            motion::transition(id, dur, window, cx)
+        });
+        let angle = turn.as_ref().map_or(0., |t| t.0 * 120.);
+        let turn = turn.map(|t| t.1);
         let t = tokens(cx);
         let fg: Hsla = if self.disabled {
             t.fg_disabled.into()
@@ -254,12 +289,21 @@ impl RenderOnce for IconButton {
         } else {
             t.fg.into()
         };
-        let (hover_bg, selected) = (t.bg_hover, t.bg_selected);
         let live = !self.disabled;
-        let group: SharedString = format!("ib-{:?}", self.id).into();
+        let h = if live { h } else { 0. };
+        let rest_bg: Hsla = if self.pressed {
+            t.bg_selected.into()
+        } else {
+            transparent_black()
+        };
+        let hover_bg: Hsla = if self.pressed {
+            t.bg_selected.into()
+        } else {
+            t.bg_hover.into()
+        };
+        let fg = mix(fg, hover_fg, h);
         div()
             .id(self.id)
-            .group(group.clone())
             .flex()
             .flex_none()
             .items_center()
@@ -267,14 +311,23 @@ impl RenderOnce for IconButton {
             .size(px(32.))
             .rounded(t.radius)
             .text_color(fg)
-            .when(self.pressed, |d| d.bg(selected))
-            .when(live, |d| d.hover(move |s| s.bg(hover_bg)))
+            .bg(mix(rest_bg, hover_bg, h))
+            .when(live, |d| {
+                d.on_hover(move |on, w, cx| {
+                    on_hover(on, w, cx);
+                    if let Some(f) = &turn {
+                        f(on, w, cx);
+                    }
+                })
+            })
             .when_some(self.on_click.filter(|_| live), |d, f| {
                 d.on_click(move |e, w, cx| f(e, w, cx))
             })
-            .child(icon(self.icon).text_color(fg).when(live, |i| {
-                i.group_hover(group, move |s| s.text_color(hover_fg))
-            }))
+            .child(
+                icon(self.icon)
+                    .text_color(fg)
+                    .with_transformation(Transformation::rotate(gpui::Radians(angle.to_radians()))),
+            )
     }
 }
 
@@ -685,6 +738,84 @@ impl RenderOnce for Avatar {
     }
 }
 
+/// `Badge.svelte`: an unread count (`--bg-selected`, `--fg-2`) or the `@n` mention pill (`--accent`, `--on-accent`):
+/// 16 px tall, at least 16 wide, 6 px sides, fully round, 12/16 `--weight-strong`; above 99 it reads `99+`. `pose` is
+/// the `bump` preset while it pops in: the web scales it from 0.6, here it is drawn smaller in the middle of its own
+/// full-size box, so nothing around it moves.
+#[derive(IntoElement)]
+pub struct Badge {
+    mention: bool,
+    n: i64,
+    pose: Option<motion::Pose>,
+}
+
+impl Badge {
+    pub fn new(mention: bool, n: i64) -> Self {
+        Badge {
+            mention,
+            n,
+            pose: None,
+        }
+    }
+    pub fn pose(mut self, p: Option<motion::Pose>) -> Self {
+        self.pose = p;
+        self
+    }
+    /// What it reads, which is also what a bump is keyed on.
+    pub fn text(mention: bool, n: i64) -> String {
+        let n = if n > 99 { "99+".into() } else { n.to_string() };
+        if mention { format!("@{n}") } else { n }
+    }
+}
+
+impl RenderOnce for Badge {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = tokens(cx);
+        let (bg, fg) = if self.mention {
+            (t.accent, t.on_accent)
+        } else {
+            (t.bg_selected, t.fg_2)
+        };
+        let text = Badge::text(self.mention, self.n);
+        let pill = |k: f32| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .h(px(16. * k))
+                .min_w(px(16. * k))
+                .px(px(6. * k))
+                .rounded_full()
+                .bg(bg)
+                .text_color(fg)
+                .text_size(px(12. * k))
+                .line_height(px(16. * k))
+                .font_weight(t.weight_strong)
+                .whitespace_nowrap()
+                .child(text.clone())
+        };
+        match self.pose {
+            None => pill(1.).into_any_element(),
+            Some(p) => div()
+                .relative()
+                .flex_none()
+                .child(pill(1.).invisible())
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .opacity(p.opacity)
+                        .child(pill(0.6 + 0.4 * p.t)),
+                )
+                .into_any_element(),
+        }
+    }
+}
+
 /// `Popover.svelte`'s box: 176 to 320 px wide, 4 px padding, 1 px `--line-subtle`, `--radius-lg`, `--bg-raised`,
 /// 13/20 text, `--shadow-float`. Place it with `gpui::anchored()`.
 pub fn popover_frame(cx: &App) -> Div {
@@ -878,8 +1009,8 @@ impl RenderOnce for Dialog {
     }
 }
 
-/// `a` moved `t` of the way to `b`, in sRGB.
-fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
+/// `a` moved `t` of the way to `b`, in sRGB (CSS transitions mix legacy colours there too).
+pub fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
     let (a, b) = (a.to_rgb(), b.to_rgb());
     let l = |x: f32, y: f32| x + (y - x) * t;
     gpui::Rgba {

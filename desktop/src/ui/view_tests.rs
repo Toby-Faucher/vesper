@@ -204,7 +204,20 @@ fn the_room_view_shows_rooms_and_messages_and_sends(cx: &mut TestAppContext) {
             .iter()
             .any(|c| matches!(c, Cmd::LoadLatest(2)))
     );
-    view.read_with(cx, |v, _| assert_eq!(v.model.active, Some(2)));
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.active, Some(2));
+        assert!(v.side.gliding(), "the selected fill glides from general");
+    });
+
+    // Hide the sidebar: the room's header gets Show sidebar, and the choice is in the settings.
+    click(cx, "hide-sidebar");
+    view.read_with(cx, |v, _| assert!(v.model.settings.sidebar_collapsed));
+    click(cx, "show-sidebar");
+    view.read_with(cx, |v, _| assert!(!v.model.settings.sidebar_collapsed));
+
+    // The account menu: Log out.
+    click(cx, "account");
+    assert!(cx.debug_bounds("account-menu").is_some());
 }
 
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
@@ -290,7 +303,6 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
         "call-mute",
         "call-deafen",
         "call-leave",
-        "leave-voice",
         "call-person-a",
         "call-person-b",
         "volume-b",

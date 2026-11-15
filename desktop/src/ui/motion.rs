@@ -1,5 +1,22 @@
-//! CSS `cubic-bezier()` easing for GPUI animations: `Animation::new(d).with_easing(cubic_bezier(0.2, 0., 0., 1.))`.
-//! The motion tokens and reduced motion live in `theme::Motion`.
+//! The web's motion (`web/src/lib/ui/motion.ts` and the CSS transitions) for GPUI:
+//!
+//! - [`cubic_bezier`] and [`ease`]: CSS easing, also for `Animation::new(d).with_easing(..)`.
+//! - [`Tween`]: a number easing to a target (the sidebar slide, the selected room's glide).
+//! - [`hover`]: a CSS `transition` on hover (fills and colours, `--dur-1`, ease-out), kept per element id.
+//! - [`Roster`] and [`pose`]: things that come and go (people in voice, unread badges) and the preset pose of each
+//!   one at a time: [`ROW`] and [`BUMP`] in, a reversed shorter ease-in out, and `--dur-calm` opacity only under
+//!   reduced motion.
+//!
+//! The tokens and reduced motion live in `theme::Motion`. Anything moving asks for the next frame itself
+//! (`window.request_animation_frame()`), so an idle window draws nothing.
+
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::time::{Duration, Instant};
+
+use gpui::{App, ElementId, Window};
+
+use super::theme::{Motion, tokens};
 
 /// The easing CSS draws for `cubic-bezier(x1, y1, x2, y2)`: progress in time (0 to 1) to progress of the value.
 pub fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32) -> impl Fn(f32) -> f32 + Clone + 'static {
@@ -38,10 +55,217 @@ pub fn ease(c: [f32; 4]) -> impl Fn(f32) -> f32 + Clone + 'static {
     cubic_bezier(c[0], c[1], c[2], c[3])
 }
 
+/// A value moving from `from` to `to` over `dur` from `start`, eased.
+#[derive(Clone, Debug)]
+pub struct Tween {
+    from: f32,
+    to: f32,
+    start: Instant,
+    dur: Duration,
+    ease: [f32; 4],
+}
+
+impl Tween {
+    /// At rest at `v`.
+    pub fn new(v: f32) -> Tween {
+        Tween {
+            from: v,
+            to: v,
+            start: Instant::now(),
+            dur: Duration::ZERO,
+            ease: [0., 0., 1., 1.],
+        }
+    }
+
+    pub fn target(&self) -> f32 {
+        self.to
+    }
+
+    /// The value at `now`.
+    pub fn at(&self, now: Instant) -> f32 {
+        let t = fraction(self.start, now, self.dur);
+        self.from + (self.to - self.from) * ease(self.ease)(t)
+    }
+
+    pub fn running(&self, now: Instant) -> bool {
+        fraction(self.start, now, self.dur) < 1.
+    }
+
+    /// Heads for `v` from wherever it is now, like a CSS transition that changes target half way.
+    pub fn go(&mut self, v: f32, now: Instant, dur: Duration, ease: [f32; 4]) {
+        if v == self.to {
+            return;
+        }
+        self.from = self.at(now);
+        (self.to, self.start, self.dur, self.ease) = (v, now, dur, ease);
+    }
+}
+
+/// How far through `dur` `now` is, 0 to 1 (1 for a zero duration).
+pub fn fraction(start: Instant, now: Instant, dur: Duration) -> f32 {
+    if dur.is_zero() {
+        return 1.;
+    }
+    (now.saturating_duration_since(start).as_secs_f32() / dur.as_secs_f32()).clamp(0., 1.)
+}
+
+/// A hover transition (`transition: background-color var(--dur-1) var(--ease-out)`): 0 at rest, 1 hovered, eased
+/// in between. Kept per `id` across frames; give the element the same id and pass the listener to its `on_hover`.
+/// Instant under reduced motion, as the web's transitions are.
+pub fn hover(
+    id: impl Into<ElementId>,
+    window: &mut Window,
+    cx: &mut App,
+) -> (f32, impl Fn(&bool, &mut Window, &mut App) + 'static) {
+    let m = &tokens(cx).motion;
+    let dur = m.or(m.dur_1, Duration::ZERO);
+    transition(id, dur, window, cx)
+}
+
+/// [`hover`] with its own duration (the gear's turn is `--dur-3`). `id` must differ from other transitions'.
+pub fn transition(
+    id: impl Into<ElementId>,
+    dur: Duration,
+    window: &mut Window,
+    cx: &mut App,
+) -> (f32, impl Fn(&bool, &mut Window, &mut App) + 'static) {
+    let ease = tokens(cx).motion.ease_out;
+    let state = window.use_keyed_state(id, cx, |_, _| Tween::new(0.));
+    let now = Instant::now();
+    let t = state.read(cx);
+    let v = t.at(now);
+    if t.running(now) {
+        window.request_animation_frame();
+    }
+    let listen = move |on: &bool, _: &mut Window, cx: &mut App| {
+        let to = if *on { 1. } else { 0. };
+        state.update(cx, |t, cx| {
+            t.go(to, Instant::now(), dur, ease);
+            cx.notify();
+        });
+    };
+    (v, listen)
+}
+
+/// A motion preset of `motion.ts`: the move's length and easing on the way in.
+#[derive(Clone, Copy, Debug)]
+pub struct Preset {
+    pub dur: fn(&Motion) -> Duration,
+    pub ease: fn(&Motion) -> [f32; 4],
+}
+
+/// `row`: a person joins or leaves voice, 8 px from the left, `--dur-2`.
+pub const ROW: Preset = Preset {
+    dur: |m| m.dur_2,
+    ease: |m| m.ease_out,
+};
+/// `bump`: an unread count comes or changes, scale 0.6 to 1, `--dur-2`, `--ease-pop`.
+pub const BUMP: Preset = Preset {
+    dur: |m| m.dur_2,
+    ease: |m| m.ease_pop,
+};
+
+/// Where a preset is: `opacity`, and `t`, how far the move is from its start pose (0) to its rest pose (1). Under
+/// reduced motion `t` stays 1 and only the opacity fades.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pose {
+    pub opacity: f32,
+    pub t: f32,
+}
+
+/// The pose of `p` started at `start`: entering, or leaving (`out`: backwards in `--dur-out`, ease-in). `None` once
+/// it is over.
+pub fn pose(m: &Motion, p: Preset, out: bool, start: Instant, now: Instant) -> Option<Pose> {
+    let dur = if m.reduced {
+        m.dur_calm
+    } else if out {
+        m.dur_out
+    } else {
+        (p.dur)(m)
+    };
+    let x = fraction(start, now, dur);
+    if x >= 1. {
+        return None;
+    }
+    let e = ease(if out { m.ease_in } else { (p.ease)(m) })(x);
+    // anime.js eases every property with the one easing; the opacity is clamped where ease-pop overshoots.
+    let opacity = (if out { 1. - e } else { e }).clamp(0., 1.);
+    let t = if m.reduced {
+        1.
+    } else if out {
+        1. - e
+    } else {
+        e
+    };
+    Some(Pose { opacity, t })
+}
+
+/// Things that come and go, by key: when each came, and the ones that left with where they were and when, kept until
+/// `keep` has passed. While calm (`settle`, like `motion.ts`: the first hello fills the sidebar), arrivals count as
+/// long since and departures are not kept.
+#[derive(Debug)]
+pub struct Roster<K, V> {
+    came: HashMap<K, Instant>,
+    /// (key, value, index it had, when it left).
+    gone: Vec<(K, V, usize, Instant)>,
+    last: Vec<(K, V)>,
+    calm_until: Option<Instant>,
+}
+
+impl<K, V> Default for Roster<K, V> {
+    fn default() -> Self {
+        Roster {
+            came: HashMap::new(),
+            gone: vec![],
+            last: vec![],
+            calm_until: None,
+        }
+    }
+}
+
+impl<K: Hash + Eq + Clone, V: Clone> Roster<K, V> {
+    /// No motion until `until`.
+    pub fn settle(&mut self, until: Instant) {
+        self.calm_until = Some(until);
+    }
+
+    /// The keys shown now, in order.
+    pub fn sync(&mut self, now: Instant, keep: Duration, cur: Vec<(K, V)>) {
+        let calm = self.calm_until.is_some_and(|u| now < u);
+        let long_ago = now.checked_sub(Duration::from_secs(60)).unwrap_or(now);
+        for (k, _) in &cur {
+            if !self.came.contains_key(k) {
+                self.came
+                    .insert(k.clone(), if calm { long_ago } else { now });
+            }
+            self.gone.retain(|g| &g.0 != k);
+        }
+        for (i, (k, v)) in self.last.iter().enumerate() {
+            if !cur.iter().any(|c| &c.0 == k) {
+                self.came.remove(k);
+                if !calm {
+                    self.gone.push((k.clone(), v.clone(), i, now));
+                }
+            }
+        }
+        self.gone
+            .retain(|g| now.saturating_duration_since(g.3) < keep);
+        self.last = cur;
+    }
+
+    /// When `k` came (long ago for the ones there from the start).
+    pub fn came(&self, k: &K) -> Option<Instant> {
+        self.came.get(k).copied()
+    }
+
+    pub fn gone(&self) -> &[(K, V, usize, Instant)] {
+        &self.gone
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::theme::Motion;
 
     #[test]
     fn matches_css_cubic_bezier() {
@@ -79,5 +303,66 @@ mod tests {
         assert_eq!(m.dur(m.dur_3), m.dur_3);
         m.reduced = true;
         assert_eq!(m.dur(m.dur_3), m.dur_calm);
+    }
+
+    #[test]
+    fn a_tween_eases_and_turns_back_from_where_it_is() {
+        let m = Motion::default();
+        let t0 = Instant::now();
+        let mut t = Tween::new(0.);
+        t.go(1., t0, m.dur_1, m.ease_out);
+        let half = t.at(t0 + m.dur_1 / 2);
+        assert!((half - ease(m.ease_out)(0.5)).abs() < 1e-5, "{half}");
+        assert!(t.running(t0 + m.dur_1 / 2) && !t.running(t0 + m.dur_1));
+        assert_eq!(t.at(t0 + m.dur_1), 1.);
+        // Back half way: from the value it had, not from 1.
+        t.go(0., t0 + m.dur_1 / 2, m.dur_1, m.ease_out);
+        assert!((t.at(t0 + m.dur_1 / 2) - half).abs() < 1e-5);
+        assert_eq!(t.at(t0 + m.dur_1 * 2), 0.);
+    }
+
+    #[test]
+    fn presets_pose_in_and_out() {
+        let mut m = Motion::default();
+        let t0 = Instant::now();
+        let p = pose(&m, ROW, false, t0, t0 + m.dur_2 / 2).unwrap();
+        assert!((p.t - ease(m.ease_out)(0.5)).abs() < 1e-5 && p.opacity == p.t);
+        assert!(pose(&m, ROW, false, t0, t0 + m.dur_2).is_none());
+        // ease-pop overshoots the scale, never the opacity.
+        let b = pose(&m, BUMP, false, t0, t0 + m.dur_2 * 3 / 4).unwrap();
+        assert!(b.t > 1. && b.opacity == 1.);
+        let o = pose(&m, ROW, true, t0, t0 + m.dur_out / 2).unwrap();
+        assert!((o.t - (1. - ease(m.ease_in)(0.5))).abs() < 1e-5);
+        assert!(pose(&m, ROW, true, t0, t0 + m.dur_out).is_none());
+        m.reduced = true;
+        let r = pose(&m, ROW, false, t0, t0 + m.dur_calm / 2).unwrap();
+        assert_eq!(r.t, 1., "no move under reduced motion");
+        assert!(r.opacity > 0. && r.opacity < 1.);
+    }
+
+    #[test]
+    fn a_roster_sees_who_came_and_who_left() {
+        let t0 = Instant::now();
+        let keep = Duration::from_millis(120);
+        let mut r: Roster<&str, i32> = Roster::default();
+        r.settle(t0 + Duration::from_secs(1));
+        r.sync(t0, keep, vec![("a", 1), ("b", 2)]);
+        assert!(
+            r.came(&"a").unwrap() < t0,
+            "there from the start: no motion"
+        );
+        r.sync(t0, keep, vec![("b", 2)]);
+        assert!(r.gone().is_empty(), "calm: no exit");
+        let t1 = t0 + Duration::from_secs(2);
+        r.sync(t1, keep, vec![("b", 2), ("c", 3)]);
+        assert_eq!(r.came(&"c"), Some(t1));
+        r.sync(t1, keep, vec![("c", 3)]);
+        assert_eq!(r.gone(), [("b", 2, 0, t1)]);
+        r.sync(t1 + keep, keep, vec![("c", 3)]);
+        assert!(r.gone().is_empty(), "dropped once its exit is over");
+        // Back before the exit ended: in again.
+        r.sync(t1, keep, vec![]);
+        r.sync(t1, keep, vec![("c", 3)]);
+        assert!(r.gone().is_empty() && r.came(&"c") == Some(t1));
     }
 }

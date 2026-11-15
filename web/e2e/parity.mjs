@@ -11,8 +11,8 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ORIGIN, browser, openRoom, sleep, startServer, track } from './lib.mjs';
-import { VIEWPORT, cast, home, rest, shotBrowser } from './shotlib.mjs';
+import { ORIGIN, browser, inVoice, openRoom, signup, sleep, startServer, track } from './lib.mjs';
+import { LONG_ROOM, VIEWPORT, api, cast, home, rest, shotBrowser } from './shotlib.mjs';
 
 const out = fileURLToPath(new URL('parity/', import.meta.url));
 const app = process.env.VESPER_DESKTOP_BIN || fileURLToPath(new URL('../../desktop/target/debug/vesper-desktop', import.meta.url));
@@ -20,7 +20,7 @@ const TOLERANCE = 24;
 const PASSWORD = 'test-password-1'; // what signup() in lib.mjs gives every account
 
 // web(ctx) returns the page to shoot; desktop is the VESPER_DEV_* state: `user` signs in, `scene` is sign-in, room:<name>
-// or settings (src/ui/dev.rs).
+// or settings (src/ui/dev.rs), and `settings` is written to the app's settings.json first.
 // The desktop has no passkeys, so the web login is shot without the passkey button.
 const SCENES = {
   login: {
@@ -46,7 +46,56 @@ const SCENES = {
     },
     desktop: { user: 'alice', scene: 'room:general' },
   },
+  shell: {
+    web: async (ctx) => { await house(ctx); await openRoom(ctx.alice.page, 'general'); return ctx.alice.page; },
+    desktop: { user: 'alice', scene: 'room:general' },
+  },
+  'shell-collapsed': {
+    web: async (ctx) => {
+      await house(ctx);
+      const page = ctx.alice.page;
+      await openRoom(page, 'general');
+      await page.getByRole('button', { name: 'Hide sidebar' }).click();
+      await page.getByRole('button', { name: 'Show sidebar' }).waitFor();
+      await sleep(400); // the slide
+      return page;
+    },
+    desktop: { user: 'alice', scene: 'room:general', settings: { sidebar_collapsed: true } },
+  },
 };
+
+// shots.mjs's full house without alice in the call (the call bar is its own scene): bob, carol (muted), dave (deafened)
+// and Bartholomew in voice in music, unread counts on music and a mention in the long room. The browsers stay open.
+let housed;
+function house({ alice, bob, seed }) {
+  housed ??= (async () => {
+    await seed();
+    const rooms = await api(alice.page, 'GET', '/api/rooms');
+    const id = (name) => rooms.find((r) => r.name === name).id;
+    const pages = [bob.page];
+    for (const [name, display] of [['carol', 'carol'], ['dave', 'dave'], ['bart', 'Bartholomew Featherstonehaugh']]) {
+      const { url } = await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 });
+      const b = await shotBrowser(name, [], { viewport: VIEWPORT });
+      await signup(b.page, url, name, display);
+      pages.push(b.page);
+    }
+    for (const p of pages) {
+      await home(p);
+      await openRoom(p, 'music');
+      await p.getByRole('button', { name: 'Join voice' }).click();
+      await p.getByRole('button', { name: 'Leave' }).waitFor();
+    }
+    await pages[1].getByRole('button', { name: 'Mute', exact: true }).click();
+    await pages[2].getByRole('button', { name: 'Deafen', exact: true }).click();
+    await home(alice.page);
+    await openRoom(alice.page, 'general');
+    for (const body of ['set list for friday is up', 'who has the good speaker cable']) await api(bob.page, 'POST', `/api/rooms/${id('music')}/messages`, { body });
+    for (const body of ['saturday works for me', '@alice can you book the room?', 'I will bring snacks'])
+      await api(bob.page, 'POST', `/api/rooms/${id(LONG_ROOM)}/messages`, { body });
+    for (const n of ['bob', 'carol', 'dave', 'Bartholomew']) await inVoice(alice.page, n).waitFor();
+  })();
+  return housed;
+}
 
 // The comparison, drawn in a page: side by side, the diff picture and the share of pixels that differ.
 async function compare(webPng, deskPng, name) {
@@ -112,6 +161,10 @@ async function startSway(dir) {
 // The desktop app in sway, put into `state`; resolves once it printed VESPER_DEV_READY and had time to draw.
 async function shootDesktop(sway, state, path, dir) {
   const home = await mkdtemp(join(dir, 'home-'));
+  if (state.settings) {
+    await mkdir(join(home, '.config/Vesper'), { recursive: true });
+    await writeFile(join(home, '.config/Vesper/settings.json'), JSON.stringify(state.settings));
+  }
   const env = {
     ...process.env,
     HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local/share'), XDG_CACHE_HOME: join(home, '.cache'),

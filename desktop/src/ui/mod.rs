@@ -12,6 +12,7 @@ pub mod motion;
 mod room;
 pub mod settings;
 mod share;
+mod sidebar;
 mod sign_in;
 pub mod theme;
 mod tray;
@@ -203,6 +204,8 @@ pub struct Vesper {
     /// Sends the next `watch off` when it is due.
     watch_timer: Option<(Instant, Task<()>)>,
     _tray: Option<tray_icon::TrayIcon>,
+    /// The sidebar's menu, folds and motion.
+    side: sidebar::Side,
     /// Debug builds: what the parity harness asked for (`VESPER_DEV_*`).
     #[cfg(debug_assertions)]
     dev: dev::Dev,
@@ -296,6 +299,7 @@ impl Vesper {
             screen: None,
             watch_timer: None,
             _tray: None,
+            side: sidebar::Side::default(),
             #[cfg(debug_assertions)]
             dev: dev::Dev::from_env(),
             _subs: subs,
@@ -413,6 +417,7 @@ impl Vesper {
     fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let cmds = self.model.sign_out();
         self.run(cmds);
+        self.side = sidebar::Side::default();
         for (_, i) in self.images.drain() {
             if let chat::Img::Ready(i) = i {
                 let _ = window.drop_image(i);
@@ -425,6 +430,11 @@ impl Vesper {
     }
 
     fn open_room(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        let was = self.model.active.filter(|_| !self.settings_open);
+        self.settings_open = false;
+        if was.is_some_and(|w| w != id) {
+            self.side.glide_from(was, theme::tokens(cx).motion.reduced);
+        }
         let cmds = self.model.open_room(id);
         self.run(cmds);
         self.composer.update(cx, |i, cx| i.focus(window, cx));

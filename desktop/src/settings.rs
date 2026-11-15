@@ -35,6 +35,8 @@ pub struct Settings {
     pub start_with_computer: bool,
     /// Each person's volume, 0 to 400 percent, by user id. Applied whenever they are in a call.
     pub volumes: HashMap<String, f32>,
+    /// The sidebar is hidden (the web keeps this in localStorage).
+    pub sidebar_collapsed: bool,
 }
 
 impl Default for Settings {
@@ -50,6 +52,7 @@ impl Default for Settings {
             output_device: None,
             start_with_computer: false,
             volumes: HashMap::new(),
+            sidebar_collapsed: false,
         }
     }
 }
@@ -130,6 +133,7 @@ mod tests {
             output_device: None,
             start_with_computer: true,
             volumes: HashMap::from([("0123456789abcdef0123456789abcdef".into(), 250.0)]),
+            sidebar_collapsed: true,
         };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);

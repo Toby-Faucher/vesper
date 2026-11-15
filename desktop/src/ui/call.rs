@@ -10,7 +10,6 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::slider::{Slider, SliderEvent, SliderState};
 use gpui_component::{Disableable, Selectable, h_flex, v_flex};
 
-use super::room::title;
 use super::sign_in::TextLine;
 use super::{Vesper, theme};
 use crate::model::{HEADPHONES, Model, Phase, REJOINING};
@@ -151,7 +150,7 @@ impl Vesper {
         let room = c
             .room
             .and_then(|id| self.model.state.find_room(id))
-            .map(title)
+            .map(|r| r.name.clone())
             .unwrap_or_default();
         let status = if c.connected {
             "Connected"
