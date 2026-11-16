@@ -134,7 +134,10 @@ fn flat(nodes: &[Md], look: Look, f: &mut Flat, c: &Ctx) {
             // PersonButton, whose `font: inherit; color: inherit; padding: 0` wins over those classes: only the fill
             // shows.
             Md::Mention(u) => {
-                let mine = u.eq_ignore_ascii_case(&c.me);
+                // @everyone and @here reach the reader too: drawn as a mention of them, as on the web.
+                let mine = u.eq_ignore_ascii_case(&c.me)
+                    || u.eq_ignore_ascii_case("everyone")
+                    || u.eq_ignore_ascii_case("here");
                 let (bg, fg) = if mine {
                     (t.accent_subtle, t.accent_fg)
                 } else {

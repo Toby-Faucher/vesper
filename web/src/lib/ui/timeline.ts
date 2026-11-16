@@ -140,6 +140,15 @@ export function mentionable<U extends Person>(q: string, users: U[], room: Seen,
   return out.slice(0, max).map((x) => x.u);
 }
 
+/** `@everyone` reaches every member who can see the room, `@here` those online now (the server resolves both). */
+export const GROUP_MENTIONS = [
+  { username: 'everyone', label: 'Everyone in this room' },
+  { username: 'here', label: 'Everyone online now' },
+] as const;
+
+/** The group mentions to offer for `@q`: those that start with it. None in a DM, where they add nothing. */
+export const groupMentions = (q: string, dm: boolean) => (dm ? [] : GROUP_MENTIONS.filter((g) => g.username.startsWith(q.toLowerCase())));
+
 /** "Sam is typing", "Sam and Alex are typing", "Several people are typing", or '' for nobody. */
 export function typingLine(names: string[]): string {
   if (!names.length) return '';

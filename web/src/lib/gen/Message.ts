@@ -5,7 +5,7 @@ import type { ReplyPreview } from "./ReplyPreview";
 
 /**
  * A chat message. A deleted one keeps its id and times with an empty body and no reactions,
- * attachments, mentions or pin.
+ * attachments, mentions or pin. A live one has an empty body only when it has attachments.
  */
 export type Message = { id: number, room_id: number, author_id: string, body: string, created_at: number, edited_at: number | null, 
 /**
@@ -14,6 +14,6 @@ export type Message = { id: number, room_id: number, author_id: string, body: st
  */
 updated_at: number, deleted: boolean, reply_to: ReplyPreview | null, reactions: Array<Reaction>, attachments: Array<Attachment>, 
 /**
- * User ids mentioned in the body.
+ * User ids mentioned in the body; `@everyone` and `@here` add the members they reach.
  */
 mentions: Array<string>, pinned: boolean, };

@@ -67,6 +67,7 @@ The "Not verified" list at the end says what was only read.
   | `---`, `***` or `___` alone on a line | a rule |
   | a bare `http://` or `https://` URL | a link |
   | `@name` | a mention |
+  | `@everyone`, `@here` | a mention of every member, or of every member online now (drawn like a mention of you) |
 
   Not supported, shown as typed: raw HTML, images (`![x](y)`), `[text](url)` links (the text could hide where a link goes),
   tables, task lists, backslash escapes, setext (underlined) headings and indented code. An unclosed marker is text.
@@ -405,7 +406,10 @@ Chat (`api_messages.rs`, store `messages.rs`): a room you cannot see, and a mess
 an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets that can see the room get them. Rules:
 
 - **Body.** NFC, trimmed, 1 to 4000 characters (not bytes), no control characters except newline and tab, else 400. The same
-  rule holds for an edit. Bodies are never logged.
+  rule holds for an edit. A message with files may have an empty body: a message of files has no text (migration
+  `0015_message_files_only.sql` rebuilds `messages` so its check allows that and copies every row). Clients used to send the
+  file names as the body; they still hide a body that is only those names, in any order. A reply to a message of files shows
+  its first file's name. Bodies are never logged.
 - **Who.** Anyone who can see the room posts, reacts and pins. Only the author edits (403 for anyone else, the owner too). The author
   deletes, and a moderator or the owner deletes anyone's (403 for a member on someone else's). A delete is soft: the body is
   emptied, and reactions, mentions and the pin go. A deleted message is 404 for edit, delete, reaction and pin.
@@ -414,6 +418,9 @@ an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets th
 - **Replies.** `reply_to` may name a deleted message of the room; the reply shows it as deleted. Allowed on purpose.
 - **Mentions.** `@name` at a word start, the name being `[a-z0-9_]{3,24}` after an ASCII lowercase, at most 20 per message, read again
   on each edit. A name that is unknown, banned or cannot see the room is dropped, so it never counts as a mention.
+  `@everyone` mentions every member who can see the room and is not banned, the author aside; `@here` only those of them
+  with a socket open at that moment. They are stored as mentions of each person, so unread counts, highlights and pushes
+  work as for `@name`. Signup refuses the usernames `everyone` and `here`. The composer offers both (not in a DM).
 - **Reactions.** 1 to 32 bytes with no ASCII letter or digit, whitespace or control character (400). At most 20 different ones per message (409).
 - **Pins.** At most 50 per room (409). A DM has no pins: the pin route answers 403 for a DM message.
 - **Read marker.** `last_read_id` is 0 or a message of that room (else 400), so it cannot be set past future messages. It never
@@ -489,7 +496,11 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
   5987), so a name can not add a header.
 - **Served headers.** `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` (kept in place of the page's policy),
   `Cross-Origin-Resource-Policy: same-origin`, `Cache-Control: private, max-age=31536000, immutable` (the file behind an id never changes).
-- **Who.** Attaching (`SendMessage.attachments`) needs your own upload, not attached yet, in the same room (else 409). An attached
+- **Client retries.** The web upload tray (`tray.svelte.ts`) runs 3 uploads at once. A network error or a 5xx other than 507 is
+  tried again by itself after 0.5, 1.5 and 4 s; after the third it fails and the row shows Retry. A full quota, a file too large
+  and a rate limit fail at once. Unit tests (`tray.test.ts`); not verified in a real browser.
+- **Who.** Attaching (`SendMessage.attachments`) needs your own upload, not attached yet, in the same room (else 409). One send
+  attaches every file or none (one transaction). An attached
   file is served to anyone who can see the room; one not attached yet only to its uploader. Everything else is the same 404 as an
   unknown id.
 - **Removal.** Deleting a message deletes its files. Uploads still not attached after 24 h are swept every hour (and at start).

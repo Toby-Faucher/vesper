@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../gen/Message';
 import { parse } from '../markdown';
-import { arrivals, canSee, dayLabel, firstUnreadInPage, follows, isLong, mentionQuery, mentionable, plain, rows, typingLine } from './timeline';
+import { arrivals, canSee, dayLabel, firstUnreadInPage, follows, groupMentions, isLong, mentionQuery, mentionable, plain, rows, typingLine } from './timeline';
 
 const TZ = 'Europe/London';
 // 2026-10-27 is a Tuesday. 23:58 London time (GMT, after the October change) is 23:58 UTC.
@@ -95,6 +95,15 @@ describe('isLong', () => {
     expect(isLong('a\n'.repeat(20))).toBe(false);
     expect(isLong('a\n'.repeat(21))).toBe(true);
     expect(isLong('x'.repeat(2001))).toBe(true);
+  });
+});
+
+describe('groupMentions', () => {
+  it('offers everyone and here by prefix, never in a DM', () => {
+    expect(groupMentions('', false).map((g) => g.username)).toEqual(['everyone', 'here']);
+    expect(groupMentions('He', false).map((g) => g.username)).toEqual(['here']);
+    expect(groupMentions('x', false)).toEqual([]);
+    expect(groupMentions('', true)).toEqual([]);
   });
 });
 

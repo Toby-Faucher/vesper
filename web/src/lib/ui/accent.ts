@@ -56,7 +56,7 @@ export function roles(fill: string, scheme: Scheme = 'dark'): Record<string, str
       '--accent-hover': mix(f, BLACK, 0.12),
       '--on-accent': WHITE,
       '--accent-fg': dark(f, (x) => contrast(x, S.app) >= 4.5 && contrast(x, subtle) >= 4.5), // links, mentions, the unread line
-      '--accent-subtle': subtle, // soft fills, text selection
+      '--accent-subtle': subtle, // soft fills
       '--accent-line': mix(f, S.app, 0.5),
       '--focus': f,
     };
@@ -66,7 +66,7 @@ export function roles(fill: string, scheme: Scheme = 'dark'): Record<string, str
     '--accent-hover': mix(fill, WHITE, 0.15),
     '--on-accent': SURFACE.app,
     '--accent-fg': mix(fill, SURFACE.fg, 0.2), // links, mentions, the unread line
-    '--accent-subtle': mix(fill, SURFACE.app, 0.82), // soft fills, text selection
+    '--accent-subtle': mix(fill, SURFACE.app, 0.82), // soft fills
     '--accent-line': mix(fill, SURFACE.app, 0.5),
     '--focus': fill,
   };

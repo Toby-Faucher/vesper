@@ -48,6 +48,9 @@ tabular figures.
   the accent.
 - Amber means one of five things: the primary action, focus, a selection marker, a mention, or the unread line. A view has
   one amber fill at most. Text on an amber fill is near-black (white in the light scheme).
+- Selected text has the accent at 30% opacity behind it (`--selection` in `tokens.css`), in both schemes, on the page,
+  in inputs and in the composer. Over the page that is `#533f0d` in dark and `#ddd0b1` in light for amber. The desktop app
+  uses the same: the accent at alpha 0.30 over the surface.
 - Warnings use their own orange plus an icon and words. They never use amber.
 - A person's colour shows only on their avatar and their speaking ring. Names, text, row borders and messages stay grey.
   There are no role colours.

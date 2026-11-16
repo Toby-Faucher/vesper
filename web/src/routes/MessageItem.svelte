@@ -16,6 +16,7 @@
   import { chat, edit, pin, react, remove } from '../lib/chat.svelte';
   import type { Message } from '../lib/gen/Message';
   import * as I from '../lib/ui/icons';
+  import { namesOnly } from '../lib/ui/attachments';
   import { isLong, plain } from '../lib/ui/timeline';
   import { isSendKey } from '../lib/ui/keys';
   import { copyText } from '../lib/ui/clipboard';
@@ -63,8 +64,8 @@
   const mentioned = $derived(!m.deleted && m.mentions.includes(myId));
   const nodes = $derived(parse(m.body));
   const long = $derived(isLong(m.body));
-  // A message sent with files and no text is stored with the file names as its body (the server needs one): do not show it twice.
-  const filler = $derived(m.attachments.length > 0 && m.body === m.attachments.map((a) => a.name).join(', '));
+  // A message of files has no text. An older one carries the file names as its body: not shown twice.
+  const filler = $derived(!m.body || namesOnly(m.body, m.attachments));
   const hm = (ms: number) => clock.format(ms);
   const full = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'full', timeStyle: 'short' });
   // The gutter has room for "7:26", not "07:26 AM": the hour and minute only (the title has the full date).
@@ -90,7 +91,7 @@
 
   let fromComposer = false; // opened by Up in the composer: focus goes back there
   function startEditing(composer = false) {
-    editText = m.body;
+    editText = filler ? '' : m.body;
     editing = true;
     fromComposer = composer;
   }
@@ -107,7 +108,7 @@
     else moreEl?.focus(); // Edit lives in the More menu: focus goes back to the button that opened it
   }
   async function save() {
-    if (!editText.trim() || saving) return;
+    if ((!editText.trim() && !m.attachments.length) || saving) return; // a message of files may lose its text
     saving = true;
     const ok = await act(() => edit(m.id, editText));
     saving = false;

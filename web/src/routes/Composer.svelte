@@ -18,7 +18,7 @@
   import { isSendKey } from '../lib/ui/keys';
   import { UI_MESSAGES } from '../lib/ui/messages';
   import { loadUsers } from '../lib/ui/users';
-  import { mentionQuery, mentionable, plain, typingLine } from '../lib/ui/timeline';
+  import { groupMentions, mentionQuery, mentionable, plain, typingLine } from '../lib/ui/timeline';
   import Avatar from '../lib/ui/c/Avatar.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
   import IconButton from '../lib/ui/c/IconButton.svelte';
@@ -79,7 +79,9 @@
   // Polite, and only when the count changes: not per progress step. A failure has its own alert in the row.
   const trayLine = $derived(busy ? UI_MESSAGES.uploading(files.filter((i) => i.state === 'queued' || i.state === 'uploading').length) : done.length ? UI_MESSAGES.filesReady(done.length) : '');
   const canSend = $derived(online && over <= 0 && !busy && !sending && (!!draft.trim() || done.length > 0));
-  const people = $derived(mention && room ? mentionable(mention.q, Object.values(session.state.users), room, myId) : []);
+  const groups = $derived(mention && room ? groupMentions(mention.q, room.kind === 'dm') : []);
+  // The list: @everyone and @here first, then people. Each option is one name to insert.
+  const people = $derived(mention && room ? [...groups, ...mentionable(mention.q, Object.values(session.state.users), room, myId)] : []);
   const listOpen = $derived(people.length > 0);
   const typingIds = $derived(typers(chat.state, roomId, now).filter((id) => id !== myId));
   const typing = $derived(typingLine(typingIds.map(name)));
@@ -144,7 +146,7 @@
     const text = draft;
     const taken = done; // a file that finishes during the send stays for the next one
     const atts = taken.map((i) => i.attachment!);
-    const body = text.trim() || atts.map((a) => a.name).join(', '); // a body is required
+    const body = text.trim(); // empty with files: a message of files has no text
     sending = true;
     error = '';
     try {
@@ -312,14 +314,20 @@
 
     {#if listOpen}
       <ul class="people" id="{uid}-people" role="listbox" aria-label="People" in:motion={'pop'} out:motion={'pop'}>
-        {#each people as p, i (p.user_id)}
+        {#each people as p, i (p.username)}
           <!-- The textarea keeps focus and the keys (aria-activedescendant); a click picks without taking it. -->
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <li id="{uid}-p{i}" role="option" aria-selected={i === active} class:on={i === active}
             onpointerdown={(e) => e.preventDefault()} onclick={() => pick(p.username)} onpointermove={() => (active = i)}>
-            <Avatar user={p} size={20} />
-            <span class="truncate text-fg">{p.display_name}</span>
-            <span class="truncate text-fg-2">@{p.username}</span>
+            {#if 'label' in p}
+              <span class="group"><Icon d={I.users} size={16} /></span>
+              <span class="truncate text-fg">@{p.username}</span>
+              <span class="truncate text-fg-2">{p.label}</span>
+            {:else}
+              <Avatar user={p} size={20} />
+              <span class="truncate text-fg">{p.display_name}</span>
+              <span class="truncate text-fg-2">@{p.username}</span>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -343,6 +351,7 @@
         <dt><code>---</code></dt><dd>rule</dd>
         <dt><code>https://...</code></dt><dd>link</dd>
         <dt><code>@name</code></dt><dd>mention</dd>
+        <dt><code>@everyone</code>, <code>@here</code></dt><dd>everyone, or everyone online</dd>
       </dl>
       <p class="mt-2 text-fg-2">HTML and images show as typed. Enter sends, Shift+Enter adds a line, Up edits your last message.</p>
     </div>
@@ -402,7 +411,7 @@
   }
   /* Only while the layer matches the draft (live): otherwise the textarea draws its own text and the layer hides. */
   .live textarea { color: transparent; caret-color: var(--fg); }
-  .live textarea::selection { background: var(--bg-selected); color: transparent; }
+  .live textarea::selection { background: var(--selection); color: transparent; } /* see-through: the layer's text shows */
   .field:not(.live) .mirror { visibility: hidden; }
   /* Same box, same scroll range, so the same lines wrap; its scrollbar is hidden under the textarea's. */
   .mirror { position: absolute; inset: 0; color: var(--fg); pointer-events: none; scrollbar-color: transparent transparent; }
@@ -463,6 +472,7 @@
     border-radius: var(--radius);
     cursor: pointer;
   }
+  .group { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 20px; height: 20px; color: var(--fg-2); }
   .people li.on { background: var(--line); } /* as the switcher's keyboard row: --bg-selected is too faint on --bg-raised */
   .help { width: 288px; padding: 8px; }
   .help dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; align-items: baseline; }

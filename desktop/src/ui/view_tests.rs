@@ -969,7 +969,7 @@ fn the_upload_tray_shows_progress_cancels_and_sends(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     let cmds = drain(&mut rx);
     assert!(
-        matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body == "a.txt" && attachments.len() == 1),
+        matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body.is_empty() && attachments.len() == 1),
         "{cmds:?}"
     );
 }

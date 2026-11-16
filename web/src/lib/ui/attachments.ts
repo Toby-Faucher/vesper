@@ -7,6 +7,18 @@ import type { IconPath } from './icons';
 // Lucide `maximize` (lucide-static 0.460.0, ISC licence, see icons.ts).
 export const expandIcon = 'M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3' as IconPath;
 
+/**
+ * True when `body` is only the names of `files` joined by ", " in any order. Messages of files used to be sent that way,
+ * before the body could be empty: the sender's order, while the server lists files by when their upload ended. Such a
+ * body is not shown. A name is tried once per distinct value, so equal names cost no extra work.
+ */
+export function namesOnly(body: string, files: Attachment[]): boolean {
+  const rest = (s: string, left: string[]): boolean =>
+    left.length === 0 ? s === '' : left.some((n, i) => left.indexOf(n) === i && s.startsWith(n) &&
+      (left.length === 1 ? s === n : s.startsWith(', ', n.length) && rest(s.slice(n.length + 2), left.filter((_, j) => j !== i))));
+  return files.length > 0 && rest(body, files.map((f) => f.name.normalize('NFC')));
+}
+
 /** The largest box an image takes in the timeline. Space for it is kept before the image loads. */
 export const BOX = { w: 360, h: 280 };
 const MIN = 48; // a tiny image still gets a box you can click

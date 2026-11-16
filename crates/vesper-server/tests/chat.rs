@@ -585,6 +585,48 @@ async fn mentions_count_in_unread() {
 }
 
 #[tokio::test]
+async fn everyone_and_here_reach_members_who_can_see() {
+    let server = TestServer::new().await;
+    let owner = server.account("owner", Role::Owner).await;
+    let bob = server.account("bob", Role::Member).await;
+    let carol = server.account("carol", Role::Member).await;
+    let dave = server.account("dave", Role::Member).await;
+    let secret = restricted(&server, &owner, &[&bob, &carol]).await;
+    let ids = |m: &Message| {
+        let mut v = m.mentions.clone();
+        v.sort();
+        v
+    };
+    let sorted = |s: &[&Session]| {
+        let mut v: Vec<String> = s.iter().map(|s| s.user.user_id.clone()).collect();
+        v.sort();
+        v
+    };
+    // @everyone: every member who can see the room (the owner too), never the author, never dave.
+    let m = sent(&server, secret, "hi @everyone", &bob).await;
+    assert_eq!(ids(&m), sorted(&[&owner, &carol]));
+    let u = Sock::open(&server, &carol).await.unread(secret);
+    assert_eq!((u.unread, u.mentions), (1, 1));
+    // @here: only those with a socket open now. carol is online, the owner is not.
+    let _carol = Sock::open(&server, &carol).await;
+    let _dave = Sock::open(&server, &dave).await;
+    let m = sent(&server, secret, "@here look", &bob).await;
+    assert_eq!(ids(&m), sorted(&[&carol]));
+    // A plain mention of the author still counts, as before.
+    let m = sent(&server, secret, "@bob @HERE", &bob).await;
+    assert_eq!(ids(&m), sorted(&[&bob, &carol]));
+    // Nobody can be named everyone or here.
+    for name in ["everyone", "Here"] {
+        let code = server.invite(&["invite"]).await;
+        let body = json!({ "invite": code, "username": name, "password": "test-password-1", "display_name": "x" });
+        let (status, _, v) = server
+            .call(request(Method::POST, "/api/signup", Some(&body), None))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {v}");
+    }
+}
+
+#[tokio::test]
 async fn mentions_skip_hidden_and_banned() {
     let server = TestServer::new().await;
     let owner = server.account("owner", Role::Owner).await;
