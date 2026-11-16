@@ -913,3 +913,64 @@ async fn orphan_files_are_swept() {
     assert!(file_of(&server, &kept).exists(), "a file with a row stays");
     assert_eq!(download(&server, &kept, &alice).await.0, StatusCode::OK);
 }
+
+/// A message of files has no text: an empty body is fine with files, and each file is its own attachment.
+#[tokio::test]
+async fn files_only_message_has_empty_body() {
+    let server = TestServer::new().await;
+    let alice = server.member("alice").await;
+    let room = general(&server).await;
+    let mut ids = Vec::new();
+    for _ in 0..9 {
+        ids.push(upload_ok(&server, &alice, room, &png()).await);
+    }
+    let (status, _, v) = server
+        .call(post(
+            &format!("/api/rooms/{room}/messages"),
+            json!({ "body": " ", "attachments": ids }),
+            &alice,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    assert_eq!(v["body"], "");
+    assert_eq!(v["attachments"].as_array().unwrap().len(), 9);
+    // A reply to it shows the first file's name, not "deleted".
+    let id = v["id"].as_i64().unwrap();
+    let (status, _, r) = server
+        .call(post(
+            &format!("/api/rooms/{room}/messages"),
+            json!({ "body": "nice", "reply_to": id }),
+            &alice,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{r}");
+    assert_eq!(r["reply_to"]["excerpt"], "f.bin");
+    // Editing it to no text is fine too; a message without files still needs text.
+    let (status, _, e) = server
+        .call(request(
+            Method::PATCH,
+            &format!("/api/messages/{id}"),
+            Some(&json!({ "body": "" })),
+            Some(&alice.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{e}");
+    let rid = r["id"].as_i64().unwrap();
+    let (status, _, _) = server
+        .call(request(
+            Method::PATCH,
+            &format!("/api/messages/{rid}"),
+            Some(&json!({ "body": "" })),
+            Some(&alice.cookie),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _, _) = server
+        .call(post(
+            &format!("/api/rooms/{room}/messages"),
+            json!({ "body": "" }),
+            &alice,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

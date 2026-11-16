@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
-//! The capture DSP path around DeepFilterNet3 (tract runtime) for 10 ms mono frames at 48 kHz.
+//! The capture DSP path around DeepFilterNet3 (tract runtime) for 10 ms mono frames at 48 kHz, and the lighter
+//! RNNoise (`Rnnoise`, no model file).
 
 #[cfg(feature = "tract")]
 mod denoiser;
@@ -9,6 +10,8 @@ pub use denoiser::Denoiser;
 mod pipeline;
 #[cfg(feature = "tract")]
 pub use pipeline::{Pipeline, PipelineConfig, PostConfig, PreConfig};
+mod rnnoise;
+pub use rnnoise::Rnnoise;
 #[cfg(feature = "wasm")]
 mod wasm;
 

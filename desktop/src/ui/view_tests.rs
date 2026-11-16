@@ -417,76 +417,92 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
     });
 }
 
-/// The share panel with the engine faked: Watch sends the watch, a picture is drawn, the struggle and the end of
-/// the share show as text.
+/// A sharer in room 1's call: `{ "user_id": id, "name": name, ... "share": ... }`.
+fn sharer(id: &str, name: &str) -> vesper_protocol::Peer {
+    serde_json::from_value(
+        json!({ "user_id": id, "name": name, "room_id": 1, "muted": false,
+        "deafened": false, "force_muted": false, "share": { "fps": 60, "bitrate_kbps": 8000 } }),
+    )
+    .unwrap()
+}
+
+/// A `w` x `h` red picture of `id`'s screen.
+fn red(id: &str, w: u32, h: u32) -> crate::voice::Frame {
+    crate::voice::Frame {
+        user_id: id.into(),
+        width: w,
+        height: h,
+        bgra: std::sync::Arc::new([0u8, 0, 255, 255].repeat((w * h) as usize)),
+    }
+}
+
+/// `inner` lies inside `outer`.
+fn inside(inner: gpui::Bounds<gpui::Pixels>, outer: gpui::Bounds<gpui::Pixels>) -> bool {
+    let e = gpui::px(0.5);
+    inner.origin.x + e >= outer.origin.x
+        && inner.origin.y + e >= outer.origin.y
+        && inner.bottom_right().x <= outer.bottom_right().x + e
+        && inner.bottom_right().y <= outer.bottom_right().y + e
+}
+
+/// The share panel with the engine faked, like `SharePanel.svelte`: every share is watched and drawn whole inside its
+/// tile, the struggle shows, a tile hides and shows again, Hide screens and Show, and the layouts.
 #[gpui::test]
-fn the_share_panel_watches_and_draws_a_picture(cx: &mut TestAppContext) {
+fn the_share_panel_watches_every_share_and_fits_each_picture(cx: &mut TestAppContext) {
     let (view, cx, mut rx) = open(cx);
     signed_in(&view, cx);
     click(cx, "join-voice");
     let call = |ev| Event::Voice { call: 1, ev };
     apply(&view, cx, call(VoiceEvent::Offer("offer".into())));
-    let bob = serde_json::from_value(
-        json!({ "user_id": "b", "name": "Bob", "room_id": 1, "muted": false,
-        "deafened": false, "force_muted": false, "share": { "fps": 60, "bitrate_kbps": 8000 } }),
-    )
-    .unwrap();
     let joined = ServerMsg::Joined {
         user_id: "a".into(),
         answer: "answer".into(),
-        peers: vec![bob],
+        peers: vec![sharer("b", "Bob"), sharer("c", "Cat")],
     };
     apply(&view, cx, Event::Server(Box::new(joined)));
-    drain(&mut rx);
-    assert!(cx.debug_bounds("share-panel").is_some());
-    assert!(
-        cx.debug_bounds("share-view").is_none(),
-        "nothing watched yet"
-    );
-
-    click(cx, "share-watch-b");
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
     let cmds = drain(&mut rx);
-    assert!(
-        matches!(
-            cmds.as_slice(),
-            [
-                Cmd::Signal(ClientMsg::Watch { user_id: s, on: true }),
-                Cmd::Voice(VoiceCmd::Watch { user_id: v, on: true })
-            ] if s == "b" && v == "b"
-        ),
-        "{cmds:?}"
-    );
-    assert!(cx.debug_bounds("share-view").is_some());
-    assert!(
-        cx.debug_bounds("share-picture").is_none(),
-        "waiting for a picture"
-    );
+    for id in ["b", "c"] {
+        assert!(
+            cmds.iter().any(|c| matches!(c, Cmd::Signal(ClientMsg::Watch { user_id, on: true }) if user_id == id)),
+            "{id} watched with no click: {cmds:?}"
+        );
+        // The decoder is told the size each tile is drawn at.
+        assert!(
+            cmds.iter().any(|c| matches!(c, Cmd::Voice(VoiceCmd::ShareSize { user_id, width, height })
+                if user_id == id && *width > 0 && (*width as f32 / *height as f32 - 16. / 9.).abs() < 0.02)),
+            "{cmds:?}"
+        );
+    }
 
-    // A 16x9 red picture: the view takes it from the model and draws it.
-    let bgra = [0u8, 0, 255, 255].repeat(16 * 9);
-    let frame = crate::voice::Frame {
-        user_id: "b".into(),
-        width: 16,
-        height: 9,
-        bgra: std::sync::Arc::new(bgra),
-    };
-    apply(&view, cx, call(VoiceEvent::Frame(frame)));
-    assert!(cx.debug_bounds("share-picture").is_some());
+    // Grid: two tiles side by side, inside the stage. A 2560x1440 picture and a 4:3 one, each whole inside its tile.
+    apply(&view, cx, call(VoiceEvent::Frame(red("b", 256, 144))));
+    apply(&view, cx, call(VoiceEvent::Frame(red("c", 160, 120))));
+    let stage = cx.debug_bounds("share-stage").unwrap();
+    let (tb, tc) = (
+        cx.debug_bounds("share-tile-b").unwrap(),
+        cx.debug_bounds("share-tile-c").unwrap(),
+    );
+    assert!(
+        inside(tb, stage) && inside(tc, stage),
+        "{tb:?} {tc:?} in {stage:?}"
+    );
+    assert!(
+        tb.origin.y == tc.origin.y && tb.bottom_right().x <= tc.origin.x,
+        "side by side: {tb:?} {tc:?}"
+    );
     view.read_with(cx, |v, _| {
-        assert!(v.model.call.frame.is_none(), "taken by the view");
-        let (id, image) = v.screen.as_ref().unwrap();
-        assert_eq!(id, "b");
+        assert!(v.model.call.frames.is_empty(), "taken by the view");
+        let image = &v.share.screens["b"];
         let size = image.size(0);
-        assert_eq!((size.width.0, size.height.0), (16, 9));
+        assert_eq!((size.width.0, size.height.0), (256, 144));
         assert_eq!(
             image.as_bytes(0).unwrap()[..4],
             [0, 0, 255, 255],
             "the bytes stay BGRA"
         );
     });
-    let picture = cx.debug_bounds("share-picture").unwrap();
-    let panel = cx.debug_bounds("share-view").unwrap();
-    assert!(picture.size.width > gpui::px(0.) && picture.size.width <= panel.size.width);
 
     apply(
         &view,
@@ -498,17 +514,85 @@ fn the_share_panel_watches_and_draws_a_picture(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("share-struggling").is_some());
 
-    // Bob stops: the picture goes and the panel says so.
+    // Point: the next click inside the picture goes to the server as 0 to 1 of it.
+    drain(&mut rx);
+    click(cx, "share-point-b");
+    let tile = cx.debug_bounds("share-tile-b").unwrap();
+    cx.simulate_click(tile.center(), Modifiers::none());
+    cx.run_until_parked();
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(
+            |c| matches!(c, Cmd::Signal(ClientMsg::Point { user_id, x, y })
+            if user_id == "b" && (x - 0.5).abs() < 0.02 && (y - 0.5).abs() < 0.02)
+        ),
+        "{cmds:?}"
+    );
+    // Zoom: 2x around the middle, and the decoder is asked for pictures twice the size.
+    click(cx, "share-zoom-b");
+    view.read_with(cx, |v, _| assert!(v.share.zoom.contains_key("b")));
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(
+            |c| matches!(c, Cmd::Voice(VoiceCmd::ShareSize { user_id, .. }) if user_id == "b")
+        )
+    );
+    click(cx, "share-zoom-b");
+    // Full screen: the tile fills the window; Esc leaves.
+    click(cx, "share-full-b");
+    view.read_with(cx, |v, _| assert!(v.share.full.is_some()));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert!(v.share.full.is_none()));
+
+    // Hide one: its picture goes, and it is named in the head with Show. Shown again within the grace, the watch
+    // never went off.
+    click(cx, "share-hide-c");
+    view.read_with(cx, |v, _| {
+        assert!(v.model.call.hidden.contains("c") && !v.share.screens.contains_key("c"))
+    });
+    drain(&mut rx);
+    click(cx, "share-show-c");
+    view.read_with(cx, |v, _| assert!(v.model.call.hidden.is_empty()));
+    assert!(
+        !drain(&mut rx)
+            .iter()
+            .any(|c| matches!(c, Cmd::Signal(ClientMsg::Watch { .. })))
+    );
+
+    // Focus: one big tile, the other a thumbnail under it; a click on the thumbnail makes it the big one.
+    click(cx, "share-layout-focus");
+    view.read_with(cx, |v, _| {
+        assert_eq!(
+            v.model.settings.share_layout,
+            crate::settings::ShareLayout::Focus
+        )
+    });
+    // Dock: one column and the divider; chat beside it.
+    click(cx, "share-layout-dock");
+    assert!(cx.debug_bounds("share-divider").is_some());
+    let (tb, tc) = (
+        cx.debug_bounds("share-tile-b").unwrap(),
+        cx.debug_bounds("share-tile-c").unwrap(),
+    );
+    assert!(
+        tb.origin.x == tc.origin.x && tb.bottom_right().y <= tc.origin.y,
+        "one column: {tb:?} {tc:?}"
+    );
+    click(cx, "share-layout-grid");
+
+    // Hide screens: nothing is watched; Show opens the panel again.
+    click(cx, "share-hide-all");
+    view.read_with(cx, |v, _| assert!(!v.model.call.panel_open));
+    click(cx, "share-show-all");
+    view.read_with(cx, |v, _| assert!(v.model.call.panel_open));
+
+    // Bob stops: his picture goes.
     let stop = ServerMsg::PeerShare {
         user_id: "b".into(),
         share: None,
     };
     apply(&view, cx, Event::Server(Box::new(stop)));
-    assert!(cx.debug_bounds("share-notice").is_some());
-    view.read_with(cx, |v, _| {
-        assert!(v.screen.is_none() && v.model.call.watching.is_none());
-        assert_eq!(v.model.call.share_notice, "Bob stopped sharing.");
-    });
+    view.read_with(cx, |v, _| assert!(!v.share.screens.contains_key("b")));
 }
 
 /// Settings from the sidebar: each choice lands in the model, push to talk shows its key and takes a new one from a
@@ -519,6 +603,8 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
     use crate::voice::ptt::KeyMsg;
 
     let (view, cx, mut rx) = open(cx);
+    // Tall enough for all of Settings > Voice without scrolling.
+    cx.simulate_resize(gpui::size(gpui::px(1280.), gpui::px(2400.)));
     signed_in(&view, cx);
     let (keys, watched) = std::sync::mpsc::channel();
     view.update(cx, |v, _| {
@@ -530,8 +616,9 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
     for s in [
         "settings",
         "settings-bitrate",
-        "settings-mic-0",
+        "settings-mic",
         "settings-speakers",
+        "settings-missing",
     ] {
         assert!(cx.debug_bounds(s).is_some(), "{s} is drawn");
     }
@@ -539,11 +626,22 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
         cx.debug_bounds("settings-ptt-key").is_none(),
         "voice activity: no key"
     );
+    assert!(
+        cx.debug_bounds("settings-mic-1").is_none(),
+        "the list is closed"
+    );
 
-    click(cx, "settings-gate");
-    click(cx, "settings-echo-off");
-    click(cx, "settings-mic-0");
+    // The dropdowns: open, pick, closed again.
+    click(cx, "settings-noise");
+    click(cx, "settings-noise-2");
+    view.read_with(cx, |v, _| {
+        assert!(v.page.select.is_none(), "picking closes it")
+    });
+    click(cx, "settings-echo");
+    click(cx, "settings-mic");
+    click(cx, "settings-mic-1");
     click(cx, "settings-speakers");
+    click(cx, "settings-speakers-0");
     view.read_with(cx, |v, _| {
         let s = &v.model.settings;
         assert_eq!(s.denoise, Denoise::Gate);
@@ -571,6 +669,15 @@ fn the_settings_view_changes_the_settings(cx: &mut TestAppContext) {
         assert!(v.model.settings.push_to_talk && !v.capturing_key);
     });
     assert!(watched.try_iter().all(|m| m == KeyMsg::Watch(None)));
+
+    // Reset to defaults asks first, then puts Talk mode back (push to talk off), not the devices.
+    click(cx, "reset-talk-mode");
+    click(cx, "reset-confirm");
+    view.read_with(cx, |v, _| {
+        let s = &v.model.settings;
+        assert!(!s.push_to_talk && s.input_device.is_some());
+    });
+    click(cx, "settings-ptt");
 
     // Out of the settings, the window's own V presses and releases push to talk (Wayland has only these).
     click(cx, "settings-close");
@@ -699,6 +806,7 @@ fn markdown_reactions_links_and_files(cx: &mut TestAppContext) {
         width: 2,
         height: 2,
         bgra: vec![255; 16],
+        delays: vec![],
     };
     apply(
         &view,
@@ -946,7 +1054,7 @@ fn the_upload_tray_shows_progress_cancels_and_sends(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     let cmds = drain(&mut rx);
     assert!(
-        matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body == "a.txt" && attachments.len() == 1),
+        matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body.is_empty() && attachments.len() == 1),
         "{cmds:?}"
     );
 }
@@ -1205,8 +1313,8 @@ fn composer_text(view: &Entity<Vesper>, cx: &mut VisualTestContext) -> String {
     view.read_with(cx, |v, cx| v.composer.read(cx).value().to_string())
 }
 
-/// A dialog takes the focus: Enter confirms it (not the composer under it), and a click on its backdrop reaches
-/// nothing under it.
+/// A dialog takes the focus: Enter confirms it (not the composer under it), and a click on its backdrop closes it and
+/// reaches nothing under it.
 #[gpui::test]
 fn a_dialog_takes_enter_and_blocks_clicks(cx: &mut TestAppContext) {
     let (view, cx, mut rx) = open(cx);
@@ -1221,8 +1329,14 @@ fn a_dialog_takes_enter_and_blocks_clicks(cx: &mut TestAppContext) {
     click(cx, "room-2");
     view.read_with(cx, |v, _| {
         assert_eq!(v.model.active, Some(1), "the backdrop took the click");
-        assert_eq!(v.model.confirm_delete, Some(11));
+        assert_eq!(
+            v.model.confirm_delete, None,
+            "and closed the dialog, as the web's"
+        );
     });
+    click(cx, "more-11");
+    click(cx, "delete-11");
+    drain(&mut rx);
     cx.simulate_keystrokes("enter");
     let cmds = drain(&mut rx);
     assert!(matches!(cmds.as_slice(), [Cmd::Delete(11)]), "{cmds:?}");
@@ -1297,7 +1411,6 @@ fn watching_bob(
         peers: vec![bob],
     };
     apply(view, cx, Event::Server(Box::new(joined)));
-    click(cx, "share-watch-b");
     drain(rx);
 }
 
@@ -1327,7 +1440,7 @@ fn a_share_nobody_draws_is_stopped(cx: &mut TestAppContext) {
     watching_bob(&view, cx, &mut rx);
     // A picture comes, and no frame is drawn (the model is fed without a notify, as a hidden window would).
     view.update(cx, |v, cx| {
-        v.model.call.frame = Some(frame());
+        v.model.call.frames.insert("b".into(), frame());
         v.frame_came(cx);
     });
     cx.executor()
@@ -1424,6 +1537,7 @@ fn late_pictures_after_sign_out_are_dropped(cx: &mut TestAppContext) {
         width: 2,
         height: 2,
         bgra: vec![255; 16],
+        delays: vec![],
     };
     apply(
         &view,
@@ -1473,4 +1587,717 @@ fn a_lost_session_resets_the_view(cx: &mut TestAppContext) {
         assert!(v.images.is_empty() && v.drafts.is_empty());
         assert_eq!(v.composer.read(cx).value(), "");
     });
+}
+
+/// The device lists drop ALSA's plugins and the same card listed under several ids, and keep the order.
+#[test]
+fn device_lists_keep_only_real_devices_once() {
+    let pairs = [
+        (
+            "null",
+            "Discard all samples (playback) or generate zero samples (capture)",
+        ),
+        (
+            "lavrate",
+            "Rate Converter Plugin Using Libav/FFmpeg Library",
+        ),
+        ("jack", "JACK Audio Connection Kit"),
+        ("pipewire", "PipeWire Sound Server"),
+        (
+            "default",
+            "Default ALSA Output (currently PipeWire Media Server)",
+        ),
+        ("sysdefault:CARD=PCH", "HDA Intel PCH, ALC3234 Analog"),
+        ("front:CARD=PCH,DEV=0", "HDA Intel PCH, ALC3234 Analog"),
+        ("dmix:CARD=PCH,DEV=0", "HDA Intel PCH, ALC3234 Analog"),
+        ("hdmi:CARD=PCH,DEV=0", "HDA Intel PCH, HDMI 0"),
+        ("hw:CARD=PCH,DEV=0", "HDA Intel PCH, ALC3234 Analog"),
+        ("{0.0.1.00000000}.{abc}", "Speakers (Realtek Audio)"),
+    ];
+    let names =
+        crate::voice::useful_names(pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())));
+    assert_eq!(
+        names,
+        [
+            "PipeWire Sound Server",
+            "HDA Intel PCH, ALC3234 Analog",
+            "HDA Intel PCH, HDMI 0",
+            "Speakers (Realtek Audio)"
+        ]
+    );
+}
+
+/// Admin is in the account menu for staff only; a moderator gets Invites and Members, the owner every section, and
+/// a moderator sent to an owner page is told so.
+#[gpui::test]
+fn admin_opens_by_role(cx: &mut TestAppContext) {
+    use super::admin::{Section, sections_for};
+    use super::settings::At;
+    use vesper_protocol::Role;
+
+    assert!(sections_for(Role::Member).is_empty());
+    assert_eq!(
+        sections_for(Role::Moderator),
+        [Section::Invites, Section::Members]
+    );
+    assert_eq!(sections_for(Role::Owner).len(), 5);
+
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    click(cx, "account");
+    assert!(
+        cx.debug_bounds("menu-admin").is_none(),
+        "a member has no Admin"
+    );
+
+    view.update(cx, |v, cx| {
+        v.side.account_open = false;
+        let id = v.model.state.my_id().to_string();
+        v.model.state.users.get_mut(&id).unwrap().role = Role::Moderator;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    drain(&mut rx);
+    click(cx, "account");
+    click(cx, "menu-admin");
+    assert!(cx.debug_bounds("nav-invites").is_some() && cx.debug_bounds("nav-members").is_some());
+    assert!(
+        cx.debug_bounds("nav-rooms").is_none(),
+        "Rooms is the owner's"
+    );
+    let paths: Vec<String> = drain(&mut rx)
+        .into_iter()
+        .filter_map(|c| match c {
+            Cmd::Http { path, .. } => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths, ["/api/invites", "/api/users"]);
+
+    view.update_in(cx, |v, window, cx| {
+        v.open_page(At::Admin(Section::Server), window, cx)
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("admin-denied").is_some());
+    assert!(
+        drain(&mut rx).is_empty(),
+        "nothing asked for a page it cannot open"
+    );
+}
+
+/// An invite link comes back once: shown with Copy link, never kept past Done.
+#[gpui::test]
+fn a_new_invite_link_shows_once(cx: &mut TestAppContext) {
+    use super::admin::Section;
+    use super::settings::At;
+    use vesper_protocol::Role;
+
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        let id = v.model.state.my_id().to_string();
+        v.model.state.users.get_mut(&id).unwrap().role = Role::Owner;
+        v.open_page(At::Admin(Section::Invites), window, cx);
+    });
+    cx.run_until_parked();
+    apply(
+        &view,
+        cx,
+        Event::Http {
+            tag: "admin:invites".into(),
+            result: Ok(crate::net::Json(json!([]))),
+        },
+    );
+    drain(&mut rx);
+    click(cx, "invite-create");
+    let sent = drain(&mut rx);
+    assert!(
+        matches!(sent.as_slice(), [Cmd::Http { path, body: Some(b), .. }]
+            if path == "/api/invites" && b.0 == json!({ "role": "member", "max_uses": 1, "expires_hours": 168 })),
+        "{sent:?}"
+    );
+    let info = json!({ "id": 9, "role": "member", "uses": 0, "max_uses": 1, "expires_at": 4_000_000_000_000_i64,
+                       "created_by": "a", "revoked": false });
+    let created = json!({ "info": info, "url": "https://v.example/invite#test-code" });
+    apply(
+        &view,
+        cx,
+        Event::Http {
+            tag: "admin:create".into(),
+            result: Ok(crate::net::Json(created)),
+        },
+    );
+    assert!(cx.debug_bounds("admin-link").is_some());
+    let shown = format!("{sent:?}");
+    assert!(!shown.contains("test-code"));
+    click(cx, "link-done");
+    view.read_with(cx, |v, _| assert!(v.page.admin_link_gone()));
+}
+
+/// Settings > Account starts from your profile and saves only what changed.
+#[gpui::test]
+fn the_account_form_starts_from_the_profile(cx: &mut TestAppContext) {
+    use super::settings::{At, Section};
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        v.open_page(At::Settings(Section::Account), window, cx)
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.input_text("account-name", cx), "Ann")
+    });
+    drain(&mut rx);
+    click(cx, "swatch-3");
+    click(cx, "account-save");
+    let sent = drain(&mut rx);
+    assert!(
+        matches!(sent.as_slice(), [Cmd::Http { path, body: Some(b), .. }]
+            if path == "/api/me" && b.0 == json!({ "accent": "#99b860" })),
+        "{sent:?}"
+    );
+}
+
+/// Profile pictures: fetched once per version, a late answer for an old version is dropped, a new version shows the
+/// letters until it comes, and a removed picture is let go.
+#[gpui::test]
+fn profile_pictures_follow_their_version(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    drain(&mut rx);
+    let set = |v: Option<&str>| {
+        let mut u = user("b", "Bob");
+        u["avatar"] = json!(v);
+        Event::Server(Box::new(
+            serde_json::from_value(json!({ "type": "user_updated", "user": u })).unwrap(),
+        ))
+    };
+    let fetches = |rx: &mut UnboundedReceiver<Cmd>| -> Vec<String> {
+        drain(rx)
+            .into_iter()
+            .filter_map(|c| match c {
+                Cmd::FetchAvatar { user_id, version } => Some(format!("{user_id}@{version}")),
+                _ => None,
+            })
+            .collect()
+    };
+    let shown = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| cx.global::<super::c::Pictures>().ready("b").is_some())
+    };
+    let came = |version: &str| Event::Avatar {
+        user_id: "b".into(),
+        version: version.into(),
+        picture: Some(crate::files::Picture {
+            width: 1,
+            height: 1,
+            bgra: vec![255; 4],
+            delays: vec![],
+        }),
+    };
+    apply(&view, cx, set(Some("v1")));
+    assert_eq!(fetches(&mut rx), ["b@v1"]);
+    apply(&view, cx, set(Some("v1")));
+    assert!(
+        fetches(&mut rx).is_empty(),
+        "the same version is not fetched again"
+    );
+    apply(&view, cx, came("v1"));
+    assert!(shown(cx));
+    apply(&view, cx, set(Some("v2")));
+    assert_eq!(fetches(&mut rx), ["b@v2"]);
+    assert!(!shown(cx), "the letters show until the new picture comes");
+    apply(&view, cx, came("v1"));
+    assert!(!shown(cx), "a late answer for the old picture is dropped");
+    apply(&view, cx, came("v2"));
+    assert!(shown(cx));
+    apply(&view, cx, set(None));
+    assert!(!shown(cx));
+    assert!(fetches(&mut rx).is_empty());
+}
+
+/// Ctrl+K opens the switcher over a focused composer, the typed text ranks the rows, Enter opens the room; the `r `
+/// chip scopes it and Backspace removes the chip; Esc closes.
+#[gpui::test]
+fn the_switcher_finds_and_opens_a_room(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    focus_composer(&view, cx);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-k"
+    } else {
+        "ctrl-k"
+    });
+    assert!(cx.debug_bounds("switcher").is_some());
+    cx.simulate_input("hang");
+    view.read_with(cx, |v, cx| {
+        let r = v.switcher_results(cx);
+        assert_eq!(r[0].label, "hangout", "{r:?}");
+    });
+    drain(&mut rx);
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.find.layer, None);
+        assert_eq!(v.model.active, Some(2));
+    });
+
+    view.update_in(cx, |v, w, cx| {
+        v.open_layer(super::find::Layer::Switcher, w, cx)
+    });
+    cx.simulate_input("p ");
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.find.scope_kind(), Some(crate::switcher::Kind::Person));
+        let r = v.switcher_results(cx);
+        assert!(r.iter().all(|i| i.kind == crate::switcher::Kind::Person) && !r.is_empty());
+    });
+    cx.simulate_keystrokes("backspace");
+    view.read_with(cx, |v, _| assert_eq!(v.find.scope_kind(), None));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert_eq!(v.find.layer, None));
+}
+
+/// Search waits 300 ms after typing, drops a late answer, shows the hits, and Enter jumps to the first: its room
+/// opens and older pages load until the message is there.
+#[gpui::test]
+fn search_asks_after_a_pause_and_jumps(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, w, cx| {
+        v.open_layer(super::find::Layer::Search, w, cx)
+    });
+    assert!(cx.debug_bounds("search").is_some());
+    drain(&mut rx);
+    cx.simulate_input("cable");
+    assert!(
+        !drain(&mut rx)
+            .iter()
+            .any(|c| matches!(c, Cmd::Search { .. })),
+        "not before the pause"
+    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(350));
+    cx.run_until_parked();
+    let seq = drain(&mut rx)
+        .into_iter()
+        .find_map(|c| match c {
+            Cmd::Search { seq, q } => {
+                assert_eq!(q.q, "cable");
+                Some(seq)
+            }
+            _ => None,
+        })
+        .expect("a search");
+    let page = |id: i64| -> vesper_protocol::SearchPage {
+        let mut m = msg(id, "b", "the good cable");
+        m["room_id"] = json!(2);
+        serde_json::from_value(
+            json!({ "hits": [{ "message": m, "snippet": "the good \u{2}cable\u{3}" }],
+            "next_before": null }),
+        )
+        .unwrap()
+    };
+    apply(
+        &view,
+        cx,
+        Event::Searched {
+            seq: seq - 1,
+            page: Ok(page(99)),
+        },
+    );
+    view.read_with(cx, |v, _| {
+        assert!(v.find.search.hits.is_empty(), "an older answer is dropped")
+    });
+    apply(
+        &view,
+        cx,
+        Event::Searched {
+            seq,
+            page: Ok(page(5)),
+        },
+    );
+    assert!(cx.debug_bounds("search-hit-0").is_some());
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| assert_eq!(v.find.layer, None));
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(|c| matches!(c, Cmd::LoadLatest(2))),
+        "{cmds:?}"
+    );
+    let older: MessagePage = serde_json::from_value(json!({ "messages": [msg(20, "b", "x")],
+        "more_before": true, "more_after": false }))
+    .unwrap();
+    apply(
+        &view,
+        cx,
+        Event::Latest {
+            room: 2,
+            page: older,
+        },
+    );
+    assert!(drain(&mut rx).iter().any(|c| matches!(
+        c,
+        Cmd::LoadOlder {
+            room: 2,
+            before: 20
+        }
+    )));
+    let mut found = msg(5, "b", "the good cable");
+    found["room_id"] = json!(2);
+    let page: MessagePage =
+        serde_json::from_value(json!({ "messages": [found], "more_before": false,
+        "more_after": false }))
+        .unwrap();
+    view.update_in(cx, |v, window, cx| {
+        v.apply(Event::Older { room: 2, page }, window, cx);
+        assert_eq!(v.model.jump, Some(5));
+    });
+}
+
+/// A click on a picture opens the viewer in the app (not the system's), which fetches the full size once; Esc closes
+/// it and lets the picture go.
+#[gpui::test]
+fn a_picture_opens_in_the_viewer(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    chat_room(&view, cx);
+    apply(
+        &view,
+        cx,
+        Event::Image {
+            id: IMAGE_ID.into(),
+            picture: Some(crate::files::Picture {
+                width: 2,
+                height: 2,
+                bgra: vec![255; 16],
+                delays: vec![],
+            }),
+        },
+    );
+    drain(&mut rx);
+    let b = cx
+        .debug_bounds(tagged(format!("image-{IMAGE_ID}")))
+        .unwrap();
+    cx.simulate_click(b.center(), Modifiers::none());
+    cx.run_until_parked();
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchFull(id) if id == IMAGE_ID)),
+        "{cmds:?}"
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::Download { .. })),
+        "not the system's viewer"
+    );
+    apply(
+        &view,
+        cx,
+        Event::Full {
+            id: IMAGE_ID.into(),
+            picture: Some(crate::files::Picture {
+                width: 4,
+                height: 2,
+                bgra: vec![255; 32],
+                delays: vec![],
+            }),
+        },
+    );
+    assert!(cx.debug_bounds("viewer").is_some());
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert!(v.viewer.is_none()));
+
+    // A click in the box keeps it; a click on the backdrop closes it, as the web's. Before, the backdrop took the
+    // click and did nothing, so the app looked frozen.
+    cx.simulate_click(b.center(), Modifiers::none());
+    cx.run_until_parked();
+    let screen = cx.debug_bounds("viewer").unwrap();
+    cx.simulate_click(screen.center(), Modifiers::none());
+    view.read_with(cx, |v, _| assert!(v.viewer.is_some()));
+    cx.simulate_click(
+        screen.origin + gpui::point(gpui::px(4.), gpui::px(4.)),
+        Modifiers::none(),
+    );
+    view.read_with(cx, |v, _| assert!(v.viewer.is_none()));
+}
+
+/// The switcher's Settings rows open their section; Admin rows are there for staff only, a moderator's without the
+/// owner's sections, and open theirs.
+#[gpui::test]
+fn the_switcher_opens_settings_and_admin_sections(cx: &mut TestAppContext) {
+    use super::admin::Section as Admin;
+    use super::find::Layer;
+    use super::settings::{At, Section};
+    use vesper_protocol::Role;
+
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    let labels = |view: &Entity<Vesper>, cx: &mut VisualTestContext, q: &str| {
+        view.update_in(cx, |v, w, cx| v.open_layer(Layer::Switcher, w, cx));
+        cx.simulate_input(q);
+        let r: Vec<String> = view.read_with(cx, |v, cx| {
+            v.switcher_results(cx)
+                .into_iter()
+                .map(|i| i.label)
+                .collect()
+        });
+        r
+    };
+    let as_role = |view: &Entity<Vesper>, cx: &mut VisualTestContext, role: Role| {
+        view.update(cx, |v, cx| {
+            let id = v.model.state.my_id().to_string();
+            v.model.state.users.get_mut(&id).unwrap().role = role;
+            cx.notify();
+        });
+    };
+
+    assert_eq!(
+        labels(&view, cx, "settings: appea")[0],
+        "Settings: Appearance"
+    );
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| {
+        assert!(v.settings_open);
+        assert_eq!(v.page.at, At::Settings(Section::Appearance));
+    });
+    assert!(
+        !labels(&view, cx, "> ")
+            .iter()
+            .any(|l| l.starts_with("Admin: ")),
+        "a member has no Admin rows"
+    );
+    cx.simulate_keystrokes("escape");
+
+    as_role(&view, cx, Role::Moderator);
+    let admin: Vec<String> = labels(&view, cx, "> admin")
+        .into_iter()
+        .filter(|l| l.starts_with("Admin: "))
+        .collect();
+    assert_eq!(admin, ["Admin: Invites", "Admin: Members"]);
+    cx.simulate_keystrokes("escape");
+
+    as_role(&view, cx, Role::Owner);
+    assert_eq!(labels(&view, cx, "admin: disk")[0], "Admin: Disk use");
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |v, _| assert_eq!(v.page.at, At::Admin(Admin::Disk)));
+}
+
+/// Admin > Disk use draws each bar at its share of the track (84 % of the disk here), like `Disk.svelte`.
+#[gpui::test]
+fn disk_bars_fill_to_their_share(cx: &mut TestAppContext) {
+    use super::admin::Section;
+    use super::settings::At;
+    use vesper_protocol::Role;
+
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        let id = v.model.state.my_id().to_string();
+        v.model.state.users.get_mut(&id).unwrap().role = Role::Owner;
+        v.open_page(At::Admin(Section::Disk), window, cx);
+    });
+    cx.run_until_parked();
+    let gb = 1_000_000_000_i64;
+    let disk = json!({ "db_bytes": 1_000_000, "upload_bytes": gb, "quota_bytes": 4 * gb,
+                       "fs_total": 62 * gb, "fs_free": 10 * gb, "warn": true });
+    apply(
+        &view,
+        cx,
+        Event::Http {
+            tag: "admin:disk".into(),
+            result: Ok(crate::net::Json(disk)),
+        },
+    );
+    for (label, share) in [("Uploads", 0.25), ("Disk", 0.84)] {
+        let track = cx
+            .debug_bounds(format!("disk-track-{label}").leak())
+            .unwrap();
+        let bar = cx.debug_bounds(format!("disk-bar-{label}").leak()).unwrap();
+        let got = f32::from(bar.size.width) / f32::from(track.size.width);
+        assert!(
+            (got - share).abs() < 0.02,
+            "{label}: {got} of the track, want {share}"
+        );
+        assert!(
+            f32::from(bar.size.height) > 4.,
+            "{label}: the bar has height"
+        );
+    }
+    assert!(
+        cx.debug_bounds("disk-bar-Database").is_none(),
+        "the database has no bar"
+    );
+}
+
+/// Settings > Voice: the input level fills its share of the meter, and the mic test starts and stops through the
+/// network thread (no call: a test of its own).
+#[gpui::test]
+fn the_meter_and_the_mic_test(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    click(cx, "open-settings");
+    drain(&mut rx);
+    click(cx, "settings-mic-test");
+    let sent = drain(&mut rx);
+    assert!(
+        matches!(sent.as_slice(), [Cmd::MicTest(Some(_))]),
+        "{sent:?}"
+    );
+    apply(&view, cx, Event::MicTest(VoiceEvent::Level(-25.0)));
+    let track = cx.debug_bounds("settings-meter").unwrap();
+    let bar = cx.debug_bounds("settings-meter-bar").unwrap();
+    let got = f32::from(bar.size.width) / f32::from(track.size.width);
+    assert!((got - 0.75).abs() < 0.02, "{got}");
+    apply(
+        &view,
+        cx,
+        Event::MicTest(VoiceEvent::Failed("No microphone was found.".into())),
+    );
+    assert!(cx.debug_bounds("settings-mic-error").is_some());
+    click(cx, "settings-mic-test");
+    drain(&mut rx);
+    click(cx, "settings-close");
+    view.read_with(cx, |v, _| {
+        assert!(!v.model.mic.testing && !v.model.mic.open)
+    });
+    let sent = drain(&mut rx);
+    assert!(
+        matches!(sent.as_slice(), [Cmd::MicTest(None)]),
+        "closing the page stops the test: {sent:?}"
+    );
+}
+
+/// Share screen from the call bar: the dialog's choices go to the engine, share_start goes once the screen is open, and the
+/// card's Stop ends it. The engine is faked.
+#[gpui::test]
+fn the_call_bar_shares_my_screen(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    click(cx, "join-voice");
+    let voice = |ev| Event::Voice { call: 1, ev };
+    apply(&view, cx, voice(VoiceEvent::Offer("offer".into())));
+    let joined = ServerMsg::Joined {
+        user_id: "a".into(),
+        answer: "answer".into(),
+        peers: vec![],
+    };
+    apply(&view, cx, Event::Server(Box::new(joined)));
+    apply(&view, cx, voice(VoiceEvent::Connected));
+    drain(&mut rx);
+
+    click(cx, "call-share");
+    assert!(cx.debug_bounds("share-dialog").is_some());
+    click(cx, "share-fps");
+    click(cx, "share-fps-0");
+    click(cx, "share-go");
+    // (debug_bounds keeps what a frame drew once, so what went away is read from the view.)
+    view.read_with(cx, |v, _| assert!(v.send.is_none(), "the dialog closes"));
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Cmd::Voice(VoiceCmd::Share(Some(s))) if s.fps == 30 && s.kbps == 8_000 && s.sharp && !s.active
+        )),
+        "{cmds:?}"
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::Signal(_))),
+        "nothing before the screen is open"
+    );
+    apply(&view, cx, voice(VoiceEvent::ShareOpen));
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [Cmd::Signal(ClientMsg::ShareStart {
+            fps: 30,
+            bitrate_kbps: 8_000
+        })]
+    ));
+    assert!(cx.debug_bounds("share-card").is_some());
+    click(cx, "share-stop");
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [
+            Cmd::Signal(ClientMsg::ShareStop),
+            Cmd::Voice(VoiceCmd::Share(None))
+        ]
+    ));
+    view.read_with(cx, |v, _| assert!(v.model.call.mine.is_none()));
+}
+
+#[gpui::test]
+fn message_text_and_names_select_and_copy(cx: &mut TestAppContext) {
+    use gpui::{Focusable, MouseButton, MouseDownEvent, point, px};
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        v.composer.update(cx, |i, cx| i.focus(window, cx))
+    });
+    // A drag across "first\nsecond line" (message 10's text) selects all of it; Ctrl+C copies it.
+    let b = cx.debug_bounds("md-10-1").expect("the text is drawn");
+    let none = Modifiers::none();
+    cx.simulate_mouse_down(b.origin + point(px(1.), px(2.)), MouseButton::Left, none);
+    cx.simulate_mouse_move(
+        b.bottom_right() + point(px(40.), px(-2.)),
+        MouseButton::Left,
+        none,
+    );
+    cx.simulate_mouse_up(b.bottom_right(), MouseButton::Left, none);
+    cx.read(|cx| {
+        assert_eq!(
+            super::select::Selection::selected(cx).as_deref(),
+            Some("first\nsecond line")
+        )
+    });
+    view.update_in(cx, |v, window, cx| {
+        assert!(
+            !v.composer.read(cx).focus_handle(cx).is_focused(window),
+            "the composer let go of the keys"
+        )
+    });
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|c| c.text()).as_deref(),
+        Some("first\nsecond line")
+    );
+
+    // A double click takes the word; a click elsewhere lets it go.
+    let at = b.origin + point(px(4.), px(2.));
+    cx.simulate_event(MouseDownEvent {
+        position: at,
+        button: MouseButton::Left,
+        modifiers: none,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(at, MouseButton::Left, none);
+    cx.read(|cx| {
+        assert_eq!(
+            super::select::Selection::selected(cx).as_deref(),
+            Some("first")
+        )
+    });
+    let room = cx.debug_bounds("composer").unwrap();
+    cx.simulate_mouse_down(room.center(), MouseButton::Left, none);
+    cx.read(|cx| assert_eq!(super::select::Selection::selected(cx), None));
+    cx.simulate_mouse_up(room.center(), MouseButton::Left, none);
+
+    // A drag over a name selects it and does not open the card (a click does: a_name_in_the_timeline_opens_the_card).
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
+    let n = cx.debug_bounds("name-10").unwrap();
+    cx.simulate_mouse_down(n.origin + point(px(1.), px(4.)), MouseButton::Left, none);
+    cx.simulate_mouse_move(
+        n.top_right() + point(px(20.), px(4.)),
+        MouseButton::Left,
+        none,
+    );
+    cx.simulate_mouse_up(
+        n.top_right() + point(px(20.), px(4.)),
+        MouseButton::Left,
+        none,
+    );
+    cx.read(|cx| {
+        assert_eq!(
+            super::select::Selection::selected(cx).as_deref(),
+            Some("Bob")
+        )
+    });
+    view.read_with(cx, |v, _| assert!(v.person.is_none()));
 }

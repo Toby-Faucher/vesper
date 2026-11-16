@@ -27,8 +27,9 @@ use vesper_protocol::{
 use crate::files::{self, IMAGE_MAX, Picture};
 use crate::settings::Denoise;
 use crate::store::{Saved, SessionStore};
+use crate::voice::check::Check;
 use crate::voice::denoise::{self, MODEL_MAX, MODEL_URL};
-use crate::voice::{AudioDevices, Call, VoiceCmd, VoiceEvent};
+use crate::voice::{AudioDevices, Call, Setup, VoiceCmd, VoiceEvent};
 
 /// From the UI to the network thread.
 #[derive(Debug)]
@@ -82,6 +83,18 @@ pub enum Cmd {
     CancelUpload(u64),
     /// An image attachment, decoded small for the timeline.
     FetchImage(String),
+    /// An image attachment for the viewer, decoded up to `files::FULL`.
+    FetchFull(String),
+    /// `GET /api/users/{user_id}/avatar?v={version}`: a profile picture.
+    FetchAvatar {
+        user_id: String,
+        version: String,
+    },
+    /// `GET /api/search`; the answer comes back with `seq`.
+    Search {
+        seq: u64,
+        q: vesper_protocol::SearchQuery,
+    },
     /// An attachment written to `to`; `open` hands it to the system's app after.
     Download {
         id: String,
@@ -94,6 +107,11 @@ pub enum Cmd {
     },
     /// To the call engine. `Start` starts a call, ending the one before.
     Voice(VoiceCmd),
+    /// The mic test outside a call: start one with these devices and filter (ending the one before), or stop.
+    MicTest(Option<Setup>),
+    /// `PUT /api/me/avatar` with this picture (`account::square_picture`); the answer is `Event::Http` with
+    /// `account:picture`.
+    PutAvatar(Png),
     /// A message on the socket. Dropped while it is down.
     Signal(ClientMsg),
     /// `POST /api/users/{user_id}/{action}`: `force-mute` (with `muted`), `stop-share`, `kick` or `disconnect`.
@@ -106,6 +124,33 @@ pub enum Cmd {
     OpenDm(String),
     /// Offline: try the socket now, not at the end of the wait.
     RetryNow,
+    /// Any other JSON route (the Settings and admin pages). The answer comes back as `Event::Http` with `tag`.
+    Http {
+        tag: String,
+        method: Method,
+        path: String,
+        body: Option<Json>,
+    },
+}
+
+/// A picture to send. `Debug` prints its size only.
+#[derive(Clone, PartialEq)]
+pub struct Png(pub Vec<u8>);
+
+impl std::fmt::Debug for Png {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} bytes", self.0.len())
+    }
+}
+
+/// A JSON body or answer that may hold a password, an invite or a reset link: `Debug` never prints it.
+#[derive(Clone, PartialEq)]
+pub struct Json(pub Value);
+
+impl std::fmt::Debug for Json {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***")
+    }
 }
 
 /// From the network thread to the UI.
@@ -190,6 +235,21 @@ pub enum Event {
         id: String,
         picture: Option<Picture>,
     },
+    /// The viewer's picture; `None` when it did not load or decode.
+    Full {
+        id: String,
+        picture: Option<Picture>,
+    },
+    /// `None` when it did not load or decode.
+    Avatar {
+        user_id: String,
+        version: String,
+        picture: Option<Picture>,
+    },
+    Searched {
+        seq: u64,
+        page: Result<vesper_protocol::SearchPage, Fail>,
+    },
     Downloaded {
         path: PathBuf,
         open: bool,
@@ -198,6 +258,13 @@ pub enum Event {
     /// A moderator action's answer: the error in words when it failed.
     Moderated(Result<(), String>),
     DmOpened(Box<vesper_protocol::RoomInfo>),
+    /// The answer to `Cmd::Http` with the same `tag`.
+    Http {
+        tag: String,
+        result: Result<Json, Fail>,
+    },
+    /// From the mic test started with `Cmd::MicTest`: `Level` or `Failed`.
+    MicTest(VoiceEvent),
     /// From the call started with `VoiceCmd::Start { call, .. }`.
     Voice {
         call: u64,
@@ -221,6 +288,15 @@ pub enum Fail {
 impl Fail {
     pub fn unauthorized(self) -> bool {
         matches!(self, Fail::Api { status: 401, .. })
+    }
+
+    /// Trying again may help: no answer, or the server failed (5xx). Not a full disk (507), too large or a limit.
+    pub fn worth_retrying(self) -> bool {
+        match self {
+            Fail::Network => true,
+            Fail::Api { status, .. } => status >= 500 && status != 507,
+            Fail::NotVesper => false,
+        }
     }
 
     /// Plain words for the error, the same texts as `web/src/lib/api.ts`.
@@ -548,10 +624,15 @@ impl Api {
         if !files::valid_id(id) {
             return Err(Fail::NotVesper);
         }
-        let url = self
-            .base
-            .join(&format!("/api/uploads/{id}"))
-            .map_err(|_| Fail::NotVesper)?;
+        self.get_ok(&format!("/api/uploads/{id}"), &[]).await
+    }
+
+    /// A GET answered with success, with the query pairs `query` encoded.
+    async fn get_ok(&self, path: &str, query: &[(&str, &str)]) -> Result<reqwest::Response, Fail> {
+        let mut url = self.base.join(path).map_err(|_| Fail::NotVesper)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
         let res = self
             .http
             .get(url)
@@ -568,6 +649,58 @@ impl Api {
             return Err(Fail::Api { status, code });
         }
         Ok(res)
+    }
+
+    /// `PUT /api/me/avatar`: the raw picture; the answer is my `UserInfo`.
+    pub async fn put_avatar(&self, picture: Vec<u8>) -> Result<Value, Fail> {
+        let url = self
+            .base
+            .join("/api/me/avatar")
+            .map_err(|_| Fail::NotVesper)?;
+        Self::answer(self.http.put(url).body(picture)).await
+    }
+
+    /// A profile picture, at most the server's 512 KiB. The id must be the server's 32 hex.
+    pub async fn avatar(&self, user_id: &str, version: &str) -> Result<Vec<u8>, Fail> {
+        if !files::valid_id(user_id) {
+            return Err(Fail::NotVesper);
+        }
+        let mut res = self
+            .get_ok(&format!("/api/users/{user_id}/avatar"), &[("v", version)])
+            .await?;
+        let mut bytes = vec![];
+        while let Some(chunk) = res.chunk().await.map_err(|_| Fail::Network)? {
+            if bytes.len() + chunk.len() > 512 * 1024 {
+                return Err(TOO_LARGE);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
+    /// `GET /api/search`: the fields that are set, as query pairs.
+    pub async fn search(
+        &self,
+        q: &vesper_protocol::SearchQuery,
+    ) -> Result<vesper_protocol::SearchPage, Fail> {
+        let num = |v: Option<i64>| v.map(|n| n.to_string());
+        let (room, from, to, before) = (num(q.room_id), num(q.from), num(q.to), num(q.before));
+        let mut pairs = vec![("q", q.q.as_str())];
+        for (k, v) in [
+            ("room_id", &room),
+            ("from", &from),
+            ("to", &to),
+            ("before", &before),
+        ] {
+            if let Some(v) = v {
+                pairs.push((k, v));
+            }
+        }
+        if let Some(a) = &q.author_id {
+            pairs.push(("author_id", a));
+        }
+        let res = self.get_ok("/api/search", &pairs).await?;
+        res.json().await.map_err(|_| Fail::NotVesper)
     }
 
     pub async fn mark_read(&self, room: i64, id: i64) -> Result<(), Fail> {
@@ -683,6 +816,7 @@ pub fn start(
                     tx,
                     conn: None,
                     call: None,
+                    check: None,
                     uploads: HashMap::new(),
                     warned: false,
                 }
@@ -711,6 +845,7 @@ struct Net {
     tx: UnboundedSender<Event>,
     conn: Option<Conn>,
     call: Option<Call>,
+    check: Option<Check>,
     /// Running uploads by tray key, so Cancel can stop them.
     uploads: HashMap<u64, JoinHandle<()>>,
     /// NotRemembered was sent.
@@ -727,13 +862,31 @@ impl Net {
         self.drop_conn();
     }
 
+    /// DeepFilterNet's model for a call or a mic test: it starts with the noise gate, and the model joins once loaded.
+    fn denoiser(&self, mode: Denoise) -> std::sync::mpsc::Receiver<denoise::Loaded> {
+        let (loaded, denoiser) = std::sync::mpsc::channel();
+        if mode == Denoise::DeepFilter {
+            let api = self.conn.as_ref().map(|c| c.api.clone());
+            tokio::spawn(async move {
+                let fetch = async {
+                    match api {
+                        Some(api) => api.model().await,
+                        None => Err("not signed in".into()),
+                    }
+                };
+                let _ = loaded.send(denoise::load(denoise::cache_path(), fetch).await);
+            });
+        }
+        denoiser
+    }
+
     fn emit(&self, ev: Event) {
         let _ = self.tx.send(ev);
     }
 
     /// Ends the socket and any call.
     fn drop_conn(&mut self) -> Option<Api> {
-        self.call = None;
+        (self.call, self.check) = (None, None);
         for (_, u) in self.uploads.drain() {
             u.abort();
         }
@@ -836,24 +989,20 @@ impl Net {
                 }
             }
             Cmd::Voice(VoiceCmd::Start { call, setup }) => {
-                self.call = None; // the old call's thread ends first
-                let (loaded, denoiser) = std::sync::mpsc::channel();
-                if setup.denoise == Denoise::DeepFilter {
-                    // The call starts now, with the noise gate; DeepFilterNet joins it once loaded.
-                    let api = self.conn.as_ref().map(|c| c.api.clone());
-                    tokio::spawn(async move {
-                        let fetch = async {
-                            match api {
-                                Some(api) => api.model().await,
-                                None => Err("not signed in".into()),
-                            }
-                        };
-                        let _ = loaded.send(denoise::load(denoise::cache_path(), fetch).await);
-                    });
-                }
+                (self.call, self.check) = (None, None); // the old call's thread ends first, and a mic test
+                let denoiser = self.denoiser(setup.denoise);
                 let tx = self.tx.clone();
                 let emit = move |ev| drop(tx.send(Event::Voice { call, ev }));
                 self.call = Some(Call::start(self.devices.clone(), setup, denoiser, emit));
+            }
+            Cmd::MicTest(setup) => {
+                self.check = None;
+                if let Some(setup) = setup {
+                    let denoiser = self.denoiser(setup.denoise);
+                    let tx = self.tx.clone();
+                    let emit = move |ev| drop(tx.send(Event::MicTest(ev)));
+                    self.check = Some(Check::start(self.devices.clone(), setup, denoiser, emit));
+                }
             }
             Cmd::Upload { key, room, path } => {
                 let Some(c) = &self.conn else { return };
@@ -871,7 +1020,21 @@ impl Net {
                                 let _ = ptx.send(Event::UploadProgress { key, progress: p });
                             }
                         };
-                        let ev = match api.upload(room, &path, progress).await {
+                        let progress = Arc::new(progress);
+                        let mut tries = 0;
+                        let r = loop {
+                            let p = progress.clone();
+                            let r = api.upload(room, &path, move |x| p(x)).await;
+                            match r {
+                                Err(Some(f)) if f.worth_retrying() && tries < UPLOAD_RETRIES => {
+                                    tries += 1;
+                                    tokio::time::sleep(retry_wait(tries)).await;
+                                    progress(0.0);
+                                }
+                                r => break r,
+                            }
+                        };
+                        let ev = match r {
                             Ok(attachment) => {
                                 // A pasted picture was ours to make; it is on the server now.
                                 if path.starts_with(files::cache_dir("paste")) {
@@ -938,6 +1101,14 @@ const TOO_LARGE: Fail = Fail::Api {
     code: ApiErrorCode::TooLarge,
 };
 
+/// A failed upload is tried again this many times on its own, then waits for Retry.
+const UPLOAD_RETRIES: u32 = 3;
+
+/// The wait before the `n`th try again: 1, 2, then 4 s.
+fn retry_wait(n: u32) -> Duration {
+    Duration::from_secs(1 << (n.max(1) - 1).min(4))
+}
+
 pub const ATTACH_FAILED: &str = "That file could not be attached. Upload it again.";
 pub const PINS_FULL: &str = "This room has 50 pins, the most it can hold. Unpin one first.";
 pub const SAVE_FAILED: &str = "The file could not be saved there.";
@@ -951,6 +1122,26 @@ fn changed(
         Ok(m) => (Ok(()), ok(m)),
         Err(f) => (Err(f), Event::ChangeFailed(f.text().into())),
     }
+}
+
+/// Downloaded bytes decoded off the UI thread (to fit `max`, else the timeline's size): the request's outcome and
+/// the picture, `None` when it did not load or decode.
+async fn decoded(
+    r: Result<Vec<u8>, Fail>,
+    max: Option<(u32, u32)>,
+) -> (Result<(), Fail>, Option<Picture>) {
+    let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+    let picture = match r {
+        Ok(bytes) => tokio::task::spawn_blocking(move || match max {
+            Some(m) => files::decode_within(&bytes, m),
+            None => files::decode_picture(&bytes),
+        })
+        .await
+        .ok()
+        .flatten(),
+        Err(_) => None,
+    };
+    (res, picture)
 }
 
 /// One REST call; a 401 ends the session.
@@ -1063,16 +1254,30 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
             )
         }
         Cmd::FetchImage(id) => {
-            let r = api.download(&id, IMAGE_MAX).await;
-            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
-            let picture = match r {
-                Ok(bytes) => tokio::task::spawn_blocking(move || files::decode_picture(&bytes))
-                    .await
-                    .ok()
-                    .flatten(),
-                Err(_) => None,
-            };
+            let (res, picture) = decoded(api.download(&id, IMAGE_MAX).await, None).await;
             (res, Event::Image { id, picture })
+        }
+        Cmd::FetchFull(id) => {
+            let r = api.download(&id, IMAGE_MAX).await;
+            let (res, picture) = decoded(r, Some(files::FULL)).await;
+            (res, Event::Full { id, picture })
+        }
+        Cmd::FetchAvatar { user_id, version } => {
+            let r = api.avatar(&user_id, &version).await;
+            let (res, picture) = decoded(r, None).await;
+            let ev = Event::Avatar {
+                user_id,
+                version,
+                picture,
+            };
+            (res, ev)
+        }
+        Cmd::Search { seq, q } => {
+            let page = api.search(&q).await;
+            (
+                page.as_ref().map(|_| ()).map_err(|f| *f),
+                Event::Searched { seq, page },
+            )
         }
         Cmd::Download { id, to, open } => match api.download_to(&id, &to).await {
             Ok(()) => (Ok(()), Event::Downloaded { path: to, open }),
@@ -1100,6 +1305,34 @@ async fn request(api: Api, tx: UnboundedSender<Event>, cmd: Cmd) {
                 Ok(room) => (Ok(()), Event::DmOpened(Box::new(room))),
                 Err(f) => (Err(f), Event::Moderated(Err(f.text().into()))),
             }
+        }
+        Cmd::Http {
+            tag,
+            method,
+            path,
+            body,
+        } => {
+            let r = api.call::<Value>(method, &path, body.map(|b| b.0)).await;
+            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+            (
+                res,
+                Event::Http {
+                    tag,
+                    result: r.map(Json),
+                },
+            )
+        }
+        Cmd::PutAvatar(png) => {
+            let r = api.put_avatar(png.0).await;
+            let res = r.as_ref().map(|_| ()).map_err(|f| *f);
+            let tag = "account:picture".into();
+            (
+                res,
+                Event::Http {
+                    tag,
+                    result: r.map(Json),
+                },
+            )
         }
         Cmd::MarkRead { room, id } => match api.mark_read(room, id).await {
             Ok(()) => return,
@@ -1204,6 +1437,22 @@ async fn socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uploads_try_again_only_when_it_can_help() {
+        let api = |status| Fail::Api {
+            status,
+            code: ApiErrorCode::Internal,
+        };
+        assert!(Fail::Network.worth_retrying());
+        assert!(api(500).worth_retrying() && api(503).worth_retrying());
+        for s in [400, 401, 403, 413, 429, 507] {
+            assert!(!api(s).worth_retrying(), "{s}");
+        }
+        assert!(!Fail::NotVesper.worth_retrying());
+        let waits: Vec<_> = (1..=UPLOAD_RETRIES).map(retry_wait).collect();
+        assert_eq!(waits, [1, 2, 4].map(Duration::from_secs));
+    }
 
     #[test]
     fn origin_of_normalises_like_the_server() {

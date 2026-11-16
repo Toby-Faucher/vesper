@@ -13,6 +13,7 @@ use vesper_desktop::model::{Model, Screen};
 use vesper_desktop::net::{self, Cmd, Event};
 use vesper_desktop::settings::Denoise;
 use vesper_desktop::store::MemStore;
+use vesper_desktop::voice::share::{self, OpenScreen, Pattern};
 use vesper_desktop::voice::{AudioDevices, AudioInput, AudioOutput, RATE};
 use vesper_protocol::Me;
 use vesper_server::config::Config;
@@ -203,6 +204,11 @@ impl AudioDevices for FakeAudio {
 
     fn output(&self, _: Option<&str>) -> Result<Box<dyn AudioOutput>, String> {
         Ok(Box::new(Speakers(self.played.clone())))
+    }
+
+    /// A shared screen is the moving colour bars, 320x180.
+    fn screen(&self) -> OpenScreen {
+        Box::new(|fps| Ok(Box::new(Pattern::new(320, 180, fps)) as Box<dyn share::Screen>))
     }
 }
 

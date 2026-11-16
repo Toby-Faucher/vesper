@@ -311,3 +311,21 @@ async fn a_session_ended_elsewhere_goes_back_to_sign_in() {
     c.until("the store is cleared", |_| store.get().is_none())
         .await;
 }
+
+/// Settings > Account's picture: a photo cropped by `square_picture` is taken by the server, and the new version
+/// reaches the users list (which the avatar cache follows).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_profile_picture_is_taken_and_shown() {
+    let s = Server::start().await;
+    s.signup("ann", true).await;
+    let mut c = Client::start(Arc::default()).await;
+    c.sign_in(&s.origin, "ann").await;
+    let photo = image::RgbImage::from_fn(1200, 800, |x, y| image::Rgb([x as u8, y as u8, 90]));
+    let mut jpeg = std::io::Cursor::new(vec![]);
+    photo.write_to(&mut jpeg, image::ImageFormat::Jpeg).unwrap();
+    let png = vesper_desktop::ui::account::square_picture(jpeg.get_ref()).unwrap();
+    c.run(vec![Cmd::PutAvatar(vesper_desktop::net::Png(png))]);
+    let me = c.id();
+    c.until("my picture", |m| m.state.users[&me].avatar.is_some())
+        .await;
+}

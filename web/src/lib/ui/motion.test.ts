@@ -205,6 +205,14 @@ it('glide_slides_a_fill_from_the_old_row_to_the_new_one_then_gives_the_row_its_o
   expect(to.style.backgroundColor).toBe('');
 });
 
+it('glide_sideways_moves_and_stretches_from_the_old_option', () => {
+  const seg = box();
+  const opt = (left: number, width: number) => ({ offsetParent: seg, offsetTop: 2, offsetLeft: left, offsetWidth: width, offsetHeight: 24, style: { backgroundColor: '' } }) as unknown as HTMLElement;
+  glide(opt(2, 80), opt(82, 64));
+  expect(animate).toHaveBeenCalledWith(seg.children[0], expect.objectContaining({ transform: ['translate(-80px, 0px) scaleX(1.25)', 'translate(0, 0) scaleX(1)'] }));
+  expect((seg.children[0] as Box).style.transformOrigin).toBe('0 0');
+});
+
 it('glide_under_reduced_motion_or_across_parents_does_not_animate', () => {
   reduce = true;
   const nav = box();

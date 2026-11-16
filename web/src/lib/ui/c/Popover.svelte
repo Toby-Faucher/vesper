@@ -66,6 +66,12 @@
       const up = p.side === 'top';
       el.style.top = up ? '' : `${p.y}px`;
       el.style.bottom = up ? `${innerHeight - p.y - r.height}px` : '';
+      // It grows out of its anchor: the origin is the anchor's middle, on the edge that faces it.
+      const within = (v: number, max: number) => Math.min(Math.max(v, 0), max);
+      const sideways = p.side === 'right' || p.side === 'left';
+      const ox = sideways ? (p.side === 'right' ? 0 : r.width) : within(a.left + a.width / 2 - p.x, r.width);
+      const oy = sideways ? within(a.top + a.height / 2 - p.y, r.height) : up ? r.height : 0;
+      el.style.transformOrigin = `${ox}px ${oy}px`;
       enter(el, 'pop');
       (onopen ?? ((e) => e.focus()))(el);
     } else if (!open && shown()) {

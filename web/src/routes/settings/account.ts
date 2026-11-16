@@ -16,7 +16,7 @@ export const pwFailure = (err: unknown): PwError =>
 
 
 const fig = (v: number | null, unit: string, digits = 0) => (v === null ? '–' : `${v.toFixed(digits)} ${unit}`);
-const MODE = { deepfilter: 'DeepFilterNet', browser: 'browser filter', off: 'no filter' } as const;
+const MODE = { deepfilter: 'DeepFilterNet', rnnoise: 'RNNoise', browser: 'browser filter', off: 'no filter' } as const;
 /** One line of Your recent calls: how long, the filter it ended on (and why), and the figures. A figure never measured is a dash. */
 export function callLine(c: CallRecord): { head: string; figures: string } {
   const min = Math.round(c.duration_s / 60);

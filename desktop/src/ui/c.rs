@@ -2,18 +2,20 @@
 //! colour comes from the [`Tokens`](super::theme::Tokens) global, so a style or accent change repaints them.
 //!
 //! Button and IconButton fade their hover colours in `--dur-1` (`motion::hover`). Not ported yet: focus-visible
-//! rings (GPUI 0.2.2 has no focus-visible), the press scale (GPUI scales only an svg), tooltips (`data-tip`), avatar
-//! pictures.
+//! rings (GPUI 0.2.2 has no focus-visible), the press scale (GPUI scales only an svg), tooltips (`data-tip`).
 
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{Animation, AnimationExt};
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, Entity, Hsla, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
-    Transformation, Window, div, percentage, px, transparent_black,
+    AnyElement, App, ClickEvent, Div, ElementId, Entity, Global, Hsla, ImageSource,
+    InteractiveElement, IntoElement, ObjectFit, ParentElement, Pixels, RenderImage, RenderOnce,
+    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, StyledImage, Transformation,
+    Window, anchored, deferred, div, img, percentage, px, transparent_black,
 };
 use gpui_component::StyledExt;
 use gpui_component::input::{Input, InputState};
@@ -412,6 +414,7 @@ pub fn text_input(state: &Entity<InputState>, cx: &App) -> Input {
     let t = tokens(cx);
     // Styled::h, not Input::h (the multi-line height).
     Styled::h(Input::new(state), px(32.))
+        .w_full()
         .px(px(10.))
         .py_0()
         .bg(t.bg_element)
@@ -453,6 +456,8 @@ impl RenderOnce for PasswordInput {
         let (hover, fg) = (t.bg_hover, t.fg);
         div()
             .relative()
+            .flex()
+            .w_full()
             .child(text_input(&self.state, cx).pr(px(64.)))
             .child(
                 div()
@@ -588,11 +593,13 @@ pub fn range(state: &Entity<SliderState>, cx: &App) -> Slider {
     Slider::new(state).bg(t.accent).text_color(t.fg)
 }
 
+/// `avatar.ts` SLOT_HEX: the avatar colour of each slot, as the server stores it.
+pub const SLOT_HEX: [&str; 8] = [
+    "#ed8d7d", "#e5955d", "#99b860", "#6fc082", "#31c3b5", "#41bae4", "#6db0f4", "#e68aaf",
+];
+
 /// `avatar.ts`: the slot (1 to 8) of a user's accent, or a hash of the id for any other accent.
 pub fn avatar_slot(user_id: &str, accent: &str) -> usize {
-    const SLOT_HEX: [&str; 8] = [
-        "#ed8d7d", "#e5955d", "#99b860", "#6fc082", "#31c3b5", "#41bae4", "#6db0f4", "#e68aaf",
-    ];
     let a = accent.trim().to_lowercase();
     if let Some(i) = SLOT_HEX.iter().position(|s| *s == a) {
         return i + 1;
@@ -614,9 +621,76 @@ pub fn initials(name: &str) -> String {
         .to_uppercase()
 }
 
+/// A profile picture: asked for, drawn, or not to be had (the letters stay).
+pub enum Pic {
+    Loading,
+    Ready(Arc<RenderImage>),
+    Failed,
+}
+
+/// Profile pictures by user id, each with the version (`UserInfo.avatar`) it is for. Kept in step with the users by
+/// [`Pictures::sync`]; [`Avatar`] draws a ready one over its letters, as `Avatar.svelte` puts the `<img>` over them.
+#[derive(Default)]
+pub struct Pictures(pub HashMap<String, (String, Pic)>);
+
+impl Global for Pictures {}
+
+impl Pictures {
+    /// Brings the cache in step with `want` (user id, picture version): a new or changed version is asked for (its
+    /// user id and version returned), a user with no picture any more is dropped. A changed version drops the old
+    /// picture at once, so the letters show until the new one comes. Returns the images let go too.
+    pub fn sync<'a>(
+        &mut self,
+        want: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    ) -> (Vec<(String, String)>, Vec<Arc<RenderImage>>) {
+        let (mut fetch, mut keep, mut gone) = (vec![], HashMap::new(), vec![]);
+        let mut let_go = |p: Pic| {
+            if let Pic::Ready(i) = p {
+                gone.push(i);
+            }
+        };
+        for (id, v) in want {
+            let Some(v) = v else { continue };
+            let entry = match self.0.remove(id) {
+                Some((had, pic)) if had == v => (had, pic),
+                old => {
+                    if let Some((_, p)) = old {
+                        let_go(p);
+                    }
+                    fetch.push((id.to_string(), v.to_string()));
+                    (v.to_string(), Pic::Loading)
+                }
+            };
+            keep.insert(id.to_string(), entry);
+        }
+        for (_, (_, p)) in std::mem::replace(&mut self.0, keep) {
+            let_go(p);
+        }
+        (fetch, gone)
+    }
+
+    /// A picture came: kept only when it is still the version wanted for that user.
+    pub fn loaded(&mut self, user_id: &str, version: &str, image: Option<Arc<RenderImage>>) {
+        if let Some((v, pic)) = self.0.get_mut(user_id)
+            && v == version
+        {
+            *pic = image.map_or(Pic::Failed, Pic::Ready);
+        }
+    }
+
+    /// The picture to draw for a user, once it is there.
+    pub fn ready(&self, user_id: &str) -> Option<Arc<RenderImage>> {
+        match self.0.get(user_id) {
+            Some((_, Pic::Ready(i))) => Some(i.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// `Avatar.svelte`: initials on the user's slot colour in `--on-avatar`, `--weight-ui`; 16 (the 20 scaled to 0.8), 20, 32 or 40 px
 /// (12/16, 13/20, 16/24 text; one letter at 16 and 20). `speaking` draws a 2 px `--bg-sidebar` gap and a 2 px accent ring; muted or deafened
-/// a danger glyph at the bottom right at 32 and 40.
+/// a danger glyph at the bottom right at 32 and 40. The user's picture ([`Pictures`]), once loaded, covers the
+/// initials: the same circle, `object-fit: cover`.
 #[derive(IntoElement)]
 pub struct Avatar {
     user_id: SharedString,
@@ -730,6 +804,21 @@ impl RenderOnce for Avatar {
                 )
             })
             .child(text)
+            .when_some(
+                cx.try_global::<Pictures>()
+                    .and_then(|p| p.ready(&self.user_id)),
+                |d, i| {
+                    d.child(
+                        img(ImageSource::Render(i))
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size(px(s))
+                            .rounded_full()
+                            .object_fit(ObjectFit::Cover),
+                    )
+                },
+            )
             .when_some(glyph, |d, g| {
                 d.child(
                     div()
@@ -758,6 +847,8 @@ pub struct Badge {
     mention: bool,
     n: i64,
     pose: Option<motion::Pose>,
+    /// Its digits roll when the number changes (`Roll.svelte`): kept per this id; `true` changes them at once.
+    roll: Option<(ElementId, bool)>,
 }
 
 impl Badge {
@@ -766,10 +857,15 @@ impl Badge {
             mention,
             n,
             pose: None,
+            roll: None,
         }
     }
     pub fn pose(mut self, p: Option<motion::Pose>) -> Self {
         self.pose = p;
+        self
+    }
+    pub fn roll(mut self, id: impl Into<ElementId>, still: bool) -> Self {
+        self.roll = Some((id.into(), still));
         self
     }
     /// What it reads, which is also what a bump is keyed on.
@@ -780,7 +876,15 @@ impl Badge {
 }
 
 impl RenderOnce for Badge {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let digits = self.roll.clone().map(|(id, still)| {
+            let n = if self.n > 99 {
+                "99+".into()
+            } else {
+                self.n.to_string()
+            };
+            motion::roll(id, &n, px(16.), still, window, cx)
+        });
         let t = tokens(cx);
         let (bg, fg) = if self.mention {
             (t.accent, t.on_accent)
@@ -804,14 +908,17 @@ impl RenderOnce for Badge {
                 .line_height(px(16. * k))
                 .font_weight(t.weight_strong)
                 .whitespace_nowrap()
-                .child(text.clone())
         };
         match self.pose {
-            None => pill(1.).into_any_element(),
+            None if digits.is_some() => pill(1.)
+                .children(self.mention.then_some("@"))
+                .child(digits.expect("checked"))
+                .into_any_element(),
+            None => pill(1.).child(text.clone()).into_any_element(),
             Some(p) => div()
                 .relative()
                 .flex_none()
-                .child(pill(1.).invisible())
+                .child(pill(1.).child(text.clone()).invisible())
                 .child(
                     div()
                         .absolute()
@@ -820,7 +927,7 @@ impl RenderOnce for Badge {
                         .items_center()
                         .justify_center()
                         .opacity(p.opacity)
-                        .child(pill(0.6 + 0.4 * p.t)),
+                        .child(pill(0.6 + 0.4 * p.t).child(text.clone())),
                 )
                 .into_any_element(),
         }
@@ -920,7 +1027,7 @@ impl RenderOnce for MenuItem {
 /// `Dialog.svelte`: over a backdrop of `--bg-app` at 72 %, a 440 px box (1 px `--line-subtle`, `--radius-lg`,
 /// `--bg-raised`, `--shadow-float`): the title (16/24, `--weight-strong`), the body (13/20, `--fg-2`), an optional
 /// footer (right-aligned, 8 px gap, a `--line-subtle` rule above) and a Close button at the top right. Put it last in
-/// a `relative` parent the size of the window. The backdrop takes every click and scroll. The parent holds the focus
+/// a `relative` parent the size of the window. The backdrop takes every click and scroll; a click there closes. The parent holds the focus
 /// (`Vesper::dialog_focus`), where Enter confirms and Esc closes.
 /// shortcut: centred, not the web's `margin: auto` in a scrolling top layer; Tab is not trapped in it.
 #[derive(IntoElement)]
@@ -929,6 +1036,7 @@ pub struct Dialog {
     body: Vec<AnyElement>,
     footer: Option<AnyElement>,
     on_close: Option<OnClick>,
+    width: f32,
 }
 
 impl Dialog {
@@ -938,7 +1046,13 @@ impl Dialog {
             body: vec![],
             footer: None,
             on_close: None,
+            width: 440.,
         }
+    }
+    /// Another width than 440 px (the image viewer's `wide`: as wide as its picture).
+    pub fn width(mut self, w: f32) -> Self {
+        self.width = w;
+        self
     }
     pub fn footer(mut self, f: impl IntoElement) -> Self {
         self.footer = Some(f.into_any_element());
@@ -965,7 +1079,9 @@ impl RenderOnce for Dialog {
         }
         let mut backdrop: Hsla = t.bg_app.into();
         backdrop.a = 0.72;
+        let on_close = self.on_close.clone();
         div()
+            .id("dialog-backdrop")
             .absolute()
             .inset_0()
             .occlude()
@@ -973,13 +1089,17 @@ impl RenderOnce for Dialog {
             .items_center()
             .justify_center()
             .bg(backdrop)
+            // A click on the backdrop closes, as the web's: pressed there, not dragged out of the box (the box takes
+            // its own presses, so they never start a click here).
+            .when_some(on_close, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)))
             .child(
                 div()
                     .id("dialog")
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .relative()
                     .flex()
                     .flex_col()
-                    .w(px(440.))
+                    .w(px(self.width))
                     .border_1()
                     .border_color(t.line_subtle)
                     .rounded(t.radius_lg)
@@ -1021,6 +1141,228 @@ impl RenderOnce for Dialog {
                     .child(div().absolute().top(px(12.)).right(px(12.)).child(close)),
             )
     }
+}
+
+type OnPick = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
+/// `Select.svelte`: the `.control` box (32 px, 10 px left, 32 px right for the chevron in `--fg-3`) with the chosen
+/// option. A click opens the options in a popover under it, `list_width` wide, the chosen one on `--bg-selected` (the
+/// web shows the system's own list). Which select is open is the owner's: `on_toggle` gets the new state.
+#[derive(IntoElement)]
+pub struct Select {
+    id: SharedString,
+    options: Vec<SharedString>,
+    chosen: Option<usize>,
+    open: bool,
+    disabled: bool,
+    list_width: Pixels,
+    on_toggle: Option<OnBool>,
+    on_pick: Option<OnPick>,
+}
+
+impl Select {
+    /// `id` is also the debug selector; option `i` is `<id>-<i>`.
+    pub fn new(
+        id: impl Into<SharedString>,
+        options: impl IntoIterator<Item = impl Into<SharedString>>,
+        chosen: Option<usize>,
+        open: bool,
+    ) -> Self {
+        Select {
+            id: id.into(),
+            options: options.into_iter().map(Into::into).collect(),
+            chosen,
+            open,
+            disabled: false,
+            list_width: px(240.),
+            on_toggle: None,
+            on_pick: None,
+        }
+    }
+    pub fn disabled(mut self, on: bool) -> Self {
+        self.disabled = on;
+        self
+    }
+    pub fn list_width(mut self, w: Pixels) -> Self {
+        self.list_width = w;
+        self
+    }
+    pub fn on_toggle(mut self, f: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_toggle = Some(Rc::new(f));
+        self
+    }
+    pub fn on_pick(mut self, f: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_pick = Some(Rc::new(f));
+        self
+    }
+}
+
+impl RenderOnce for Select {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let t = tokens(cx);
+        let label = self
+            .chosen
+            .and_then(|i| self.options.get(i).cloned())
+            .unwrap_or_default();
+        let open = self.open && !self.disabled;
+        let toggle = self.on_toggle.clone();
+        let sel = self.id.to_string();
+        let trigger = div()
+            .id(ElementId::Name(self.id.clone()))
+            .debug_selector(move || sel)
+            .relative()
+            .flex()
+            .items_center()
+            .w_full()
+            .h(px(32.))
+            .pl(px(10.))
+            .pr(px(32.))
+            .border_1()
+            .border_color(if open { t.focus } else { t.line })
+            .rounded(t.radius)
+            .bg(t.bg_element)
+            .text_step(TEXT_SM)
+            .text_color(if self.disabled { t.fg_disabled } else { t.fg })
+            .when(self.disabled, |d| d.opacity(0.6))
+            .when_some(toggle.filter(|_| !self.disabled), |d, f| {
+                d.on_click(move |_, w, cx| f(!open, w, cx))
+            })
+            .child(div().min_w_0().ellipsis().child(label))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(8.))
+                    .flex()
+                    .items_center()
+                    .child(icon("chevronDown").text_color(t.fg_3)),
+            );
+        let list = open.then(|| {
+            let (sel, hover) = (t.bg_selected, t.bg_hover);
+            let close = self.on_toggle.clone();
+            let rows = self.options.into_iter().enumerate().map(|(i, o)| {
+                let pick = self.on_pick.clone();
+                let close = self.on_toggle.clone();
+                let selector = format!("{}-{i}", self.id);
+                div()
+                    .id(ElementId::NamedInteger("option".into(), i as u64))
+                    .debug_selector(move || selector)
+                    .flex()
+                    .items_center()
+                    .h(px(32.))
+                    .px(px(8.))
+                    .rounded(t.radius_sm)
+                    .when(self.chosen == Some(i), |d| d.bg(sel))
+                    .hover(move |s| s.bg(hover))
+                    .on_click(move |_, w, cx| {
+                        if let Some(f) = &close {
+                            f(false, w, cx);
+                        }
+                        if let Some(f) = &pick {
+                            f(i, w, cx);
+                        }
+                    })
+                    .child(div().min_w_0().ellipsis().child(o))
+            });
+            deferred(
+                anchored().snap_to_window_with_margin(px(8.)).child(
+                    div().pt(px(4.)).child(
+                        popover_frame(cx)
+                            .id(ElementId::Name(format!("{}-list", self.id).into()))
+                            .w(self.list_width)
+                            .max_w(self.list_width)
+                            .max_h(px(320.))
+                            .overflow_y_scroll()
+                            .on_mouse_down_out(move |_, w, cx| {
+                                if let Some(f) = &close {
+                                    f(false, w, cx);
+                                }
+                            })
+                            .children(rows),
+                    ),
+                ),
+            )
+            .with_priority(2)
+        });
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .child(trigger)
+            .children(list)
+    }
+}
+
+/// `Kbd.svelte`: 20 px tall, at least 20 wide, 4 px sides, `--radius-sm`, a `--line` border with a `--line-strong`
+/// bottom, `--bg-element`, 12/16 `--fg-2`.
+pub fn kbd(text: impl Into<SharedString>, cx: &App) -> Div {
+    let t = tokens(cx);
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .h(px(20.))
+        .min_w(px(20.))
+        .px(px(4.))
+        .rounded(t.radius_sm)
+        .border_1()
+        .border_color(t.line)
+        .bg(t.bg_element)
+        .text_step(TEXT_XS)
+        .text_color(t.fg_2)
+        .child(text.into())
+}
+
+/// A radio `.list .option` of Settings > Appearance: no border of its own, 12 px sides, the dot at the left; checked
+/// `--bg-selected`, hover `--bg-hover`. `radio_list` frames the rows.
+pub fn radio_row(id: impl Into<ElementId>, checked: bool, cx: &App) -> gpui::Stateful<Div> {
+    let t = tokens(cx);
+    let hover = t.bg_hover;
+    let dot = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(13.))
+        .rounded_full()
+        .border_1()
+        .border_color(if checked { t.accent } else { t.line_strong })
+        .bg(if checked { t.accent } else { t.bg_element })
+        .when(checked, |d| {
+            d.child(div().size(px(5.)).rounded_full().bg(t.on_accent))
+        });
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .px(px(12.))
+        .when(checked, |d| d.bg(t.bg_selected))
+        .when(!checked, |d| d.hover(move |s| s.bg(hover)))
+        .text_step(TEXT_SM)
+        .text_color(t.fg)
+        .child(dot)
+}
+
+/// Appearance's `.list`: one 1 px `--line` box, `--radius`, at most 320 px wide, a 1 px `--line-subtle` hairline
+/// between the rows. The end rows take the inner radius, as `overflow: clip` cuts them on the web.
+pub fn radio_list(rows: Vec<gpui::Stateful<Div>>, cx: &App) -> Div {
+    let t = tokens(cx);
+    let (n, inner) = (rows.len(), t.radius - px(1.));
+    div()
+        .flex()
+        .flex_col()
+        .max_w(px(320.))
+        .rounded(t.radius)
+        .border_1()
+        .border_color(t.line)
+        .children(rows.into_iter().enumerate().map(|(i, r)| {
+            r.when(i > 0, |d| d.border_t_1().border_color(t.line_subtle))
+                .when(i == 0, |d| d.rounded_t(inner))
+                .when(i + 1 == n, |d| d.rounded_b(inner))
+        }))
 }
 
 /// `Status.svelte`'s kinds.

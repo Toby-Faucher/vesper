@@ -13,6 +13,7 @@
 
   const a = $derived(items[at]);
   const url = $derived(`/api/uploads/${a.id}`);
+  let loaded = $state(''); // the id of the image on screen once it loaded
   const go = (d: number) => (at = (at + d + items.length) % items.length);
 
   function onKey(e: KeyboardEvent) {
@@ -27,12 +28,12 @@
 <svelte:window onkeydown={onKey} />
 
 <Dialog open title={a.name} wide {onclose}>
-  <div class="stage">
+  <div class="stage" class:shown={loaded === a.id}>
     {#key a.id}
       {#if a.kind === 'video'}
         <!-- svelte-ignore a11y_media_has_caption: user uploads come with no captions -->
         <video src={url} controls autoplay playsinline aria-label="Video {a.name}"></video>
-      {:else}<img src={url} alt={a.name} />{/if}
+      {:else}<img src={url} alt={a.name} onload={() => (loaded = a.id)} />{/if}
     {/key}
   </div>
   {#snippet footer()}
@@ -51,5 +52,7 @@
 <style>
   /* The stage takes the image's or video's size (up to the dialog and the window), so a small one does not float in a band. */
   .stage { display: flex; min-height: 96px; align-items: center; justify-content: center; border-radius: var(--radius); background: var(--bg-element); }
+  /* A loaded image has no fill behind it, so a transparent one blends in. */
+  .stage.shown { background: none; }
   .stage img, .stage video { max-width: 100%; max-height: min(640px, calc(100vh - 220px)); }
 </style>

@@ -7,15 +7,32 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// What runs on the microphone before Opus. The web's modes are `deepfilter`, `browser` and `off`; the desktop has no
-/// browser filter, so its light mode is the web's noise gate on the raw microphone.
+/// What runs on the microphone before Opus. The web's modes are `deepfilter`, `rnnoise`, `browser` and `off`; the
+/// desktop has no browser filter, so its light mode is the web's noise gate on the raw microphone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Denoise {
     #[default]
     DeepFilter,
+    Rnnoise,
     Gate,
     Off,
+}
+
+/// The share bitrate's range in kbps, the server's (`web/src/lib/share/ceiling.ts`).
+pub const MIN_KBPS: u32 = 500;
+pub const MAX_KBPS: u32 = 30_000;
+/// The suggestion without a measured upload, the web's `suggestKbps(null, ...)`.
+pub const SUGGEST_KBPS: u32 = 8_000;
+/// How the share panel lays out the screens (the web's `vesper.shareLayout`). An unknown value reads as Grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShareLayout {
+    Focus,
+    Dock,
+    #[default]
+    #[serde(other)]
+    Grid,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -30,6 +47,8 @@ pub struct Settings {
     pub ptt_key: String,
     /// 32 to 510, 64 like the web's default.
     pub bitrate_kbps: u32,
+    /// The level marker, -100 to 0 dBFS (the web's `vad.thresholdDb`): the noise gate opens above it.
+    pub gate_db: i32,
     /// Device names; `None` or a name that is gone means the system default.
     pub input_device: Option<String>,
     pub output_device: Option<String>,
@@ -38,6 +57,21 @@ pub struct Settings {
     pub volumes: HashMap<String, f32>,
     /// The sidebar is hidden (the web keeps this in localStorage).
     pub sidebar_collapsed: bool,
+    /// The call bar is the small pill (the web's `vesper.callbar`).
+    pub call_small: bool,
+    /// Settings > Appearance, on this device only like the web's `vesper.scheme`: `dark`, `light` or `system`. An old
+    /// file's `style` (Persona, Cozy, BBS, Aurora were removed) is an unknown key: ignored on load, dropped on save.
+    pub scheme: String,
+    /// Settings > Notifications: the ring of a DM call, and its volume, 0 to 100 (the web's `vesper.notify`).
+    pub ring: bool,
+    pub volume: u32,
+    /// The share dialog's last choice, as the web's `vesper.share`: 30 or 60 fps, the bitrate (none: the suggestion)
+    /// and whether text stays sharp (else motion smooth).
+    pub share_fps: u32,
+    pub share_kbps: Option<u32>,
+    pub share_sharp: bool,
+    /// The share panel's layout, on this device only like the web's.
+    pub share_layout: ShareLayout,
 }
 
 impl Default for Settings {
@@ -49,11 +83,20 @@ impl Default for Settings {
             // Not Space as on the web: a global Space would open the mic on every jump in a game.
             ptt_key: "Grave".into(),
             bitrate_kbps: 64,
+            gate_db: -50,
             input_device: None,
             output_device: None,
             start_with_computer: false,
             volumes: HashMap::new(),
             sidebar_collapsed: false,
+            call_small: false,
+            scheme: "dark".into(),
+            ring: true,
+            volume: 50,
+            share_fps: 60,
+            share_kbps: None,
+            share_sharp: true,
+            share_layout: ShareLayout::Grid,
         }
     }
 }
@@ -61,6 +104,14 @@ impl Default for Settings {
 impl Settings {
     pub fn clamped(mut self) -> Settings {
         self.bitrate_kbps = self.bitrate_kbps.clamp(32, 510);
+        self.gate_db = self.gate_db.clamp(-100, 0);
+        self.volume = self.volume.min(100);
+        if !matches!(self.share_fps, 30 | 60) {
+            self.share_fps = 60;
+        }
+        self.share_kbps = self
+            .share_kbps
+            .filter(|k| (MIN_KBPS..=MAX_KBPS).contains(k));
         if crate::voice::ptt::parse_key(&self.ptt_key).is_none() {
             self.ptt_key = Settings::default().ptt_key;
         }
@@ -155,18 +206,27 @@ mod tests {
             push_to_talk: true,
             ptt_key: "F13".into(),
             bitrate_kbps: 96,
+            gate_db: -42,
             input_device: Some("USB mic".into()),
             output_device: None,
             start_with_computer: true,
             volumes: HashMap::from([("0123456789abcdef0123456789abcdef".into(), 250.0)]),
             sidebar_collapsed: true,
+            call_small: true,
+            scheme: "system".into(),
+            ring: false,
+            volume: 30,
+            share_fps: 30,
+            share_kbps: Some(4_000),
+            share_sharp: false,
+            share_layout: ShareLayout::Dock,
         };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
 
         std::fs::write(
             &p,
-            r#"{"bitrate_kbps": 9000, "ptt_key": "Nope", "denoise": "off", "volumes": {"a": 900, "b": -5}}"#,
+            r#"{"bitrate_kbps": 9000, "ptt_key": "Nope", "denoise": "off", "volumes": {"a": 900, "b": -5}, "share_fps": 45, "share_kbps": 90000}"#,
         )
         .unwrap();
         let s = Settings::load(&p);
@@ -180,6 +240,38 @@ mod tests {
             "volumes clamped"
         );
         assert!(s.echo_cancel, "on when the file does not say");
+        assert_eq!(
+            (s.share_fps, s.share_kbps),
+            (60, None),
+            "share settings clamped"
+        );
+
+        // Every mode is saved by its name; files from before RNNoise keep their mode.
+        for (name, d) in [
+            ("deepfilter", Denoise::DeepFilter),
+            ("rnnoise", Denoise::Rnnoise),
+            ("gate", Denoise::Gate),
+            ("off", Denoise::Off),
+        ] {
+            let s = Settings {
+                denoise: d,
+                ..Settings::default()
+            };
+            s.save(&p).unwrap();
+            assert!(
+                std::fs::read_to_string(&p)
+                    .unwrap()
+                    .contains(&format!(r#""denoise": "{name}""#))
+            );
+            assert_eq!(Settings::load(&p), s);
+        }
+
+        // An old file's style is ignored: the look is Vesper with the scheme it had.
+        std::fs::write(&p, r#"{"style": "cozy", "scheme": "light"}"#).unwrap();
+        let s = Settings::load(&p);
+        assert_eq!(s.scheme, "light");
+        s.save(&p).unwrap();
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("style"));
 
         // One value this build cannot read falls back alone; the rest, volumes too, stay.
         std::fs::write(

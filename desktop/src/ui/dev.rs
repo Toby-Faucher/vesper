@@ -3,17 +3,27 @@
 //!
 //! - `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD`: sign in with these once the sign in screen shows.
 //! - `VESPER_DEV_SCENE`: `sign-in` (stay there), or after signing in `room:<name>` (and wait for its messages),
-//!   `settings`, or anything else for the main screen as it opens.
+//!   `settings`, `settings:<section>` (`voice`, `notifications`, `appearance`, `account`, `desktop`), `admin:<section>`
+//!   (`invites`, `members`, `rooms`, `disk`, `server`), or anything else for the main screen as it opens.
 //! - `VESPER_DEV_CLOCK`: `HH:MM`, the time every message shows (the web scenes pin 7:41 PM). Dates are left alone.
 //! - `VESPER_DEV_SHIFT`: `id:days,...`, messages moved back that many days (the web harness does the same to its pages).
 //! - `VESPER_DEV_EMPTY`: the room has no messages: ready once its first page came.
 //! - `VESPER_DEV_DRAFT`: text put in the composer, with focus there, once the room is ready.
 //! - `VESPER_DEV_PINS`: opens the pins list once the room is ready.
+//! - `VESPER_DEV_VIEWER`: `<n>`: opens the image viewer on the room's n-th picture (oldest first) once ready.
+//! - `VESPER_DEV_FIND`: `switcher:<text>`, `search:<text>` or `shortcuts:`: opens that layer with the text typed, once
+//!   the room is ready.
 //! - `VESPER_DEV_SEND`: text sent from the composer 2.5 s after the room is ready (past the first hello's calm), then
 //!   `VESPER_DEV_ARRIVED` on stderr once it is in the list, for the harness's motion frames.
 //! - `VESPER_DEV_TYPING`: the room is ready only once someone is typing there (a typing push comes every few seconds).
+//! - `VESPER_DEV_THEN`: with a `settings:` scene, 2.5 s after READY: `scheme:<id>@<x>,<y>` picks that colour scheme
+//!   with a click at x, y (the theme reveal), or `page:<section>` opens that section (the nav's slide); then
+//!   `VESPER_DEV_ARRIVED`, for the harness's motion frames.
 //! - `VESPER_DEV_TRAY`: `name|size|mime|state;...` rows put in the room's upload tray (no upload runs). The state is
 //!   `queued`, `uploading:<share>` or `failed:quota`.
+//!
+//! - `VESPER_DEV_DISK`: a `DiskUse` as JSON: Admin > Disk use shows it in place of the server's answer (the harness
+//!   answers the web's GET with the same, so the bars do not hang on this machine's disk).
 //!
 //! - `VESPER_DEV_VOICE`: a room name: once the scene is reached, join voice there, with a silent fake microphone and
 //!   speakers that play nothing (no audio device is opened). Ready once connected and the first stats came.
@@ -24,7 +34,13 @@
 //! - `VESPER_DEV_PTT_HELD`: with VOICE, the push-to-talk key is held (push to talk is on in the scene's settings).
 //! - `VESPER_DEV_PERSON`: `<display name>@bar` or `@side`: opens that person's card from the call bar or the sidebar
 //!   once ready; `VESPER_DEV_VOLUME` sets their volume first.
+//! - `VESPER_DEV_SHARE`: with VOICE, `<width>x<height>`: once in, shares moving colour bars of that size in place of
+//!   the screen (`voice::share::Pattern`), through the real encode and send path, at 60 fps and 8 Mbps. Ready once
+//!   the share is announced; the encoder runs when someone watches.
 //! - `VESPER_DEV_RING`: a username: a DM call from them rings once ready (not from the server: for motion frames).
+//!
+//! - `VESPER_DEV_FRAMES`: once a second on stderr, `VESPER_DEV_FRAMES` with the draws, the share pictures that came,
+//!   and how late a 10 ms timer on the UI thread ran at most (a stall: the UI thread was busy that long).
 //!
 //! Prints `VESPER_DEV_READY` on stderr once the state is reached; the harness takes its picture after that. Then
 //! `VESPER_DEV_OFFLINE` once the socket drops (the harness stops the server for the offline scenes), and
@@ -42,6 +58,7 @@ use gpui_component::input::RopeExt;
 use super::Vesper;
 use crate::model::{Phase, Screen};
 use crate::uploads::{Item, UPLOAD_QUOTA, UpState};
+use crate::voice::share::{self, OpenScreen, Pattern};
 use crate::voice::{AudioDevices, AudioInput, AudioOutput, RATE};
 
 #[derive(Debug, Default, PartialEq)]
@@ -66,12 +83,18 @@ pub struct Dev {
     empty: bool,
     draft: Option<String>,
     pins: bool,
+    find: Option<String>,
+    viewer: Option<usize>,
     typing: bool,
     tray: Option<String>,
     send: Option<String>,
+    then: Option<String>,
     /// The newest message id when the send went: ARRIVED is printed once a newer one is in.
     sent_after: Option<i64>,
     voice: Option<String>,
+    /// The test pattern's size, and whether the share was started.
+    share: Option<(u32, u32)>,
+    shared: bool,
     links: bool,
     rtt: Option<f32>,
     ptt_held: bool,
@@ -79,15 +102,20 @@ pub struct Dev {
     person: Option<(String, bool)>,
     volume: Option<f32>,
     ring: Option<String>,
+    disk: Option<String>,
     offline_said: bool,
     /// A ring came after ready: ARRIVED was printed.
     rang: bool,
+    /// `VESPER_DEV_FRAMES`, and whether its probe runs.
+    frames: bool,
+    probing: bool,
 }
 
 /// A silent microphone paced by the clock, and speakers that drop what they get. `lose` unplugs the microphone a
 /// second in, for good.
 pub struct FakeAudio {
     lose: bool,
+    share: Option<(u32, u32)>,
     opened: AtomicBool,
 }
 
@@ -128,6 +156,21 @@ impl AudioDevices for FakeAudio {
     fn output(&self, _: Option<&str>) -> Result<Box<dyn AudioOutput>, String> {
         Ok(Box::new(Speakers))
     }
+    fn screen(&self) -> OpenScreen {
+        match self.share {
+            Some((w, h)) => {
+                Box::new(move |fps| Ok(Box::new(Pattern::new(w, h, fps)) as Box<dyn share::Screen>))
+            }
+            None => Box::new(crate::voice::capture::open),
+        }
+    }
+}
+
+/// `VESPER_DEV_SHARE`'s `<width>x<height>`.
+fn share_size() -> Option<(u32, u32)> {
+    let v = std::env::var("VESPER_DEV_SHARE").ok()?;
+    let (w, h) = v.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
 /// The fake devices when a scene joins voice, else none (the real ones).
@@ -137,6 +180,7 @@ pub fn audio() -> Option<Arc<dyn AudioDevices>> {
         .filter(|v| !v.is_empty())?;
     Some(Arc::new(FakeAudio {
         lose: std::env::var_os("VESPER_DEV_MIC_LOST").is_some(),
+        share: share_size(),
         opened: AtomicBool::new(false),
     }))
 }
@@ -175,11 +219,17 @@ impl Dev {
             empty: var("VESPER_DEV_EMPTY").is_some(),
             draft: var("VESPER_DEV_DRAFT"),
             pins: var("VESPER_DEV_PINS").is_some(),
+            find: var("VESPER_DEV_FIND"),
+            viewer: var("VESPER_DEV_VIEWER").and_then(|v| v.parse().ok()),
             typing: var("VESPER_DEV_TYPING").is_some(),
             send: var("VESPER_DEV_SEND"),
+            then: var("VESPER_DEV_THEN"),
             sent_after: None,
             tray: var("VESPER_DEV_TRAY"),
+            disk: var("VESPER_DEV_DISK"),
             voice: var("VESPER_DEV_VOICE"),
+            share: share_size(),
+            shared: false,
             links: var("VESPER_DEV_LINKS").is_some(),
             rtt: var("VESPER_DEV_RTT").and_then(|v| v.parse().ok()),
             ptt_held: var("VESPER_DEV_PTT_HELD").is_some(),
@@ -192,6 +242,8 @@ impl Dev {
             ring: var("VESPER_DEV_RING"),
             offline_said: false,
             rang: false,
+            frames: var("VESPER_DEV_FRAMES").is_some(),
+            probing: false,
         }
     }
 
@@ -209,13 +261,70 @@ impl Dev {
     }
 }
 
+impl Vesper {
+    /// `VESPER_DEV_THEN`: one step a motion scene films.
+    fn dev_then(&mut self, then: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(rest) = then.strip_prefix("scheme:") {
+            let (id, at) = rest.split_once('@').unwrap_or((rest, ""));
+            let at = at
+                .split_once(',')
+                .and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)));
+            self.page.reveal_from = at.map(|(x, y)| gpui::point(gpui::px(x), gpui::px(y)));
+            let id = id.to_string();
+            self.change_settings(|s| s.scheme = id, cx);
+            self.sync_look(window, cx);
+        } else if let Some(section) = then.strip_prefix("page:") {
+            let at = super::settings::Section::from_id(section).map(super::settings::At::Settings);
+            self.open_page(at.unwrap_or_default(), window, cx);
+        }
+        cx.notify();
+        eprintln!("VESPER_DEV_ARRIVED");
+    }
+}
+
 fn ready(what: &str) {
     eprintln!("VESPER_DEV_READY {what}");
 }
 
 impl Vesper {
+    /// `VESPER_DEV_FRAMES`: a 10 ms timer on the UI thread, and once a second how late it ran at most.
+    fn dev_probe(&mut self, cx: &mut Context<Self>) {
+        self.dev.probing = true;
+        cx.spawn(async move |this, cx| {
+            let tick = Duration::from_millis(10);
+            let (mut since, mut worst, mut sum, mut n) =
+                (Instant::now(), Duration::ZERO, Duration::ZERO, 0u32);
+            let mut last = (0, 0);
+            loop {
+                let t = Instant::now();
+                cx.background_executor().timer(tick).await;
+                // Back on the UI thread: anything past the tick was the thread being busy.
+                let Ok(counts) = this.update(cx, |v, _| (v.draws, v.model.call.pictures)) else {
+                    return;
+                };
+                let late = t.elapsed().saturating_sub(tick);
+                (worst, sum, n) = (worst.max(late), sum + late, n + 1);
+                if since.elapsed() >= Duration::from_secs(1) {
+                    eprintln!(
+                        "VESPER_DEV_FRAMES draws {} pictures {} stall max {} ms mean {:.1} ms",
+                        counts.0 - last.0,
+                        counts.1.saturating_sub(last.1),
+                        worst.as_millis(),
+                        sum.as_secs_f64() * 1000. / f64::from(n.max(1)),
+                    );
+                    (since, worst, sum, n, last) =
+                        (Instant::now(), Duration::ZERO, Duration::ZERO, 0, counts);
+                }
+            }
+        })
+        .detach();
+    }
+
     /// One step towards the asked-for state, after each event from the network.
     pub(super) fn dev_step(&mut self, latest: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dev.frames && !self.dev.probing {
+            self.dev_probe(cx);
+        }
         if !self.dev.shift.is_empty() {
             self.dev.shift(&mut self.model);
         }
@@ -278,10 +387,50 @@ impl Vesper {
                 if self.model.screen == Screen::Main && !self.model.state.rooms.is_empty() =>
             {
                 match self.dev.scene.as_deref().unwrap_or("") {
-                    "settings" => {
-                        self.open_settings(window, cx);
+                    s if s == "settings"
+                        || s.starts_with("settings:")
+                        || s.starts_with("admin:") =>
+                    {
+                        use super::settings::{At, Section};
+                        let s = s.to_string();
+                        let s = s.as_str();
+                        let (page, section) = s.split_once(':').unwrap_or((s, "voice"));
+                        let at = if page == "admin" {
+                            super::admin::Section::from_id(section).map(At::Admin)
+                        } else {
+                            Section::from_id(section).map(At::Settings)
+                        };
+                        self.model.not_remembered = false;
+                        self.open_page(at.unwrap_or_default(), window, cx);
+                        // Nothing focused, as the web scenes' rest(); the lists the page asked for come before READY.
+                        self.key_focus.focus(window);
                         self.dev.step = Step::Done;
-                        ready("settings");
+                        let s = s.to_string();
+                        let disk = self.dev.disk.clone();
+                        cx.spawn_in(window, async move |this, cx| {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(1500))
+                                .await;
+                            if let Some(d) = disk.and_then(|d| serde_json::from_str(&d).ok()) {
+                                let ev = crate::net::Event::Http {
+                                    tag: "admin:disk".into(),
+                                    result: Ok(crate::net::Json(d)),
+                                };
+                                let _ = this.update_in(cx, |v, window, cx| v.apply(ev, window, cx));
+                            }
+                            ready(&s);
+                        })
+                        .detach();
+                        if let Some(then) = self.dev.then.take() {
+                            cx.spawn_in(window, async move |this, cx| {
+                                cx.background_executor()
+                                    .timer(Duration::from_millis(4000))
+                                    .await;
+                                let _ = this
+                                    .update_in(cx, |v, window, cx| v.dev_then(&then, window, cx));
+                            })
+                            .detach();
+                        }
                     }
                     s if s.starts_with("room:") => {
                         let name = &s["room:".len()..];
@@ -333,6 +482,37 @@ impl Vesper {
                     let cmds = self.model.toggle_pins();
                     self.run(cmds);
                 }
+                if let Some(id) = self
+                    .dev
+                    .viewer
+                    .take()
+                    .and_then(|n| self.room_pictures().get(n).map(|a| a.id.clone()))
+                {
+                    self.open_viewer(&id, cx);
+                }
+                if let Some((layer, text)) = self
+                    .dev
+                    .find
+                    .take()
+                    .as_deref()
+                    .and_then(|f| f.split_once(':'))
+                {
+                    use super::find::Layer;
+                    let l = match layer {
+                        "search" => Layer::Search,
+                        "shortcuts" => Layer::Shortcuts,
+                        _ => Layer::Switcher,
+                    };
+                    self.open_layer(l, window, cx);
+                    let text = text.to_string();
+                    self.find_field.update(cx, |i, cx| {
+                        let end = text.len();
+                        i.set_value(text, window, cx);
+                        let pos = i.text().offset_to_position(end);
+                        i.set_cursor_position(pos, window, cx);
+                    });
+                    self.find_changed(window, cx);
+                }
                 if let (Some(rows), Some(room)) = (self.dev.tray.take(), self.model.active) {
                     self.model
                         .tray
@@ -382,9 +562,20 @@ impl Vesper {
                 self.dev_finish("room", window, cx);
             }
             Step::Voice
+                if self.dev.share.is_some()
+                    && !self.dev.shared
+                    && self.model.call.phase == Phase::Joined
+                    && self.model.call.connected =>
+            {
+                self.dev.shared = true;
+                self.act(|m| m.share(60, 8_000, true), cx);
+            }
+            Step::Voice
                 if self.model.call.phase == Phase::Joined
                     && self.model.call.connected
                     && self.model.call.quality.is_some()
+                    && (self.dev.share.is_none()
+                        || self.model.call.mine.is_some_and(|m| m.open))
                     && (!self.dev.links || {
                         let c = &self.model.call;
                         let me = self.model.state.my_id();

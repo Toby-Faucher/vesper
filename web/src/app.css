@@ -34,7 +34,7 @@
     @apply bg-app font-sans text-sm text-fg antialiased;
   }
   ::selection {
-    background: var(--accent-subtle);
+    background: var(--selection);
   }
 }
 
@@ -125,6 +125,13 @@
   opacity: 1;
   scale: 1;
   transition: opacity var(--dur-2) var(--ease-out) 400ms, scale var(--dur-2) var(--ease-out) 400ms;
+}
+
+/* The theme reveal (reveal() in motion.ts): no crossfade, the new page is clipped to the growing circle over the old one. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
 }
 
 @media (prefers-reduced-motion: reduce) {

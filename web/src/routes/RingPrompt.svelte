@@ -89,7 +89,7 @@
     border: 1px solid var(--line);
     border-radius: var(--radius);
     background: var(--bg-raised);
-    box-shadow: var(--shadow-pop, 0 8px 24px color-mix(in oklab, black, transparent 65%));
+    box-shadow: var(--shadow-float);
   }
   .pulse { display: inline-flex; border-radius: 9999px; }
   /* A soft ring around the picture; not at all under reduced motion. */

@@ -1,17 +1,23 @@
 //! The window: one view, `Vesper`, that owns the `Model` and draws the sign in screen or the main screen. Events from
 //! the network thread come in through `listen`; what the model asks for goes out on `cmds`.
 
+pub mod account;
+mod admin;
 mod banner;
 pub mod c;
 mod call;
 mod chat;
+mod chrome;
 #[cfg(debug_assertions)]
 mod dev;
+mod find;
 pub mod icons;
 mod md;
 pub mod motion;
 mod person;
 mod room;
+mod select;
+mod send;
 pub mod settings;
 mod share;
 mod sidebar;
@@ -19,6 +25,7 @@ mod sign_in;
 mod sound;
 pub mod theme;
 mod tray;
+mod viewer;
 
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -27,11 +34,12 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Application, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement,
-    Render, RenderImage, Styled, Subscription, Task, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, actions, div, px, rgb, size,
+    Render, Styled, Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, div, px, rgb, size,
 };
 use gpui_component::Root;
 use gpui_component::input::{InputEvent, InputState};
@@ -57,7 +65,17 @@ actions!(
         ComposerEscape,
         PasteFile,
         Dismiss,
-        ConfirmDialog
+        CopySelection,
+        ConfirmDialog,
+        FindUp,
+        FindDown,
+        FindEnter,
+        FindTab,
+        FindHome,
+        FindEnd,
+        FindBack,
+        ViewerPrev,
+        ViewerNext
     ]
 );
 
@@ -74,6 +92,7 @@ pub fn init(cx: &mut App) {
     theme::apply(cx);
     let input = Some("Composer > Input");
     let edit = Some("EditBox > Input");
+    let find_input = Some("Find > Input");
     // A handler that does not use its key (Up with text in the box) lets it through to the input.
     cx.bind_keys([
         KeyBinding::new("enter", SendMessage, input),
@@ -92,12 +111,31 @@ pub fn init(cx: &mut App) {
         // Esc anywhere closes the topmost thing (an input's own Esc goes first, and passes it on when it has nothing
         // to close).
         KeyBinding::new("escape", Dismiss, None),
+        // Selected message text (select.rs). A focused field's own Ctrl+C comes first.
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-c", CopySelection, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-c", CopySelection, None),
         KeyBinding::new("enter", ConfirmDialog, Some(DIALOG)),
+        // The switcher's and search's field: the rows move, the field keeps the focus.
+        KeyBinding::new("up", FindUp, find_input),
+        KeyBinding::new("down", FindDown, find_input),
+        KeyBinding::new("enter", FindEnter, find_input),
+        KeyBinding::new("tab", FindTab, find_input),
+        KeyBinding::new("home", FindHome, find_input),
+        KeyBinding::new("end", FindEnd, find_input),
+        KeyBinding::new("backspace", FindBack, find_input),
+        KeyBinding::new("escape", Dismiss, find_input),
+        KeyBinding::new("left", ViewerPrev, Some(viewer::VIEWER)),
+        KeyBinding::new("right", ViewerNext, Some(viewer::VIEWER)),
     ]);
 }
 
 /// Starts the network and key threads and opens the window. Returns when the app quits.
 pub fn run() {
+    let crate::single::Claim::First(single) = crate::single::claim() else {
+        return; // another Vesper was running: it shows itself
+    };
     let audio: Arc<dyn crate::voice::AudioDevices> = Arc::new(Cpal);
     // The parity harness's calls run on fake devices (dev.rs).
     #[cfg(debug_assertions)]
@@ -118,10 +156,15 @@ pub fn run() {
         init(cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
+            // The app draws its own window buttons (chrome.rs): no system title bar on Windows, client-side
+            // decorations on Linux. macOS keeps its title bar.
             titlebar: Some(TitlebarOptions {
                 title: Some("Vesper".into()),
+                appears_transparent: cfg!(windows),
                 ..Default::default()
             }),
+            window_decorations: cfg!(target_os = "linux")
+                .then_some(gpui::WindowDecorations::Client),
             // Wayland's activation (the tray's Show Vesper) needs it, and the taskbar matches the window by it.
             app_id: Some("vesper".into()),
             ..Default::default()
@@ -162,6 +205,23 @@ pub fn run() {
             let tray = tray::start(cx, view.downgrade(), handle.into());
             view.update(cx, |v, _| (v._tray, v.audio) = (tray, Some(audio)));
         }
+        // A second launch asks this one to come to the front, as the tray's Show Vesper does.
+        if let Some(l) = single {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            l.serve(move || {
+                let _ = tx.send(());
+            });
+            let window: gpui::AnyWindowHandle = handle.into();
+            cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                while rx.recv().await.is_some() {
+                    let _ = cx.update_window(window, |_, window, cx| {
+                        window.activate_window();
+                        cx.activate(true);
+                    });
+                }
+            })
+            .detach();
+        }
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -195,6 +255,8 @@ pub struct Vesper {
     /// Inline pictures by upload id, and the order they came in.
     images: HashMap<String, chat::Img>,
     image_order: VecDeque<String>,
+    /// A press on a top bar's empty space: the next move drags the window (`chrome.rs`).
+    drag_armed: bool,
     /// The `@` being typed (its byte offset and the text after it), the highlighted person, and an `@` whose list
     /// Esc closed.
     mention: Option<(usize, String)>,
@@ -215,8 +277,11 @@ pub struct Vesper {
     pub capturing_key: bool,
     key_problem: &'static str,
     key_focus: FocusHandle,
+    /// Held while text is selected, so Ctrl+C copies it (select.rs).
+    text_focus: FocusHandle,
     settings_error: String,
-    bitrate: Option<(Entity<SliderState>, Subscription)>,
+    /// The Settings and Admin pages' own state.
+    page: settings::Page,
     /// To the key thread (none in tests).
     pub ptt_tx: Option<Sender<KeyMsg>>,
     /// A settings save waiting for a slider to stop.
@@ -225,8 +290,8 @@ pub struct Vesper {
     watched: std::cell::Cell<Option<Option<device_query::Keycode>>>,
     /// Why push to talk works only while the window has focus.
     pub ptt_note: Option<&'static str>,
-    /// The watched screen's newest picture, by sharer.
-    screen: Option<(String, Arc<RenderImage>)>,
+    /// The share panel's pictures and state.
+    share: share::ShareView,
     /// Sends the next `watch off` when it is due.
     watch_timer: Option<(Instant, Task<()>)>,
     _tray: Option<tray_icon::TrayIcon>,
@@ -252,14 +317,25 @@ pub struct Vesper {
     tl: chat::Tl,
     /// The room whose name the composer's placeholder has.
     placeholder_room: Option<i64>,
-    /// Since when the call bar shows, for its rise.
+    /// Since when the call bar shows, for its rise and the call timer.
     bar_since: Option<Instant>,
+    /// The call bar's pill, peek, morph and timer.
+    bar: call::Bar,
     /// The open person card, the opener a press outside closed it on (and when), and where openers were drawn.
     person: Option<person::Card>,
     person_closed: Option<(String, Instant)>,
     anchors: person::Anchors,
     /// The connection banner and the ring prompt's motion.
     banner: banner::Banner,
+    /// The switcher, search or shortcuts layer, and its fields.
+    find: find::Find,
+    /// The open image viewer.
+    viewer: Option<viewer::Viewer>,
+    /// The open share dialog.
+    send: Option<send::Dialog>,
+    find_field: Entity<InputState>,
+    after_field: Entity<InputState>,
+    before_field: Entity<InputState>,
     /// Debug builds: what the parity harness asked for (`VESPER_DEV_*`).
     #[cfg(debug_assertions)]
     dev: dev::Dev,
@@ -320,6 +396,35 @@ impl Vesper {
             subs.push(cx.on_focus(&f, window, |this, w, cx| this.send_typing(w, cx)));
             subs.push(cx.on_blur(&f, window, |this, w, cx| this.send_typing(w, cx)));
         }
+        let find_field = cx.new(|cx| InputState::new(window, cx));
+        let after_field = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD"));
+        let before_field = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD"));
+        subs.push(cx.subscribe_in(
+            &find_field,
+            window,
+            |this, _, e: &InputEvent, window, cx| {
+                if matches!(e, InputEvent::Change) {
+                    this.find_changed(window, cx);
+                }
+            },
+        ));
+        for (f, key) in [
+            (&after_field, crate::searchq::Key::After),
+            (&before_field, crate::searchq::Key::Before),
+        ] {
+            subs.push(
+                cx.subscribe_in(f, window, move |this, _, e: &InputEvent, window, cx| {
+                    if matches!(e, InputEvent::Change) {
+                        this.date_changed(key, window, cx);
+                    }
+                }),
+            );
+        }
+        for i in [&find_field, &after_field, &before_field] {
+            let f = i.read(cx).focus_handle(cx);
+            subs.push(cx.on_focus(&f, window, |this, w, cx| this.send_typing(w, cx)));
+            subs.push(cx.on_blur(&f, window, |this, w, cx| this.send_typing(w, cx)));
+        }
         let list = Self::new_list(false, cx);
         let _ = cmds.send(Cmd::Restore); // the first thing the app asks for: the stored session
         Vesper {
@@ -337,6 +442,7 @@ impl Vesper {
             heads: vec![],
             images: HashMap::new(),
             image_order: VecDeque::new(),
+            drag_armed: false,
             mention: None,
             mention_ix: 0,
             mention_dismissed: None,
@@ -348,13 +454,18 @@ impl Vesper {
             capturing_key: false,
             key_problem: "",
             key_focus: cx.focus_handle(),
+            text_focus: {
+                let f = cx.focus_handle();
+                cx.set_global(select::TextFocus(f.clone()));
+                f
+            },
             settings_error: String::new(),
-            bitrate: None,
+            page: Default::default(),
             ptt_tx: None,
             watched: Default::default(),
             save_later: None,
             ptt_note: None,
-            screen: None,
+            share: Default::default(),
             watch_timer: None,
             _tray: None,
             audio: None,
@@ -370,10 +481,17 @@ impl Vesper {
             tl: chat::Tl::default(),
             placeholder_room: None,
             bar_since: None,
+            bar: Default::default(),
             person: None,
             person_closed: None,
             anchors: Default::default(),
             banner: Default::default(),
+            find: Default::default(),
+            viewer: None,
+            send: None,
+            find_field,
+            after_field,
+            before_field,
             #[cfg(debug_assertions)]
             dev: dev::Dev::from_env(),
             _subs: subs,
@@ -435,17 +553,7 @@ impl Vesper {
 
     /// Tells the key thread whether a text input in the active window has focus.
     fn send_typing(&self, window: &Window, cx: &App) {
-        let inputs = [
-            &self.server,
-            &self.username,
-            &self.password,
-            &self.composer,
-            &self.edit,
-        ];
-        let typing = window.is_window_active()
-            && inputs
-                .iter()
-                .any(|i| i.read(cx).focus_handle(cx).is_focused(window));
+        let typing = window.is_window_active() && self.typing(window, cx);
         if let Some(tx) = &self.ptt_tx {
             let _ = tx.send(KeyMsg::Typing(typing));
         }
@@ -458,20 +566,38 @@ impl Vesper {
         let latest = matches!(ev, Event::Latest { .. });
         // A late answer of a session that ended is not shown.
         let main = self.model.screen == Screen::Main;
+        if let Event::Http { tag, result } = ev {
+            if main {
+                self.http_answer(&tag, result, window, cx);
+            }
+            return;
+        }
         match &ev {
             Event::Image { id, picture } if main => self.image_loaded(id, picture.clone(), window),
-            Event::Downloaded { path, open: true } if main => cx.open_with_system(path),
+            Event::Avatar {
+                user_id,
+                version,
+                picture,
+            } => {
+                let image = picture.clone().and_then(chat::render_image);
+                cx.default_global::<c::Pictures>()
+                    .loaded(user_id, version, image);
+            }
+            Event::Downloaded { path, open: true } if main => chat::open_file(path, cx),
             Event::Latest { room, .. } => drop(self.tl.loaded.insert(*room)),
+            Event::Searched { seq, page } => self.searched(*seq, page.clone(), cx),
+            Event::Full { id, picture } => self.full_loaded(id, picture.clone(), window),
             _ => {}
         }
         let editing = self.model.editing;
         let cmds = self.model.apply(ev);
         self.run(cmds);
+        self.sync_pictures(window, cx);
         if main && self.model.screen != Screen::Main {
             self.reset_view(window, cx);
         }
         self.sync_ring_sound(cx);
-        if self.model.call.frame.is_some() {
+        if !self.model.call.frames.is_empty() {
             self.frame_came(cx);
         }
         if editing.is_some() && self.model.editing.is_none() {
@@ -492,9 +618,25 @@ impl Vesper {
             self.composer
                 .update(cx, |i, cx| i.set_value(text, window, cx));
         }
+        self.sync_look(window, cx);
         #[cfg(debug_assertions)]
         self.dev_step(latest, window, cx);
         cx.notify();
+    }
+
+    /// Profile pictures follow the users: a new or changed one is fetched, an old one let go.
+    fn sync_pictures(&mut self, window: &mut Window, cx: &mut App) {
+        let users = self.model.state.users.values();
+        let (fetch, gone) = cx
+            .default_global::<c::Pictures>()
+            .sync(users.map(|u| (u.user_id.as_str(), u.avatar.as_deref())));
+        for i in gone {
+            let _ = window.drop_image(i);
+        }
+        let cmds = fetch
+            .into_iter()
+            .map(|(user_id, version)| Cmd::FetchAvatar { user_id, version });
+        self.run(cmds.collect());
     }
 
     fn run(&self, cmds: Vec<Cmd>) {
@@ -533,9 +675,14 @@ impl Vesper {
     fn reset_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.drafts.clear();
         self.settings_open = false;
+        let cmds = self.model.set_mic_open(false);
+        self.run(cmds);
+        self.page = Default::default();
         self.side = sidebar::Side::default();
         self.banner = Default::default();
         self.person = None;
+        self.find = Default::default();
+        self.close_viewer(window, cx);
         self.tl = chat::Tl::default();
         for (_, i) in self.images.drain() {
             if let chat::Img::Ready(i) = i {
@@ -565,6 +712,10 @@ impl Vesper {
             self.composer
                 .update(cx, |i, cx| i.set_value(new, window, cx));
         }
+        crate::switcher::push_recent(&mut self.find.recent, id);
+        if self.model.active != Some(id) {
+            self.close_viewer(window, cx);
+        }
         let cmds = self.model.open_room(id);
         self.run(cmds);
         self.composer.update(cx, |i, cx| i.focus(window, cx));
@@ -587,7 +738,9 @@ impl Vesper {
     /// Shows or leaves the Settings view. The room behind it is not on screen meanwhile, so it is not marked read.
     fn show_settings(&mut self, open: bool) {
         self.settings_open = open;
-        let cmds = self.model.set_covered(open);
+        let mut cmds = self.model.set_covered(open);
+        let voice = open && self.page.at == settings::At::Settings(settings::Section::Voice);
+        cmds.extend(self.model.set_mic_open(voice));
         self.run(cmds);
     }
 
@@ -595,11 +748,29 @@ impl Vesper {
     fn dialog_open(&self) -> bool {
         (self.model.confirm_delete.is_some() && !self.settings_open)
             || self.person.as_ref().is_some_and(|c| c.confirm)
+            || self.viewer.is_some()
+            || self.send.is_some()
     }
 
     /// Esc: closes the topmost thing, in the web's order: a dialog, the person card, a menu or popover, the pins,
     /// then declines the ring shown.
-    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.share.full.is_some() {
+            self.leave_full(window, cx);
+            return cx.notify();
+        }
+        if self.find.layer.is_some() {
+            return self.close_layer(window, cx);
+        }
+        if self.viewer.is_some() {
+            return self.close_viewer(window, cx);
+        }
+        if self.send.is_some() {
+            return self.close_share(cx);
+        }
+        if self.page_escape(window, cx) {
+            return;
+        }
         let m = &mut self.model;
         if m.confirm_delete.is_some() {
             m.cancel_delete();
@@ -627,6 +798,9 @@ impl Vesper {
 
     /// Enter in a dialog: its confirm button.
     fn confirm_dialog(&mut self, _: &ConfirmDialog, _: &mut Window, cx: &mut Context<Self>) {
+        if self.send.is_some() {
+            return self.go_share(cx);
+        }
         if let Some(id) = self.model.confirm_delete.filter(|_| !self.settings_open) {
             return self.act(|m| m.delete(id, true), cx);
         }
@@ -655,15 +829,16 @@ impl Vesper {
         if let Some(t) = &self._tray {
             let _ = t.set_tooltip(Some(tip));
         }
-        let (audio, speakers) = (
-            self.audio.clone(),
+        let (audio, speakers, volume) = (
+            self.audio.clone().filter(|_| self.model.settings.ring),
             self.model.settings.output_device.clone(),
+            self.model.settings.volume,
         );
         self.ring_sound = ring.map(|room| {
             let task = cx.spawn(async move |_, cx| {
                 loop {
                     if let Some(a) = &audio {
-                        sound::play_ring(a.clone(), speakers.clone());
+                        sound::play_ring(a.clone(), speakers.clone(), volume);
                     }
                     cx.background_executor().timer(sound::RING_EVERY).await;
                 }
@@ -692,7 +867,7 @@ impl Vesper {
                 .await;
             let _ = this.update(cx, |v, cx| {
                 v.frame_check = None;
-                if v.draws == draws && v.model.call.frame.is_some() {
+                if v.draws == draws && !v.model.call.frames.is_empty() {
                     v.share_hidden(cx);
                 }
             });
@@ -925,11 +1100,26 @@ impl Render for Vesper {
         } else if self.dialog_focus.is_focused(window) {
             self.composer.update(cx, |i, cx| i.focus(window, cx));
         }
+        let reveal = self.reveal_layer(window, cx);
         let t = theme::tokens(cx);
         // `body` of app.css: --bg-app, --fg, 13/20.
         div()
             .on_action(cx.listener(Self::dismiss))
+            .track_focus(&self.text_focus)
+            .on_action(|_: &CopySelection, _, cx| select::Selection::copy(cx))
             .on_action(cx.listener(Self::confirm_dialog))
+            .on_action(cx.listener(|this, _: &FindUp, _, cx| this.find_move(false, cx)))
+            .on_action(cx.listener(|this, _: &FindDown, _, cx| this.find_move(true, cx)))
+            .on_action(cx.listener(|this, _: &FindEnter, w, cx| this.find_enter(false, w, cx)))
+            .on_action(cx.listener(|this, _: &FindTab, w, cx| this.find_enter(true, w, cx)))
+            .on_action(cx.listener(|this, _: &FindHome, _, cx| this.find_edge(false, cx)))
+            .on_action(cx.listener(|this, _: &FindEnd, _, cx| this.find_edge(true, cx)))
+            .on_action(cx.listener(|this, _: &FindBack, _, cx| this.find_back(cx)))
+            .on_action(cx.listener(|this, _: &ViewerPrev, _, cx| this.viewer_go(-1, cx)))
+            .on_action(cx.listener(|this, _: &ViewerNext, _, cx| this.viewer_go(1, cx)))
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                this.shortcut_key(e, window, cx);
+            }))
             .size_full()
             .bg(t.bg_app)
             .text_color(t.fg)
@@ -943,6 +1133,22 @@ impl Render for Vesper {
                 this.window_key(Some(&e.keystroke.key), false);
             }))
             .child(body)
+            // Before the main screen there is no top bar: its top strip moves the window.
+            .when(self.model.screen != Screen::Main, |d| {
+                d.child(
+                    self.draggable(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right(px(16. + chrome::RESERVE))
+                            .h(px(48.)),
+                        cx,
+                    ),
+                )
+            })
+            .children(self.window_controls(window, cx))
+            .children(reveal)
     }
 }
 

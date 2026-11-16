@@ -1,5 +1,5 @@
 export type DspIn =
-  | { type: 'init'; modelUrl: string; atten: number; beta: number }
+  | { type: 'init'; engine?: 'deepfilter' | 'rnnoise'; modelUrl: string; atten: number; beta: number }
   | { type: 'frame'; data: Float32Array }
   | { type: 'set'; atten?: number; beta?: number };
 
@@ -10,11 +10,13 @@ export type DspOut =
 
 interface Denoiser {
   process(input: Float32Array): Float32Array;
-  setAttenLimit(db: number): void;
-  setPostFilter(beta: number): void;
+  /** DeepFilterNet only. */
+  setAttenLimit?(db: number): void;
+  setPostFilter?(beta: number): void;
 }
 export interface DspWasm {
   WasmDenoiser: new (model: Uint8Array, atten: number, beta: number) => Denoiser;
+  WasmRnnoise: new () => Denoiser;
 }
 
 export interface DspDeps {
@@ -31,14 +33,18 @@ export function createDspHandler({ loadWasm, fetchModel }: DspDeps) {
     try {
       if (msg.type === 'init') {
         d = null;
+        if (msg.engine === 'rnnoise') {
+          d = new (await loadWasm()).WasmRnnoise(); // its model is in the wasm
+          return [{ type: 'ready' }];
+        }
         const [wasm, model] = await Promise.all([loadWasm(), fetchModel(msg.modelUrl)]);
         d = new wasm.WasmDenoiser(model, msg.atten, msg.beta);
         return [{ type: 'ready' }];
       }
       if (!d) throw new Error('denoiser not initialised');
       if (msg.type === 'set') {
-        if (msg.atten !== undefined) d.setAttenLimit(msg.atten);
-        if (msg.beta !== undefined) d.setPostFilter(msg.beta);
+        if (msg.atten !== undefined) d.setAttenLimit?.(msg.atten);
+        if (msg.beta !== undefined) d.setPostFilter?.(msg.beta);
         return [];
       }
       const t = performance.now();

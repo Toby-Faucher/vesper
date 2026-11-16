@@ -35,7 +35,7 @@ export const UI_MESSAGES = {
   shareTile: (name: string) => `${name}'s screen`,
   shareBig: 'Show it big',
   shareControls: 'Screen controls',
-  shareFull: 'Full screen at 1:1',
+  shareFull: 'Full screen',
   shareZoom: 'Zoom',
   sharePopOut: 'Pop out',
   sharePoint: 'Point',

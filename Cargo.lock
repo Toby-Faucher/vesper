@@ -173,6 +173,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d301b3b94cb4b2f23d7917810addbbaff90738e0ca2be692bd027e70d7e0330c"
 
 [[package]]
+name = "anymap3"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb5dfbc6d8d2675589ccbe4d0fd61df2419075625f8c1a62325e718e2b0049f9"
+
+[[package]]
 name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -195,6 +201,12 @@ dependencies = [
  "cpufeatures 0.3.1",
  "password-hash 0.6.1",
 ]
+
+[[package]]
+name = "array-init"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d62b7694a562cdf5a74227903507c56ab2cc8bdd1f781ed5cb4cf9c9f810bfc"
 
 [[package]]
 name = "arrayvec"
@@ -1191,6 +1203,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "easyfft"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "767e39eef2ad8a3b6f1d733be3ec70364d21d437d06d4f18ea76ce08df20b75f"
+dependencies = [
+ "array-init",
+ "generic_singleton",
+ "num-complex",
+ "realfft",
+ "rustfft",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1438,6 +1463,16 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+]
+
+[[package]]
+name = "generic_singleton"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab6e923c8e978e57cf63e2e200ca967d1d20f0ea2662b28f6d4e11c44aa6ab16"
+dependencies = [
+ "anymap3",
+ "parking_lot",
 ]
 
 [[package]]
@@ -2234,6 +2269,16 @@ dependencies = [
  "num-traits",
  "rawpointer",
  "serde",
+]
+
+[[package]]
+name = "nnnoiseless"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "805d5964d1e7a0006a7fdced7dae75084d66d18b35f1dfe81bd76929b1f8da0c"
+dependencies = [
+ "easyfft",
+ "once_cell",
 ]
 
 [[package]]
@@ -4560,7 +4605,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vesper-audiolab"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4580,11 +4625,12 @@ dependencies = [
 
 [[package]]
 name = "vesper-dsp"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "deep_filter",
  "getrandom 0.2.17",
  "ndarray",
+ "nnnoiseless",
  "serde",
  "tract-core",
  "wasm-bindgen",
@@ -4592,7 +4638,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-loadtest"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "futures-util",
  "serde_json",
@@ -4604,7 +4650,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-protocol"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4613,7 +4659,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-server"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "argon2 0.6.0",
  "aws-lc-rs",
@@ -4647,7 +4693,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-sfu"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "str0m",
  "tokio",
@@ -4657,7 +4703,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-store"
-version = "2.1.0"
+version = "2.2.0"
 dependencies = [
  "getrandom 0.3.4",
  "serde_json",

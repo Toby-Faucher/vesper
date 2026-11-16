@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ApiFailure } from '../api';
 import { uploadCap } from '../chat.svelte';
 import type { Attachment } from '../gen/Attachment';
-import { LIMIT, Tray, uploadError } from './tray.svelte';
+import { LIMIT, Tray, transient, uploadError } from './tray.svelte';
 import { UI_MESSAGES } from './messages';
 
 // A fake upload: each call waits until the test settles it.
@@ -20,7 +20,7 @@ const states = (t: Tray) => t.items.map((i) => i.state);
 describe('Tray', () => {
   it(`runs at most ${LIMIT} uploads at once and starts the next when one ends`, async () => {
     const f = fake();
-    const t = new Tray(f.up);
+    const t = new Tray(f.up, []);
     t.add(1, ['a', 'b', 'c', 'd', 'e'].map((n) => file(n)));
     expect(f.calls.map((c) => c.name)).toEqual(['a', 'b', 'c']);
     expect(states(t)).toEqual(['uploading', 'uploading', 'uploading', 'queued', 'queued']);
@@ -37,7 +37,7 @@ describe('Tray', () => {
   it('refuses a file over the limit before any upload', () => {
     expect(uploadCap.max).toBe(25 * 1024 * 1024); // before the hello
     const f = fake();
-    const t = new Tray(f.up);
+    const t = new Tray(f.up, []);
     t.add(1, [file('big', uploadCap.max + 1), file('ok', uploadCap.max)]);
     expect(f.calls.map((c) => c.name)).toEqual(['ok']);
     expect(t.items[0]).toMatchObject({ state: 'failed', error: 'Files can be up to 25 MB.', retry: false });
@@ -50,7 +50,7 @@ describe('Tray', () => {
     uploadCap.max = 100 * 1024 * 1024;
     try {
       const f = fake();
-      const t = new Tray(f.up);
+      const t = new Tray(f.up, []);
       t.add(1, [file('big', uploadCap.max + 1), file('mid', 50 * 1024 * 1024)]);
       expect(f.calls.map((c) => c.name)).toEqual(['mid']);
       expect(t.items[0].error).toBe('Files can be up to 100 MB.');
@@ -61,7 +61,7 @@ describe('Tray', () => {
 
   it('cancel aborts a running upload, removes it and starts a queued one', async () => {
     const f = fake();
-    const t = new Tray(f.up);
+    const t = new Tray(f.up, []);
     t.add(1, ['a', 'b', 'c', 'd'].map((n) => file(n)));
     t.remove(t.items[0].key);
     expect(f.calls[0].signal.aborted).toBe(true);
@@ -73,7 +73,7 @@ describe('Tray', () => {
 
   it('shows progress, retries a failure, and Send takes only the finished files', async () => {
     const f = fake();
-    const t = new Tray(f.up);
+    const t = new Tray(f.up, []);
     t.add(1, [file('a'), file('b')]);
     f.calls[0].progress(0.4);
     expect(t.items[0].progress).toBe(0.4);
@@ -93,7 +93,7 @@ describe('Tray', () => {
 
   it('a send removes only the files it took: one that finished during the send stays', async () => {
     const f = fake();
-    const t = new Tray(f.up);
+    const t = new Tray(f.up, []);
     t.add(1, [file('a')]);
     f.calls[0].ok(att('a'));
     await flush();
@@ -107,7 +107,7 @@ describe('Tray', () => {
 
   it('keeps the files of each room apart: uploads of another room go on and wait there', async () => {
     const f = fake();
-    const t = new Tray(f.up);
+    const t = new Tray(f.up, []);
     t.add(1, [file('one')]);
     t.add(2, [file('two')]);
     expect(t.of(2).map((i) => i.file.name)).toEqual(['two']);
@@ -120,6 +120,46 @@ describe('Tray', () => {
     expect(t.busy(2)).toBe(true); // room 2's Send waits for its own file only
     expect(t.done(1).map((i) => i.attachment?.id)).toEqual(['one']); // back in room 1: still attached
     expect(f.calls.every((c) => !c.signal.aborted)).toBe(true);
+  });
+
+  it('tries a network or server error again by itself three times, then shows Retry', async () => {
+    const f = fake();
+    const t = new Tray(f.up, [0, 0, 0]);
+    t.add(1, [file('a'), file('b')]);
+    f.calls[0].fail(new TypeError('network'));
+    await flush();
+    await flush();
+    expect(f.calls.map((c) => c.name)).toEqual(['a', 'b', 'a']);
+    expect(states(t)).toEqual(['uploading', 'uploading']);
+    expect(t.busy(1)).toBe(true); // Send waits during the retries
+    for (const e of [new ApiFailure(502, 'internal'), new ApiFailure(500, 'internal')]) {
+      f.calls.at(-1)!.fail(e);
+      await flush();
+      await flush();
+    }
+    expect(f.calls.filter((c) => c.name === 'a').length).toBe(4);
+    f.calls.at(-1)!.fail(new TypeError('network'));
+    await flush();
+    expect(t.items[0]).toMatchObject({ state: 'failed', error: UI_MESSAGES.uploadNetwork, retry: true });
+    // Never for a full quota, too large or a rate limit: those fail at once.
+    f.calls[1].fail(new ApiFailure(507, 'quota_full'));
+    await flush();
+    await flush();
+    expect(t.items[1].state).toBe('failed');
+    expect(f.calls.filter((c) => c.name === 'b').length).toBe(1);
+    expect([413, 429, 507, 400].map((s) => transient(new ApiFailure(s, 'internal')))).toEqual([false, false, false, false]);
+  });
+
+  it('a cancel during the wait drops the retry', async () => {
+    const f = fake();
+    const t = new Tray(f.up, [10]);
+    t.add(1, [file('a')]);
+    f.calls[0].fail(new TypeError('network'));
+    await flush();
+    t.remove(t.items[0].key);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(f.calls.length).toBe(1);
+    expect(t.items).toEqual([]);
   });
 
   it('words each failure plainly', () => {

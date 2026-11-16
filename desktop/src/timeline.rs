@@ -292,6 +292,30 @@ pub fn typing_line(names: &[String]) -> String {
     }
 }
 
+/// `namesOnly` in attachments.ts: `body` is only these file names joined by ", " in any order, as messages of files were
+/// sent before the body could be empty. Such a body is not shown. Each distinct name is tried once.
+/// shortcut: no NFC step (the web has one); a name stored in another normal form shows its old body. Upgrade if seen.
+pub fn names_only(body: &str, names: &[&str]) -> bool {
+    fn rest(s: &str, left: &[&str]) -> bool {
+        if left.is_empty() {
+            return s.is_empty();
+        }
+        left.iter().enumerate().any(|(i, n)| {
+            if left[..i].contains(n) || !s.starts_with(n) {
+                return false;
+            }
+            let after = &s[n.len()..];
+            if left.len() == 1 {
+                return after.is_empty();
+            }
+            let mut others = left.to_vec();
+            others.remove(i);
+            after.strip_prefix(", ").is_some_and(|a| rest(a, &others))
+        })
+    }
+    !names.is_empty() && rest(body, names)
+}
+
 /// "12 KB", "3.4 MB": binary units, as the server counts its upload limit, rounded up.
 pub fn file_size(n: u64) -> String {
     const MB: u64 = 1024 * 1024;
@@ -339,6 +363,16 @@ pub fn fit(w: u32, h: u32) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn names_only_any_order() {
+        assert!(names_only("a.mp3, b, c.mp3", &["b, c.mp3", "a.mp3"]));
+        assert!(names_only("a.mp3, b, c.mp3", &["c.mp3", "a.mp3", "b"]));
+        assert!(names_only("x, x, x", &["x", "x", "x"]));
+        assert!(!names_only("x, x", &["x", "x", "x"]));
+        assert!(!names_only("see a.mp3", &["a.mp3"]));
+        assert!(!names_only("", &[]));
+    }
     use super::*;
     use crate::state::tests::{msg, room, user};
     use chrono::{FixedOffset, Utc};

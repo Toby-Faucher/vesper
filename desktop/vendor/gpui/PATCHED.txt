@@ -18,3 +18,15 @@ which shortens them in place. Taffy measures a text more than once, so after a n
 wider one shaped the whole text with runs that covered only its start, and the rest (the ellipsis too) fell back to
 the platform's default font. The closure now truncates a copy of the runs on each measure. When updating, apply it
 again unless the new release no longer changes the runs in place.
+
+A third change, in Cargo.toml only: the optional `scap` (zed-scap) dependency of the `screen-capture` feature is gone,
+and the feature is empty. Vesper never turns it on, but Cargo resolves optional dependencies anyway, and zed-scap's
+pipewire 0.8 links the same system library as the pipewire 0.9 that the desktop's own Wayland screen capture uses, so
+the two could not be in one lockfile. Drop this change when updating, unless the clash is still there.
+
+A fourth change (src/platform/blade/blade_atlas.rs, Linux): removing an image whose texture held nothing else destroyed the
+texture at once, while the frame just submitted could still sample it. A screen share swaps a big picture every frame,
+and so does closing a large photo, and the GPU hung (`GPU hung` in the log, the window frozen in wait_for_gpu). Such a
+texture now waits in a list until a frame submitted after its removal is done. Also there and in
+src/platform/windows/directx_atlas.rs: a removed tile in a texture that still holds others gives its space back (it was
+never freed before). Apply both again unless a new release defers the destroy and frees the tile itself.

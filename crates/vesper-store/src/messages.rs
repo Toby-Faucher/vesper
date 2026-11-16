@@ -48,7 +48,10 @@ macro_rules! msg_select {
     () => {
         "SELECT m.id, m.room_id, m.author_id, m.body, m.created_at, m.edited_at, m.updated_at,
                 m.deleted_at IS NOT NULL AS deleted, m.pinned_at IS NOT NULL AS pinned,
-                p.id AS reply_id, p.author_id AS reply_author, substr(p.body, 1, 100) AS reply_excerpt
+                p.id AS reply_id, p.author_id AS reply_author,
+                substr(CASE WHEN p.body = '' AND p.deleted_at IS NULL
+                    THEN (SELECT name FROM uploads WHERE message_id = p.id ORDER BY created_at, id LIMIT 1)
+                    ELSE p.body END, 1, 100) AS reply_excerpt
          FROM messages m LEFT JOIN messages p ON p.id = m.reply_to "
     };
 }

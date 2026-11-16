@@ -523,6 +523,7 @@ const SHARE_FAILED = 'Could not share your screen.';
 const SHARE_CUT = 'Your screen share sent more than 35 Mbps and was stopped.';
 const SHARE_DM = 'Screen share is only in group rooms.';
 const SHARE_STOPPED = 'A moderator stopped your screen share.';
+const shareLowered = (kbps: number) => `Your screen share was lowered to ${(kbps / 1000).toFixed(1)} Mbps so every share in the room fits.`;
 const MARKER_MS = 3000;
 let cutAt = 0; // when the server last cut my share
 let before: Mine | null | undefined; // my share before my last share_start (null: it started one), for a refusal
@@ -573,6 +574,11 @@ function onShareMsg(m: ServerMsg) {
     void applyMine();
   } else if (m.type === 'peer_share' && m.user_id === voice.userId && !m.share) {
     if (endShare()) cutAt = Date.now(); // the server cut my share; its error says why
+  } else if (m.type === 'peer_share' && m.user_id === voice.userId && m.share && shares.mine && m.share.bitrate_kbps < shares.mine.kbps) {
+    // The server gave my share less than I asked for (the room's budget): send at that rate.
+    shares.mine = { ...shares.mine, kbps: m.share.bitrate_kbps };
+    void applyMine();
+    showNotice(shareLowered(m.share.bitrate_kbps));
   } else if (m.type === 'share_stopped') {
     endShare(); // already ended by the peer_share before it
     showNotice(SHARE_STOPPED);

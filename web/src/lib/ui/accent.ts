@@ -56,7 +56,7 @@ export function roles(fill: string, scheme: Scheme = 'dark'): Record<string, str
       '--accent-hover': mix(f, BLACK, 0.12),
       '--on-accent': WHITE,
       '--accent-fg': dark(f, (x) => contrast(x, S.app) >= 4.5 && contrast(x, subtle) >= 4.5), // links, mentions, the unread line
-      '--accent-subtle': subtle, // soft fills, text selection
+      '--accent-subtle': subtle, // soft fills
       '--accent-line': mix(f, S.app, 0.5),
       '--focus': f,
     };
@@ -66,7 +66,7 @@ export function roles(fill: string, scheme: Scheme = 'dark'): Record<string, str
     '--accent-hover': mix(fill, WHITE, 0.15),
     '--on-accent': SURFACE.app,
     '--accent-fg': mix(fill, SURFACE.fg, 0.2), // links, mentions, the unread line
-    '--accent-subtle': mix(fill, SURFACE.app, 0.82), // soft fills, text selection
+    '--accent-subtle': mix(fill, SURFACE.app, 0.82), // soft fills
     '--accent-line': mix(fill, SURFACE.app, 0.5),
     '--focus': fill,
   };
@@ -130,13 +130,8 @@ export function tint(fill: string): number[] {
 export function applyAccent(v: string | null | undefined, root: HTMLElement = document.documentElement, store: Storage | null = storage): void {
   const fill = fillOf(v);
   const amber = fill === PRESETS.amber.hex;
-  // A style with its own accent (data-own-accent, set by applyStyle) keeps it while the accent is the default amber.
-  const own = amber && root.getAttribute?.('data-own-accent') != null;
   const light = root.getAttribute?.('data-scheme') === 'light';
-  for (const [k, val] of Object.entries(roles(fill, light ? 'light' : 'dark'))) {
-    if (own) root.style.removeProperty(k);
-    else root.style.setProperty(k, val);
-  }
+  for (const [k, val] of Object.entries(roles(fill, light ? 'light' : 'dark'))) root.style.setProperty(k, val);
   root.style.setProperty('--logo-filter', amber ? 'none' : 'url(#logo-tint)'); // amber: the shipped file, untouched
   const doc = root.ownerDocument; // absent in the unit tests
   doc?.getElementById('logo-matrix')?.setAttribute('values', tint(fill).join(' '));

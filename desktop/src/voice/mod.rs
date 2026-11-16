@@ -1,11 +1,14 @@
 //! Voice: the call engine and the audio around it. One call runs on its own thread (`engine.rs`): a str0m client over
 //! UDP to the server's SFU, Opus both ways, a jitter buffer and decoder per person, and the mix to the speakers.
-//! Watched screen shares decode on a second thread (`video.rs`).
+//! Watched screen shares decode on a second thread (`video.rs`); my own share is captured and encoded on two more
+//! (`share.rs`, `capture.rs`).
 //!
 //! Signaling is not done here. The engine makes an offer and answers the SFU's offers; the model sends them over the
 //! socket, as the web app's `join.ts` does. Audio comes in through `AudioInput` and goes out through `AudioOutput`, so
 //! tests run a call with no devices; the real ones are cpal (`device.rs`).
 
+pub mod capture;
+pub mod check;
 pub mod denoise;
 mod device;
 pub mod echo;
@@ -13,13 +16,15 @@ mod engine;
 pub mod jitter;
 pub mod mix;
 pub mod ptt;
+pub mod share;
 pub mod video;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
-pub use device::{Cpal, Resampler, device_names};
+pub use device::{Cpal, Resampler, device_names, useful_names};
+pub use share::ShareSetup;
 pub use video::Frame;
 
 use crate::settings::Denoise;
@@ -54,6 +59,10 @@ pub trait AudioDevices: Send + Sync {
     /// The error is a sentence for the user.
     fn input(&self, name: Option<&str>) -> Result<Box<dyn AudioInput>, String>;
     fn output(&self, name: Option<&str>) -> Result<Box<dyn AudioOutput>, String>;
+    /// How my screen share opens the screen: the real one, or a test pattern.
+    fn screen(&self) -> share::OpenScreen {
+        Box::new(capture::open)
+    }
 }
 
 /// How a call starts, from the settings.
@@ -67,6 +76,8 @@ pub struct Setup {
     pub echo: bool,
     pub input: Option<String>,
     pub output: Option<String>,
+    /// The level marker in dBFS: the noise gate opens above it. `None`: the gate's own -50.
+    pub gate_db: Option<f32>,
 }
 
 /// From the model to the call engine (through the network thread).
@@ -84,6 +95,10 @@ pub enum VoiceCmd {
     /// Not sending: muted, or push to talk not held.
     Muted(bool),
     Deafened(bool),
+    /// Settings > Voice shows the input level: send `VoiceEvent::Level` while on.
+    Meter(bool),
+    /// The mic test: play what is sent on the speakers too.
+    Hear(bool),
     /// 0 to 400 percent.
     Volume {
         user_id: String,
@@ -93,6 +108,14 @@ pub enum VoiceCmd {
     Watch {
         user_id: String,
         on: bool,
+    },
+    /// Share my screen with these settings (the first opens the screen, which may ask which one), or stop.
+    Share(Option<ShareSetup>),
+    /// The size `user_id`'s share is drawn at, in device pixels: its pictures come no larger (never larger than sent).
+    ShareSize {
+        user_id: String,
+        width: u32,
+        height: u32,
     },
     Stop,
 }
@@ -123,6 +146,19 @@ pub enum VoiceEvent {
         own: crate::link::Sample,
         links: Vec<(String, crate::link::Sample)>,
     },
+    /// The peak of what the mic sends after the filters, in dBFS (-100 for silence), every 100 ms while metered.
+    Level(f32),
+    /// My screen is open: the share can be announced (`share_start`).
+    ShareOpen,
+    /// Every 2 s while my share is encoded: the size, frame rate and bitrate sent.
+    ShareFigures {
+        width: u32,
+        height: u32,
+        fps: f32,
+        kbps: f32,
+    },
+    /// My share ended here: the picker was cancelled (empty) or the capture failed (a sentence for the user).
+    ShareEnded(String),
     /// The call cannot go on. The text is for the user.
     Failed(String),
 }

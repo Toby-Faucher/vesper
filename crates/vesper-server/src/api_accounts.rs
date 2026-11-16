@@ -19,6 +19,7 @@ use vesper_protocol::{
 use vesper_store::{NewAccount, NewSession, StoreError, now_ms};
 
 use crate::AppState;
+use crate::api_messages::{EVERYONE, HERE};
 use crate::auth::{
     clear_cookie, client_ip, cookie_token, device_label, hash_password, hash_token, is_private,
     new_token, session_cookie, valid_accent, valid_bio, valid_display_name, valid_password,
@@ -248,6 +249,10 @@ async fn signup(
     let req = body(req)?;
     let username =
         valid_username(&req.username).ok_or_else(|| bad("username: 3 to 24 of a-z, 0-9 and _"))?;
+    // `@everyone` and `@here` mention many people: never a person's name.
+    if [EVERYONE, HERE].contains(&username.as_str()) {
+        return Err(bad("username: everyone and here are taken"));
+    }
     let display_name = valid_display_name(&req.display_name)
         .ok_or_else(|| bad("display name: 1 to 32 characters, no hidden characters"))?;
     if !valid_password(&req.password) {

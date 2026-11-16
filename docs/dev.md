@@ -87,6 +87,12 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 - Linux needs the X11, Wayland, Vulkan, fontconfig, ALSA and Opus development headers (the package list is in the `desktop` CI
   job). Arch: `opus` and `alsa-lib`; Debian and Ubuntu: `libopus-dev` and `libasound2-dev`. The `opus` crate links the system
   libopus through pkg-config. Watching a screen share needs nothing more: the VP8 decoder (`vp8-decoder`) is pure Rust.
+- Sending a screen share on Linux needs the PipeWire headers and libclang (the `pipewire` crate generates its bindings with
+  bindgen). Arch: `pipewire` and `clang`; Debian and Ubuntu: `libpipewire-0.3-dev` and `libclang-dev`. Under Wayland it needs
+  xdg-desktop-portal with a backend that has ScreenCast (GNOME, KDE or wlr). The encoder (`vp8-encoder`) is pure Rust. Windows needs
+  nothing more ([ADR 0011](decisions/0011-desktop-screen-share-send.md)).
+- `VESPER_DEV_SHARE=1280x720` (debug builds, with `VESPER_DEV_VOICE`) shares moving colour bars in place of the screen through the
+  real encoder and sender. `desktop/src/ui/dev.rs` lists the `VESPER_DEV_*` variables.
 - Check: `scripts/check-desktop.sh` (fmt, clippy `-D warnings`, tests). It is not part of `scripts/check.sh`; CI runs it as its own job.
 - `desktop/vendor/` holds patched copies of `gpui` 0.2.2 and `gpui-component` 0.5.1 (`[patch.crates-io]` in
   `desktop/Cargo.toml`). Each `PATCHED.txt` says what changed and when to drop it. Both patches stop redraws in an idle
@@ -114,15 +120,16 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   after a day).
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
   Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
-- Settings (the gear next to your name; Log out is in the menu on your name) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
+- Settings (the gear next to your name; Admin for staff and Log out are in the menu on your name; Settings > App holds Start with the computer) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
   `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets. It also keeps whether the sidebar is hidden
-  (the web keeps that in localStorage). It is written to a temporary file and renamed. A value the app cannot read falls
+  (the web keeps that in localStorage), the style and colour scheme, and the ring's switch and volume. It is written to a temporary file and renamed. A value the app cannot read falls
   back to its default alone; a file that is not JSON is kept as `settings.json.bad`.
 - DeepFilterNet runs natively (`vesper-dsp` with tract, the same `=0.21.4` pin and debug-assertions override as the root
   workspace). The app does not ship the model: at the first call it downloads `/dsp/model.tar.gz` from the server it is signed
   in to (the file the web app loads), checks its sha256 against the pin in `scripts/fetch-model.sh`, and keeps it as
   `Vesper/DeepFilterNet3_onnx.tar.gz` in the OS data dir. A server without `/dsp/` (a dev server without `scripts/build-dsp.sh`)
-  gives a call with the noise gate and a note in the call bar.
+  gives a call with the noise gate and a note in the call bar. RNNoise (`vesper-dsp`'s `Rnnoise`) is built into the app and
+  needs no model file.
 - The DeepFilterNet test with the real model runs only when `crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz` exists
   (`scripts/fetch-model.sh`); without it the test prints `SKIPPED` and passes. CI has no model, so it skips there.
 - Push to talk watches its key globally on Windows, macOS (with Accessibility access) and X11, only during a call. On Wayland it
@@ -150,16 +157,21 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   round trip), `call-mic-lost`, `person-card` (bob opens alice's card from the call bar at 140 %), `person-card-mod` (dave,
   a moderator, opens carol's from the sidebar) and `voice-quality` (the connection icons), `composer-offline` and
   `reconnecting` (both stop the server for each picture), `motion-ring` (bob calls alice in their DM: also
-  `motion-ring-{web,desktop}-{60,150,800}ms.png`, the prompt's rise and its pulse half way) and `shell-collapsed`. One
+  `motion-ring-{web,desktop}-{60,150,800}ms.png`, the prompt's rise and its pulse half way), `shell-collapsed`,
+  `logo-accent` (alice in teal: the logo follows the accent), `call-pill` (the call bar made small), `motion-reveal` (Dark
+  to Light with a click: also `motion-reveal-{web,desktop}-{100,250}ms.png`) and `motion-slide` (Settings, Voice to
+  Appearance: also `motion-slide-{web,desktop}-{60,150}ms.png`), and one per Settings and Admin section. One
   account is in one call at a time, so in the call scenes the web account leaves the call after its picture and the
   desktop's same account joins it. The desktop runs with the web scenes' clock (7:41 PM) and an en-US locale. It needs `sway` and `grim`; verified on the
   dev machine (Arch, no X). A debug build reads `VESPER_DEV_SERVER`, `VESPER_DEV_USER`, `VESPER_DEV_PASSWORD` and
-  `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`) to get into a scene without typing, and `VESPER_DEV_CLOCK`,
+  `VESPER_DEV_SCENE` (`sign-in`, `room:<name>`, `settings`, `settings:<section>`, `admin:<section>`) to get into a scene without typing, and `VESPER_DEV_CLOCK`,
   `VESPER_DEV_SHIFT`, `VESPER_DEV_EMPTY`, `VESPER_DEV_DRAFT`, `VESPER_DEV_PINS`, `VESPER_DEV_TYPING` and `VESPER_DEV_TRAY` for
   the clock, older days, an empty room, a draft, the pins list, someone typing and the upload tray, and `VESPER_DEV_VOICE`
   (join voice in a room on a silent fake microphone and speakers that play nothing: a real call through the server, no
   audio device opened), `VESPER_DEV_LINKS`, `VESPER_DEV_RTT`, `VESPER_DEV_MIC_LOST`, `VESPER_DEV_DEAFEN`,
-  `VESPER_DEV_PTT_HELD`, `VESPER_DEV_PERSON`, `VESPER_DEV_VOLUME` and `VESPER_DEV_RING` for the call scenes
+  `VESPER_DEV_PTT_HELD`, `VESPER_DEV_PERSON`, `VESPER_DEV_VOLUME` and `VESPER_DEV_RING` for the call scenes, and
+  `VESPER_DEV_THEN` for a step a motion scene films on a Settings page, and `VESPER_DEV_FRAMES` (once a second on
+  stderr: frames drawn, share pictures, and the longest the UI thread was busy)
   (`desktop/src/ui/dev.rs` says how each is written); a
   release build does not have that code. The server takes 5 sign ins per name and then one a minute, so the app waits 13 s and signs in
   again when it is refused. To add a scene, add an entry to `SCENES` in `parity.mjs`: the web steps, and the

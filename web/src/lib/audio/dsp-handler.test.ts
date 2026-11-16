@@ -11,6 +11,9 @@ const wasm: DspWasm = {
     setAttenLimit() {}
     setPostFilter() {}
   },
+  WasmRnnoise: class {
+    process = (input: Float32Array) => input.map((x) => x * 0.25);
+  },
 };
 const make = (fetchModel = async () => new Uint8Array([1])) =>
   createDspHandler({ loadWasm: async () => wasm, fetchModel });
@@ -48,6 +51,16 @@ describe('dsp handler', () => {
     expect((await h({ type: 'frame', data: new Float32Array(HOP) }))[0].type).toBe('error');
   });
 
+  it('rnnoise needs no model and ignores the DeepFilterNet knobs', async () => {
+    const h = make(async () => {
+      throw new Error('no model fetch for rnnoise');
+    });
+    expect(await h({ ...init, engine: 'rnnoise' })).toEqual([{ type: 'ready' }]);
+    expect(await h({ type: 'set', atten: 20, beta: 0.02 })).toEqual([]);
+    const [r] = await h({ type: 'frame', data: new Float32Array(HOP).fill(1) });
+    expect(r.type === 'frame' && r.data[0]).toBe(0.25);
+  });
+
   it('set forwards atten and beta', async () => {
     const calls: string[] = [];
     const h = createDspHandler({
@@ -57,6 +70,7 @@ describe('dsp handler', () => {
           setAttenLimit = (v: number) => calls.push(`a${v}`);
           setPostFilter = (v: number) => calls.push(`b${v}`);
         },
+        WasmRnnoise: wasm.WasmRnnoise,
       }),
       fetchModel: async () => new Uint8Array(),
     });

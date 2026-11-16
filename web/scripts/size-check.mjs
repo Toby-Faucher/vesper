@@ -43,7 +43,9 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 200, cssFirst: 12, css
 // against 61.11 before, so CI is expected near 61.45. The viewer's video code and its icon stay in the lazy chat chunk.
 // 2026-11-14: 61.6 to 61.9 for v1.8.2 "What's new" (the version check in whats-new.ts and its effect in the shell); measured
 // 61.60 on the dev machine against 61.32 before, so CI is expected near 61.75. The notes and the dialog are a lazy chunk.
-export const RATCHET_GZIP_KB = { first: 61.9 };
+// 2026-11-15: 61.9 to 62.4 for v2.2.0 (@everyone and @here in the mention list, upload retries, the lowered-share
+// notice and the selection token); measured 62.0 on the dev machine, so CI is expected near 62.2.
+export const RATCHET_GZIP_KB = { first: 62.4 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.

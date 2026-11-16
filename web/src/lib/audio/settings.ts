@@ -46,7 +46,7 @@ export function clampSettings(s: Partial<AudioSettings>): AudioSettings {
   const vad: Partial<AudioSettings['vad']> = s.vad ?? {};
   const ptt: Partial<AudioSettings['pushToTalk']> = s.pushToTalk ?? {};
   return {
-    mode: (['deepfilter', 'browser', 'off'] as unknown[]).includes(s.mode) ? s.mode! : D.mode,
+    mode: (['deepfilter', 'rnnoise', 'browser', 'off'] as unknown[]).includes(s.mode) ? s.mode! : D.mode,
     attenDb: num(s.attenDb, D.attenDb, 6, 100),
     postFilter: num(s.postFilter, D.postFilter, 0, 0.05),
     inputBoostDb: num(s.inputBoostDb, D.inputBoostDb, 0, 12),

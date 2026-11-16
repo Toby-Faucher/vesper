@@ -13,6 +13,13 @@ const ATTACHMENTS_TS: &str = include_str!("../../../web/src/lib/ui/attachments.t
 /// The screen share's icons (`eyeOff`, `monitorUp`, ...), kept out of the web's first load in their own file.
 const SHARE_TS: &str = include_str!("../../../web/src/lib/share/icons.ts");
 
+/// The desktop's own window buttons (chrome.rs), drawn like the others: minimize, maximize, restore.
+const WINDOW: &[(&str, &str)] = &[
+    ("winMin", "M6 12h12"),
+    ("winMax", "M6 6h12v12H6z"),
+    ("winRestore", "M6 9h9v9H6z M9 6h9v9"),
+];
+
 /// Every icon: its name in icons.ts (`micOff`) and its one path.
 pub fn all() -> &'static [(&'static str, &'static str)] {
     static ALL: OnceLock<Vec<(&str, &str)>> = OnceLock::new();
@@ -27,6 +34,7 @@ pub fn all() -> &'static [(&'static str, &'static str)] {
                 let (d, _) = rest.split_once("' as IconPath")?;
                 Some((name, d))
             })
+            .chain(WINDOW.iter().copied())
             .collect()
     })
 }
@@ -98,14 +106,15 @@ mod tests {
             .lines()
             .filter(|l| l.starts_with("export const "))
             .count();
-        // and expandIcon from attachments.ts
+        // and expandIcon from attachments.ts, and the window buttons
         assert_eq!(
             all().len(),
-            n + 1 + share,
+            n + 1 + share + WINDOW.len(),
             "a line of icons.ts did not parse"
         );
         assert!(Assets.load("vesper/eyeOff.svg").unwrap().is_some());
         assert!(Assets.load("vesper/expandIcon.svg").unwrap().is_some());
+        assert!(Assets.load("vesper/winRestore.svg").unwrap().is_some());
         assert!(n >= 40);
         let mic = Assets.load("vesper/mic.svg").unwrap().unwrap();
         assert!(
@@ -115,6 +124,9 @@ mod tests {
         );
         assert!(Assets.load("vesper/nope.svg").unwrap().is_none());
         assert!(Assets.load("vesper/spinner.svg").unwrap().is_some());
-        assert_eq!(Assets.list("vesper").unwrap().len(), n + 1 + share);
+        assert_eq!(
+            Assets.list("vesper").unwrap().len(),
+            n + 1 + share + WINDOW.len()
+        );
     }
 }

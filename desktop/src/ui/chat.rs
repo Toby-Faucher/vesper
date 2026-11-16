@@ -31,6 +31,7 @@ use vesper_protocol::{Attachment, AttachmentKind, Message, UserInfo};
 use super::c::{self, Avatar, Ellipsis, MenuItem, mix, popover_frame};
 use super::icons::icon;
 use super::motion::{self, POP, RISE};
+use super::select::{SelText, Selection};
 use super::theme::{TEXT_SM, TEXT_XS, TextStepExt, Tokens, tokens};
 use super::{
     CancelEdit, ComposerDown, ComposerEscape, ComposerTab, ComposerUp, EDIT_BOX, NewLine,
@@ -42,13 +43,13 @@ use crate::model::EMOJIS;
 use crate::net::Cmd;
 use crate::timeline::{
     BOX, Locale, RowHead, arrivals, clock, file_size, fit, is_long, mention_query, mentionable,
-    type_label, typing_line,
+    names_only, type_label, typing_line,
 };
 use crate::uploads::UpState;
 
 /// Decoded pictures kept for the timeline; the oldest goes first.
 pub const IMAGE_CACHE: usize = 64;
-const IMAGE_FAILED: &str = "The image did not load.";
+pub(super) const IMAGE_FAILED: &str = "The image did not load.";
 /// The New row goes this long after the room is read (`FADE_AFTER_MS`).
 const FADE_AFTER: Duration = Duration::from_millis(4000);
 /// The server's limit of pins per room.
@@ -549,8 +550,12 @@ impl Vesper {
         let anchor = format!("name-{id}");
         let open = {
             let (uid, key) = (msg.author_id.clone(), anchor.clone());
+            let sel = format!("author-{id}");
             move |this: &mut Self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
-                this.open_person(uid.clone(), key.clone(), false, cx)
+                // A drag over the name selected it: that is not a click on it.
+                if !Selection::dragged_in(&sel, cx) {
+                    this.open_person(uid.clone(), key.clone(), false, cx)
+                }
             }
         };
         let gutter = if head {
@@ -594,7 +599,7 @@ impl Vesper {
                             .hover(|s| s.underline())
                             .on_click(cx.listener(open))
                             .child(self.probe(anchor))
-                            .child(name),
+                            .child(SelText::new(format!("author-{id}"), name).pointer()),
                     )
                     // Baseline to baseline with the 14/20 name: 3 px down.
                     .child(
@@ -683,8 +688,8 @@ impl Vesper {
     ) -> Div {
         let id = msg.id;
         let names: Vec<&str> = msg.attachments.iter().map(|a| a.name.as_str()).collect();
-        // A message of files only carries their names as its body: not shown twice.
-        let filler = !msg.attachments.is_empty() && msg.body == names.join(", ");
+        // A message of files has no text; an older one carries the file names as its body: not shown twice.
+        let filler = msg.body.is_empty() || names_only(&msg.body, &names);
         let edited = msg.edited_at.is_some();
         let note = match (edited, !head && msg.pinned) {
             (true, true) => Some("(edited) Pinned"),
@@ -1231,7 +1236,7 @@ impl Vesper {
     }
 
     /// An image (`.img`): fetched once with the session cookie, in a 360 x 280 `--bg-element` box until it comes, then
-    /// its own shape; one that fails is a 48 px box with a line of text. Anything else is a card.
+    /// its own shape with no fill; one that fails is a 48 px box with a line of text. Anything else is a card.
     fn attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) -> AnyElement {
         let t = tokens(cx).clone();
         if a.kind == AttachmentKind::Image && a.size as u64 <= IMAGE_MAX {
@@ -1240,8 +1245,8 @@ impl Vesper {
                 self.run(vec![Cmd::FetchImage(a.id.clone())]);
             }
             let open = {
-                let a = a.clone();
-                cx.listener(move |this, _, _, cx| this.open_attachment(&a, cx))
+                let id = a.id.clone();
+                cx.listener(move |this, _, _, cx| this.open_viewer(&id, cx))
             };
             let boxed = |w: f32, h: f32| {
                 div()
@@ -1257,11 +1262,10 @@ impl Vesper {
                 Img::Ready(i) => {
                     let s = i.size(0);
                     let (w, h) = fit(s.width.0 as u32, s.height.0 as u32);
-                    boxed(w as f32, h as f32).child(
-                        img(ImageSource::Render(i.clone()))
-                            .w(px(w as f32))
-                            .h(px(h as f32)),
-                    )
+                    // Loaded: no fill behind it, so a transparent picture blends in.
+                    boxed(w as f32, h as f32)
+                        .bg(gpui::transparent_black())
+                        .child(picture(i, format!("pic-{}", a.id), w as f32, h as f32, cx))
                 }
                 Img::Loading => boxed(BOX.0 as f32, BOX.1 as f32),
                 Img::Failed => boxed(BOX.0 as f32, 48.)
@@ -1365,13 +1369,13 @@ impl Vesper {
     }
 
     /// Hands a media file to the system's app. Downloaded first, named by its id and the type the server found.
-    fn open_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
+    pub(super) fn open_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
         let Some(ext) = files::media_ext(&a.mime).filter(|_| files::valid_id(&a.id)) else {
             return;
         };
         let path = files::cache_dir("open").join(format!("{}.{ext}", a.id));
         if path.exists() {
-            cx.open_with_system(&path);
+            open_file(&path, cx);
         } else {
             self.run(vec![Cmd::Download {
                 id: a.id.clone(),
@@ -1382,7 +1386,7 @@ impl Vesper {
     }
 
     /// Saves where the user picks, starting in Downloads. With no dialog (no portal on Linux) it goes to Downloads.
-    fn save_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
+    pub(super) fn save_attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) {
         if !files::valid_id(&a.id) {
             return;
         }
@@ -1411,9 +1415,7 @@ impl Vesper {
 
     /// A picture came from the network thread: kept for drawing, the oldest let go past `IMAGE_CACHE`.
     pub(super) fn image_loaded(&mut self, id: &str, picture: Option<Picture>, window: &mut Window) {
-        let img = picture
-            .and_then(|p| image::RgbaImage::from_raw(p.width, p.height, p.bgra))
-            .map(|buf| Arc::new(RenderImage::new(vec![image::Frame::new(buf)])));
+        let img = picture.and_then(render_image);
         self.images
             .insert(id.to_string(), img.map_or(Img::Failed, Img::Ready));
         self.image_order.push_back(id.to_string());
@@ -1674,7 +1676,7 @@ impl Vesper {
             mix(t.line.into(), t.line_strong.into(), h)
         };
         let slot = self.composer_slot(over, &t, now, cx);
-        let reply = self.reply_bar(&t, cx);
+        let reply = self.reply_bar(&t, window, cx);
         let away = self.away_line(room, &t);
         let tray = self.upload_tray(room, &t, window, cx);
         let people = self.mention_list(&t, now, cx);
@@ -1836,9 +1838,16 @@ impl Vesper {
 
     /// `.bar`: 32 px, 12 px left and 4 px right, an 8 px gap, a `--line-subtle` rule under it, 12/16 `--fg-2`:
     /// "Replying to <name>" and the text, and a 24 px Cancel reply.
-    fn reply_bar(&self, t: &Tokens, cx: &mut Context<Self>) -> Option<Div> {
+    fn reply_bar(&self, t: &Tokens, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
         let m = &self.model;
         let r = m.reply_to.as_ref()?;
+        // `swap` in: 4 px up and a fade, as the web's reply bar.
+        let came = motion::since(SharedString::from(format!("reply-{}", r.id)), window, cx);
+        let pose = motion::pose(&t.motion, motion::SWAP, false, came, Instant::now());
+        if pose.is_some() {
+            window.request_animation_frame();
+        }
+        let (dy, alpha) = pose.map_or((0., 1.), |p| (4. * (1. - p.t), p.opacity));
         let ex = plain(&parse(&r.body));
         let ex = if ex.is_empty() {
             "a message with a file".into()
@@ -1852,6 +1861,9 @@ impl Vesper {
         Some(
             div()
                 .debug_selector(|| "reply-bar".into())
+                .relative()
+                .top(px(dy))
+                .opacity(alpha)
                 .flex()
                 .items_center()
                 .gap(px(8.))
@@ -2323,7 +2335,11 @@ impl Vesper {
 
     /// The pins list under the header's Pins button (`PinsPopover.svelte`): "Pinned messages", then per pin a
     /// picture, the name and when, the text, and Unpin; "n of 50 pins" under them.
-    pub(super) fn render_pins(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_pins(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let t = tokens(cx).clone();
         let now = Instant::now();
         let at = self.tl.shown_since("pins".into(), now);
@@ -2425,7 +2441,10 @@ impl Vesper {
                         .py(px(4.))
                         .text_step(TEXT_XS)
                         .text_color(t.fg_2)
-                        .child(format!("{} of {MAX_PINS} pins", l.len()))
+                        .flex()
+                        // The count rolls its digits (`Roll.svelte`) when a pin goes.
+                        .child(motion::roll("pins-count", &l.len().to_string(), px(16.), false, window, cx))
+                        .child(format!(" of {MAX_PINS} pins"))
                         .into_any_element(),
                 );
                 v
@@ -2522,6 +2541,48 @@ impl Vesper {
                         .on_close(cancel),
                 ),
         )
+    }
+}
+
+/// A decoded picture as GPUI draws it.
+/// Opens a file in the system's app. On Linux through `open_url`, which first asks the compositor for an activation
+/// token, so the app comes up in front: `open_with_system` runs xdg-open without one, and the desktop may keep the
+/// new window behind Vesper.
+pub(super) fn open_file(path: &std::path::Path, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if let Ok(u) = url::Url::from_file_path(path) {
+        return cx.open_url(u.as_str());
+    }
+    cx.open_with_system(path);
+}
+
+pub(super) fn render_image(p: Picture) -> Option<Arc<RenderImage>> {
+    if p.delays.is_empty() {
+        let buf = image::RgbaImage::from_raw(p.width, p.height, p.bgra)?;
+        return Some(Arc::new(RenderImage::new(vec![image::Frame::new(buf)])));
+    }
+    let len = (p.width * p.height * 4) as usize;
+    let frames = p
+        .bgra
+        .chunks_exact(len)
+        .zip(&p.delays)
+        .map(|(px, &ms)| {
+            let buf = image::RgbaImage::from_raw(p.width, p.height, px.to_vec())?;
+            let delay = image::Delay::from_numer_denom_ms(u32::from(ms), 1);
+            Some(image::Frame::from_parts(buf, 0, 0, delay))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Arc::new(RenderImage::new(frames)))
+}
+
+/// A picture `w` x `h`. An animated one plays (GPUI keeps the frame in the element's state, by `id`); under reduced
+/// motion it has no id, so it stays on its first frame.
+pub(super) fn picture(i: &Arc<RenderImage>, id: String, w: f32, h: f32, cx: &App) -> AnyElement {
+    let el = img(ImageSource::Render(i.clone())).w(px(w)).h(px(h));
+    if i.frame_count() > 1 && !tokens(cx).motion.reduced {
+        el.id(SharedString::from(id)).into_any_element()
+    } else {
+        el.into_any_element()
     }
 }
 

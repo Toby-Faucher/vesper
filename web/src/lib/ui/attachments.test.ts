@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import type { Attachment } from '../gen/Attachment';
 import type { Message } from '../gen/Message';
-import { BOX, fileSize, fit, isGenericPaste, pastedName, typeLabel, viewable, viewCase } from './attachments';
+import { BOX, fileSize, fit, isGenericPaste, namesOnly, pastedName, typeLabel, viewable, viewCase } from './attachments';
 
 describe('attachments', () => {
+  it('spots a body that is only the file names, in any order', () => {
+    const f = (...names: string[]) => names.map((name, i): Attachment => ({ id: `${i}`, name, mime: 'audio/mpeg', size: 1, kind: 'audio' }));
+    expect(namesOnly('a.mp3, b, c.mp3', f('b, c.mp3', 'a.mp3'))).toBe(true); // a name may hold ", "
+    expect(namesOnly('a.mp3, b, c.mp3', f('c.mp3', 'a.mp3', 'b'))).toBe(true);
+    expect(namesOnly('a.mp3, b, c.mp3', f('b', 'c.mp3', 'a.mp3'))).toBe(true);
+    expect(namesOnly('x, x, x', f('x', 'x', 'x'))).toBe(true);
+    expect(namesOnly('x, x', f('x', 'x', 'x'))).toBe(false);
+    expect(namesOnly('see a.mp3', f('a.mp3'))).toBe(false);
+    expect(namesOnly('', [])).toBe(false);
+    expect(namesOnly('caf\u00e9.mp3', f('cafe\u0301.mp3'))).toBe(true); // the server stores the body as NFC
+  });
+
   it('fits an image into the box without scaling it up', () => {
     expect(fit(720, 280)).toEqual({ w: 360, h: 140 });
     expect(fit(300, 1000)).toEqual({ w: 84, h: 280 });

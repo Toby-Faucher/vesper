@@ -9,6 +9,7 @@
 //!
 //! Screen shares come in on the video m-lines the SFU adds. The engine passes a watched share's VP8 frames to the
 //! decoder thread (`video.rs`) and asks the sharer for a keyframe (a PLI, which the SFU passes on) when it needs one.
+//! My own share's frames come from its encode thread (`share.rs`) and go out on the video m-line of the join offer.
 
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
@@ -23,14 +24,17 @@ use str0m::media::{Direction, Frequency, KeyframeRequestKind, MediaKind, MediaTi
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 
-use super::denoise::{Capture, Late, Loaded, deep_filter};
+use super::denoise::{Capture, Late, Loaded, deep_filter, rnnoise};
 use super::echo::{self, Echo};
 use super::jitter::{Jitter, Pop};
-use super::mix::{Limiter, Speaking, mix_into, rms, volume_to_gain};
+use super::mix::{Limiter, Meter, Speaking, mix_into, rms, volume_to_gain};
+use super::share::{Out, Sending};
 use super::video::Video;
 use super::{AudioDevices, AudioInput, AudioOutput, FRAME, RATE, Setup, VoiceCmd, VoiceEvent};
 
 const TICK: Duration = Duration::from_millis(20);
+/// The longest wait for the socket while my share sends, so its frames go out soon after they are encoded.
+const SHARE_WAIT: Duration = Duration::from_millis(4);
 /// Captured audio held at most, so a stalled engine does not send old sound later (100 ms).
 const MAX_CAPTURED: usize = FRAME * 5;
 /// Media must be up this long after the answer.
@@ -74,6 +78,9 @@ struct Engine<'a> {
     /// Each SFU address and our address towards it (the socket is bound to 0.0.0.0).
     routes: Vec<(SocketAddr, SocketAddr)>,
     mid: Mid,
+    /// My screen share's m-line, and the share while it runs.
+    video_mid: Mid,
+    sending: Option<Sending>,
     pending: Option<SdpPendingOffer>,
     answered: Option<Instant>,
     connected: bool,
@@ -101,6 +108,11 @@ struct Engine<'a> {
     /// Percent by user id.
     volumes: HashMap<String, f32>,
     me: Speaking,
+    /// Settings > Voice is open: the level goes to the model.
+    meter: Option<Meter>,
+    /// The mic test: what is sent is played too, a frame later.
+    hear: bool,
+    heard: Vec<f32>,
     limiter: Limiter,
     shown: (bool, Vec<String>),
     video: Video,
@@ -163,12 +175,11 @@ impl<'a> Engine<'a> {
             .set_stats_interval(Some(Duration::from_secs(2)))
             .build(Instant::now());
         // One audio m-line both ways, as the browser's addTrack makes. Others' voices come on m-lines the SFU adds.
-        // One receive-only video m-line: an offer with a video m-line gets others' screens (ADR 0009), and as this
-        // one never sends, the SFU makes no track of it and offers nobody video from this client. (The web's
-        // m-line is send-only, for its own share.)
+        // One send-only video m-line for my own share, as the web's: an offer with a video m-line also gets others'
+        // screens, on m-lines the SFU adds (ADR 0009).
         let mut change = rtc.sdp_api();
         let mid = change.add_media(MediaKind::Audio, Direction::SendRecv, None, None, None);
-        change.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
+        let video_mid = change.add_media(MediaKind::Video, Direction::SendOnly, None, None, None);
         let (offer, pending) = change.apply().expect("adding media is a change");
         emit(VoiceEvent::Offer(offer.to_sdp_string()));
         Ok(Engine {
@@ -176,6 +187,8 @@ impl<'a> Engine<'a> {
             socket,
             routes: vec![],
             mid,
+            video_mid,
+            sending: None,
             pending: Some(pending),
             answered: None,
             connected: false,
@@ -190,12 +203,25 @@ impl<'a> Engine<'a> {
             devices_shown: "",
             encoder,
             echo: Echo::new(setup.echo, echo::late()),
-            capture: Capture::new(setup.denoise, denoiser, deep_filter, Late::default()),
+            capture: {
+                let worker = match setup.denoise {
+                    crate::settings::Denoise::Rnnoise => rnnoise,
+                    _ => deep_filter,
+                };
+                let mut c = Capture::new(setup.denoise, denoiser, worker, Late::default());
+                if let Some(g) = setup.gate_db {
+                    c.set_gate(g);
+                }
+                c
+            },
             captured: vec![],
             frames: 0,
             peers: HashMap::new(),
             volumes: setup.volumes,
             me: Speaking::default(),
+            meter: None,
+            hear: false,
+            heard: vec![],
             limiter: Limiter::default(),
             shown: (false, vec![]),
             video,
@@ -226,7 +252,14 @@ impl<'a> Engine<'a> {
             let wait = timeout
                 .min(tick)
                 .saturating_duration_since(Instant::now())
-                .clamp(Duration::from_millis(1), TICK);
+                .clamp(
+                    Duration::from_millis(1),
+                    if self.sending.is_some() {
+                        SHARE_WAIT
+                    } else {
+                        TICK
+                    },
+                );
             self.socket.set_read_timeout(Some(wait)).map_err(|_| LOST)?;
             match self.socket.recv_from(&mut buf) {
                 Ok((n, source)) => self.receive(&buf[..n], source),
@@ -237,6 +270,7 @@ impl<'a> Engine<'a> {
             while let Ok(need) = self.video.needs.try_recv() {
                 self.need_keyframe(&need.user_id, need.broken);
             }
+            self.send_share();
             let now = Instant::now();
             self.rtc
                 .handle_input(Input::Timeout(now))
@@ -278,6 +312,8 @@ impl<'a> Engine<'a> {
             }
             VoiceCmd::Muted(m) => self.muted = m,
             VoiceCmd::Deafened(d) => self.deafened = d,
+            VoiceCmd::Meter(on) => self.meter = on.then(Meter::default),
+            VoiceCmd::Hear(on) => (self.hear, self.heard) = (on, vec![]),
             VoiceCmd::Volume { user_id, percent } => {
                 self.volumes.insert(user_id, percent);
             }
@@ -290,6 +326,16 @@ impl<'a> Engine<'a> {
                 }
                 self.video.watch(user_id, on);
             }
+            VoiceCmd::Share(Some(setup)) => match &self.sending {
+                Some(s) => s.set(setup),
+                None => self.sending = Some(Sending::start(self.devices.screen(), setup)),
+            },
+            VoiceCmd::Share(None) => self.sending = None,
+            VoiceCmd::ShareSize {
+                user_id,
+                width,
+                height,
+            } => self.video.size(user_id, width, height),
             VoiceCmd::Start { .. } | VoiceCmd::Stop => {}
         }
         Ok(())
@@ -452,7 +498,55 @@ impl<'a> Engine<'a> {
                         self.trouble.insert(user, Instant::now());
                     }
                 }
+                Output::Event(Event::KeyframeRequest(r)) if r.mid == self.video_mid => {
+                    if let Some(s) = &self.sending {
+                        s.keyframe();
+                    }
+                }
                 Output::Event(_) => {}
+            }
+        }
+    }
+
+    /// What my share's threads made: frames go out on my video m-line, the rest to the model.
+    fn send_share(&mut self) {
+        let Some(s) = &self.sending else {
+            return;
+        };
+        let outs: Vec<Out> = s.out.try_iter().collect();
+        for o in outs {
+            match o {
+                Out::Frame { data, rtp } => {
+                    let Some(w) = self.rtc.writer(self.video_mid) else {
+                        continue;
+                    };
+                    let Some(pt) = w
+                        .payload_params()
+                        .find(|p| p.spec().codec == Codec::Vp8)
+                        .map(|p| p.pt())
+                    else {
+                        continue;
+                    };
+                    let time = MediaTime::new(rtp, Frequency::NINETY_KHZ);
+                    let _ = w.write(pt, Instant::now(), time, data);
+                }
+                Out::Open => (self.emit)(VoiceEvent::ShareOpen),
+                Out::Figures {
+                    width,
+                    height,
+                    fps,
+                    kbps,
+                } => (self.emit)(VoiceEvent::ShareFigures {
+                    width,
+                    height,
+                    fps,
+                    kbps,
+                }),
+                Out::Ended(why) => {
+                    self.sending = None;
+                    (self.emit)(VoiceEvent::ShareEnded(why));
+                    return;
+                }
             }
         }
     }
@@ -582,9 +676,16 @@ impl<'a> Engine<'a> {
             mix.fill(0.0);
         }
         if let Some(o) = &mut self.output {
-            o.write(&mix);
+            // The mic test's own voice is left out of the echo canceller's far end, or it would take the voice out.
+            let mut out = mix;
+            let n = self.heard.len().min(FRAME);
+            if !self.deafened {
+                mix_into(&mut out[..n], &self.heard[..n], 1.0);
+            }
+            self.heard.drain(..n);
+            o.write(&out);
         }
-        // The far end is exactly what went to the speakers: nothing while deafened or without them.
+        // The far end is what went to the speakers: nothing while deafened or without them.
         self.echo.render(&mix);
 
         if let Some(i) = &mut self.input {
@@ -608,6 +709,15 @@ impl<'a> Engine<'a> {
             }
             let level = if self.muted { 0.0 } else { rms(&frame) };
             me = self.me.update(level);
+            if self.muted {
+                frame.fill(0.0); // not filtered, not sent: silence on the meter and in the mic test
+            }
+            if let Some(db) = self.meter.as_mut().and_then(|m| m.update(&frame)) {
+                (self.emit)(VoiceEvent::Level(db));
+            }
+            if self.hear && self.heard.len() < 4 * FRAME {
+                self.heard.extend_from_slice(&frame);
+            }
             self.send(&frame);
         }
 
@@ -756,6 +866,52 @@ mod tests {
         let (_, denoiser) = std::sync::mpsc::channel();
         let e = Engine::new(fake, setup, denoiser, Video::start(|_| {}), emit);
         e.unwrap_or_else(|_| panic!("the engine starts"))
+    }
+
+    /// The mic test plays what is sent, outside the echo canceller's far end; the meter says its level every 100 ms
+    /// while on, and silence while muted.
+    #[test]
+    fn the_mic_test_is_heard_and_metered() {
+        let fake = Fake::default();
+        let levels = Mutex::new(vec![]);
+        let emit = |ev| {
+            if let VoiceEvent::Level(db) = ev {
+                levels.lock().unwrap().push(db);
+            }
+        };
+        let mut e = engine(&fake, &emit);
+        e.tick();
+        assert!(levels.lock().unwrap().is_empty(), "no meter until asked");
+        e.command(VoiceCmd::Meter(true)).unwrap();
+        e.command(VoiceCmd::Hear(true)).unwrap();
+        for _ in 0..10 {
+            e.tick();
+        }
+        let played = fake.played.lock().unwrap().clone();
+        assert!(rms(&played[5 * FRAME..]) > 0.01, "my voice is played");
+        assert!(
+            e.echo.far.iter().all(|s| *s == 0.0),
+            "and is not the far end"
+        );
+        let got = levels.lock().unwrap().clone();
+        assert_eq!(got.len(), 2, "every fifth frame: {got:?}");
+        assert!(got.iter().all(|db| *db > -60.0 && *db < 0.0), "{got:?}");
+
+        e.command(VoiceCmd::Muted(true)).unwrap();
+        for _ in 0..5 {
+            e.tick();
+        }
+        assert_eq!(
+            levels.lock().unwrap().last(),
+            Some(&-100.0),
+            "muted is silent"
+        );
+        e.command(VoiceCmd::Hear(false)).unwrap();
+        e.command(VoiceCmd::Meter(false)).unwrap();
+        for _ in 0..5 {
+            e.tick();
+        }
+        assert_eq!(levels.lock().unwrap().len(), 3);
     }
 
     /// What goes to the speakers is, sample for sample, what the echo canceller gets as its far end: someone's

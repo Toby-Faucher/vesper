@@ -94,23 +94,43 @@ async fn visible_message(
     Ok((msg, room))
 }
 
-/// User ids of the `@names` in `body` that can see `room` and are not banned.
-async fn mentions(st: &AppState, room: &RoomInfo, body: &str) -> Result<Vec<String>, ApiError> {
+/// `@everyone` mentions every member who can see the room; `@here` only those with a socket open.
+/// Neither can be a username (signup refuses them).
+pub const EVERYONE: &str = "everyone";
+pub const HERE: &str = "here";
+
+/// User ids of the `@names` in `body` that can see `room` and are not banned. `@everyone` and
+/// `@here` add the other members (not `author`) who can see it, `@here` only those online now.
+async fn mentions(
+    st: &AppState,
+    room: &RoomInfo,
+    author: &str,
+    body: &str,
+) -> Result<Vec<String>, ApiError> {
     let names: HashSet<String> = mentioned_usernames(body).into_iter().collect();
     if names.is_empty() {
         return Ok(Vec::new());
     }
+    let (all, here) = (names.contains(EVERYONE), names.contains(HERE));
     Ok(st
         .store
         .users()
         .await?
         .into_iter()
-        .filter(|u| names.contains(&u.username) && !u.banned && can_see(u, room))
+        .filter(|u| !u.banned && can_see(u, room))
+        .filter(|u| {
+            names.contains(&u.username)
+                || (u.user_id != author && (all || (here && st.hub.online(&u.user_id))))
+        })
         .map(|u| u.user_id)
         .collect())
 }
 
-fn body_text(s: &str) -> Result<String, ApiError> {
+/// The trimmed body. Empty is allowed only for a message that has files (`files`).
+fn body_text(s: &str, files: bool) -> Result<String, ApiError> {
+    if files && s.trim().is_empty() {
+        return Ok(String::new());
+    }
     valid_body(s).ok_or_else(|| {
         bad("message: 1 to 4000 characters, no control characters except newline and tab")
     })
@@ -165,8 +185,8 @@ async fn send(
     let req = body(req)?;
     let room = visible_room(&st, &a.user, id).await?;
     limit(&st, Kind::Message, &a.user.user_id)?;
-    let text = body_text(&req.body)?;
-    let mentions = mentions(&st, &room, &text).await?;
+    let text = body_text(&req.body, !req.attachments.is_empty())?;
+    let mentions = mentions(&st, &room, &a.user.user_id, &text).await?;
     let msg = st
         .store
         .post_message(NewMessage {
@@ -220,8 +240,8 @@ async fn edit(
         return Err(ApiError::new(ApiErrorCode::Forbidden, "not allowed"));
     }
     limit(&st, Kind::Change, &a.user.user_id)?;
-    let text = body_text(&req.body)?;
-    let mentions = mentions(&st, &room, &text).await?;
+    let text = body_text(&req.body, !msg.attachments.is_empty())?;
+    let mentions = mentions(&st, &room, &a.user.user_id, &text).await?;
     let msg = st
         .store
         .edit_message(id, &a.user.user_id, &text, &mentions, now_ms())

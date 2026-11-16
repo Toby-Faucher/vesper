@@ -74,7 +74,7 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - **Static files:** a missing extensionless path under `/assets/` returns `index.html` with the `immutable` cache header. Replies 206 and 304 under `/assets/` get `no-cache`. Base images in `deploy/Dockerfile` are pinned by digest (v1.4), so they get no security updates until someone bumps the digests on purpose. Precompressed `.br` and `.gz` files (v1.4) are served only for files read from `web/dist`; the SPA fallback page (`index.html` for a path like `/r/1`) goes out as it is. Whether this gains anything behind the Cloudflare tunnel, which may compress too, is not measured.
 - **The SFU wakes every 10 ms when idle.** Cheap, but it is not zero.
 - **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof).
-- **A room's shares are capped in total.** Each share counts its bitrate once per other person in the call, and the sum may not pass 120 000 kbps (for example 4 people sharing 10 Mbps each). A share that would go over is refused with "Too many screens are being shared right now." The number is the highest tested load that held voice at 95% in the [video load test](testing/latency.md#video-load) on two cores. It is checked only when a share starts, so people who join later raise the total without a re-check. It scales with the number of viewers, so a 12-person room with one 10 Mbps share (110 000) is allowed, though only 4-person rooms were measured. It is measured on a Core i7-12700, not on the production VM. The suggested bitrate stops at 10 Mbps, so four people can share at the suggestion.
+- **A room's shares are capped in total.** Each share counts its bitrate once per other person in the call, and the sum may not pass 120 000 kbps (for example 4 people sharing 10 Mbps each). A share that would go over gets the bitrate that is left, and the sharer sees "Your screen share was lowered to ... Mbps". Only when less than 500 kbps is left is it refused with "Too many screens are being shared right now." The server logs the numbers each time. The number is the highest tested load that held voice at 95% in the [video load test](testing/latency.md#video-load) on two cores. It is checked only when a share starts, so people who join later raise the total without a re-check. It scales with the number of viewers, so a 12-person room with one 10 Mbps share (110 000) is allowed, though only 4-person rooms were measured. It is measured on a Core i7-12700, not on the production VM. The suggested bitrate stops at 10 Mbps, so four people can share at the suggestion.
 - **Voice and video share one UDP socket and one SFU thread.** Under heavy video the server's socket receive buffer fills and drops packets, voice with them. At 4 x 20 Mbps on loopback the server's socket dropped 50 146 packets in 30 s and the load test's sockets dropped none during the run (see the [video load test](testing/latency.md#video-load)). A bigger buffer needs `SO_RCVBUF` in the SFU and a higher `net.core.rmem_max` on the host, since the kernel caps the first at the second. Not done yet.
 - **Screen share has one video layer for every viewer.** There is no simulcast. A viewer on a bad link asks for keyframes, and the SFU forwards each request with no throttle, so the other viewers pay a little for them.
 - **Screen share carries no sound.** Game audio and tab audio are not sent. Firefox's `getDisplayMedia` captures no audio at all (from docs: Mozilla bug 1541425).
@@ -103,7 +103,7 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 
 - **A very slow first visit can still fall back.** The denoiser files (about 10 MB, see Denoiser) start downloading when the page loads, and the worker waits 20 s after Join. A link that cannot fetch them in that time gets browser suppression for that call.
 - **Not tried in real Chrome or Firefox.** Firefox may refuse a mic and AudioContext rate mismatch, which forces the browser fallback every time.
-- **The noise gate and the limiter work in DeepFilterNet mode only.** In browser and off mode the raw mic track is sent; the gate switch is disabled there. After an automatic fallback to browser mode the setting stays on but does nothing. With the gate on, the Settings meter shows the gated sound, so the noise under the marker is not visible; turn the gate off to set the marker.
+- **The noise gate, the limiter and the input boost work in DeepFilterNet mode only.** In browser and off mode the raw mic track is sent; in RNNoise mode they are left off on purpose, to match the Settings controls. The gate switch is disabled outside DeepFilterNet mode. After an automatic fallback to browser mode the setting stays on but does nothing. With the gate on, the Settings meter shows the gated sound, so the noise under the marker is not visible; turn the gate off to set the marker.
 - **Soft word starts under the marker are muted.** The gate opens on the first frame above the marker, so a quiet "s" or "h" before it can lose up to about 1.5 dB over the first 20 ms (measured on corpus speech).
 - **In Chromium the hand-over from the browser filter to DeepFilterNet opens the mic a second time.** The old track runs until the new one has sound, so there is no gap, but the new track's echo canceller starts from scratch, so echo can leak for a moment if others talk then. A browser that asks for mic permission each time could ask again. When the second track is silent or fails, both filters stay stacked for the call (`swap skipped: ...`). Not heard in a real browser; not tried on Edge on Windows, where the first silent reopen was seen.
 - **The switch from the passthrough to DeepFilterNet is a cut.** When the worker connects, the worklet goes from the passed-through mic to silence until 30 ms are queued, then fades in; the step to silence is not faded. It predates the underrun fade.
@@ -126,8 +126,6 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - **The connection test reports only the local candidate type.**
 - **Chat history is trimmed only at the bottom.** A room keeps its newest 500 messages while it is read at the bottom (older ones load again on scroll up). A reader who scrolls far up keeps every page loaded until they come back down. Rooms visited earlier stay in memory, capped the same way, until the next reconnect.
 - **The light scheme was checked on screen on the component gallery only** (headless Chromium, `/_gallery?primitives`), not on the shell, a call, the call bar, toasts, images or markdown. Contrast is checked by numbers in `tokens.test.ts` and `accent.test.ts`. The scheme choice and the first-paint script were not tried in Firefox or Safari.
-- **Persona's slanted buttons lose the slant while focused**, so the focus ring is not cut by the clip. Its fonts are the latin subset: names with other scripts fall back to the system face. Cozy and BBS use system faces, so they look different per OS.
-- **The styles (Persona, Cozy, BBS, Aurora) were looked at on the component gallery and a mock sidebar with a dialog only** (headless Chromium, dev server, fake rooms), not on the real shell, messages, the call bar, search, settings pages or an image. Contrast is checked by numbers for each style (`tokens.test.ts`). Not verified: the Persona spring, tilt and hover motion (seen as still frames), Firefox and Safari (`clip-path`, `@starting-style`, `linear()`), how the lazy CSS and fonts load on a slow link (the page waits at most 2 s, then shows Vesper dark), and the accent colours other than the default under each style.
 
 ## Direct messages
 
@@ -144,7 +142,7 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - **No panic hook in the wasm**, so a Rust panic shows as an opaque error. The build drops the name section, so a wasm stack trace shows function numbers, not names.
 - **Added delay is not measured.** The output queue starts at 30 ms and may grow to 80 ms, on top of the algorithm's lookahead. From the code we estimate about 30 ms more than before the larger buffers. The [checkpoint](testing/checkpoint.md) must measure it.
 - **`ndarray` and the `tract-core` pin in `vesper-dsp` are not optional**, although only the `tract` feature needs them. A featureless build pulls them in for nothing.
-- **The no-sound warnings work only in deepfilter mode.** In browser or off mode, also after a fallback, there are no pipeline numbers, so neither warning shows.
+- **The no-sound warnings work only in deepfilter and rnnoise mode.** In browser or off mode, also after a fallback, there are no pipeline numbers, so neither warning shows.
 - **The output queue only grows after jitter.** After a bad patch it can sit at 60 to 80 ms until it drops a frame. Diagnostics shows it as `Queue`.
 - **Thresholds are untuned:** the fallback trips at 20 late frames out of 100, with a 30 ms budget, after a 3 s warm-up. The numbers come from one laptop (2.1 ms average per frame there). The fallback is one-way for the rest of the call.
 
@@ -157,12 +155,24 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - The first call in DeepFilterNet mode downloads the 8 MB model from the server; until it is in, and on a server without
   `/dsp/` (a dev server without `scripts/build-dsp.sh`), the noise gate runs and the call bar says so. The fallback after slow
   frames is one way for the rest of the call, as on the web. The noise gate has no threshold setting (fixed at -50 dBFS).
+- RNNoise (Settings > Voice) is built into the app and needs no download. It falls back to the noise gate the same way.
+  Nobody has listened to it on a real call, on the web or the desktop; only the unit tests on synthetic noise ran.
 - Push to talk needs X11 for a global key on Linux; on Wayland it works only while the window has focus. On macOS it needs
   Accessibility access. A game running as administrator on Windows may hide its keys from the app (not tried).
 - Closing the window during a call minimises it instead of hiding it (GPUI 0.2.2 cannot hide a window on Windows), so it
   stays in the taskbar. On a Linux desktop without a tray host there is no tray icon. On Wayland an app cannot raise its own
   window: Show Vesper in the tray asks the compositor to activate it (by its app id, `vesper`), and the compositor may only
   mark it as wanting attention. Not verified on GNOME or KDE; sway does not minimise windows at all.
+- The app draws its own minimise, maximise and close at the top right on Windows and Linux (macOS keeps its title bar).
+  On Linux it asks for client-side decorations; a tiled window goes full screen instead of maximising, and sway and
+  Hyprland ignore minimise. The edges of a floating window on Linux do not resize it (the compositor's own keys do).
+  Verified: the buttons render (parity screenshots in a headless sway). Not verified: dragging, double click and the
+  buttons on a real desktop, and the Windows title bar (only CI builds it).
+- Message text, code blocks and names can be selected and copied (drag, double click for a word, triple click for all,
+  Ctrl+C), but only inside one text at a time: a drag cannot run across paragraphs or messages as on the web. The room
+  header, cards and other labels are not selectable. Verified by a headless GPUI test, not with a real mouse.
+- A second launch brings the running app to the front and exits (a Unix socket, a named pipe on Windows). On Wayland the
+  same limit as Show Vesper applies. Verified on Linux by a unit test; the Windows pipe is not verified.
 - An incoming DM call plays the web's ring sound every 2.5 s, and the tray's tooltip says who calls; the window is not
   raised. The ring has no on and off switch or volume in Settings, and the other call sounds (join, leave, mute) are missing.
   Not verified on real speakers.
@@ -174,12 +184,19 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   cannot talk to the server. A socket message of a kind it does not know is skipped.
 - The call's UDP socket is IPv4 only, so an SFU reachable only over IPv6 does not connect.
 - Not verified on real devices or across a real network with NAT: the voice tests run on loopback with fake audio.
-- Screen share: the desktop app can watch, not share. It watches one share at a time, at fit size, without the web's layouts,
+- Screen share from the desktop app ([ADR 0011](decisions/0011-desktop-screen-share-send.md)): the pure Rust VP8 encoder is single
+  threaded, so a 1080p share runs at about 20 fps (from the encoder's own figures, not measured here). Windows and X11 share the
+  primary monitor, with no picker; X11 leaves the cursor out. On Wayland a picture whose buffer is not a plain mapped one (DMA-BUF
+  only) is skipped. Only the test pattern was sent end to end; the real captures are not verified (Windows is only compiled in CI).
+- Screen share: the desktop app watches one share at a time, at fit size, without the web's layouts,
   1:1, zoom, pop-out or pointer. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
+- Screen share: the desktop app can watch, not share. It shows the shares as the web does (Grid, Focus and Dock, chat
+  beside them, hide, point, zoom, full screen), without pop-out and the figures line. Each share decodes on a thread of
+  its own, at the size its tile is drawn. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
   shown when it minimised the window itself, or when pictures came for 2 s and no frame was drawn; the sharer is then told
   to stop after the 10 s grace, and the next frame drawn watches again. Whether a window behind a game stops drawing
-  depends on the system (not verified). Not verified with a real browser sharing, nor how a real 60 fps share looks or keeps
-  up on a screen.
+  depends on the system (not verified). Verified on this machine (debug build, headless sway): three web shares at
+  2560x1440 in each layout. Not verified: a real 60 fps share on a screen, Windows, and macOS.
 - Chat: a reply's quote scrolls to the original only when it is loaded (the web also loads it from the server). No search,
   no person cards from a mention (a mention is styled but cannot be clicked), and no "any symbol" reaction box. Day labels
   are in English. Drafts are kept per room in memory only, as on the web.

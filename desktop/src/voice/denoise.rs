@@ -1,6 +1,7 @@
-//! What runs on the microphone between capture and Opus: DeepFilterNet (`vesper-dsp`, native tract), the web's
-//! noise gate, or nothing. Like the web app, DeepFilterNet falls back when it cannot keep up (`Late`, the web's
-//! `ModeController`), and the call goes on with the lighter filter while the model loads or when it is missing.
+//! What runs on the microphone between capture and Opus: DeepFilterNet (`vesper-dsp`, native tract), RNNoise
+//! (`vesper-dsp`, model built in), the web's noise gate, or nothing. Like the web app, either denoiser falls back to the
+//! gate when it cannot keep up (`Late`, the web's `ModeController`), and the call goes on with the gate while
+//! DeepFilterNet's model loads or when it is missing.
 //!
 //! The model is not in the binary: it comes from the signed-in server's `/dsp/model.tar.gz` (the same file the web app
 //! loads, the upstream DeepFilterNet3 tar.gz that tract reads natively), is checked against the pinned sha256, and is
@@ -28,12 +29,19 @@ const HOP: usize = vesper_dsp::HOP;
 pub const LOADING: &str =
     "Noise filter: loading DeepFilterNet. The noise gate runs until it is ready.";
 pub const DEEPFILTER: &str = "Noise filter: DeepFilterNet.";
+pub const RNNOISE: &str = "Noise filter: RNNoise.";
 pub const GATE: &str = "Noise filter: noise gate.";
 pub const OFF: &str = "Noise filter: off.";
 pub const SLOW: &str = "DeepFilterNet could not keep up on this computer, so the noise gate runs for the rest of the call.";
+pub const RNNOISE_SLOW: &str =
+    "RNNoise could not keep up on this computer, so the noise gate runs for the rest of the call.";
 
 pub fn unavailable(why: &str) -> String {
     format!("DeepFilterNet is not available ({why}), so the noise gate runs for this call.")
+}
+
+fn rnnoise_unavailable(why: &str) -> String {
+    format!("RNNoise is not available ({why}), so the noise gate runs for this call.")
 }
 
 /// A denoiser on 10 ms frames. `vesper_dsp::Denoiser` in the app; tests use fakes. Not `Send`: tract's state is not,
@@ -48,6 +56,12 @@ impl Filter for vesper_dsp::Denoiser {
     }
 }
 
+impl Filter for vesper_dsp::Rnnoise {
+    fn process(&mut self, frame: &[f32]) -> Result<Vec<f32>, String> {
+        vesper_dsp::Rnnoise::process(self, frame).map_err(|e| e.to_string())
+    }
+}
+
 /// The checked model bytes, or why there are none. Sent to the call when ready.
 pub type Loaded = Result<Vec<u8>, String>;
 /// Builds the denoiser from the model bytes.
@@ -58,6 +72,11 @@ pub fn deep_filter(model: &[u8]) -> Result<Box<dyn Filter>, String> {
     vesper_dsp::Denoiser::new(model, 100.0, 0.02)
         .map(|d| Box::new(d) as Box<dyn Filter>)
         .map_err(|e| e.to_string())
+}
+
+/// RNNoise ignores the model bytes: its model is in the binary.
+pub fn rnnoise(_: &[u8]) -> Result<Box<dyn Filter>, String> {
+    Ok(Box::new(vesper_dsp::Rnnoise::default()))
 }
 
 /// Trips once `max_late` of the last `window` frames took longer than `budget`, after `warmup` frames; one way for the
@@ -217,6 +236,8 @@ impl Worker {
 /// The capture filter of one call.
 pub struct Capture {
     deep: Option<Worker>,
+    /// What the worker runs: true for RNNoise, false for DeepFilterNet. Only picks the status texts.
+    light: bool,
     gate: Option<Gate>,
     late: Late,
     status: String,
@@ -228,7 +249,8 @@ pub struct Capture {
 
 impl Capture {
     /// `loading` brings the model for DeepFilterNet and `build` makes the denoiser from it, on the worker. Until it
-    /// is ready, and after a fall back, the noise gate runs. The other modes ignore both.
+    /// is ready, and after a fall back, the noise gate runs. RNNoise uses `build` with no model (the app passes
+    /// [`rnnoise`]); the other modes ignore both.
     pub fn new(mode: Denoise, loading: Receiver<Loaded>, build: Build, late: Late) -> Capture {
         let (deep, gate, status) = match mode {
             Denoise::DeepFilter => (
@@ -236,11 +258,21 @@ impl Capture {
                 Some(Gate::default()),
                 LOADING,
             ),
+            Denoise::Rnnoise => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let _ = tx.send(Ok(vec![]));
+                (
+                    Some(Worker::spawn(rx, build)),
+                    Some(Gate::default()),
+                    RNNOISE,
+                )
+            }
             Denoise::Gate => (None, Some(Gate::default()), GATE),
             Denoise::Off => (None, None, OFF),
         };
         Capture {
             deep,
+            light: mode == Denoise::Rnnoise,
             gate,
             late,
             status: status.into(),
@@ -250,10 +282,29 @@ impl Capture {
         }
     }
 
+    /// The noise gate opens on a peak above `threshold` dBFS (the level marker) and closes 4 dB under it.
+    pub fn set_gate(&mut self, threshold: f32) {
+        if let Some(g) = &mut self.gate {
+            (g.open, g.close) = (db(threshold), db(threshold - 4.0));
+        }
+    }
+
     fn fall_back(&mut self, status: String) {
         self.deep = None;
         self.status = status;
         self.shown = false;
+    }
+
+    fn unavailable(&self, why: &str) -> String {
+        if self.light {
+            rnnoise_unavailable(why)
+        } else {
+            unavailable(why)
+        }
+    }
+
+    fn slow(&self) -> String {
+        (if self.light { RNNOISE_SLOW } else { SLOW }).into()
     }
 
     /// Filters `frame` (a multiple of 10 ms) in place, unless it is not `live` (muted: not sent). Returns the status
@@ -263,10 +314,12 @@ impl Capture {
             match w.out.try_recv() {
                 Ok(Ok(_)) => {
                     w.ready = true;
-                    (self.status, self.shown) = (DEEPFILTER.into(), false);
+                    if !self.light {
+                        (self.status, self.shown) = (DEEPFILTER.into(), false);
+                    }
                 }
-                Ok(Err(why)) => self.fall_back(unavailable(&why)),
-                Err(TryRecvError::Disconnected) => self.fall_back(unavailable("it stopped")),
+                Ok(Err(why)) => self.fall_back(self.unavailable(&why)),
+                Err(TryRecvError::Disconnected) => self.fall_back(self.unavailable("it stopped")),
                 Err(TryRecvError::Empty) => {}
             }
         }
@@ -277,14 +330,14 @@ impl Capture {
                 let _ = w.frames.send(chunk.to_vec());
                 match w.out.recv_timeout(STUCK) {
                     Ok(Ok(out)) if out.len() == chunk.len() => chunk.copy_from_slice(&out),
-                    Ok(Ok(_)) => self.fall_back(unavailable("a wrong frame size")),
-                    Ok(Err(e)) => self.fall_back(unavailable(&e)),
-                    Err(_) => self.fall_back(SLOW.into()),
+                    Ok(Ok(_)) => self.fall_back(self.unavailable("a wrong frame size")),
+                    Ok(Err(e)) => self.fall_back(self.unavailable(&e)),
+                    Err(_) => self.fall_back(self.slow()),
                 }
                 let took = t.elapsed();
                 (self.frames, self.total) = (self.frames + 1, self.total + took);
                 if self.late.report(took) && self.deep.is_some() {
-                    self.fall_back(SLOW.into());
+                    self.fall_back(self.slow());
                 }
                 if self.deep.is_some() {
                     continue;
@@ -479,6 +532,68 @@ mod tests {
         let mut x = input.clone();
         assert_eq!(c.process(&mut x, true).as_deref(), Some(OFF));
         assert_eq!(x, input);
+    }
+
+    /// RNNoise needs no model: it needs no download, takes out white noise, and says so once. Its fallbacks name it.
+    #[test]
+    fn rnnoise_runs_without_a_model_and_takes_out_noise() {
+        let mut c = Capture::new(
+            Denoise::Rnnoise,
+            rx(None),
+            rnnoise,
+            Late::new(Duration::from_secs(10), 100, 20, 0),
+        );
+        // The worker thread starts it; on a busy machine that takes a moment, and the gate runs meanwhile.
+        let mut statuses: Vec<String> = c.process(&mut [0.0; FRAME], true).into_iter().collect();
+        let t = Instant::now();
+        while c.frames == 0 {
+            assert!(t.elapsed() < Duration::from_secs(30), "the worker answers");
+            std::thread::sleep(Duration::from_millis(1));
+            statuses.extend(c.process(&mut [0.0; FRAME], true));
+        }
+        let mut n = Noise(11);
+        let (mut ein, mut eout) = (0f64, 0f64);
+        for i in 0..100 {
+            let mut x: Vec<f32> = (0..FRAME).map(|_| n.next(0.02)).collect();
+            let e = energy(&x);
+            statuses.extend(c.process(&mut x, true));
+            if i >= 50 {
+                (ein, eout) = (ein + e, eout + energy(&x));
+            }
+        }
+        assert_eq!(statuses, [RNNOISE]);
+        let down = 10.0 * (ein / eout).log10();
+        println!(
+            "RNNoise in the call filter: white noise down {down:.1} dB, {:.3} ms per 10 ms frame (this build)",
+            c.total.as_secs_f64() * 1000.0 / f64::from(c.frames)
+        );
+        assert!(down > 6.0, "white noise down by over 6 dB, got {down:.1}");
+
+        let mut c = Capture::new(
+            Denoise::Rnnoise,
+            rx(None),
+            |_| Err("broken".into()),
+            Late::default(),
+        );
+        let mut said = vec![];
+        let t = Instant::now();
+        while said.len() < 2 && t.elapsed() < Duration::from_secs(10) {
+            said.extend(c.process(&mut [0.0; FRAME], true));
+        }
+        assert_eq!(said, [RNNOISE.into(), rnnoise_unavailable("broken")]);
+        let mut c = Capture::new(
+            Denoise::Rnnoise,
+            rx(None),
+            |_| Ok(Box::new(Slow(12))),
+            Late::new(Duration::from_millis(10), 10, 3, 0),
+        );
+        let mut frame = [0.1f32; FRAME];
+        let mut said = vec![];
+        let t = Instant::now();
+        while said.len() < 2 && t.elapsed() < Duration::from_secs(10) {
+            said.extend(c.process(&mut frame, true));
+        }
+        assert_eq!(said, [RNNOISE, RNNOISE_SLOW]);
     }
 
     #[test]

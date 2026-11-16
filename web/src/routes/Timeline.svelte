@@ -19,7 +19,6 @@
   import { roomOrder, stepRoom } from '../lib/ui/keys';
   import type { Attachment } from '../lib/gen/Attachment';
   import Button from '../lib/ui/c/Button.svelte';
-  import EmptyState from '../lib/ui/c/EmptyState.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
 
   // The viewer loads on the first image click or video open.
@@ -177,7 +176,7 @@
       // A live message or two, not a page loaded with "Load newer".
       const m = fresh.length <= 3 ? fresh.reverse().find((x) => x.author_id !== myId && !x.deleted) : undefined;
       // A new node each time, so the same text twice ("ok", "ok") is read twice.
-      if (m) announce = { n: announce.n + 1, text: `${user(m.author_id).display_name}: ${plain(parse(m.body))}` };
+      if (m) announce = { n: announce.n + 1, text: `${user(m.author_id).display_name}: ${plain(parse(m.body)) || 'a file'}` };
     }
     lastId = last?.id ?? 0;
     const hadNew = newFrom !== Infinity;
@@ -343,7 +342,8 @@
     {:else if loading && !log?.messages.length}
       <p class="px-4 pt-2 text-sm text-fg-3" role="status">{UI_MESSAGES.chatLoading}</p>
     {:else if empty}
-      <div class="flex h-full items-center justify-center"><EmptyState title="No messages yet." body="Say hello." /></div>
+      <!-- At the foot of the list, where the first message will land, not centred like a page. -->
+      <div class="flex h-full flex-col justify-end pr-4 pl-17"><p class="text-base font-medium text-fg">No messages yet.</p><p class="text-sm text-fg-3">Say hello.</p></div>
     {/if}
     {#if log?.moreBefore}
       <div class="py-2 pl-17"><Button size="sm" loading={loadingOlder} onclick={older}>Load older messages</Button></div>

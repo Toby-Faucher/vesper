@@ -11,7 +11,7 @@ use crate::net::{Cmd, Event};
 use crate::settings::Settings;
 use crate::state::{AppState, Chat, RoomLog, merge_latest, merge_older};
 use crate::uploads::Tray;
-use crate::voice::{Frame, Setup, VoiceCmd, VoiceEvent};
+use crate::voice::{Frame, Setup, ShareSetup, VoiceCmd, VoiceEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -52,8 +52,64 @@ const UPLOAD_MAX: i64 = 25 << 20;
 pub const UPLOADS_BUSY: &str = "Wait for the files to finish uploading.";
 /// The web's three quick reactions.
 pub const EMOJIS: [&str; 3] = ["\u{1f44d}", "\u{1f602}", "\u{2764}\u{fe0f}"];
-/// The web's text for `share_stopped`. Only a sharer gets it, and the desktop app cannot share yet.
+/// The web's text for `share_stopped`. Only a sharer gets it.
 pub const SHARE_STOPPED: &str = "A moderator stopped your screen share.";
+/// The web's texts for a share the server cut or refused.
+pub const SHARE_CUT: &str = "Your screen share sent more than 35 Mbps and was stopped.";
+pub const SHARE_DM: &str = "Screen share is only in group rooms.";
+/// The server lowered my share to fit the room's budget.
+pub fn share_lowered(kbps: u32) -> String {
+    format!(
+        "Your screen share was lowered to {:.1} Mbps so every share in the room fits.",
+        f64::from(kbps) / 1000.
+    )
+}
+
+/// My own screen share, like the web's `shares.mine`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Mine {
+    pub fps: u8,
+    pub kbps: u32,
+    /// Keep text sharp, else motion smooth.
+    pub sharp: bool,
+    pub watchers: u32,
+    /// The screen is open and `share_start` went; before that the picker may still be up.
+    pub open: bool,
+    /// What is sent: width, height, frame rate and kbps, from the encoder every 2 s.
+    pub figures: Option<(u32, u32, f32, f32)>,
+}
+
+impl Mine {
+    /// The engine's settings: it encodes only while someone watches.
+    fn setup(&self) -> ShareSetup {
+        ShareSetup {
+            fps: u32::from(self.fps),
+            kbps: self.kbps,
+            sharp: self.sharp,
+            active: self.watchers > 0,
+        }
+    }
+
+    fn start_msg(&self) -> Cmd {
+        Cmd::Signal(ClientMsg::ShareStart {
+            fps: self.fps,
+            bitrate_kbps: self.kbps,
+        })
+    }
+}
+
+/// A point at a share shows this long (`MARKER_MS`).
+pub const MARKER_FOR: Duration = Duration::from_secs(3);
+
+/// Someone pointed at a spot of `share`'s screen: `x` and `y` from 0 to 1, shown until `until`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Marker {
+    pub share: String,
+    pub from: String,
+    pub x: f32,
+    pub y: f32,
+    pub until: Instant,
+}
 
 /// Whether the server and the engine have been told to watch one share, like the web's `WatchGate`.
 #[derive(Debug, Default)]
@@ -64,6 +120,9 @@ struct Gate {
 }
 
 /// The server's socket error codes in plain words, as `SIGNAL_MESSAGES` in `web/src/lib/signaling.ts`.
+/// How many older pages a search hit's jump loads at most (50 messages each).
+pub const SEEK_PAGES: u8 = 40;
+
 pub fn signal_text(code: ErrorCode) -> &'static str {
     match code {
         ErrorCode::RoomFull => "This room is full.",
@@ -125,19 +184,33 @@ pub struct Call {
     /// The headphones note is shown (echo cancellation off).
     pub headphones: bool,
     headphones_seen: bool,
-    /// The screen share I chose to watch. One at a time.
-    pub watching: Option<String>,
+    /// The share panel is open (`shares.panelOpen` on the web): every share in it not hidden is watched.
+    pub panel_open: bool,
+    /// Shares hidden one by one (`shares.hidden`).
+    pub hidden: HashSet<String>,
+    /// The big one in Focus (`shares.focus`); the first shown one when it is not shown.
+    pub focus: Option<String>,
+    /// Chat beside the screens in Grid and Focus (`shares.chatOpen`).
+    pub chat_open: bool,
+    /// Points at a share, each shown until its time (`shares.markers`).
+    pub markers: Vec<Marker>,
     /// The share view is on screen: the call's room is shown, not Settings. Set by the view.
     pub share_visible: bool,
     gates: HashMap<String, Gate>,
-    /// The newest picture of the watched share. The view takes its pixels to draw; the next picture comes after.
-    pub frame: Option<Frame>,
-    /// Pictures of the watched share so far.
-    pub frames: u64,
+    /// The newest picture of each watched share. The view takes the pixels to draw; the next picture comes after.
+    pub frames: HashMap<String, Frame>,
+    /// Pictures of watched shares so far.
+    pub pictures: u64,
     /// Watched shares that lose packets or frames.
     pub struggling: HashSet<String>,
     /// Why the watched share went away.
     pub share_notice: String,
+    /// My own share, from Start sharing until it ends.
+    pub mine: Option<Mine>,
+    /// My share before the last `share_start` (`Some(None)`: it started one), to put back if the server refuses it.
+    before: Option<Option<Mine>>,
+    /// When the server last cut my share: its `rate_limited` error comes after.
+    cut_at: Option<Instant>,
     /// The call's last round trip and loss, for the call bar's quality line; none before the first stats.
     pub quality: Option<crate::link::Sample>,
     /// Each other person's connection grade, by user id.
@@ -165,13 +238,20 @@ impl Default for Call {
             devices: String::new(),
             headphones: false,
             headphones_seen: false,
-            watching: None,
+            panel_open: true,
+            hidden: HashSet::new(),
+            focus: None,
+            chat_open: false,
+            markers: vec![],
             share_visible: false,
             gates: HashMap::new(),
-            frame: None,
-            frames: 0,
+            frames: HashMap::new(),
+            pictures: 0,
             struggling: HashSet::new(),
             share_notice: String::new(),
+            mine: None,
+            before: None,
+            cut_at: None,
             quality: None,
             links: HashMap::new(),
             own_link: crate::link::Link::default(),
@@ -193,9 +273,14 @@ impl Call {
         };
     }
 
-    /// The pixels of the newest picture, for the view to draw. Taking them lets the next picture come.
-    pub fn take_frame(&mut self) -> Option<Frame> {
-        self.frame.take()
+    /// The pixels of the newest pictures, for the view to draw. Taking them lets the next ones come.
+    pub fn take_frames(&mut self) -> HashMap<String, Frame> {
+        std::mem::take(&mut self.frames)
+    }
+
+    /// `id`'s share has a tile in the open panel, so it is watched while the view is on screen.
+    pub fn shown(&self, id: &str) -> bool {
+        self.panel_open && !self.hidden.contains(id)
     }
 
     /// When the next `watch off` is due, for the view's timer.
@@ -256,6 +341,8 @@ pub struct Model {
     pub pins: Option<(i64, Option<Vec<Message>>)>,
     /// A loaded message the list scrolls to.
     pub jump: Option<i64>,
+    /// A search hit to scroll to once loaded: room, message id, older pages it may still load.
+    seeking: Option<(i64, i64, u8)>,
     /// Where the last saved file went.
     pub saved: Option<PathBuf>,
     /// When the socket tries again, while offline.
@@ -267,6 +354,70 @@ pub struct Model {
     pub person_error: String,
     /// A DM the person card asked for is there: the view opens it.
     pub dm_opened: Option<i64>,
+    /// Settings > Voice's input level and mic test.
+    pub mic: MicCheck,
+}
+
+/// `levelHint` of devices.ts over the last 30 levels (3 s).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Hint {
+    #[default]
+    Ok,
+    Clipping,
+    TooQuiet,
+}
+
+/// `MicCheck.svelte`: the input level, metered from the mic test or the call while Settings > Voice is open, and the
+/// mic test (hear yourself). In a call both use the call's own capture; outside one the test opens the mic itself.
+#[derive(Debug)]
+pub struct MicCheck {
+    /// Settings > Voice is open. Set by the view.
+    pub open: bool,
+    pub testing: bool,
+    /// The level in dBFS, -100 for silence.
+    pub db: f32,
+    peaks: std::collections::VecDeque<f32>,
+    pub hint: Hint,
+    /// Why the test stopped or did not start.
+    pub error: String,
+}
+
+impl Default for MicCheck {
+    fn default() -> Self {
+        MicCheck {
+            open: false,
+            testing: false,
+            db: -100.0,
+            peaks: Default::default(),
+            hint: Hint::Ok,
+            error: String::new(),
+        }
+    }
+}
+
+impl MicCheck {
+    fn level(&mut self, db: f32) {
+        self.db = db;
+        self.peaks.push_back(db);
+        if self.peaks.len() > 30 {
+            self.peaks.pop_front();
+        }
+        let max = self.peaks.iter().copied().fold(-100f32, f32::max);
+        self.hint = if self.peaks.len() < 30 {
+            Hint::Ok
+        } else if max >= -1.0 {
+            Hint::Clipping
+        } else if max < -40.0 {
+            Hint::TooQuiet
+        } else {
+            Hint::Ok
+        };
+    }
+
+    fn quiet(&mut self) {
+        (self.db, self.hint) = (-100.0, Hint::Ok);
+        self.peaks.clear();
+    }
 }
 
 impl Default for Model {
@@ -286,6 +437,7 @@ impl Default for Model {
             focused: true,
             covered: false,
             loading_older: false,
+            seeking: None,
             draft_back: None,
             read_sent: HashMap::new(),
             call: Call::default(),
@@ -307,6 +459,7 @@ impl Default for Model {
             person_busy: "",
             person_error: String::new(),
             dm_opened: None,
+            mic: MicCheck::default(),
         }
     }
 }
@@ -383,6 +536,16 @@ impl Model {
                 return cmds;
             }
             Event::Voice { call, ev } => return self.voice_event(call, ev),
+            Event::MicTest(ev) if self.mic.testing && self.call.phase == Phase::Idle => match ev {
+                VoiceEvent::Level(db) => self.mic.level(db),
+                VoiceEvent::Failed(why) => {
+                    self.mic.testing = false;
+                    self.mic.error = why;
+                    self.mic.quiet();
+                }
+                _ => {}
+            },
+            Event::MicTest(_) => {} // a late one, after the test stopped
             Event::Server(m) => return self.server_msg(*m),
             Event::Latest { room, page } => {
                 let log = merge_latest(self.chat.rooms.get(&room), &page);
@@ -449,7 +612,10 @@ impl Model {
                 return self.tray.failed(key, fail, max);
             }
             // The view decodes nothing here; it keeps the pictures.
-            Event::Image { .. } => {}
+            Event::Image { .. }
+            | Event::Full { .. }
+            | Event::Avatar { .. }
+            | Event::Searched { .. } => {}
             Event::Downloaded { path, open } => {
                 if !open {
                     self.saved = Some(path);
@@ -475,6 +641,8 @@ impl Model {
                 self.person_busy = "";
                 self.person_error = r.err().unwrap_or_default();
             }
+            // The pages' own requests: the view takes their answers.
+            Event::Http { .. } => {}
             Event::DmOpened(room) => {
                 self.person_busy = "";
                 if !self.state.dms.iter().any(|d| d.id == room.id) {
@@ -492,7 +660,9 @@ impl Model {
                 self.dm_opened = Some(room.id);
             }
         }
-        self.maybe_read()
+        let mut cmds = self.seek_step();
+        cmds.extend(self.maybe_read());
+        cmds
     }
 
     fn server_msg(&mut self, m: ServerMsg) -> Vec<Cmd> {
@@ -562,13 +732,9 @@ impl Model {
             }
         }
         cmds.extend(self.call_msg(&m));
-        if let Some(id) = self.call.watching.clone()
-            && !self.sharers().iter().any(|(s, _)| *s == id)
-        {
-            let c = &mut self.call;
-            c.share_notice = format!("{} stopped sharing.", self.state.name_of(&id));
-            (c.watching, c.frame, c.frames) = (None, None, 0);
-        }
+        // A share that ended goes from the panel at once (its `watch off` waits for the grace).
+        let sharing: HashSet<String> = self.sharers().into_iter().map(|(id, _)| id).collect();
+        self.call.frames.retain(|id, _| sharing.contains(id));
         cmds.extend(self.sync_watches(Instant::now()));
         cmds.extend(self.maybe_read());
         cmds
@@ -585,14 +751,31 @@ impl Model {
             .collect()
     }
 
-    /// Watch `user`'s screen share, or stop (`None`). Choosing another share stops the one before.
-    pub fn watch(&mut self, user: Option<String>, now: Instant) -> Vec<Cmd> {
+    /// Hide one share (`hide` in ShareTile.svelte) or show it again: a hidden share is not watched.
+    pub fn hide_share(&mut self, user: &str, hide: bool, now: Instant) -> Vec<Cmd> {
         let c = &mut self.call;
-        if c.watching != user {
-            (c.watching, c.frame, c.frames) = (user, None, 0);
-            c.share_notice.clear();
+        if hide {
+            c.hidden.insert(user.into());
+            c.frames.remove(user);
+        } else {
+            c.hidden.remove(user);
         }
         self.sync_watches(now)
+    }
+
+    /// Open the share panel, or close it (Hide screens): closed, no share is watched.
+    pub fn set_panel_open(&mut self, open: bool, now: Instant) -> Vec<Cmd> {
+        self.call.panel_open = open;
+        if !open {
+            self.call.frames.clear();
+        }
+        self.sync_watches(now)
+    }
+
+    /// Point at a spot of `user`'s share, `x` and `y` from 0 to 1 (`pointAt`).
+    pub fn point_at(&self, user: &str, x: f32, y: f32) -> Vec<Cmd> {
+        let user_id = user.into();
+        vec![Cmd::Signal(ClientMsg::Point { user_id, x, y })]
     }
 
     /// The view tells whether the share view is on screen.
@@ -604,8 +787,8 @@ impl Model {
         self.sync_watches(now)
     }
 
-    /// Sends `watch` on or off for each sharer, like the web's `syncWatches`: on as soon as the share is chosen and
-    /// its view is on screen, off only `WATCH_GRACE` after that stops. The engine is told too, so it decodes only
+    /// Sends `watch` on or off for each sharer, like the web's `syncWatches`: on as soon as the share has a tile in
+    /// the open panel and the view is on screen, off only `WATCH_GRACE` after that stops. The engine is told too, so it decodes only
     /// what is watched. A share that ended keeps its gate, so the off still goes out.
     pub fn sync_watches(&mut self, now: Instant) -> Vec<Cmd> {
         let sharing: HashSet<String> = self.sharers().into_iter().map(|(id, _)| id).collect();
@@ -615,7 +798,7 @@ impl Model {
         for id in ids {
             let want = c.phase == Phase::Joined
                 && c.share_visible
-                && c.watching.as_ref() == Some(&id)
+                && c.shown(&id)
                 && sharing.contains(&id);
             let g = c.gates.entry(id.clone()).or_default();
             let on = if want && !g.on {
@@ -676,6 +859,77 @@ impl Model {
             }
             ServerMsg::ShareStopped => {
                 c.share_notice = SHARE_STOPPED.into();
+                c.error = SHARE_STOPPED.into();
+                vec![]
+            }
+            ServerMsg::Watchers { count } => match c.mine.as_mut() {
+                Some(m) => {
+                    m.watchers = *count;
+                    vec![Cmd::Voice(VoiceCmd::Share(Some(m.setup())))]
+                }
+                None => vec![],
+            },
+            // The server ended my share: a moderator, or it sent too much (its error follows).
+            ServerMsg::PeerShare {
+                user_id,
+                share: None,
+            } if *user_id == self.state.my_id() && c.mine.is_some_and(|m| m.open) => {
+                (c.mine, c.before, c.cut_at) = (None, None, Some(Instant::now()));
+                vec![Cmd::Voice(VoiceCmd::Share(None))]
+            }
+            // The server gave my share less than I asked for (the room's budget): send at that rate.
+            ServerMsg::PeerShare {
+                user_id,
+                share: Some(info),
+            } if *user_id == self.state.my_id()
+                && c.mine.is_some_and(|m| m.open && info.bitrate_kbps < m.kbps) =>
+            {
+                let m = c.mine.as_mut().expect("checked");
+                m.kbps = info.bitrate_kbps;
+                c.error = share_lowered(m.kbps);
+                vec![Cmd::Voice(VoiceCmd::Share(Some(m.setup())))]
+            }
+            ServerMsg::Error {
+                code: code @ (ErrorCode::ShareCap | ErrorCode::Forbidden),
+                ..
+            } if c.phase == Phase::Joined && c.mine.is_some() && c.before.is_some() => {
+                // The server refused my last share_start: a new share ends, new settings go back.
+                c.error = if *code == ErrorCode::Forbidden {
+                    SHARE_DM.into()
+                } else {
+                    signal_text(*code).into()
+                };
+                let now = c.mine.expect("checked");
+                c.mine = c.before.take().flatten().map(|prev| Mine {
+                    watchers: now.watchers,
+                    figures: now.figures,
+                    ..prev
+                });
+                vec![Cmd::Voice(VoiceCmd::Share(c.mine.map(|m| m.setup())))]
+            }
+            ServerMsg::Error {
+                code: ErrorCode::RateLimited,
+                ..
+            } if c
+                .cut_at
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(5)) =>
+            {
+                c.error = SHARE_CUT.into();
+                vec![]
+            }
+            ServerMsg::Point {
+                user_id,
+                from,
+                x,
+                y,
+            } if c.phase == Phase::Joined => {
+                c.markers.push(Marker {
+                    share: user_id.clone(),
+                    from: from.clone(),
+                    x: *x,
+                    y: *y,
+                    until: Instant::now() + MARKER_FOR,
+                });
                 vec![]
             }
             ServerMsg::RingStart { room_id, user_id } => {
@@ -732,6 +986,10 @@ impl Model {
                 c.filter = text;
                 vec![]
             }
+            VoiceEvent::Level(db) => {
+                self.mic.level(db);
+                vec![]
+            }
             VoiceEvent::EchoOff(text) => {
                 c.echo_off = text;
                 vec![]
@@ -741,9 +999,10 @@ impl Model {
                 vec![]
             }
             VoiceEvent::Frame(f) => {
-                // A late picture of a share no longer watched is dropped.
-                if c.watching.as_ref() == Some(&f.user_id) {
-                    (c.frame, c.frames) = (Some(f), c.frames + 1);
+                // A late picture of a share no longer shown is dropped.
+                if c.shown(&f.user_id) {
+                    c.pictures += 1;
+                    c.frames.insert(f.user_id.clone(), f);
                 }
                 vec![]
             }
@@ -768,9 +1027,90 @@ impl Model {
                 }
                 vec![]
             }
+            VoiceEvent::ShareOpen => match c.mine.as_mut().filter(|m| !m.open) {
+                Some(m) => {
+                    m.open = true;
+                    c.before = Some(None);
+                    vec![m.start_msg()]
+                }
+                None => vec![],
+            },
+            VoiceEvent::ShareFigures {
+                width,
+                height,
+                fps,
+                kbps,
+            } => {
+                if let Some(m) = c.mine.as_mut() {
+                    m.figures = Some((width, height, fps, kbps));
+                }
+                vec![]
+            }
+            VoiceEvent::ShareEnded(why) => {
+                let Some(m) = c.mine.take() else {
+                    return vec![];
+                };
+                c.before = None;
+                if !why.is_empty() {
+                    c.error = why;
+                }
+                if m.open {
+                    vec![Cmd::Signal(ClientMsg::ShareStop)]
+                } else {
+                    vec![]
+                }
+            }
             VoiceEvent::Failed(e) => self.end_call(&e, true),
             _ => vec![],
         }
+    }
+
+    /// Share my screen (the share dialog's Start sharing), or change the running share's settings (its Save).
+    /// The first opens the screen; `share_start` goes once it is open.
+    pub fn share(&mut self, fps: u8, kbps: u32, sharp: bool) -> Vec<Cmd> {
+        let c = &mut self.call;
+        if c.phase != Phase::Joined {
+            return vec![];
+        }
+        match c.mine {
+            None => {
+                let m = Mine {
+                    fps,
+                    kbps,
+                    sharp,
+                    watchers: 0,
+                    open: false,
+                    figures: None,
+                };
+                (c.mine, c.error) = (Some(m), String::new());
+                vec![Cmd::Voice(VoiceCmd::Share(Some(m.setup())))]
+            }
+            Some(m) if !m.open => vec![], // the picker is up
+            Some(m) => {
+                c.before = Some(Some(m));
+                let m = Mine {
+                    fps,
+                    kbps,
+                    sharp,
+                    ..m
+                };
+                c.mine = Some(m);
+                vec![m.start_msg(), Cmd::Voice(VoiceCmd::Share(Some(m.setup())))]
+            }
+        }
+    }
+
+    /// Stop sharing my screen.
+    pub fn stop_share(&mut self) -> Vec<Cmd> {
+        let Some(m) = self.call.mine.take() else {
+            return vec![];
+        };
+        self.call.before = None;
+        let mut cmds = vec![Cmd::Voice(VoiceCmd::Share(None))];
+        if m.open {
+            cmds.insert(0, Cmd::Signal(ClientMsg::ShareStop));
+        }
+        cmds
     }
 
     /// Ends my call, or a pending rejoin. `leave` tells the server, when it knows of the call.
@@ -781,6 +1121,10 @@ impl Model {
         }
         self.call.end(error);
         let mut cmds = vec![];
+        if self.mic.testing {
+            self.mic.testing = false; // the test was the call's: it ends with it, as on the web
+        }
+        self.mic.quiet();
         if leave && matches!(phase, Phase::Joining | Phase::Joined) {
             cmds.push(Cmd::Signal(ClientMsg::Leave));
         }
@@ -857,12 +1201,60 @@ impl Model {
                 echo: s.echo_cancel,
                 input: s.input_device.clone(),
                 output: s.output_device.clone(),
+                gate_db: Some(s.gate_db as f32),
             },
         }));
         if !self.live() {
             cmds.push(self.sending()); // push to talk: silent until the key
         }
+        if self.mic.testing {
+            self.mic.testing = false; // the test outside the call: the call takes the mic (net ends the test)
+            self.mic.quiet();
+        }
+        if self.mic.open {
+            cmds.push(Cmd::Voice(VoiceCmd::Meter(true)));
+        }
         cmds
+    }
+
+    /// The view shows Settings > Voice, or stopped showing it: the call meters while it shows, and the mic test ends
+    /// when it goes (as `MicCheck.svelte` stops its test when it is unmounted).
+    pub fn set_mic_open(&mut self, open: bool) -> Vec<Cmd> {
+        if self.mic.open == open {
+            return vec![];
+        }
+        self.mic.open = open;
+        let mut cmds = vec![];
+        if !open && self.mic.testing {
+            cmds = self.mic_test();
+        }
+        self.mic.quiet();
+        if self.call.phase != Phase::Idle {
+            cmds.push(Cmd::Voice(VoiceCmd::Meter(open)));
+        }
+        cmds
+    }
+
+    /// Mic test (hear yourself) or Stop mic test: in a call, on the call's capture; else on its own.
+    pub fn mic_test(&mut self) -> Vec<Cmd> {
+        let m = &mut self.mic;
+        m.testing = !m.testing;
+        m.error.clear();
+        if !m.testing {
+            m.quiet();
+        }
+        if self.call.phase != Phase::Idle {
+            return vec![Cmd::Voice(VoiceCmd::Hear(self.mic.testing))];
+        }
+        let s = &self.settings;
+        let setup = self.mic.testing.then(|| Setup {
+            denoise: s.denoise,
+            input: s.input_device.clone(),
+            output: s.output_device.clone(),
+            gate_db: Some(s.gate_db as f32),
+            ..Setup::default()
+        });
+        vec![Cmd::MicTest(setup)]
     }
 
     pub fn leave_voice(&mut self) -> Vec<Cmd> {
@@ -1076,21 +1468,11 @@ impl Model {
             return vec![];
         }
         let attachments = self.tray.done(room);
-        // A body is required: a message of files only is sent with their names, as the web does.
-        let body = if body.is_empty() {
-            let names: Vec<&str> = self
-                .tray
-                .of(room)
-                .filter(|i| attachments.iter().any(|a| a.0 == i.key))
-                .map(|i| i.name.as_str())
-                .collect();
-            names.join(", ")
-        } else {
-            body.into()
-        };
-        if body.is_empty() {
+        // A message of files has no text: the body stays empty.
+        if body.is_empty() && attachments.is_empty() {
             return vec![];
         }
+        let body = body.to_string();
         self.error.clear();
         let keys: Vec<u64> = attachments.iter().map(|a| a.0).collect();
         self.tray.set_sending(&keys, true);
@@ -1294,6 +1676,50 @@ impl Model {
         found
     }
 
+    /// A search hit: opens its room and scrolls to it, loading older pages until it is there (at most `SEEK_PAGES`;
+    /// the web loads the page around it instead, which this timeline cannot hold yet).
+    pub fn seek(&mut self, room: i64, id: i64) -> Vec<Cmd> {
+        let mut cmds = self.open_room(room);
+        self.seeking = Some((room, id, SEEK_PAGES));
+        cmds.extend(self.seek_step());
+        cmds
+    }
+
+    /// The next step of `seek`: scroll there when loaded, else the next older page.
+    fn seek_step(&mut self) -> Vec<Cmd> {
+        let Some((room, id, left)) = self.seeking else {
+            return vec![];
+        };
+        let Some(log) = self
+            .chat
+            .rooms
+            .get(&room)
+            .filter(|_| self.active == Some(room))
+        else {
+            self.seeking = None;
+            return vec![];
+        };
+        if log.messages.iter().any(|m| m.id == id) {
+            (self.jump, self.seeking) = (Some(id), None);
+            return vec![];
+        }
+        let Some(first) = log.messages.first().map(|m| m.id) else {
+            return vec![]; // the first page is on its way
+        };
+        if !log.more_before || left == 0 || first < id {
+            self.seeking = None;
+            return vec![];
+        }
+        if self.loading_older {
+            return vec![]; // the page in flight comes back here
+        }
+        (self.seeking, self.loading_older) = (Some((room, id, left - 1)), true);
+        vec![Cmd::LoadOlder {
+            room,
+            before: first,
+        }]
+    }
+
     /// Files (path, size) for the shown room's tray.
     pub fn attach(&mut self, files: Vec<(PathBuf, u64)>) -> Vec<Cmd> {
         let Some(room) = self.active else {
@@ -1462,6 +1888,63 @@ mod tests {
 
     fn server(m: &mut Model, msg: ServerMsg) -> Vec<Cmd> {
         m.apply(Event::Server(Box::new(msg)))
+    }
+
+    /// The mic test runs on its own outside a call and on the call's capture in one; the meter follows Settings >
+    /// Voice; a call ends the test that was its own.
+    #[test]
+    fn the_mic_test_and_meter() {
+        let mut m = signed_in();
+        server(&mut m, hello());
+        assert!(m.set_mic_open(true).is_empty(), "no call: nothing to meter");
+        let cmds = m.mic_test();
+        assert!(
+            matches!(cmds.as_slice(), [Cmd::MicTest(Some(Setup { gate_db: Some(g), .. }))] if *g == -50.0),
+            "{cmds:?}"
+        );
+        for _ in 0..30 {
+            m.apply(Event::MicTest(VoiceEvent::Level(-60.0)));
+        }
+        assert_eq!((m.mic.db, m.mic.hint), (-60.0, Hint::TooQuiet));
+        m.apply(Event::MicTest(VoiceEvent::Level(-0.5)));
+        assert_eq!(m.mic.hint, Hint::Clipping);
+        m.apply(Event::MicTest(VoiceEvent::Failed(
+            "No microphone was found.".into(),
+        )));
+        assert!(!m.mic.testing);
+        assert_eq!(
+            (m.mic.db, m.mic.error.as_str()),
+            (-100.0, "No microphone was found.")
+        );
+
+        assert!(matches!(m.mic_test().as_slice(), [Cmd::MicTest(Some(_))]));
+        let cmds = m.join_voice(1);
+        assert!(!m.mic.testing, "the call takes the mic");
+        assert!(
+            matches!(cmds.last(), Some(Cmd::Voice(VoiceCmd::Meter(true)))),
+            "{cmds:?}"
+        );
+        assert!(matches!(
+            m.mic_test().as_slice(),
+            [Cmd::Voice(VoiceCmd::Hear(true))]
+        ));
+        voice(&mut m, VoiceEvent::Level(-20.0));
+        assert_eq!(m.mic.db, -20.0);
+        let cmds = m.set_mic_open(false);
+        assert!(
+            matches!(
+                cmds.as_slice(),
+                [
+                    Cmd::Voice(VoiceCmd::Hear(false)),
+                    Cmd::Voice(VoiceCmd::Meter(false))
+                ]
+            ),
+            "leaving Settings > Voice stops the test: {cmds:?}"
+        );
+        m.set_mic_open(true);
+        m.mic_test();
+        m.leave_voice();
+        assert!(!m.mic.testing, "the call's test ends with it");
     }
 
     /// Signed in, online, and in the call in room 1.
@@ -1920,44 +2403,78 @@ mod tests {
         })
     }
 
+    /// Cy joins my call (room 1).
+    fn join_cy(m: &mut Model) {
+        let peer = serde_json::from_value(
+            serde_json::json!({ "user_id": "c", "name": "Cy", "room_id": 1,
+            "muted": false, "deafened": false, "force_muted": false, "share": null }),
+        )
+        .unwrap();
+        server(m, ServerMsg::PeerJoined { peer });
+    }
+
+    fn sorted(mut v: Vec<(String, bool)>) -> Vec<(String, bool)> {
+        v.sort();
+        v
+    }
+
     #[test]
-    fn watching_needs_the_view_on_screen_and_stops_after_the_grace() {
+    fn every_shown_share_is_watched_while_the_view_is_on_screen() {
         let mut m = in_call();
         let t = Instant::now();
         assert!(m.sharers().is_empty());
         assert!(
             watches(&share(&mut m, "b", true)).is_empty(),
-            "shown, not watched"
+            "the view is not on screen yet"
         );
         assert_eq!(m.sharers(), [("b".to_string(), "Bob".to_string())]);
 
-        // Chosen, but the view is not on screen: nothing yet. On screen: watch on, once.
-        assert!(m.watch(Some("b".into()), t).is_empty());
+        // On screen: watch on, once. A second share is watched as soon as it starts: every tile is.
         assert_eq!(watches(&m.set_share_visible(true, t)), [("b".into(), true)]);
         assert!(m.sync_watches(t).is_empty());
+        join_cy(&mut m);
+        assert_eq!(watches(&share(&mut m, "c", true)), [("c".into(), true)]);
 
-        // Pictures of the watched share are kept; others are dropped.
+        // The newest picture of each is kept for the view.
         voice(&mut m, picture("b"));
         voice(&mut m, picture("c"));
-        assert_eq!(m.call.frames, 1);
-        assert!(m.call.take_frame().is_some_and(|f| f.user_id == "b"));
-        assert!(m.call.take_frame().is_none());
+        voice(&mut m, picture("b"));
+        assert_eq!(m.call.pictures, 3);
+        let mut got: Vec<String> = m.call.take_frames().into_keys().collect();
+        got.sort();
+        assert_eq!(got, ["b", "c"]);
+        assert!(m.call.take_frames().is_empty());
+
+        // Hidden: its pictures are dropped, and its off goes after the grace. Shown again: on at once.
+        assert!(m.hide_share("c", true, t).is_empty());
+        voice(&mut m, picture("c"));
+        assert!(m.call.frames.is_empty());
+        assert_eq!(
+            watches(&m.sync_watches(t + WATCH_GRACE)),
+            [("c".into(), false)]
+        );
+        assert_eq!(watches(&m.hide_share("c", false, t)), [("c".into(), true)]);
 
         // Off screen: off only after the grace; back within it: nothing sent at all.
         assert!(m.set_share_visible(false, t).is_empty());
         assert_eq!(m.call.watch_deadline(), Some(t + WATCH_GRACE));
         assert!(m.set_share_visible(true, t + WATCH_GRACE / 2).is_empty());
         assert_eq!(m.call.watch_deadline(), None);
-        assert!(m.watch(None, t).is_empty());
+
+        // Hide screens: every share goes off after the grace; Show: all on again.
+        assert!(m.set_panel_open(false, t).is_empty());
         assert!(m.sync_watches(t + WATCH_GRACE / 2).is_empty());
         assert_eq!(
-            watches(&m.sync_watches(t + WATCH_GRACE)),
-            [("b".into(), false)]
+            sorted(watches(&m.sync_watches(t + WATCH_GRACE))),
+            [("b".into(), false), ("c".into(), false)]
         );
         assert!(m.sync_watches(t + WATCH_GRACE * 2).is_empty(), "sent once");
+        assert_eq!(
+            sorted(watches(&m.set_panel_open(true, t))),
+            [("b".into(), true), ("c".into(), true)]
+        );
 
         // Struggling, as the engine says.
-        assert!(m.watch(Some("b".into()), t).len() == 2);
         voice(
             &mut m,
             VoiceEvent::Struggling {
@@ -1976,36 +2493,183 @@ mod tests {
         assert!(m.call.struggling.is_empty());
     }
 
+    /// My own share, like the web's `startShare`, `onShareMsg` and `shareRefused`.
     #[test]
-    fn a_share_ending_clears_the_view_and_a_call_ending_forgets_the_watches() {
+    fn my_share_starts_once_open_follows_its_watchers_and_ends() {
+        // Cmd has no PartialEq: compare what it prints.
+        macro_rules! same {
+            ($a:expr, $b:expr $(,)?) => {
+                assert_eq!(format!("{:?}", $a), format!("{:?}", $b))
+            };
+        }
+        let mut m = in_call();
+        let me = m.state.my_id().to_string();
+        let setup = |active| ShareSetup {
+            fps: 30,
+            kbps: 4000,
+            sharp: true,
+            active,
+        };
+        let start = ClientMsg::ShareStart {
+            fps: 30,
+            bitrate_kbps: 4000,
+        };
+        // The screen opens first (the picker); only then does share_start go.
+        same!(
+            m.share(30, 4000, true),
+            [Cmd::Voice(VoiceCmd::Share(Some(setup(false))))]
+        );
+        assert!(m.share(60, 4000, true).is_empty(), "the picker is up");
+        same!(
+            voice(&mut m, VoiceEvent::ShareOpen),
+            [Cmd::Signal(start.clone())]
+        );
+        // Watched: the encoder runs; nobody left: it stops.
+        let w = |n| ServerMsg::Watchers { count: n };
+        same!(
+            server(&mut m, w(2)),
+            [Cmd::Voice(VoiceCmd::Share(Some(setup(true))))]
+        );
+        // The server lowered it to fit the room: sent at that rate, and said.
+        let granted = ServerMsg::PeerShare {
+            user_id: me.clone(),
+            share: Some(vesper_protocol::ShareInfo {
+                fps: 30,
+                bitrate_kbps: 2500,
+            }),
+        };
+        let lowered = ShareSetup {
+            kbps: 2500,
+            ..setup(true)
+        };
+        same!(
+            server(&mut m, granted),
+            [Cmd::Voice(VoiceCmd::Share(Some(lowered)))]
+        );
+        assert_eq!(m.call.error, share_lowered(2500));
+        assert!(m.call.error.contains("2.5 Mbps"));
+        // New settings refused (share_cap): the old ones come back, the share goes on.
+        m.share(60, 9000, false);
+        let refused = ServerMsg::Error {
+            code: ErrorCode::ShareCap,
+            message: String::new(),
+        };
+        same!(
+            server(&mut m, refused),
+            [Cmd::Voice(VoiceCmd::Share(Some(lowered)))]
+        );
+        assert_eq!(m.call.mine.map(|x| (x.fps, x.kbps)), Some((30, 2500)));
+        // Stop: share_stop, then the engine.
+        same!(
+            m.stop_share(),
+            [
+                Cmd::Signal(ClientMsg::ShareStop),
+                Cmd::Voice(VoiceCmd::Share(None))
+            ]
+        );
+        assert!(m.call.mine.is_none());
+
+        // A cancelled picker ends it quietly; a failed capture says so.
+        m.share(30, 4000, true);
+        assert!(voice(&mut m, VoiceEvent::ShareEnded(String::new())).is_empty());
+        assert!(m.call.mine.is_none());
+        m.share(30, 4000, true);
+        voice(&mut m, VoiceEvent::ShareOpen);
+        let cmds = voice(
+            &mut m,
+            VoiceEvent::ShareEnded("The screen capture stopped.".into()),
+        );
+        same!(cmds, [Cmd::Signal(ClientMsg::ShareStop)]);
+        assert_eq!(m.call.error, "The screen capture stopped.");
+
+        // A new share refused in a DM room ends here with the web's text.
+        m.share(30, 4000, true);
+        voice(&mut m, VoiceEvent::ShareOpen);
+        let refused = ServerMsg::Error {
+            code: ErrorCode::Forbidden,
+            message: String::new(),
+        };
+        same!(server(&mut m, refused), [Cmd::Voice(VoiceCmd::Share(None))]);
+        assert_eq!((m.call.mine, m.call.error.as_str()), (None, SHARE_DM));
+
+        // The server cut it: it ends here, and its rate_limited error reads as the cut.
+        m.share(30, 4000, true);
+        voice(&mut m, VoiceEvent::ShareOpen);
+        let cut = ServerMsg::PeerShare {
+            user_id: me,
+            share: None,
+        };
+        let cmds = server(&mut m, cut);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Cmd::Voice(VoiceCmd::Share(None))))
+        );
+        let limited = ServerMsg::Error {
+            code: ErrorCode::RateLimited,
+            message: String::new(),
+        };
+        server(&mut m, limited);
+        assert_eq!((m.call.mine, m.call.error.as_str()), (None, SHARE_CUT));
+    }
+
+    #[test]
+    fn a_share_ending_clears_its_picture_and_a_call_ending_forgets_the_watches() {
         let mut m = in_call();
         share(&mut m, "b", true);
         let t = Instant::now();
-        m.set_share_visible(true, t);
-        assert_eq!(watches(&m.watch(Some("b".into()), t)), [("b".into(), true)]);
+        assert_eq!(watches(&m.set_share_visible(true, t)), [("b".into(), true)]);
         voice(&mut m, picture("b"));
 
-        // Bob stops: the picture goes at once with a note; the off goes after the grace.
+        // Bob stops: the picture goes at once; the off goes after the grace.
         assert!(watches(&share(&mut m, "b", false)).is_empty());
-        assert_eq!((m.call.watching.as_deref(), m.call.frames), (None, 0));
-        assert!(m.call.frame.is_none());
-        assert_eq!(m.call.share_notice, "Bob stopped sharing.");
+        assert!(m.call.frames.is_empty());
         assert!(m.call.watch_deadline().is_some());
         let later = Instant::now() + WATCH_GRACE;
         assert_eq!(watches(&m.sync_watches(later)), [("b".into(), false)]);
 
-        // Watching again, then the call ends: the server forgets watches with the session, so nothing is sent.
+        // Watching again, one hidden, then the call ends: the server forgets watches with the session, so nothing is
+        // sent, and the panel's state goes with the call.
         share(&mut m, "b", true);
-        m.watch(Some("b".into()), t);
+        join_cy(&mut m);
+        share(&mut m, "c", true);
+        m.hide_share("c", true, t);
+        m.call.chat_open = true;
         let cmds = m.leave_voice();
         assert!(watches(&cmds).is_empty());
-        assert!(m.call.watching.is_none() && m.call.watch_deadline().is_none());
+        let c = &m.call;
+        assert!(
+            c.hidden.is_empty() && c.panel_open && !c.chat_open && c.watch_deadline().is_none()
+        );
         assert!(m.call.share_visible, "the view's state stays");
 
         // share_stopped goes only to a sharer; its text is the web's.
         let mut m = in_call();
         server(&mut m, ServerMsg::ShareStopped);
         assert_eq!(m.call.share_notice, SHARE_STOPPED);
+
+        // A point goes to the server; one at a share shows for `MARKER_FOR`.
+        let cmds = m.point_at("b", 0.5, 0.25);
+        assert!(
+            matches!(cmds.as_slice(), [Cmd::Signal(ClientMsg::Point { user_id, x, y })] if user_id == "b" && *x == 0.5 && *y == 0.25),
+            "{cmds:?}"
+        );
+        let before = Instant::now();
+        let (user_id, from) = ("b".to_string(), "c".to_string());
+        server(
+            &mut m,
+            ServerMsg::Point {
+                user_id,
+                from,
+                x: 0.1,
+                y: 0.9,
+            },
+        );
+        let mk = &m.call.markers[0];
+        assert_eq!(
+            (mk.share.as_str(), mk.from.as_str(), mk.x, mk.y),
+            ("b", "c", 0.1, 0.9)
+        );
+        assert!(mk.until >= before + MARKER_FOR);
     }
 
     fn chat() -> Model {
@@ -2209,7 +2873,7 @@ mod tests {
         });
         let cmds = m.send("");
         assert!(
-            matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body == "a.txt" && attachments == &[(1, "u1".to_string())]),
+            matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body.is_empty() && attachments == &[(1, "u1".to_string())]),
             "{cmds:?}"
         );
         m.apply(Event::Sent {

@@ -5,7 +5,7 @@
 //!
 //! A click on a person in voice opens their card (`person.rs`); the people in your call show their connection.
 //!
-//! Not here (no desktop feature behind them yet): the switcher button (Ctrl K), Admin in the account menu, the half-strength fill of the row the pointer heads for (`intent.ts`).
+//! Not here (no desktop feature behind them yet): the switcher button (Ctrl K), the half-strength fill of the row the pointer heads for (`intent.ts`).
 //!
 //! No `ml_auto()` here: taffy drops the flex gaps before an auto margin, so what the web pushes right with `ml-auto`
 //! sits after a `flex_1` item instead.
@@ -54,7 +54,7 @@ pub struct Side {
     rows: Rc<RefCell<(Pixels, HashMap<i64, Pixels>)>>,
     /// Per room, so a leaver's place is its index in that room.
     people: HashMap<i64, Roster<String, Peer>>,
-    badges: Roster<(i64, bool, String), ()>,
+    badges: Roster<(i64, bool), ()>,
     settled: bool,
     calm_until: Option<Instant>,
 }
@@ -220,10 +220,11 @@ impl Vesper {
                 [(false, u.unread as i64), (true, u.mentions as i64)]
                     .into_iter()
                     .filter(|(_, n)| *n > 0)
-                    .map(move |(mention, n)| ((id, mention, Badge::text(mention, n)), ()))
+                    .map(move |(mention, _)| ((id, mention), ()))
             })
             .collect();
         self.side.badges.sync(now, Duration::ZERO, badges);
+        let calm = self.side.calm(now);
         let mut moving = false;
         let mut pose_of = |came: Option<Instant>, p, out| {
             let r = came.and_then(|at| motion::pose(&mo, p, out, at, now));
@@ -265,8 +266,14 @@ impl Vesper {
                     motion::Preset,
                     bool,
                 ) -> Option<Pose>| {
-                    let key = (r.id, mention, Badge::text(mention, n));
-                    Badge::new(mention, n).pose(pose_of(self.side.badges.came(&key), BUMP, false))
+                    // It pops in when it comes; then its digits roll (still while the first hello settles).
+                    let key = (r.id, mention);
+                    Badge::new(mention, n)
+                        .pose(pose_of(self.side.badges.came(&key), BUMP, false))
+                        .roll(
+                            SharedString::from(format!("badge-{}-{mention}", r.id)),
+                            calm,
+                        )
                 };
                 let badges = [
                     (unread > 0).then(|| badge(false, unread, pose_of)),
@@ -429,14 +436,24 @@ impl Vesper {
                     .gap(px(8.))
                     .pr(px(8.))
                     .pl(px(16.))
-                    .child(img(logo()).h(px(28.)).w(px(59.)).flex_none())
-                    .child(div().flex_1().flex().justify_end().child(
-                        div().debug_selector(|| "hide-sidebar".into()).child(
-                            IconButton::new("hide-sidebar", "sidebar").on_click(
-                                cx.listener(|this, _, _, cx| this.set_collapsed(true, cx)),
-                            ),
-                        ),
-                    )),
+                    .child(img(logo(t.fill)).h(px(28.)).w(px(59.)).flex_none())
+                    .child(self.drag_space(cx))
+                    .child(
+                        div()
+                            .flex()
+                            .child(div().debug_selector(|| "open-switcher".into()).child(
+                                IconButton::new("open-switcher", "command").on_click(cx.listener(
+                                    |this, _, w, cx| {
+                                        this.open_layer(super::find::Layer::Switcher, w, cx)
+                                    },
+                                )),
+                            ))
+                            .child(div().debug_selector(|| "hide-sidebar".into()).child(
+                                IconButton::new("hide-sidebar", "sidebar").on_click(
+                                    cx.listener(|this, _, _, cx| this.set_collapsed(true, cx)),
+                                ),
+                            )),
+                    ),
             )
             .child(
                 div()
@@ -468,7 +485,8 @@ impl Vesper {
             .into_any_element()
     }
 
-    /// The account menu over the account button (`Menu.svelte` placed above, 4 px off): Log out. Admin is the web's.
+    /// The account menu over the account button (`Menu.svelte` placed above, 4 px off): Admin (staff only) and Log out.
+    /// The web's Desktop app item (the download page) is left out: this is the desktop app.
     fn account_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         deferred(
             anchored().anchor(Corner::BottomLeft).child(
@@ -481,6 +499,21 @@ impl Vesper {
                             this.side.menu_closed_at = Some(Instant::now());
                             cx.notify();
                         }))
+                        .when(self.my_role() != vesper_protocol::Role::Member, |d| {
+                            d.child(
+                                div().debug_selector(|| "menu-admin".into()).child(
+                                    MenuItem::new("menu-admin", "Admin")
+                                        .icon("shield")
+                                        .on_select(cx.listener(|this, _, window, cx| {
+                                            this.side.account_open = false;
+                                            let to = super::settings::At::Admin(
+                                                super::admin::Section::Invites,
+                                            );
+                                            this.open_page(to, window, cx)
+                                        })),
+                                ),
+                            )
+                        })
                         .child(
                             MenuItem::new("sign-out", "Log out")
                                 .icon("logOut")
@@ -534,6 +567,14 @@ impl Vesper {
         let chevron_id = ElementId::Name(format!("fold-{id}").into());
         let (ch, chevron_hover) =
             motion::transition(chevron_id.clone(), Duration::ZERO, window, cx);
+        let turn_dur = t.motion.or(t.motion.dur_2, Duration::ZERO);
+        let turn = motion::follow(
+            ElementId::Name(format!("turn-{id}").into()),
+            if folded { 1. } else { 0. },
+            turn_dur,
+            window,
+            cx,
+        );
         let rows = self.side.rows.clone();
         let row = div()
             .id(row_id.clone())
@@ -616,16 +657,12 @@ impl Vesper {
                             cx.notify();
                         }))
                         .child(
-                            icon(if folded {
-                                "chevronRight"
-                            } else {
-                                "chevronDown"
-                            })
-                            .text_color(mix(
-                                meta.into(),
-                                t.fg.into(),
-                                ch,
-                            )),
+                            // It turns (down open, right folded) over `--dur-2`, as the web's .turn.
+                            icon("chevronDown")
+                                .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                                    -std::f32::consts::FRAC_PI_2 * turn,
+                                )))
+                                .text_color(mix(meta.into(), t.fg.into(), ch)),
                         ),
                 )
             });

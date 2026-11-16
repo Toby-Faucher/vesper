@@ -13,7 +13,7 @@ use vesper_protocol::{RoomInfo, RoomKind};
 use super::c::{self, Ellipsis};
 use super::icons::icon;
 use super::theme::{TEXT_BASE, TEXT_SM, TEXT_XS, TextStepExt, tokens};
-use super::{COMPOSER, Vesper, theme};
+use super::{COMPOSER, Vesper, chrome, theme};
 use crate::model::{Model, NOT_REMEMBERED, Phase};
 
 /// `EmptyState.svelte`: the title (16/24, `--weight-strong`), the body (13/20, `--fg-3`, at most 320 px), centred in
@@ -47,16 +47,15 @@ fn empty_state(title: &'static str, body: &'static str, lift: f32, cx: &App) -> 
 impl Vesper {
     pub(super) fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.sync_share(window, cx);
+        if let Some(full) = self.render_full_share(window, cx) {
+            return full;
+        }
         let banner = self.render_banner(window, cx);
         if self.settings_open {
-            let settings = self.render_settings(cx);
-            let collapsed = self.collapsed_header(cx);
-            let main = self
-                .main_pane(window, cx)
-                .children(banner)
-                .children(collapsed)
-                .child(settings);
-            let shell = self.shell(main, window, cx);
+            let page = self.render_page(window, cx);
+            let main = self.main_pane(window, cx).children(banner).child(page);
+            let dialog = self.page_dialog(window, cx);
+            let shell = self.shell(main, window, cx).children(dialog);
             return self.overlays(shell, window, cx);
         }
         self.sync_list(cx);
@@ -93,7 +92,7 @@ impl Vesper {
         let empty = self.tl.loaded.contains(&room.id)
             && m.log()
                 .is_some_and(|l| l.messages.is_empty() && !l.more_before);
-        let header = self.room_header(&room, cx);
+        let header = self.room_header(&room, window, cx);
         let m = &self.model;
         let keyring = m.not_remembered.then(|| {
             h_flex()
@@ -115,7 +114,27 @@ impl Vesper {
         });
         let (dy, opacity) = self.swap_pose(cx);
         let timeline = if empty {
-            empty_state("No messages yet.", "Say hello.", 0., cx).pb(px(16.))
+            // At the foot of the list, where the first message will land, 68 px in like the message text.
+            let t = tokens(cx);
+            v_flex()
+                .flex_1()
+                .justify_end()
+                .pl(px(68.))
+                .pr(px(16.))
+                .pb(px(16.))
+                .child(
+                    div()
+                        .text_step(TEXT_BASE)
+                        .font_weight(t.weight_strong)
+                        .text_color(t.fg)
+                        .child("No messages yet."),
+                )
+                .child(
+                    div()
+                        .text_step(TEXT_SM)
+                        .text_color(t.fg_3)
+                        .child("Say hello."),
+                )
         } else {
             div().flex().flex_col().flex_1().min_h_0().child(
                 list(
@@ -151,7 +170,19 @@ impl Vesper {
             .children(self.saved_line(cx))
             .child(composer);
         let call_status = self.call_status(cx);
-        let share = self.render_share(window, cx);
+        // Chat (`#room-chat`): beside the share panel while it is open, else the rest of the column.
+        let chat = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            // `pt-3` over the timeline (Chat.svelte).
+            .child(div().h(px(12.)).flex_none())
+            .child(timeline)
+            .child(composer);
+        let row = self.share_row(chat, window, cx);
         let dialog = self.delete_dialog(cx);
         if self.timeline_moving() {
             window.request_animation_frame();
@@ -162,11 +193,7 @@ impl Vesper {
             .child(header)
             .children(keyring)
             .children(call_status)
-            .children(share)
-            // `pt-3` over the timeline (Chat.svelte).
-            .child(div().h(px(12.)).flex_none())
-            .child(timeline)
-            .child(composer)
+            .child(row)
             // Files dropped anywhere on the room go to the tray.
             .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgb(theme::ACCENT_SUBTLE)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
@@ -185,7 +212,7 @@ impl Vesper {
             .flex_1()
             .h_full()
             .min_w_0()
-            .when(call.is_some(), |d| d.pb(px(super::call::BAR_H + 24.)))
+            .when(call.is_some(), |d| d.pb(px(self.bar.room() + 24.)))
             .children(call)
     }
 
@@ -194,7 +221,16 @@ impl Vesper {
         let card = self.render_person(window, cx);
         let confirm = self.person_confirm(cx);
         let ring = self.render_ring(window, cx);
-        shell.children(card).children(confirm).children(ring)
+        let layer = self.render_layer(window, cx);
+        let viewer = self.render_viewer(window, cx);
+        let send = self.share_dialog(cx);
+        shell
+            .children(send)
+            .children(card)
+            .children(confirm)
+            .children(ring)
+            .children(viewer)
+            .children(layer)
     }
 
     /// Where the last saved file went, with Show in folder (the desktop's own: the web's browser shows downloads).
@@ -236,7 +272,7 @@ impl Vesper {
     }
 
     /// The Show sidebar button the web puts at the left of a page header while the sidebar is hidden.
-    fn show_sidebar(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(super) fn show_sidebar(&self, cx: &mut Context<Self>) -> Option<Div> {
         self.model.settings.sidebar_collapsed.then(|| {
             div()
                 .ml(px(-8.))
@@ -257,20 +293,22 @@ impl Vesper {
                 .h(px(48.))
                 .flex_none()
                 .gap(px(12.))
-                .px(px(16.))
+                .pl(px(16.))
+                .pr(px(16. + chrome::RESERVE))
                 .border_b_1()
                 .border_color(line)
                 .child(b)
+                .child(self.drag_space(cx))
         })
     }
 
     /// `RoomHeader.svelte`: 48 px, 16 px sides, 12 px gap, a `--line-subtle` rule under it. The name (16/24,
-    /// `--weight-strong`), a DM's or a restricted room's note, then Pins and Join voice at the right. Join voice is
-    /// not there in this room's call (the call bar has Leave) and is secondary while in a call elsewhere. Search is
-    /// the web's (the desktop has no message search yet).
-    fn room_header(&mut self, room: &RoomInfo, cx: &mut Context<Self>) -> Div {
+    /// `--weight-strong`), a DM's or a restricted room's note, then Pins, Search and Join voice at the right. Join voice is
+    /// not there in this room's call (the call bar has Leave) and is secondary while in a call elsewhere. Search opens
+    /// the search dialog.
+    fn room_header(&mut self, room: &RoomInfo, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let t = tokens(cx).clone();
-        let popover = self.render_pins(cx);
+        let popover = self.render_pins(window, cx);
         let m = &self.model;
         let id = room.id;
         let here = m.call.room == Some(id);
@@ -321,11 +359,13 @@ impl Vesper {
                 )
                 .children(popover)
         });
+        let drag = self.drag_space(cx);
         h_flex()
             .h(px(48.))
             .flex_none()
             .gap(px(12.))
-            .px(px(16.))
+            .pl(px(16.))
+            .pr(px(16. + chrome::RESERVE))
             .border_b_1()
             .border_color(t.line_subtle)
             .children(self.show_sidebar(cx))
@@ -347,13 +387,17 @@ impl Vesper {
                     .child(icon("shield").text_color(t.fg_2))
                     .child(n)
             }))
+            // The empty middle moves the window; flex_1, not ml_auto: taffy drops the gaps before an auto margin.
+            .child(drag)
             .child(
-                // flex_1 and justify_end, not ml_auto: taffy drops the gaps before an auto margin.
                 h_flex()
-                    .flex_1()
-                    .justify_end()
                     .gap(px(8.))
                     .children(pins)
+                    .child(div().debug_selector(|| "search-button".into()).child(
+                        c::IconButton::new("search-button", "search").on_click(cx.listener(
+                            |this, _, w, cx| this.open_layer(super::find::Layer::Search, w, cx),
+                        )),
+                    ))
                     .children(join),
             )
     }

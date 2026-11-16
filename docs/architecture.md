@@ -67,6 +67,7 @@ The "Not verified" list at the end says what was only read.
   | `---`, `***` or `___` alone on a line | a rule |
   | a bare `http://` or `https://` URL | a link |
   | `@name` | a mention |
+  | `@everyone`, `@here` | a mention of every member, or of every member online now (drawn like a mention of you) |
 
   Not supported, shown as typed: raw HTML, images (`![x](y)`), `[text](url)` links (the text could hide where a link goes),
   tables, task lists, backslash escapes, setext (underlined) headings and indented code. An unclosed marker is text.
@@ -91,7 +92,7 @@ The "Not verified" list at the end says what was only read.
 | `vesper-store` | SQLite through sqlx (ADR 0005), the only crate that imports sqlx. WAL, foreign keys on, a pool of 4, migrations in `migrations/`. Accounts, sessions, invites, rooms, messages, search and upload rows (`accounts.rs`, `sessions.rs`, `invites.rs`, `rooms.rs`, `messages.rs`, `search.rs`, `uploads.rs`). Messages are never hard-deleted: a delete empties the body and keeps a tombstone. Triggers keep the FTS5 table `messages_fts` in step with live bodies. Reactions, mentions (user ids, parsed by the server), pins and per-room read markers have their own tables; the `uploads` table is in the same migration (`0003_messages.sql`). `messages.updated_at` (`0004_updated_at.sql`) is unix ms, raised to `max(old + 1, now)` inside every edit, delete, reaction and pin change, so of two copies of one message the larger is the newer, even when the pushes arrive out of order. Bios and profile pictures (`0005_profile.sql`): `accounts.bio`, `accounts.avatar` (the picture version) and the `avatars` table. The UI accent from Settings > Appearance (`0006_ui_accent.sql`): `accounts.ui_accent`, a preset key or `#rrggbb`, NULL for amber. Password resets (`0007_password_resets.sql`, `resets.rs`): every reset row is kept as an audit (who made it, used when and from the LAN or the internet, shown to the person); at most one live code per account (a partial unique index), cancelled by a new one, a role change, a ban or unban and a password change; a role change or ban of the maker cancels the live links they made. Archived rooms (`0008_room_archive.sql`): `rooms.archived_at`, NULL while not archived. `Store::backup_into` writes a consistent copy with `VACUUM INTO` (for `vesper-server backup` and the automatic backups). `Store::schema_versions` reads the newest applied and the newest embedded migration without changing the file, so the server can back up before `Store::open` migrates. Passkeys (`0013_passkeys.sql`, `passkeys.rs`): one row per WebAuthn credential, the credential id unique and the `webauthn-rs` credential kept as JSON (public key and counter), deleted with the account. It stores only hashes of session tokens, invite codes and reset codes. |
 | `vesper-sfu` | SFU on str0m. One UDP socket, rooms keyed by name, Opus voice and one VP8 screen per client forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
 | `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_passkeys.rs` (passkeys, WebAuthn through `webauthn-rs`), `api_admin.rs` (users, invites, reset links, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`, `listed`, `visible_room`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `speedtest.rs` (upload speed test), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands, `backup`, the automatic `pre-*` and `auto-*` backups and their keep rule), `build.rs` (the build id), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
-| `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
+| `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, and `Rnnoise` (the `nnnoiseless` port, model built in), both on 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
 | `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
 
 ## Direct messages
@@ -152,7 +153,7 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `share_cap
 7. `set_voice_state` updates presence. `leave`, a closed socket, a kick, a lost room or the SFU ending the session removes the user.
    `share_start` (group rooms only; also changes the settings of a running share) and `share_stop` set `Peer.share`, which is `null` when
    nobody shares, and tell the room with `peer_share`. A share ends with the call. A share in a DM gets `forbidden`, and one that would take
-   the room's shares over their total gets `share_cap`. The client then ends a new share, or puts back the settings a change replaced.
+   the room's shares over their total is lowered to what is left, and the sharer gets its own `peer_share` with that bitrate; only less than 500 kbps left gets `share_cap`. The client then ends a new share, or puts back the settings a change replaced.
    `watch` (not for yourself) asks the SFU to forward a sharer's video to the viewer (or stops it). The sharer gets `watchers { count }` when a share
    starts and whenever the count of watchers in the call changes, also when a watcher leaves.
    `point` (x and y from 0 to 1, else `bad_message`) goes as a server `point { user_id, from, x, y }` to everyone else in the call
@@ -223,8 +224,8 @@ unit tests in `hub.rs` and `voice.rs`.
 - Video ([ADR 0009](decisions/0009-video-in-the-sfu.md)): a join offer has one audio m-line and at most one VP8 video m-line. A client with
   video is offered every other video track at join. Packets flow only while `set_sharing(user, true)` holds for the sender and
   `watch(viewer, sharer, true)` for the receiver. Both are per session, so a rejoin starts with neither. The SFU makes an incoming
-  track only from an m-line the client sends on, so the desktop client's receive-only video m-line gets others' screens and is
-  never offered to anyone.
+  track only from an m-line the client sends on. The web's and the desktop's video m-lines are send-only, for their own share
+  (the desktop's capture and encoder: [ADR 0011](decisions/0011-desktop-screen-share-send.md)).
 - Keyframes: `watch(viewer, sharer, true)` sends the sharer a PLI, so the new viewer gets a picture right away. A viewer's own PLI or FIR on a
   forwarded video goes to the sharer as the same kind. Covered by `tests/forwarding.rs` with str0m test clients, not a browser.
 - Share ceiling: the SFU measures each sharer's incoming video in windows of at least a second. When it stays above `share_ceiling_bps`
@@ -241,6 +242,7 @@ unit tests in `hub.rs` and `voice.rs`.
 ## Audio pipeline (browser)
 
 Order, fixed by the spec: microphone, browser echo cancellation (always on), gain (the input boost), DeepFilterNet, Opus encode, WebRTC to the SFU.
+RNNoise takes DeepFilterNet's place in that order when it is picked.
 
 - In `deepfilter` mode: mic through a gain node (the input boost) into an AudioWorklet, which exchanges 10 ms frames with a DSP worker over a MessageChannel; worklet output goes
   into a `MediaStreamDestination`, and that track is what WebRTC sends (`web/src/lib/audio/capture.ts`, `denoise.worklet.ts`,
@@ -259,6 +261,11 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
     from frame arrival, so in played time the release starts 200 ms minus the queue depth after the sound drops. Turning it off
     ramps it open. The switch is disabled outside DeepFilterNet mode. The passthrough before the model is
     ready, and after a failure, is not gated.
+- In `rnnoise` mode the same graph, worklet and worker run, with `WasmRnnoise` from the same WASM file in the worker instead of
+  DeepFilterNet. It needs no model download. The input boost, the limiter and the noise gate stay off in this mode (the Settings
+  controls for them are DeepFilterNet only), so the path is mic, echo cancellation, RNNoise, Opus. The browser filter hand-over at
+  `ready` is the same as for DeepFilterNet. RNNoise delays the output by one frame (10 ms) where DeepFilterNet takes 30 ms.
+  Unit-tested with fakes and the Rust tests; not heard in a real browser or call.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
   suppression is on in `browser` mode, in `deepfilter` mode while the model loads, and in `deepfilter` mode if the user turned it on.
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is
@@ -266,7 +273,9 @@ Order, fixed by the spec: microphone, browser echo cancellation (always on), gai
 
 ## DSP pipeline (Rust)
 
-`vesper-dsp` runs each 10 ms frame through a `Pipeline`: input gain, pre stages, DeepFilterNet, post stages. A `PipelineConfig`
+`vesper-dsp` runs each 10 ms frame through a `Pipeline`: input gain, pre stages, DeepFilterNet, post stages. `Rnnoise` is separate
+and has no settings: it scales the frame to the 16-bit range RNNoise expects and back. A test checks it takes white noise down by
+over 10 dB in the pauses of a synthetic voice while the voice stays within 6 dB (measured 30.3 dB and -2.2 dB on the dev machine). A `PipelineConfig`
 sets each step, and its default gives the same output as the shipped denoiser bit for bit (a golden hash test pins it). The WASM
 `WasmDenoiser` is backed by the same `Pipeline`, so an audio experiment changes Rust only and never needs a change under `web/`.
 DeepFilterNet3 delays the output by 1440 samples (30 ms), which a test checks against a measured delay to within one sample; `latency_samples()` reports what our own stages add on top.
@@ -274,8 +283,11 @@ The `serde` feature lets the audio lab load configs from TOML. It is off by defa
 
 ## Fallback logic
 
-- Modes: `deepfilter`, `browser`, `off` (`web/src/lib/audio/mode.ts`).
-- `ModeController` trips from `deepfilter` to `browser` when 20 of the last 100 frames each took longer than 30 ms. The first 300 frames (about 3 s) are ignored. It stays tripped until `reset()`.
+- Modes: `deepfilter`, `rnnoise`, `browser`, `off` (`web/src/lib/audio/mode.ts`).
+- The chain is `deepfilter` or `rnnoise`, then `browser`, then `off`. RNNoise is a choice next to DeepFilterNet, not a step
+  after it: a slow or failed DeepFilterNet goes to `browser`, as before. Each fallback below applies to `rnnoise` the same way.
+  The desktop app has no browser filter, so both go to its noise gate there.
+- `ModeController` trips from `deepfilter` or `rnnoise` to `browser` when 20 of the last 100 frames each took longer than 30 ms. The first 300 frames (about 3 s) are ignored. It stays tripped until `reset()`.
   The numbers are set in `denoise-core.ts`.
 - A mic that ends mid-call (or that the system mutes for over 3 s) leaves the call up with `off (microphone lost: ...)`, and the call bar offers
   Retry microphone: `capture.retry()` asks for the mic again (a saved mic that is gone falls back to the default, as at the start) and builds
@@ -372,7 +384,7 @@ JSON over HTTP under `/api` (`api_accounts.rs`, `api_admin.rs`, `api_rooms.rs`, 
 | `GET /api/admin/disk` | owner | `DiskUse` |
 | `GET /api/admin/server` | owner | `ServerStatus`: version and build, uptime, the `DiskUse` numbers, people in voice, failed pushes in the last 24 h (in memory, since start if shorter), the newest `*.db` in `<data>/backups` (name and time). No secrets and no one's address. The advertised public address is not in it: the server does not record when it changed |
 
-Your recent calls (`api_calls.rs`, store `calls.rs`, table `call_stats` from migration `0010_call_stats.sql`): when you leave a call your
+Your recent calls (`api_calls.rs`, store `calls.rs`, table `call_stats` from migration `0010_call_stats.sql`; `0014_call_stats_rnnoise.sql` rebuilds it to allow the `rnnoise` mode and copies every row): when you leave a call your
 client posts one summary: how long it lasted, the noise suppression mode it ended in and its fallback reason, incoming loss, jitter,
 concealed share and round trip (averages over the call's 2 s stats polls), and whether the browser filter ran while DeepFilterNet
 loaded. No room and no other people are stored. Each person reads only their own (Settings > Account, "Your recent calls"); there is
@@ -394,7 +406,10 @@ Chat (`api_messages.rs`, store `messages.rs`): a room you cannot see, and a mess
 an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets that can see the room get them. Rules:
 
 - **Body.** NFC, trimmed, 1 to 4000 characters (not bytes), no control characters except newline and tab, else 400. The same
-  rule holds for an edit. Bodies are never logged.
+  rule holds for an edit. A message with files may have an empty body: a message of files has no text (migration
+  `0015_message_files_only.sql` rebuilds `messages` so its check allows that and copies every row). Clients used to send the
+  file names as the body; they still hide a body that is only those names, in any order. A reply to a message of files shows
+  its first file's name. Bodies are never logged.
 - **Who.** Anyone who can see the room posts, reacts and pins. Only the author edits (403 for anyone else, the owner too). The author
   deletes, and a moderator or the owner deletes anyone's (403 for a member on someone else's). A delete is soft: the body is
   emptied, and reactions, mentions and the pin go. A deleted message is 404 for edit, delete, reaction and pin.
@@ -403,6 +418,9 @@ an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets th
 - **Replies.** `reply_to` may name a deleted message of the room; the reply shows it as deleted. Allowed on purpose.
 - **Mentions.** `@name` at a word start, the name being `[a-z0-9_]{3,24}` after an ASCII lowercase, at most 20 per message, read again
   on each edit. A name that is unknown, banned or cannot see the room is dropped, so it never counts as a mention.
+  `@everyone` mentions every member who can see the room and is not banned, the author aside; `@here` only those of them
+  with a socket open at that moment. They are stored as mentions of each person, so unread counts, highlights and pushes
+  work as for `@name`. Signup refuses the usernames `everyone` and `here`. The composer offers both (not in a DM).
 - **Reactions.** 1 to 32 bytes with no ASCII letter or digit, whitespace or control character (400). At most 20 different ones per message (409).
 - **Pins.** At most 50 per room (409). A DM has no pins: the pin route answers 403 for a DM message.
 - **Read marker.** `last_read_id` is 0 or a message of that room (else 400), so it cannot be set past future messages. It never
@@ -478,7 +496,11 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
   5987), so a name can not add a header.
 - **Served headers.** `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` (kept in place of the page's policy),
   `Cross-Origin-Resource-Policy: same-origin`, `Cache-Control: private, max-age=31536000, immutable` (the file behind an id never changes).
-- **Who.** Attaching (`SendMessage.attachments`) needs your own upload, not attached yet, in the same room (else 409). An attached
+- **Client retries.** The web upload tray (`tray.svelte.ts`) runs 3 uploads at once. A network error or a 5xx other than 507 is
+  tried again by itself after 0.5, 1.5 and 4 s; after the third it fails and the row shows Retry. A full quota, a file too large
+  and a rate limit fail at once. Unit tests (`tray.test.ts`); not verified in a real browser.
+- **Who.** Attaching (`SendMessage.attachments`) needs your own upload, not attached yet, in the same room (else 409). One send
+  attaches every file or none (one transaction). An attached
   file is served to anyone who can see the room; one not attached yet only to its uploader. Everything else is the same 404 as an
   unknown id.
 - **Removal.** Deleting a message deletes its files. Uploads still not attached after 24 h are swept every hour (and at start).

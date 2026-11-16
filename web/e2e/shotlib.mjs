@@ -64,6 +64,24 @@ export const LINES = [
   'the co-op one again?', 'sure', 'I fixed my mic, tell me if it still crackles', 'sounds fine to me', 'link to the patch notes: https://example.com/notes',
 ];
 
+// A 256 px picture drawn in the page (a disc on a field, two colours) and saved as the account's picture.
+async function picture(page, [field, disc]) {
+  const status = await page.evaluate(async ([field, disc]) => {
+    const c = new OffscreenCanvas(256, 256);
+    const g = c.getContext('2d');
+    g.fillStyle = field;
+    g.fillRect(0, 0, 256, 256);
+    g.fillStyle = disc;
+    g.beginPath();
+    g.arc(128, 150, 70, 0, Math.PI * 2);
+    g.fill();
+    g.fillRect(40, 40, 60, 30);
+    const body = await c.convertToBlob({ type: 'image/png' });
+    return (await fetch('/api/me/avatar', { method: 'PUT', body })).status;
+  }, [field, disc]);
+  if (status >= 400) throw new Error(`PUT /api/me/avatar: ${status}`);
+}
+
 // Signs up alice (the owner, whose fake mic plays speech) and bob. `open(url)` is a fresh signed-out page;
 // `seed()` (once) makes two more rooms and 40 messages in general.
 export async function cast() {
@@ -79,6 +97,9 @@ export async function cast() {
   const bobLink = (await api(alice.page, 'POST', '/api/invites', { role: 'member', max_uses: 1, expires_hours: 1 })).url;
   const bob = await shotBrowser('bob', [], { viewport: VIEWPORT });
   await signup(bob.page, bobLink, 'bob');
+  // Profile pictures for both, so every avatar of theirs shows a picture; the house's others keep their letters.
+  await picture(alice.page, ['#e5955d', '#2a1a10']);
+  await picture(bob.page, ['#41bae4', '#0d2633']);
   let seeded;
   const seed = () => (seeded ??= (async () => {
     for (const name of ['music', LONG_ROOM]) await api(alice.page, 'POST', '/api/rooms', { name });
@@ -156,6 +177,10 @@ export function png(w, h, [r0, g0, b0], [r1, g1, b1]) {
       raw.set([r0 + (r1 - r0) * t, g0 + (g1 - g0) * t, b0 + (b1 - b0) * t].map(Math.round), row + 1 + x * 3);
     }
   }
+  return pngOf(w, h, 2, raw); // RGB
+}
+// A PNG file of filtered rows `raw`, 8 bits a channel, of colour type `type` (2 RGB, 6 RGBA).
+function pngOf(w, h, type, raw) {
   const chunk = (type, data) => {
     const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
     const out = Buffer.alloc(12 + data.length);
@@ -168,8 +193,43 @@ export function png(w, h, [r0, g0, b0], [r1, g1, b1]) {
   ihdr.writeUInt32BE(w, 0);
   ihdr.writeUInt32BE(h, 4);
   ihdr[8] = 8;
-  ihdr[9] = 2; // RGB
+  ihdr[9] = type;
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+// A disc in `rgb` with a soft edge (a glow fading out) on a fully transparent square (RGBA), to show what is behind a
+// picture's clear and part-clear pixels once it is drawn smaller.
+export function pngDisc(size, [r, g, b]) {
+  const raw = Buffer.alloc((size * 4 + 1) * size);
+  const c = (size - 1) / 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const d = Math.hypot(x - c, y - c) / size; // 0 at the centre
+      const a = Math.round(255 * Math.min(1, Math.max(0, (0.48 - d) / 0.18)));
+      if (a) raw.set([r, g, b, a], y * (size * 4 + 1) + 1 + x * 4);
+    }
+  }
+  return pngOf(size, size, 6, raw);
+}
+// An animated GIF: `frames` squares of four-colour palette indices, `ms` per frame, index 0 transparent. Each pixel is
+// sent as its own LZW code with a clear code every two, so the code width never grows (no compressor needed).
+export function gif(size, palette, frames, ms) {
+  const u16 = (n) => [n & 255, n >> 8];
+  const out = [...Buffer.from('GIF89a'), ...u16(size), ...u16(size), 0x91, 0, 0, ...palette.flat()];
+  out.push(0x21, 0xff, 11, ...Buffer.from('NETSCAPE2.0'), 3, 1, 0, 0, 0);
+  for (const px of frames) {
+    out.push(0x21, 0xf9, 4, (2 << 2) | 1, ...u16(Math.round(ms / 10)), 0, 0);
+    out.push(0x2c, 0, 0, 0, 0, ...u16(size), ...u16(size), 0, 2);
+    const bytes = [];
+    let acc = 0, bits = 0;
+    const put = (code) => { acc |= code << bits; bits += 3; while (bits >= 8) { bytes.push(acc & 255); acc >>= 8; bits -= 8; } };
+    px.forEach((p, i) => { if (i % 2 === 0) put(4); put(p); });
+    put(5);
+    if (bits) bytes.push(acc & 255);
+    for (let i = 0; i < bytes.length; i += 255) out.push(Math.min(255, bytes.length - i), ...bytes.slice(i, i + 255));
+    out.push(0);
+  }
+  out.push(0x3b);
+  return Buffer.from(out);
 }
 let photos;
 export function photosRoom({ alice, bob }) {

@@ -31,7 +31,11 @@ the warning colour poor, all faint while measuring. Its name says "Connection to
 give the figures in words. Your own row with Settings sits at the bottom. The sidebar hides fully with `Ctrl+\`. It never
 shrinks to a row of icons. The main pane has a 48 px header with the room name, Pins, Search and Join voice. Join voice is the amber primary only when you are in no call. While you are in a
 call, a small call bar floats at the bottom centre of the main pane. The pane leaves room for it, so it covers nothing.
-Settings and Admin use the same shell: a list of sections on the left of the pane and one page of controls.
+Settings and Admin use the same shell: a list of sections on the left of the pane and one page of controls. The page
+title is 20 px, a step above its 16 px sections. A list of choices (Colour scheme) is one bordered box with hairlines
+between the rows, not a stack of boxes. An empty room says "No messages yet." at the foot of the list, left aligned with the
+message text, where the first message will land; only a missing room or page centres its empty state. The welcome steps show
+"Step 1 of 3" next to their buttons, not above the heading.
 
 **The tokens rule.** A component uses role names only (`bg-app`, `text-fg-2`, `bg-accent`, `text-danger`). Raw steps and
 hex values live only in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css). Sizes follow the 4 px scale. Text uses six
@@ -44,6 +48,9 @@ tabular figures.
   the accent.
 - Amber means one of five things: the primary action, focus, a selection marker, a mention, or the unread line. A view has
   one amber fill at most. Text on an amber fill is near-black (white in the light scheme).
+- Selected text has the accent at 30% opacity behind it (`--selection` in `tokens.css`), in both schemes, on the page,
+  in inputs and in the composer. Over the page that is `#533f0d` in dark and `#ddd0b1` in light for amber. The desktop app
+  uses the same: the accent at alpha 0.30 over the surface.
 - Warnings use their own orange plus an icon and words. They never use amber.
 - A person's colour shows only on their avatar and their speaking ring. Names, text, row borders and messages stay grey.
   There are no role colours.
@@ -63,11 +70,11 @@ matrix that moves amber to the fill and keeps every grey, applied to the logo by
 it fetches the PNG and makes a `blob:` URL). Amber leaves both files untouched. The avatar colours, the notification icon and the speaking ring do not
 change. There is no coral: it sat between the danger red and the warning orange.
 
-**The switch point.** The look is chosen in two places, both on `<html>` and both set before the app mounts: `data-style` by
-`web/src/lib/ui/style.ts` and `data-scheme` (`dark` or `light`) by `web/src/lib/ui/scheme.ts`. Components never read either.
-A new style is a block in `tokens.css` or a lazy file with the same role names, plus one entry in `STYLES`.
+**The switch point.** The look is chosen in one place, `data-scheme` (`dark` or `light`) on `<html>`, set before the app mounts by
+`web/src/lib/ui/scheme.ts`. Components never read it. There is one style, Vesper: the Persona, Cozy, BBS and Aurora styles were
+removed, and `main.ts` deletes the old `vesper.style` key, so a device that had one shows Vesper.
 
-**Color scheme.** Settings > Appearance > Color scheme: Dark, Light or System (follows `prefers-color-scheme`, and a change of the
+**Colour scheme.** Settings > Appearance > Colour scheme: Dark, Light or System (follows `prefers-color-scheme`, and a change of the
 system setting applies at once). Per device, in `localStorage` (`vesper.scheme`), no server change. The default is Dark, so the
 look people have stays. `index.html` loads `public/scheme-init.js`, a small blocking script (a file, because the CSP forbids inline script) that sets `data-scheme` and the `theme-color` meta before the first
 paint, so there is no flash; `scheme.ts` repeats the rules and keeps the tab colour right after a change. The base block of
@@ -83,61 +90,10 @@ Settings still checks a custom colour in dark only (the stored value is the same
 always paints in light, which `accent.test.ts` checks for the presets and a grid of colours. The logo and the tab icon keep the
 unchanged accent colour: the logo has its own dark ring, so it reads on a light sidebar. This was not checked on screen.
 
-## Styles
-
-Settings > Appearance > Style, per device (`vesper.style`). A style is a lazy CSS file in `web/src/styles/`, loaded by a dynamic
-`import()` only when it is chosen, so the first load does not grow (Vesper itself is `tokens.css`, in the first load). `main.ts`
-waits for the file (at most 2 s) before it mounts, so the page never shows a style without its tokens. The stored choice and
-`data-style` are the same id; an unknown id falls back to Vesper.
-
-| Style | Scheme | Own accent | What it is |
-| --- | --- | --- | --- |
-| Vesper | both | no (amber) | The default look. |
-| Persona | dark | red | Red, black and white. Slanted buttons and chips, a red slash for the current room, Anton headings, a star cursor, tilted dialogs. |
-| Cozy | light | leaf green | Warm cream paper, wood-brown text, round shapes, the system rounded face. |
-| BBS | dark | yellow | A dial-up board: black, monospace, square corners, a blue selection bar. |
-| Aurora | dark | mint | A deep blue night sky, soft corners, a faint static glow behind the page. |
-
-**Why these three.** Brisk has about 48 styles, most of them novelty or built on its game-streaming layout. These were picked for
-reading long text and for variety: Cozy is the warm light one (dark brown on cream, 7 to 11:1), BBS is the monospace one (light grey
-on black, 12:1 and up, the one a person who lives in a terminal may want), Aurora is a dark with another mood (cool blue instead of
-warm grey, mint instead of amber). Each is a few lines of tokens and one or two shape rules (0.5 kB gzip each; Persona is 1.8), with no font
-file: Cozy and BBS use the system rounded and monospace faces, so their type changes with the OS. Brisk's frosted glass, moving
-light, scanlines and page transitions are not ported. Not picked: Blueprint and Aqua (low contrast text on a pattern or a gradient), Bonfire (too close to Vesper dark).
-
-**Style and scheme.** Each style says in `STYLES` (`style.ts`) what it does with the Color scheme choice: `both` (Vesper: the
-choice applies), `dark` or `light` (the style is that by nature). For a fixed style the choice is ignored: Settings greys the
-Color scheme group and says "This style is dark only", and `data-scheme` is set to the style's own. The map of fixed styles is
-repeated in `public/scheme-init.js` (it must set the right scheme before the first paint); `scheme.test.ts` checks the two agree.
-
-**Style and accent.** Amber is the default accent, and the default is replaced by a style's own colour when the style sets
-`own: true` (`data-own-accent` on `<html>`; `applyAccent` then leaves the accent roles to the style's CSS). Any other accent the
-person picked still applies, painted by `roles()` as for Vesper. The Persona red is `#e60012` with white text (5.0:1).
-
-**Persona.** Ported from the look of Brisk's Persona style (palette, type, shapes, motion), not its CSS. Tokens first: surfaces,
-lines, text, accent roles, the focus ring (white, with a red ring outside it), radii 0, a hard red shadow. Then a few rules: slanted
-`.btn` and `.badge` (`clip-path`; a focused button is square so its ring is not cut), the sidebar's slanted red edge, `.row.current`
-as a red slash, Anton on `h1`, `h3` and room names, section labels as white tabs, a star cursor (white, red over buttons and links,
-the text cursor stays over fields), dialogs with a red edge that tilt in with a spring. Message text is Rubik regular, white on
-near-black (about 19:1), unchanged in size. Left out: the page-wipe and calling card animation and the background shards. The motion
-that is there (the dialog tilt, the row and button hop) is inside `prefers-reduced-motion: no-preference`.
-Fonts are self-hosted in `web/src/styles/fonts/`, latin subset only, loaded with the style: Anton 400, Rubik 400 and 700
-(woff2, 19 kB each), SIL Open Font License 1.1 (the licence texts sit next to the files). No CDN.
-
-**Adding a style.**
-1. Write `web/src/styles/<id>.css`. One rule, `html[data-style='<id>'] { ... }`, redefines the roles of `tokens.css` that differ
-   (roles not listed stay Vesper dark). Set `color-scheme`. Then shape rules, all starting with `html[data-style='<id>']`. Prefer
-   tokens (`--radius`, `--font-sans`, `--shadow-float`) to component selectors; where a component needs a hook, add a class, not a rule in the component.
-2. Add the entry to `STYLES` with `scheme`, `own` and `load: () => import('../../styles/<id>.css')`. If the scheme is `dark` or
-   `light`, add the id to the map in `public/scheme-init.js`.
-3. Add the file to `LOOKS` in `tokens.test.ts`: every text pair needs 4.5:1 and every UI pair 3:1 in the style's own colours.
-4. Put motion inside `@media (prefers-reduced-motion: no-preference)`. Fonts are self-hosted (check the licence) or a system stack; never a CDN.
-5. Run `npm run size` and say what it did to the CSS budget. All CSS was 16.3 kB gzip of 20 before the styles and is 19.5 with the four, and was 20.0 at v1.8.0, when the budget went to 24 kB. The next raise needs the same justified, dated note in `size-check.mjs`. Update this section.
-
 ## Tokens
 
 Colours, type, radii and motion live in [`web/src/styles/tokens.css`](../web/src/styles/tokens.css): the base block (Vesper dark) and the
-light block. The look is chosen by `data-style` and `data-scheme` on `<html>` (see the switch point above). Components never read them.
+light block. The look is chosen by `data-scheme` on `<html>` (see the switch point above). Components never read them.
 `web/src/app.css` maps the roles to Tailwind names (`bg-app`, `text-fg-3`, `bg-accent`, `text-danger` ...) and turns the default
 Tailwind palette off, so a class like `bg-neutral-800` does not exist. `web/src/lib/ui/no-raw-colours.test.ts` fails on a hex value,
 `rgb()`, `hsl()`, `oklch()` or a palette class outside `tokens.css`, and `tokens.test.ts` checks the contrast of each text and UI pair in every look (dark and light so far).
@@ -147,7 +103,9 @@ To see every role, the type scale, the radii and the focus ring, run `npm --pref
 ## Motion
 
 Every animation goes through [`web/src/lib/ui/motion.ts`](../web/src/lib/ui/motion.ts) as a named preset, played by anime.js's WAAPI
-build (`waapi.animate` only). Only `opacity` and `transform` move, except the jump flash, which fades a background colour.
+build (`waapi.animate` only). Only `opacity` and `transform` move, except the jump flash, which fades a background colour, the
+theme reveal (a `clip-path` on the view transition) and the call bar's morph (its size); those two use the browser's own
+`element.animate`.
 anime.js is not in the first load: it loads right after start, and until it arrives every preset is instant (the jump flash
 is the instant change it has under reduced motion).
 
@@ -159,7 +117,30 @@ is the instant change it has under reduced motion).
 | `row` | 8 px from the left, 160 ms | a person joining or leaving voice |
 | `bump` | scale 0.6 with a small overshoot, 160 ms | a reaction coming, going or changing its count; a sidebar unread count |
 
-Enter eases out (`--ease-out`, `--ease-pop` for `bump`); exit runs the pose backwards in 120 ms, easing in. The selected room's fill
+Enter eases out (`--ease-out`, `--ease-pop` for `bump`); exit runs the pose backwards in 120 ms, easing in.
+
+Four effects after shadcn-labs transition-kit, rebuilt here without the package:
+
+- **Theme reveal** (`reveal`): a click on Dark, Light or System spreads the new scheme as a circle from the pointer, a view
+  transition with the new page clipped to a growing `circle()`, `--dur-reveal` (400 ms, the one whole-window motion, and rare)
+  ease-out. Arrow keys switch at once, and so does a browser without view transitions. The desktop cannot draw the window
+  twice: its circle is the new page colour over the old look, then the new look fades in under it (`--dur-out`).
+- **Sliding selectors** (`slides`, an attachment): the picked option's fill glides to the next one (`glide`, `--dur-2`
+  ease-out, place and width) in the Settings and Admin section lists and the search's All rooms / This room. It follows
+  `aria-current="page"` or `aria-pressed="true"` with a MutationObserver.
+- **Number flip** (`roll`, `Roll.svelte`): each changed digit rolls out and the new one in, both `--dur-2` ease-out, up when
+  the number grows. Sidebar unread and mention counts (the badge still pops in when it appears), the pins count and the
+  call timer. Counts that come with the first hello do not roll.
+- **Call pill and popovers from their trigger**: the call bar's chevron makes it a pill (the room, the mic, the timer; per
+  device, `vesper.callbar`, the desktop's `call_small`). Hover or focus opens it to the full bar over the timeline; it
+  closes 300 ms after the pointer and focus leave, and a notice or an error keeps it full. The change morphs the box
+  (`morph`: size and corners, `--dur-3` ease-out, content fading in over `--dur-2`); size moves here because the bar floats
+  over the pane, so only its own box lays out again. Popovers and menus scale from the middle of their anchor's facing
+  edge (`transform-origin`); dialogs stay centred. The desktop's popovers fade only (GPUI has no element scale).
+
+Also: the fold chevron of a room's people turns over `--dur-2` (one icon rotated, not two swapped), and the reply bar
+comes in with `swap`. An unpinned row leaves with `row`. The call timer counts from when the bar appeared on this
+device, m:ss, then h:mm:ss. The selected room's fill
 glides to the next room (`glide`). Buttons sink a little while pressed and hover changes colour: both plain CSS on the same tokens.
 The sidebar row the mouse is heading for (prefetch on intent) takes half the hover fill, a CSS colour change over
 `--dur-1`; hover replaces it.
@@ -169,8 +150,8 @@ A message row's highlight (hover, keyboard focus, editing, a mention) is a CSS f
 (`slide`). The grid takes its final columns once at the start and only transforms move after that; the leaving sidebar is
 inert at once and hidden when the slide ends. The saved hidden state at load does not slide.
 
-Rules: under `prefers-reduced-motion` every preset is an 80 ms opacity fade, and the glide, the jump flash, the row highlight, the intent fill and
-the sidebar are instant. Nothing
+Rules: under `prefers-reduced-motion` every preset and the number flip are an 80 ms opacity fade, and the glide, the slides,
+the theme reveal, the call bar's morph, the chevron, the jump flash, the row highlight, the intent fill and the sidebar are instant. Nothing
 animates on a speaking change; the ring toggles instantly (a fade once cost about 60 percent more CPU in a call). History, a room open and
 "Load older" do not animate; only live arrivals do, three at most. The rooms, counts and people that come with the first hello appear
 at once (`settle()`), and at most three transitions start in one task. A dialog or popover closes at once, so focus moves on; the fading

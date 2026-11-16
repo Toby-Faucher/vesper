@@ -600,6 +600,15 @@ describe('screen share', () => {
     expect(shareMsgs()).toEqual([{ type: 'share_start', fps: 60, bitrate_kbps: 8000 }]);
   });
 
+  it('a_share_the_server_lowered_sends_at_the_lower_rate', async () => {
+    await sharing();
+    sig.emit({ type: 'peer_share', user_id: me, share: { fps: 60, bitrate_kbps: 3000 } });
+    await Promise.resolve();
+    expect(shares.mine).toMatchObject({ kbps: 3000 });
+    expect(send.applyShare).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ kbps: 3000 }), expect.anything());
+    expect(voice.notice).toBe('Your screen share was lowered to 3.0 Mbps so every share in the room fits.');
+  });
+
   it('a_moderator_stop_ends_the_share_with_a_notice', async () => {
     const { track } = await sharing();
     sig.emit({ type: 'peer_share', user_id: me, share: null });

@@ -6,15 +6,24 @@
 //! - [`Roster`] and [`pose`]: things that come and go (people in voice, unread badges) and the preset pose of each
 //!   one at a time: [`ROW`] and [`BUMP`] in, a reversed shorter ease-in out, and `--dur-calm` opacity only under
 //!   reduced motion.
+//! - [`Slide`]: a sliding selector (`slides`): the picked option's fill glides from the one picked before.
+//! - [`roll`]: number flip (`Roll.svelte`): each changed digit rolls out and the new one in.
+//! - [`reveal_radius`]: the theme switch's circle (`reveal`).
 //!
 //! The tokens and reduced motion live in `theme::Motion`. Anything moving asks for the next frame itself
 //! (`window.request_animation_frame()`), so an idle window draws nothing.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gpui::{App, ElementId, Window};
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    App, Bounds, Div, ElementId, IntoElement, ParentElement, Pixels, Point, SharedString, Styled,
+    Window, canvas, div, point, px, size,
+};
 
 use super::theme::{Motion, tokens};
 
@@ -159,6 +168,33 @@ pub fn fade(
     (v, listen)
 }
 
+/// A value easing to `target` over `dur` (ease-out), kept per `id`, like a CSS transition on a state change: the
+/// fold chevron's turn. Pass `Duration::ZERO` under reduced motion.
+pub fn follow(
+    id: impl Into<ElementId>,
+    target: f32,
+    dur: Duration,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
+    let ease = tokens(cx).motion.ease_out;
+    let state = window.use_keyed_state(id, cx, |_, _| Tween::new(target));
+    let now = Instant::now();
+    state.update(cx, |t, _| t.go(target, now, dur, ease));
+    let t = state.read(cx);
+    if t.running(now) {
+        window.request_animation_frame();
+    }
+    t.at(now)
+}
+
+/// When the element kept by `id` was first drawn (in a run of frames that drew it), for a preset's enter pose.
+pub fn since(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> Instant {
+    *window
+        .use_keyed_state(id, cx, |_, _| Instant::now())
+        .read(cx)
+}
+
 /// A motion preset of `motion.ts`: the move's length and easing on the way in.
 #[derive(Clone, Copy, Debug)]
 pub struct Preset {
@@ -256,6 +292,218 @@ pub fn pose(m: &Motion, p: Preset, out: bool, start: Instant, now: Instant) -> O
         e
     };
     Some(Pose { opacity, t })
+}
+
+/// A sliding selector (`slides` in motion.ts): when the picked option changes, a fill glides from the old option's box
+/// to the new one's (place and width, `--dur-2`, ease-out), drawn first in the container so it sits under the text,
+/// while the new option draws no fill of its own. Kept per id across frames. None under reduced motion.
+#[derive(Clone, Default)]
+pub struct Slide(Rc<RefCell<SlideState>>);
+
+#[derive(Default)]
+struct SlideState {
+    origin: Point<Pixels>,
+    boxes: HashMap<usize, Bounds<Pixels>>,
+    at: Option<usize>,
+    from: Option<(Bounds<Pixels>, Instant)>,
+}
+
+impl Slide {
+    /// The slide of the control `id`, with option `at` picked now.
+    pub fn new(id: impl Into<ElementId>, at: usize, window: &mut Window, cx: &mut App) -> Slide {
+        let reduced = tokens(cx).motion.reduced;
+        let s = window
+            .use_keyed_state(id, cx, |_, _| Slide::default())
+            .read(cx)
+            .clone();
+        {
+            let mut st = s.0.borrow_mut();
+            if st.at != Some(at) {
+                let from = st.at.and_then(|i| st.boxes.get(&i).copied());
+                st.from = from.filter(|_| !reduced).map(|b| (b, Instant::now()));
+                st.at = Some(at);
+            }
+        }
+        s
+    }
+
+    /// The fill's box in the container now, while it glides; `None` once there.
+    pub fn fill(&self, window: &mut Window, cx: &App) -> Option<Bounds<Pixels>> {
+        let m = &tokens(cx).motion;
+        let mut st = self.0.borrow_mut();
+        let (from, start) = st.from?;
+        let to = *st.boxes.get(&st.at?)?;
+        let x = fraction(start, Instant::now(), m.dur_2);
+        if x >= 1. {
+            st.from = None;
+            return None;
+        }
+        window.request_animation_frame();
+        let e = ease(m.ease_out)(x);
+        let mid = |a: Pixels, b: Pixels| a + (b - a) * e;
+        Some(Bounds {
+            origin: point(
+                mid(from.origin.x, to.origin.x) - st.origin.x,
+                mid(from.origin.y, to.origin.y) - st.origin.y,
+            ),
+            size: size(
+                mid(from.size.width, to.size.width),
+                mid(from.size.height, to.size.height),
+            ),
+        })
+    }
+
+    /// The picked option's fill is on its way.
+    pub fn gliding(&self) -> bool {
+        self.0.borrow().from.is_some()
+    }
+
+    /// `container` with the gliding fill: call it before adding the options, so the fill paints under them.
+    /// `radius` and `color` are the option's fill.
+    pub fn under(
+        &self,
+        container: Div,
+        radius: Pixels,
+        color: impl Into<gpui::Hsla>,
+        window: &mut Window,
+        cx: &App,
+    ) -> Div {
+        let fill = self.fill(window, cx);
+        let s = self.0.clone();
+        let color = color.into();
+        container
+            .relative()
+            .child(
+                canvas(
+                    move |b, _, _| s.borrow_mut().origin = b.origin,
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .when_some(fill, |d, b| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left(b.origin.x)
+                        .top(b.origin.y)
+                        .w(b.size.width)
+                        .h(b.size.height)
+                        .rounded(radius)
+                        .bg(color),
+                )
+            })
+    }
+
+    /// Put in option `i` (positioned): it writes down where the option is.
+    pub fn track(&self, i: usize) -> impl IntoElement {
+        let s = self.0.clone();
+        canvas(
+            move |b, _, _| {
+                s.borrow_mut().boxes.insert(i, b);
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full()
+    }
+}
+
+/// Number flip (`roll` in motion.ts, `Roll.svelte`): `text` with each digit that changed since the last frame rolling,
+/// the old one out and the new one in, both `--dur-2` ease-out, up when the number grows. Columns line up from the
+/// right, so 9 to 10 rolls a new tens digit in. `line` is the text's line height. Kept per `id`; `still` (the first
+/// hello's calm) changes it at once. Reduced motion: a `--dur-calm` fade in place.
+pub fn roll(
+    id: impl Into<ElementId>,
+    text: &str,
+    line: Pixels,
+    still: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    #[derive(Default)]
+    struct Roll {
+        cur: String,
+        prev: String,
+        at: Option<Instant>,
+        up: bool,
+    }
+    let m = tokens(cx).motion.clone();
+    let st = window.use_keyed_state(id, cx, |_, _| Roll {
+        cur: text.to_string(),
+        ..Roll::default()
+    });
+    let now = Instant::now();
+    let value = |t: &str| {
+        t.chars()
+            .filter(char::is_ascii_digit)
+            .collect::<String>()
+            .parse::<u64>()
+            .unwrap_or(0)
+    };
+    st.update(cx, |r, _| {
+        if r.cur != text {
+            r.up = value(text) >= value(&r.cur);
+            r.prev = std::mem::replace(&mut r.cur, text.to_string());
+            r.at = (!still).then_some(now);
+        }
+    });
+    let r = st.read(cx);
+    let dur = if m.reduced { m.dur_calm } else { m.dur_2 };
+    let x = r.at.map_or(1., |at| fraction(at, now, dur));
+    if x < 1. {
+        window.request_animation_frame();
+    }
+    let e = ease(m.ease_out)(x);
+    let (cur, prev): (Vec<char>, Vec<char>) = (r.cur.chars().collect(), r.prev.chars().collect());
+    let sign = if r.up { 1. } else { -1. };
+    div().flex().children(cur.iter().enumerate().map(|(i, &c)| {
+        let back = cur.len() - i; // from the right
+        let old = prev.len().checked_sub(back).map(|j| prev[j]);
+        let glyph = |c: char| SharedString::from(c.to_string());
+        if x >= 1. || old == Some(c) {
+            return div().child(glyph(c));
+        }
+        let (dy_in, dy_out) = if m.reduced {
+            (px(0.), px(0.))
+        } else {
+            (line * (sign * (1. - e)), line * (-sign * e))
+        };
+        div()
+            .relative()
+            .overflow_hidden()
+            .h(line)
+            .child(div().invisible().child(glyph(c)))
+            .when_some(old, |d, o| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(dy_out)
+                        .opacity(1. - e)
+                        .child(glyph(o)),
+                )
+            })
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(dy_in)
+                    .opacity(e)
+                    .child(glyph(c)),
+            )
+    }))
+}
+
+/// The theme switch's circle (`reveal` in motion.ts): its radius `x` of the way through `--dur-reveal`, eased out,
+/// reaching the window corner farthest from `at`.
+pub fn reveal_radius(m: &Motion, at: Point<Pixels>, window: Bounds<Pixels>, x: f32) -> Pixels {
+    let far = |v: Pixels, lo: Pixels, hi: Pixels| (v - lo).max(hi - v);
+    let (w, h) = (
+        far(at.x, window.left(), window.right()),
+        far(at.y, window.top(), window.bottom()),
+    );
+    px((f32::from(w).powi(2) + f32::from(h).powi(2)).sqrt()) * ease(m.ease_out)(x)
 }
 
 /// Things that come and go, by key: when each came, and the ones that left with where they were and when, kept until
