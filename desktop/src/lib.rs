@@ -9,6 +9,7 @@ pub mod model;
 pub mod net;
 pub mod searchq;
 pub mod settings;
+pub mod single;
 pub mod state;
 pub mod store;
 pub mod switcher;

@@ -123,6 +123,9 @@ pub fn init(cx: &mut App) {
 
 /// Starts the network and key threads and opens the window. Returns when the app quits.
 pub fn run() {
+    let crate::single::Claim::First(single) = crate::single::claim() else {
+        return; // another Vesper was running: it shows itself
+    };
     let audio: Arc<dyn crate::voice::AudioDevices> = Arc::new(Cpal);
     // The parity harness's calls run on fake devices (dev.rs).
     #[cfg(debug_assertions)]
@@ -186,6 +189,23 @@ pub fn run() {
         {
             let tray = tray::start(cx, view.downgrade(), handle.into());
             view.update(cx, |v, _| (v._tray, v.audio) = (tray, Some(audio)));
+        }
+        // A second launch asks this one to come to the front, as the tray's Show Vesper does.
+        if let Some(l) = single {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            l.serve(move || {
+                let _ = tx.send(());
+            });
+            let window: gpui::AnyWindowHandle = handle.into();
+            cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                while rx.recv().await.is_some() {
+                    let _ = cx.update_window(window, |_, window, cx| {
+                        window.activate_window();
+                        cx.activate(true);
+                    });
+                }
+            })
+            .detach();
         }
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
