@@ -722,6 +722,7 @@ fn markdown_reactions_links_and_files(cx: &mut TestAppContext) {
         width: 2,
         height: 2,
         bgra: vec![255; 16],
+        delays: vec![],
     };
     apply(
         &view,
@@ -1453,6 +1454,7 @@ fn late_pictures_after_sign_out_are_dropped(cx: &mut TestAppContext) {
         width: 2,
         height: 2,
         bgra: vec![255; 16],
+        delays: vec![],
     };
     apply(
         &view,
@@ -1706,6 +1708,7 @@ fn profile_pictures_follow_their_version(cx: &mut TestAppContext) {
             width: 1,
             height: 1,
             bgra: vec![255; 4],
+            delays: vec![],
         }),
     };
     apply(&view, cx, set(Some("v1")));
@@ -1881,6 +1884,7 @@ fn a_picture_opens_in_the_viewer(cx: &mut TestAppContext) {
                 width: 2,
                 height: 2,
                 bgra: vec![255; 16],
+                delays: vec![],
             }),
         },
     );
@@ -1909,6 +1913,7 @@ fn a_picture_opens_in_the_viewer(cx: &mut TestAppContext) {
                 width: 4,
                 height: 2,
                 bgra: vec![255; 32],
+                delays: vec![],
             }),
         },
     );

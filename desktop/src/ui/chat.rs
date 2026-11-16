@@ -1260,11 +1260,7 @@ impl Vesper {
                     // Loaded: no fill behind it, so a transparent picture blends in.
                     boxed(w as f32, h as f32)
                         .bg(gpui::transparent_black())
-                        .child(
-                            img(ImageSource::Render(i.clone()))
-                                .w(px(w as f32))
-                                .h(px(h as f32)),
-                        )
+                        .child(picture(i, format!("pic-{}", a.id), w as f32, h as f32, cx))
                 }
                 Img::Loading => boxed(BOX.0 as f32, BOX.1 as f32),
                 Img::Failed => boxed(BOX.0 as f32, 48.)
@@ -2556,8 +2552,33 @@ pub(super) fn open_file(path: &std::path::Path, cx: &mut App) {
 }
 
 pub(super) fn render_image(p: Picture) -> Option<Arc<RenderImage>> {
-    let buf = image::RgbaImage::from_raw(p.width, p.height, p.bgra)?;
-    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buf)])))
+    if p.delays.is_empty() {
+        let buf = image::RgbaImage::from_raw(p.width, p.height, p.bgra)?;
+        return Some(Arc::new(RenderImage::new(vec![image::Frame::new(buf)])));
+    }
+    let len = (p.width * p.height * 4) as usize;
+    let frames = p
+        .bgra
+        .chunks_exact(len)
+        .zip(&p.delays)
+        .map(|(px, &ms)| {
+            let buf = image::RgbaImage::from_raw(p.width, p.height, px.to_vec())?;
+            let delay = image::Delay::from_numer_denom_ms(u32::from(ms), 1);
+            Some(image::Frame::from_parts(buf, 0, 0, delay))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Arc::new(RenderImage::new(frames)))
+}
+
+/// A picture `w` x `h`. An animated one plays (GPUI keeps the frame in the element's state, by `id`); under reduced
+/// motion it has no id, so it stays on its first frame.
+pub(super) fn picture(i: &Arc<RenderImage>, id: String, w: f32, h: f32, cx: &App) -> AnyElement {
+    let el = img(ImageSource::Render(i.clone())).w(px(w)).h(px(h));
+    if i.frame_count() > 1 && !tokens(cx).motion.reduced {
+        el.id(SharedString::from(id)).into_any_element()
+    } else {
+        el.into_any_element()
+    }
 }
 
 /// `.attach`, `.send` and the help IconButton: 32 px, `--radius`, a `--bg-hover` fill on hover in `--dur-1`; Attach
