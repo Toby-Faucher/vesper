@@ -1780,6 +1780,12 @@ impl Window {
         self.platform_window.set_title(title);
     }
 
+    /// vesper patch: puts a small icon over the window's taskbar button, or clears it (`None`). `icon` is a square
+    /// RGBA picture and its width; `label` is read out by screen readers. Windows only; elsewhere it does nothing.
+    pub fn set_overlay_icon(&self, icon: Option<(&[u8], u32)>, label: &str) {
+        self.platform_window.set_overlay_icon(icon, label);
+    }
+
     /// Sets the application identifier.
     pub fn set_app_id(&mut self, app_id: &str) {
         self.platform_window.set_app_id(app_id);

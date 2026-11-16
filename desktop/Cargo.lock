@@ -10044,6 +10044,7 @@ dependencies = [
  "vp8-decoder",
  "vp8-encoder",
  "windows-capture",
+ "windows-registry 0.5.3",
  "x11rb",
  "zbus",
 ]

@@ -180,13 +180,16 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - Dialogs take the focus and every click under them, and Esc closes the topmost dialog, card, menu or ring, but Tab is not
   kept inside a dialog.
 - Notifications: a mention or a direct message shows a system notification (freedesktop on Linux, a toast on Windows), and so
-  does a DM call while the window is in the background; a click opens the room. On Windows the toast is shown under
-  PowerShell's app id, because a toast under our own id needs a Start menu shortcut that carries it; so it says "Windows
+  does a DM call while the window is in the background; a click opens the room. On Windows the toast says "Vesper" with
+  its icon: at every start the app registers its app id `Vesper.Desktop` under
+  `HKCU\Software\Classes\AppUserModelId` (no admin) and writes `vesper.png` beside Vesper.exe if it is missing. The
+  installer writes the same key, and its uninstaller removes the key and the picture. A portable copy leaves both behind
+  when its folder is deleted. If the key cannot be written, toasts fall back to PowerShell's app id and say "Windows
   PowerShell". The unread count (mentions, plus unread messages in DMs) is in the window title as on the web, a red dot on
-  the tray icon, and on Linux the launcher's count (`com.canonical.Unity.LauncherEntry`, for `vesper.desktop`: KDE, Dash to
-  Dock, Plank). There is no taskbar overlay icon on Windows: it needs COM calls that are `unsafe`, which the crates forbid.
-  Verified: the rules and the count by unit tests, and the D-Bus calls build. Not verified: a notification on a real
-  desktop, a click on one, and anything on Windows.
+  the tray icon and on the Windows taskbar button (an overlay icon, set through a patch in the vendored gpui since the
+  crates forbid `unsafe`), and on Linux the launcher's count (`com.canonical.Unity.LauncherEntry`, for `vesper.desktop`:
+  KDE, Dash to Dock, Plank). Verified: the rules, the count and the dot's pixels by unit tests, and the D-Bus calls build.
+  Not verified: a notification on a real desktop, a click on one, and anything on Windows (CI only compiles it).
 - The window's size, place and maximised state are kept in the settings file and restored at the next start; a place that
   is on no screen now is dropped and the window is centred at its old size. On Wayland the place is the compositor's.
 - Mute and deafen keys (Settings > Voice, under Keyboard shortcuts) act during a call, on the same key thread as push to

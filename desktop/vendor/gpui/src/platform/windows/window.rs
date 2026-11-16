@@ -755,6 +755,42 @@ impl PlatformWindow for WindowsWindow {
             .ok();
     }
 
+    // vesper patch: the overlay icon on the taskbar button (ITaskbarList3::SetOverlayIcon).
+    fn set_overlay_icon(&self, icon: Option<(&[u8], u32)>, label: &str) {
+        let set = || -> Result<()> {
+            let list: ITaskbarList3 =
+                unsafe { CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER) }?;
+            unsafe { list.HrInit() }?;
+            let Some((rgba, n)) = icon else {
+                unsafe { list.SetOverlayIcon(self.0.hwnd, HICON::default(), PCWSTR::null()) }?;
+                return Ok(());
+            };
+            let bgra: Vec<u8> = rgba
+                .chunks_exact(4)
+                .flat_map(|p| [p[2], p[1], p[0], p[3]])
+                .collect();
+            anyhow::ensure!(bgra.len() == (n * n * 4) as usize, "not a square RGBA icon");
+            // An empty AND mask: the 32 bit colour's alpha is the shape. Rows are padded to 16 bits.
+            let mask = vec![0u8; (n as usize).div_ceil(16) * 2 * n as usize];
+            let hicon = unsafe {
+                CreateIcon(
+                    None,
+                    n as i32,
+                    n as i32,
+                    1,
+                    32,
+                    mask.as_ptr(),
+                    bgra.as_ptr(),
+                )
+            }?;
+            // The taskbar keeps its own copy, so the icon goes right after.
+            let r = unsafe { list.SetOverlayIcon(self.0.hwnd, hicon, &HSTRING::from(label)) };
+            unsafe { DestroyIcon(hicon) }.log_err();
+            Ok(r?)
+        };
+        set().context("set overlay icon").log_err();
+    }
+
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
         let hwnd = self.0.hwnd;
 

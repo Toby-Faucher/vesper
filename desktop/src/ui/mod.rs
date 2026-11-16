@@ -25,7 +25,7 @@ mod sidebar;
 mod sign_in;
 mod sound;
 pub mod theme;
-mod tray;
+pub mod tray;
 mod viewer;
 
 use std::collections::{HashMap, VecDeque};
@@ -795,7 +795,8 @@ impl Vesper {
         }
     }
 
-    /// The unread count on the window title, the tray icon (a dot) and the Linux launcher, when it changed.
+    /// The unread count on the window title, the tray icon and the Windows taskbar button (a dot), and the Linux
+    /// launcher, when it changed.
     fn sync_badge(&mut self, window: &mut Window) {
         let n = if self.model.screen == Screen::Main {
             crate::notify::badge(&self.model.state)
@@ -807,10 +808,12 @@ impl Vesper {
         }
         let was = std::mem::replace(&mut self.badge, n);
         window.set_window_title(&crate::notify::title(n));
-        if let Some(t) = &self._tray
-            && (was > 0) != (n > 0)
-        {
-            tray::set_unread(t, n > 0);
+        if (was > 0) != (n > 0) {
+            if let Some(t) = &self._tray {
+                tray::set_unread(t, n > 0);
+            }
+            let dot = tray::badge(32);
+            window.set_overlay_icon((n > 0).then_some((dot.as_slice(), 32)), "Unread messages");
         }
         if let Some(os) = &self.os {
             os.count(n);
