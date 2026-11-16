@@ -15,6 +15,7 @@ mod md;
 pub mod motion;
 mod person;
 mod room;
+mod send;
 pub mod settings;
 mod share;
 mod sidebar;
@@ -292,6 +293,8 @@ pub struct Vesper {
     find: find::Find,
     /// The open image viewer.
     viewer: Option<viewer::Viewer>,
+    /// The open share dialog.
+    send: Option<send::Dialog>,
     find_field: Entity<InputState>,
     after_field: Entity<InputState>,
     before_field: Entity<InputState>,
@@ -441,6 +444,7 @@ impl Vesper {
             banner: Default::default(),
             find: Default::default(),
             viewer: None,
+            send: None,
             find_field,
             after_field,
             before_field,
@@ -701,6 +705,7 @@ impl Vesper {
         (self.model.confirm_delete.is_some() && !self.settings_open)
             || self.person.as_ref().is_some_and(|c| c.confirm)
             || self.viewer.is_some()
+            || self.send.is_some()
     }
 
     /// Esc: closes the topmost thing, in the web's order: a dialog, the person card, a menu or popover, the pins,
@@ -711,6 +716,9 @@ impl Vesper {
         }
         if self.viewer.is_some() {
             return self.close_viewer(window, cx);
+        }
+        if self.send.is_some() {
+            return self.close_share(cx);
         }
         if self.page_escape(window, cx) {
             return;
@@ -742,6 +750,9 @@ impl Vesper {
 
     /// Enter in a dialog: its confirm button.
     fn confirm_dialog(&mut self, _: &ConfirmDialog, _: &mut Window, cx: &mut Context<Self>) {
+        if self.send.is_some() {
+            return self.go_share(cx);
+        }
         if let Some(id) = self.model.confirm_delete.filter(|_| !self.settings_open) {
             return self.act(|m| m.delete(id, true), cx);
         }

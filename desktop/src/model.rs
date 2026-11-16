@@ -11,7 +11,7 @@ use crate::net::{Cmd, Event};
 use crate::settings::Settings;
 use crate::state::{AppState, Chat, RoomLog, merge_latest, merge_older};
 use crate::uploads::Tray;
-use crate::voice::{Frame, Setup, VoiceCmd, VoiceEvent};
+use crate::voice::{Frame, Setup, ShareSetup, VoiceCmd, VoiceEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -52,8 +52,51 @@ const UPLOAD_MAX: i64 = 25 << 20;
 pub const UPLOADS_BUSY: &str = "Wait for the files to finish uploading.";
 /// The web's three quick reactions.
 pub const EMOJIS: [&str; 3] = ["\u{1f44d}", "\u{1f602}", "\u{2764}\u{fe0f}"];
-/// The web's text for `share_stopped`. Only a sharer gets it, and the desktop app cannot share yet.
+/// The web's text for `share_stopped`. Only a sharer gets it.
 pub const SHARE_STOPPED: &str = "A moderator stopped your screen share.";
+/// The web's texts for a share the server cut or refused.
+pub const SHARE_CUT: &str = "Your screen share sent more than 35 Mbps and was stopped.";
+pub const SHARE_DM: &str = "Screen share is only in group rooms.";
+/// The server lowered my share to fit the room's budget.
+pub fn share_lowered(kbps: u32) -> String {
+    format!(
+        "Your screen share was lowered to {:.1} Mbps so every share in the room fits.",
+        f64::from(kbps) / 1000.
+    )
+}
+
+/// My own screen share, like the web's `shares.mine`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Mine {
+    pub fps: u8,
+    pub kbps: u32,
+    /// Keep text sharp, else motion smooth.
+    pub sharp: bool,
+    pub watchers: u32,
+    /// The screen is open and `share_start` went; before that the picker may still be up.
+    pub open: bool,
+    /// What is sent: width, height, frame rate and kbps, from the encoder every 2 s.
+    pub figures: Option<(u32, u32, f32, f32)>,
+}
+
+impl Mine {
+    /// The engine's settings: it encodes only while someone watches.
+    fn setup(&self) -> ShareSetup {
+        ShareSetup {
+            fps: u32::from(self.fps),
+            kbps: self.kbps,
+            sharp: self.sharp,
+            active: self.watchers > 0,
+        }
+    }
+
+    fn start_msg(&self) -> Cmd {
+        Cmd::Signal(ClientMsg::ShareStart {
+            fps: self.fps,
+            bitrate_kbps: self.kbps,
+        })
+    }
+}
 
 /// Whether the server and the engine have been told to watch one share, like the web's `WatchGate`.
 #[derive(Debug, Default)]
@@ -141,6 +184,12 @@ pub struct Call {
     pub struggling: HashSet<String>,
     /// Why the watched share went away.
     pub share_notice: String,
+    /// My own share, from Start sharing until it ends.
+    pub mine: Option<Mine>,
+    /// My share before the last `share_start` (`Some(None)`: it started one), to put back if the server refuses it.
+    before: Option<Option<Mine>>,
+    /// When the server last cut my share: its `rate_limited` error comes after.
+    cut_at: Option<Instant>,
     /// The call's last round trip and loss, for the call bar's quality line; none before the first stats.
     pub quality: Option<crate::link::Sample>,
     /// Each other person's connection grade, by user id.
@@ -175,6 +224,9 @@ impl Default for Call {
             frames: 0,
             struggling: HashSet::new(),
             share_notice: String::new(),
+            mine: None,
+            before: None,
+            cut_at: None,
             quality: None,
             links: HashMap::new(),
             own_link: crate::link::Link::default(),
@@ -764,6 +816,62 @@ impl Model {
             }
             ServerMsg::ShareStopped => {
                 c.share_notice = SHARE_STOPPED.into();
+                c.error = SHARE_STOPPED.into();
+                vec![]
+            }
+            ServerMsg::Watchers { count } => match c.mine.as_mut() {
+                Some(m) => {
+                    m.watchers = *count;
+                    vec![Cmd::Voice(VoiceCmd::Share(Some(m.setup())))]
+                }
+                None => vec![],
+            },
+            // The server ended my share: a moderator, or it sent too much (its error follows).
+            ServerMsg::PeerShare {
+                user_id,
+                share: None,
+            } if *user_id == self.state.my_id() && c.mine.is_some_and(|m| m.open) => {
+                (c.mine, c.before, c.cut_at) = (None, None, Some(Instant::now()));
+                vec![Cmd::Voice(VoiceCmd::Share(None))]
+            }
+            // The server gave my share less than I asked for (the room's budget): send at that rate.
+            ServerMsg::PeerShare {
+                user_id,
+                share: Some(info),
+            } if *user_id == self.state.my_id()
+                && c.mine.is_some_and(|m| m.open && info.bitrate_kbps < m.kbps) =>
+            {
+                let m = c.mine.as_mut().expect("checked");
+                m.kbps = info.bitrate_kbps;
+                c.error = share_lowered(m.kbps);
+                vec![Cmd::Voice(VoiceCmd::Share(Some(m.setup())))]
+            }
+            ServerMsg::Error {
+                code: code @ (ErrorCode::ShareCap | ErrorCode::Forbidden),
+                ..
+            } if c.phase == Phase::Joined && c.mine.is_some() && c.before.is_some() => {
+                // The server refused my last share_start: a new share ends, new settings go back.
+                c.error = if *code == ErrorCode::Forbidden {
+                    SHARE_DM.into()
+                } else {
+                    signal_text(*code).into()
+                };
+                let now = c.mine.expect("checked");
+                c.mine = c.before.take().flatten().map(|prev| Mine {
+                    watchers: now.watchers,
+                    figures: now.figures,
+                    ..prev
+                });
+                vec![Cmd::Voice(VoiceCmd::Share(c.mine.map(|m| m.setup())))]
+            }
+            ServerMsg::Error {
+                code: ErrorCode::RateLimited,
+                ..
+            } if c
+                .cut_at
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(5)) =>
+            {
+                c.error = SHARE_CUT.into();
                 vec![]
             }
             ServerMsg::RingStart { room_id, user_id } => {
@@ -860,9 +968,90 @@ impl Model {
                 }
                 vec![]
             }
+            VoiceEvent::ShareOpen => match c.mine.as_mut().filter(|m| !m.open) {
+                Some(m) => {
+                    m.open = true;
+                    c.before = Some(None);
+                    vec![m.start_msg()]
+                }
+                None => vec![],
+            },
+            VoiceEvent::ShareFigures {
+                width,
+                height,
+                fps,
+                kbps,
+            } => {
+                if let Some(m) = c.mine.as_mut() {
+                    m.figures = Some((width, height, fps, kbps));
+                }
+                vec![]
+            }
+            VoiceEvent::ShareEnded(why) => {
+                let Some(m) = c.mine.take() else {
+                    return vec![];
+                };
+                c.before = None;
+                if !why.is_empty() {
+                    c.error = why;
+                }
+                if m.open {
+                    vec![Cmd::Signal(ClientMsg::ShareStop)]
+                } else {
+                    vec![]
+                }
+            }
             VoiceEvent::Failed(e) => self.end_call(&e, true),
             _ => vec![],
         }
+    }
+
+    /// Share my screen (the share dialog's Start sharing), or change the running share's settings (its Save).
+    /// The first opens the screen; `share_start` goes once it is open.
+    pub fn share(&mut self, fps: u8, kbps: u32, sharp: bool) -> Vec<Cmd> {
+        let c = &mut self.call;
+        if c.phase != Phase::Joined {
+            return vec![];
+        }
+        match c.mine {
+            None => {
+                let m = Mine {
+                    fps,
+                    kbps,
+                    sharp,
+                    watchers: 0,
+                    open: false,
+                    figures: None,
+                };
+                (c.mine, c.error) = (Some(m), String::new());
+                vec![Cmd::Voice(VoiceCmd::Share(Some(m.setup())))]
+            }
+            Some(m) if !m.open => vec![], // the picker is up
+            Some(m) => {
+                c.before = Some(Some(m));
+                let m = Mine {
+                    fps,
+                    kbps,
+                    sharp,
+                    ..m
+                };
+                c.mine = Some(m);
+                vec![m.start_msg(), Cmd::Voice(VoiceCmd::Share(Some(m.setup())))]
+            }
+        }
+    }
+
+    /// Stop sharing my screen.
+    pub fn stop_share(&mut self) -> Vec<Cmd> {
+        let Some(m) = self.call.mine.take() else {
+            return vec![];
+        };
+        self.call.before = None;
+        let mut cmds = vec![Cmd::Voice(VoiceCmd::Share(None))];
+        if m.open {
+            cmds.insert(0, Cmd::Signal(ClientMsg::ShareStop));
+        }
+        cmds
     }
 
     /// Ends my call, or a pending rejoin. `leave` tells the server, when it knows of the call.
@@ -2209,6 +2398,125 @@ mod tests {
             },
         );
         assert!(m.call.struggling.is_empty());
+    }
+
+    /// My own share, like the web's `startShare`, `onShareMsg` and `shareRefused`.
+    #[test]
+    fn my_share_starts_once_open_follows_its_watchers_and_ends() {
+        // Cmd has no PartialEq: compare what it prints.
+        macro_rules! same {
+            ($a:expr, $b:expr $(,)?) => {
+                assert_eq!(format!("{:?}", $a), format!("{:?}", $b))
+            };
+        }
+        let mut m = in_call();
+        let me = m.state.my_id().to_string();
+        let setup = |active| ShareSetup {
+            fps: 30,
+            kbps: 4000,
+            sharp: true,
+            active,
+        };
+        let start = ClientMsg::ShareStart {
+            fps: 30,
+            bitrate_kbps: 4000,
+        };
+        // The screen opens first (the picker); only then does share_start go.
+        same!(
+            m.share(30, 4000, true),
+            [Cmd::Voice(VoiceCmd::Share(Some(setup(false))))]
+        );
+        assert!(m.share(60, 4000, true).is_empty(), "the picker is up");
+        same!(
+            voice(&mut m, VoiceEvent::ShareOpen),
+            [Cmd::Signal(start.clone())]
+        );
+        // Watched: the encoder runs; nobody left: it stops.
+        let w = |n| ServerMsg::Watchers { count: n };
+        same!(
+            server(&mut m, w(2)),
+            [Cmd::Voice(VoiceCmd::Share(Some(setup(true))))]
+        );
+        // The server lowered it to fit the room: sent at that rate, and said.
+        let granted = ServerMsg::PeerShare {
+            user_id: me.clone(),
+            share: Some(vesper_protocol::ShareInfo {
+                fps: 30,
+                bitrate_kbps: 2500,
+            }),
+        };
+        let lowered = ShareSetup {
+            kbps: 2500,
+            ..setup(true)
+        };
+        same!(
+            server(&mut m, granted),
+            [Cmd::Voice(VoiceCmd::Share(Some(lowered)))]
+        );
+        assert_eq!(m.call.error, share_lowered(2500));
+        assert!(m.call.error.contains("2.5 Mbps"));
+        // New settings refused (share_cap): the old ones come back, the share goes on.
+        m.share(60, 9000, false);
+        let refused = ServerMsg::Error {
+            code: ErrorCode::ShareCap,
+            message: String::new(),
+        };
+        same!(
+            server(&mut m, refused),
+            [Cmd::Voice(VoiceCmd::Share(Some(lowered)))]
+        );
+        assert_eq!(m.call.mine.map(|x| (x.fps, x.kbps)), Some((30, 2500)));
+        // Stop: share_stop, then the engine.
+        same!(
+            m.stop_share(),
+            [
+                Cmd::Signal(ClientMsg::ShareStop),
+                Cmd::Voice(VoiceCmd::Share(None))
+            ]
+        );
+        assert!(m.call.mine.is_none());
+
+        // A cancelled picker ends it quietly; a failed capture says so.
+        m.share(30, 4000, true);
+        assert!(voice(&mut m, VoiceEvent::ShareEnded(String::new())).is_empty());
+        assert!(m.call.mine.is_none());
+        m.share(30, 4000, true);
+        voice(&mut m, VoiceEvent::ShareOpen);
+        let cmds = voice(
+            &mut m,
+            VoiceEvent::ShareEnded("The screen capture stopped.".into()),
+        );
+        same!(cmds, [Cmd::Signal(ClientMsg::ShareStop)]);
+        assert_eq!(m.call.error, "The screen capture stopped.");
+
+        // A new share refused in a DM room ends here with the web's text.
+        m.share(30, 4000, true);
+        voice(&mut m, VoiceEvent::ShareOpen);
+        let refused = ServerMsg::Error {
+            code: ErrorCode::Forbidden,
+            message: String::new(),
+        };
+        same!(server(&mut m, refused), [Cmd::Voice(VoiceCmd::Share(None))]);
+        assert_eq!((m.call.mine, m.call.error.as_str()), (None, SHARE_DM));
+
+        // The server cut it: it ends here, and its rate_limited error reads as the cut.
+        m.share(30, 4000, true);
+        voice(&mut m, VoiceEvent::ShareOpen);
+        let cut = ServerMsg::PeerShare {
+            user_id: me,
+            share: None,
+        };
+        let cmds = server(&mut m, cut);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Cmd::Voice(VoiceCmd::Share(None))))
+        );
+        let limited = ServerMsg::Error {
+            code: ErrorCode::RateLimited,
+            message: String::new(),
+        };
+        server(&mut m, limited);
+        assert_eq!((m.call.mine, m.call.error.as_str()), (None, SHARE_CUT));
     }
 
     #[test]

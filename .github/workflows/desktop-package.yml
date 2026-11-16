@@ -54,7 +54,7 @@ jobs:
       - run: >-
           sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
           libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libssl-dev
-          libopus-dev pkg-config
+          libopus-dev libpipewire-0.3-dev libclang-dev pkg-config
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: desktop

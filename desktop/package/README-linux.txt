@@ -3,7 +3,8 @@ Vesper for Linux (early test build)
 1. Unpack: tar xzf vesper-desktop-linux-x64.tar.gz, then run ./Vesper/vesper-desktop
 2. It needs the usual desktop libraries, which most distributions already have: Vulkan (vulkan-icd-loader and a
    Vulkan driver for your GPU), libxkbcommon, Wayland or X11, fontconfig, ALSA (PipeWire and PulseAudio work through
-   it) and libopus. On Arch: pacman -S vulkan-icd-loader libxkbcommon-x11 opus
+   it), libopus and libpipewire (for sharing your screen). On Arch: pacman -S vulkan-icd-loader libxkbcommon-x11 opus
+   pipewire
 3. Sign in with the server address (for example https://vesper.tfaucher.com), your username and your password.
    Make the account in the web app first: signup, invites and passkeys are only there.
 4. Push to talk works while a game has focus only under X11 (or a game running through XWayland). On a Wayland

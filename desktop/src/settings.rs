@@ -19,6 +19,12 @@ pub enum Denoise {
     Off,
 }
 
+/// The share bitrate's range in kbps, the server's (`web/src/lib/share/ceiling.ts`).
+pub const MIN_KBPS: u32 = 500;
+pub const MAX_KBPS: u32 = 30_000;
+/// The suggestion without a measured upload, the web's `suggestKbps(null, ...)`.
+pub const SUGGEST_KBPS: u32 = 8_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -49,6 +55,11 @@ pub struct Settings {
     /// Settings > Notifications: the ring of a DM call, and its volume, 0 to 100 (the web's `vesper.notify`).
     pub ring: bool,
     pub volume: u32,
+    /// The share dialog's last choice, as the web's `vesper.share`: 30 or 60 fps, the bitrate (none: the suggestion)
+    /// and whether text stays sharp (else motion smooth).
+    pub share_fps: u32,
+    pub share_kbps: Option<u32>,
+    pub share_sharp: bool,
 }
 
 impl Default for Settings {
@@ -70,6 +81,9 @@ impl Default for Settings {
             scheme: "dark".into(),
             ring: true,
             volume: 50,
+            share_fps: 60,
+            share_kbps: None,
+            share_sharp: true,
         }
     }
 }
@@ -79,6 +93,12 @@ impl Settings {
         self.bitrate_kbps = self.bitrate_kbps.clamp(32, 510);
         self.gate_db = self.gate_db.clamp(-100, 0);
         self.volume = self.volume.min(100);
+        if !matches!(self.share_fps, 30 | 60) {
+            self.share_fps = 60;
+        }
+        self.share_kbps = self
+            .share_kbps
+            .filter(|k| (MIN_KBPS..=MAX_KBPS).contains(k));
         if crate::voice::ptt::parse_key(&self.ptt_key).is_none() {
             self.ptt_key = Settings::default().ptt_key;
         }
@@ -183,13 +203,16 @@ mod tests {
             scheme: "system".into(),
             ring: false,
             volume: 30,
+            share_fps: 30,
+            share_kbps: Some(4_000),
+            share_sharp: false,
         };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
 
         std::fs::write(
             &p,
-            r#"{"bitrate_kbps": 9000, "ptt_key": "Nope", "denoise": "off", "volumes": {"a": 900, "b": -5}}"#,
+            r#"{"bitrate_kbps": 9000, "ptt_key": "Nope", "denoise": "off", "volumes": {"a": 900, "b": -5}, "share_fps": 45, "share_kbps": 90000}"#,
         )
         .unwrap();
         let s = Settings::load(&p);
@@ -203,6 +226,11 @@ mod tests {
             "volumes clamped"
         );
         assert!(s.echo_cancel, "on when the file does not say");
+        assert_eq!(
+            (s.share_fps, s.share_kbps),
+            (60, None),
+            "share settings clamped"
+        );
 
         // Every mode is saved by its name; files from before RNNoise keep their mode.
         for (name, d) in [

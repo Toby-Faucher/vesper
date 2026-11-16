@@ -310,6 +310,19 @@ const SCENES = {
       await rejoin(bob.page);
     },
   },
+  // The desktop shares (alice, the moving colour bars of VESPER_DEV_SHARE through its real encoder and sender) and the
+  // web watches it (bob, in the house's music call): the web picture is bob's view, checked for the four bars.
+  'share-send': {
+    web: async (ctx) => {
+      await house(ctx);
+      if (await bar(ctx.alice.page).count()) await hangUp(ctx.alice.page);
+      return null;
+    },
+    desktop: ({ bob }) => ({
+      user: 'alice', scene: 'room:music', env: { VESPER_DEV_VOICE: 'music', VESPER_DEV_SHARE: '1280x720' },
+      during: () => watchDesktopShare(bob.page, `${out}share-send-web.png`),
+    }),
+  },
   // A weak connection: 420 ms round trip (the web's getStats wrapped, the desktop's VESPER_DEV_RTT).
   'call-weak': {
     web: async (ctx) => {
@@ -616,6 +629,27 @@ function pageScenes(name, list) {
 }
 
 const bar = (page) => page.getByRole('region', { name: 'Call' });
+// The web page watches the one share in its call until it plays, checks the desktop's colour bars (red, green, blue and
+// white, sliding a pixel a frame, so eight spots across must show all four) and takes its picture.
+async function watchDesktopShare(page, path) {
+  await openRoom(page, 'music');
+  const playing = () => [...document.querySelectorAll('video')].some((v) => v.videoWidth > 0 && v.currentTime > 1);
+  await page.waitForFunction(playing, null, { timeout: 30000 });
+  const seen = await page.evaluate(() => {
+    const v = [...document.querySelectorAll('video')].find((x) => x.videoWidth > 0);
+    const c = Object.assign(document.createElement('canvas'), { width: v.videoWidth, height: v.videoHeight });
+    const g = c.getContext('2d');
+    g.drawImage(v, 0, 0);
+    const at = (x) => [...g.getImageData(Math.floor(x * c.width), c.height >> 1, 1, 1).data].slice(0, 3);
+    return { width: v.videoWidth, height: v.videoHeight, frames: v.getVideoPlaybackQuality().totalVideoFrames, bars: [1, 3, 5, 7, 9, 11, 13, 15].map((n) => at(n / 16)) };
+  });
+  console.log(`  the web sees the desktop's share: ${JSON.stringify(seen)}`);
+  const want = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
+  const near = (a, b) => a.every((c, i) => Math.abs(c - b[i]) < 60);
+  if (!want.every((w) => seen.bars.some((b) => near(b, w)))) throw new Error('the bars did not come through');
+  await rest(page);
+  await page.screenshot({ path });
+}
 // alice in the house's music call, reading general.
 async function inCall(ctx) {
   await house(ctx);
@@ -813,6 +847,7 @@ async function shootDesktop(sway, state, path, dir) {
     // 180 s: past 5 sign ins a minute the server takes one a minute, and the app waits and tries again (dev.rs).
     await Promise.race([ready, sleep(180000).then(() => { throw new Error(`no VESPER_DEV_READY in 180 s:\n${log.slice(-2000)}`); })]);
     await sleep(1500); // a few frames, the logo and the fonts
+    await state.during?.(); // the scene's own steps while the app runs
     const shoot = async (to) => {
       const grim = track('grim', [to], { env: { ...process.env, XDG_RUNTIME_DIR: sway.runtime, WAYLAND_DISPLAY: sway.display }, stdio: 'inherit' });
       if ((await grim.exited) !== 0) throw new Error('grim failed');

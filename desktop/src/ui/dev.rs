@@ -34,6 +34,9 @@
 //! - `VESPER_DEV_PTT_HELD`: with VOICE, the push-to-talk key is held (push to talk is on in the scene's settings).
 //! - `VESPER_DEV_PERSON`: `<display name>@bar` or `@side`: opens that person's card from the call bar or the sidebar
 //!   once ready; `VESPER_DEV_VOLUME` sets their volume first.
+//! - `VESPER_DEV_SHARE`: with VOICE, `<width>x<height>`: once in, shares moving colour bars of that size in place of
+//!   the screen (`voice::share::Pattern`), through the real encode and send path, at 60 fps and 8 Mbps. Ready once
+//!   the share is announced; the encoder runs when someone watches.
 //! - `VESPER_DEV_RING`: a username: a DM call from them rings once ready (not from the server: for motion frames).
 //!
 //! Prints `VESPER_DEV_READY` on stderr once the state is reached; the harness takes its picture after that. Then
@@ -52,6 +55,7 @@ use gpui_component::input::RopeExt;
 use super::Vesper;
 use crate::model::{Phase, Screen};
 use crate::uploads::{Item, UPLOAD_QUOTA, UpState};
+use crate::voice::share::{self, OpenScreen, Pattern};
 use crate::voice::{AudioDevices, AudioInput, AudioOutput, RATE};
 
 #[derive(Debug, Default, PartialEq)]
@@ -85,6 +89,9 @@ pub struct Dev {
     /// The newest message id when the send went: ARRIVED is printed once a newer one is in.
     sent_after: Option<i64>,
     voice: Option<String>,
+    /// The test pattern's size, and whether the share was started.
+    share: Option<(u32, u32)>,
+    shared: bool,
     links: bool,
     rtt: Option<f32>,
     ptt_held: bool,
@@ -102,6 +109,7 @@ pub struct Dev {
 /// second in, for good.
 pub struct FakeAudio {
     lose: bool,
+    share: Option<(u32, u32)>,
     opened: AtomicBool,
 }
 
@@ -142,6 +150,21 @@ impl AudioDevices for FakeAudio {
     fn output(&self, _: Option<&str>) -> Result<Box<dyn AudioOutput>, String> {
         Ok(Box::new(Speakers))
     }
+    fn screen(&self) -> OpenScreen {
+        match self.share {
+            Some((w, h)) => {
+                Box::new(move |fps| Ok(Box::new(Pattern::new(w, h, fps)) as Box<dyn share::Screen>))
+            }
+            None => Box::new(crate::voice::capture::open),
+        }
+    }
+}
+
+/// `VESPER_DEV_SHARE`'s `<width>x<height>`.
+fn share_size() -> Option<(u32, u32)> {
+    let v = std::env::var("VESPER_DEV_SHARE").ok()?;
+    let (w, h) = v.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
 /// The fake devices when a scene joins voice, else none (the real ones).
@@ -151,6 +174,7 @@ pub fn audio() -> Option<Arc<dyn AudioDevices>> {
         .filter(|v| !v.is_empty())?;
     Some(Arc::new(FakeAudio {
         lose: std::env::var_os("VESPER_DEV_MIC_LOST").is_some(),
+        share: share_size(),
         opened: AtomicBool::new(false),
     }))
 }
@@ -198,6 +222,8 @@ impl Dev {
             tray: var("VESPER_DEV_TRAY"),
             disk: var("VESPER_DEV_DISK"),
             voice: var("VESPER_DEV_VOICE"),
+            share: share_size(),
+            shared: false,
             links: var("VESPER_DEV_LINKS").is_some(),
             rtt: var("VESPER_DEV_RTT").and_then(|v| v.parse().ok()),
             ptt_held: var("VESPER_DEV_PTT_HELD").is_some(),
@@ -492,9 +518,20 @@ impl Vesper {
                 self.dev_finish("room", window, cx);
             }
             Step::Voice
+                if self.dev.share.is_some()
+                    && !self.dev.shared
+                    && self.model.call.phase == Phase::Joined
+                    && self.model.call.connected =>
+            {
+                self.dev.shared = true;
+                self.act(|m| m.share(60, 8_000, true), cx);
+            }
+            Step::Voice
                 if self.model.call.phase == Phase::Joined
                     && self.model.call.connected
                     && self.model.call.quality.is_some()
+                    && (self.dev.share.is_none()
+                        || self.model.call.mine.is_some_and(|m| m.open))
                     && (!self.dev.links || {
                         let c = &self.model.call;
                         let me = self.model.state.my_id();
