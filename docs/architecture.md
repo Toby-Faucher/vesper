@@ -492,7 +492,11 @@ Uploads (`uploads.rs`, store `uploads.rs`): one file per request, sent as the ra
   5987), so a name can not add a header.
 - **Served headers.** `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` (kept in place of the page's policy),
   `Cross-Origin-Resource-Policy: same-origin`, `Cache-Control: private, max-age=31536000, immutable` (the file behind an id never changes).
-- **Who.** Attaching (`SendMessage.attachments`) needs your own upload, not attached yet, in the same room (else 409). An attached
+- **Client retries.** The web upload tray (`tray.svelte.ts`) runs 3 uploads at once. A network error or a 5xx other than 507 is
+  tried again by itself after 0.5, 1.5 and 4 s; after the third it fails and the row shows Retry. A full quota, a file too large
+  and a rate limit fail at once. Unit tests (`tray.test.ts`); not verified in a real browser.
+- **Who.** Attaching (`SendMessage.attachments`) needs your own upload, not attached yet, in the same room (else 409). One send
+  attaches every file or none (one transaction). An attached
   file is served to anyone who can see the room; one not attached yet only to its uploader. Everything else is the same 404 as an
   unknown id.
 - **Removal.** Deleting a message deletes its files. Uploads still not attached after 24 h are swept every hour (and at start).
