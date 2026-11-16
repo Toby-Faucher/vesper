@@ -2419,11 +2419,8 @@ fn message_text_and_names_select_and_copy(cx: &mut TestAppContext) {
         none,
     );
     cx.simulate_mouse_up(b.bottom_right(), MouseButton::Left, none);
-    cx.read(|cx| {
-        assert_eq!(
-            super::select::Selection::selected(cx).as_deref(),
-            Some("first\nsecond line")
-        )
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.selected_text(cx).as_deref(), Some("first\nsecond line"))
     });
     view.update_in(cx, |v, window, cx| {
         assert!(
@@ -2447,15 +2444,12 @@ fn message_text_and_names_select_and_copy(cx: &mut TestAppContext) {
         first_mouse: false,
     });
     cx.simulate_mouse_up(at, MouseButton::Left, none);
-    cx.read(|cx| {
-        assert_eq!(
-            super::select::Selection::selected(cx).as_deref(),
-            Some("first")
-        )
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.selected_text(cx).as_deref(), Some("first"))
     });
     let room = cx.debug_bounds("composer").unwrap();
     cx.simulate_mouse_down(room.center(), MouseButton::Left, none);
-    cx.read(|cx| assert_eq!(super::select::Selection::selected(cx), None));
+    view.read_with(cx, |v, cx| assert_eq!(v.selected_text(cx), None));
     cx.simulate_mouse_up(room.center(), MouseButton::Left, none);
 
     // A drag over a name selects it and does not open the card (a click does: a_name_in_the_timeline_opens_the_card).
@@ -2464,22 +2458,140 @@ fn message_text_and_names_select_and_copy(cx: &mut TestAppContext) {
     let n = cx.debug_bounds("name-10").unwrap();
     cx.simulate_mouse_down(n.origin + point(px(1.), px(4.)), MouseButton::Left, none);
     cx.simulate_mouse_move(
-        n.top_right() + point(px(20.), px(4.)),
+        n.top_right() + point(px(2.), px(4.)),
         MouseButton::Left,
         none,
     );
     cx.simulate_mouse_up(
-        n.top_right() + point(px(20.), px(4.)),
+        n.top_right() + point(px(2.), px(4.)),
         MouseButton::Left,
         none,
     );
-    cx.read(|cx| {
-        assert_eq!(
-            super::select::Selection::selected(cx).as_deref(),
-            Some("Bob")
-        )
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.selected_text(cx).as_deref(), Some("Bob"))
     });
     view.read_with(cx, |v, _| assert!(v.person.is_none()));
+}
+
+/// A drag from one message's text into the next selects both in order, with the reply's quote, name and time between,
+/// and Ctrl+C copies that.
+#[gpui::test]
+fn a_drag_across_messages_selects_and_copies_both(cx: &mut TestAppContext) {
+    use gpui::{MouseButton, point, px};
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
+    let (a, b) = (
+        cx.debug_bounds("md-10-1").unwrap(),
+        cx.debug_bounds("md-11-1").unwrap(),
+    );
+    let none = Modifiers::none();
+    cx.simulate_mouse_down(a.origin + point(px(1.), px(2.)), MouseButton::Left, none);
+    // Over the gap between the two (no text there) and on past the end of message 11's text.
+    let gap = point(a.center().x, a.bottom() + px(2.));
+    cx.simulate_mouse_move(gap, MouseButton::Left, none);
+    let end = b.bottom_right() + point(px(40.), px(-2.));
+    cx.simulate_mouse_move(end, MouseButton::Left, none);
+    cx.simulate_mouse_up(end, MouseButton::Left, none);
+    let time = crate::timeline::clock(1_700_000_000_011, crate::timeline::Locale::system(), false);
+    let want = format!("first\nsecond line\nReply to Bob: first\nAnn\n{time}\na reply");
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.selected_text(cx).as_deref(), Some(want.as_str()))
+    });
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(cx.read_from_clipboard().and_then(|c| c.text()), Some(want));
+    // The quote is text now, and a plain click on it still jumps.
+    click(cx, "quote-11");
+    view.read_with(cx, |v, cx| {
+        assert_eq!(v.selected_text(cx), None);
+        assert_eq!(v.tl.flashing(), Some(10));
+    });
+}
+
+/// Ctrl+A after a press in the list selects every loaded message, those scrolled out of the list too, and Ctrl+C copies
+/// them in order. Each text drawn is the text the copy takes for it.
+#[gpui::test]
+fn ctrl_a_in_the_list_selects_every_message(cx: &mut TestAppContext) {
+    use gpui::{MouseButton, px};
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    let rich = "# Head\n\n> quoted\n\n- one\n- two\n\n```rust\nlet x = 1;\n```\n\nsee `code`, @bob and https://a.test/x";
+    let mut list: Vec<serde_json::Value> = (100..140)
+        .map(|i| msg(i, if i % 2 == 0 { "a" } else { "b" }, &format!("m-{i}")))
+        .collect();
+    list.push(msg(140, "a", rich));
+    let page: MessagePage = serde_json::from_value(
+        json!({ "messages": list, "more_before": false, "more_after": false }),
+    )
+    .unwrap();
+    apply(&view, cx, Event::Latest { room: 1, page });
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
+    let drawn = cx.read(super::select::Selection::drawn);
+    assert!(
+        drawn.iter().all(|(k, _)| k.1 != 100),
+        "the first message is out of the list"
+    );
+    let model = view.read_with(cx, |v, cx| v.chat_texts(i64::MIN..=i64::MAX, cx));
+    for (k, t) in drawn.iter().filter(|(k, _)| k.0 == super::select::CHAT) {
+        let m = model.iter().find(|(mk, _)| mk == k).map(|(_, t)| t);
+        assert_eq!(m, Some(t), "{k:?} is drawn as the copy takes it");
+    }
+    assert!(
+        drawn
+            .iter()
+            .any(|(k, t)| k.1 == 140 && t.as_ref() == "let x = 1;"),
+        "the code block is drawn: {drawn:?}"
+    );
+
+    let m = cx.debug_bounds("message-139").unwrap();
+    cx.simulate_mouse_down(
+        m.origin + gpui::point(px(4.), px(4.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        m.origin + gpui::point(px(4.), px(4.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_keystrokes("ctrl-a");
+    view.read_with(cx, |v, cx| {
+        assert!(v.composer.read(cx).value().is_empty());
+        assert!(super::select::Selection::active(cx));
+    });
+    cx.simulate_keystrokes("ctrl-c");
+    let got = cx.read_from_clipboard().and_then(|c| c.text()).unwrap();
+    let at = |s: &str| got.find(s).unwrap_or_else(|| panic!("{s:?} in {got:?}"));
+    assert!(at("m-100") < at("m-101") && at("m-101") < at("m-139"));
+    assert!(at("m-139") < at("Head") && at("Head") < at("quoted"));
+    assert!(at("quoted") < at("one") && at("two") < at("rust\nlet x = 1;"));
+    assert!(
+        got.ends_with("see code, @bob and https://a.test/x"),
+        "{got:?}"
+    );
+}
+
+/// Ctrl+A in the composer selects the composer's text, not the messages.
+#[gpui::test]
+fn ctrl_a_in_the_composer_selects_only_the_composer(cx: &mut TestAppContext) {
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        v.composer.update(cx, |i, cx| i.focus(window, cx))
+    });
+    cx.simulate_input("hello");
+    cx.simulate_keystrokes("ctrl-a");
+    view.read_with(cx, |v, cx| {
+        assert!(!super::select::Selection::active(cx));
+        assert_eq!(v.selected_text(cx), None);
+    });
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|c| c.text()).as_deref(),
+        Some("hello")
+    );
 }
 
 /// Settings > App: the close button's choice lands in the settings, and Copy diagnostics copies a report without the

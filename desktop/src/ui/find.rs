@@ -21,6 +21,7 @@ use vesper_protocol::{SearchHit, SearchQuery};
 use super::c::{self, Avatar, Badge, Ellipsis};
 use super::icons::icon;
 use super::motion::{self, POP};
+use super::select::{self, SelText, Selection};
 use super::settings::{self, At};
 use super::theme::{TEXT_LG, TEXT_SM, TEXT_XS, TextStepExt, Tokens, tokens};
 use super::{Vesper, admin};
@@ -1808,19 +1809,24 @@ impl Vesper {
                 });
             let room = st.find_room(m.room_id).map(|r| r.name.clone());
             let lit = self.find.hit == Some(i) || self.find.hovered == Some(i);
-            let mut snip = div().mt(px(2.)).text_color(t.fg_2).flex().flex_wrap();
-            // shortcut: each run is its own box, so a long run wraps as a block; fine for one-line snippets.
-            for (text, mark) in searchq::marks(&h.snippet) {
-                snip = snip.child(
-                    div()
-                        .when(mark, |d| {
-                            d.rounded(px(2.))
-                                .bg(t.accent_subtle)
-                                .text_color(t.accent_fg)
-                        })
-                        .child(text.replace(' ', "\u{a0}")),
-                );
+            // One text, so it selects as one; a mark is a highlight (square: a highlight has no radius).
+            let (mut text, mut marks) = (String::new(), vec![]);
+            for (run, mark) in searchq::marks(&h.snippet) {
+                if mark {
+                    let style = gpui::HighlightStyle {
+                        color: Some(t.accent_fg.into()),
+                        background_color: Some(t.accent_subtle.into()),
+                        ..Default::default()
+                    };
+                    marks.push((text.len()..text.len() + run.len(), style));
+                }
+                text.push_str(&run);
             }
+            let snip = div().mt(px(2.)).text_color(t.fg_2).child(
+                SelText::new((select::FIND, i as i64, 3), text)
+                    .pointer()
+                    .with_highlights(marks),
+            );
             rows = rows.child(
                 div()
                     .id(ElementId::Name(format!("search-hit-{i}").into()))
@@ -1840,7 +1846,12 @@ impl Vesper {
                         };
                         cx.notify();
                     }))
-                    .on_click(cx.listener(move |this, _, w, cx| this.go_to_hit(i, w, cx)))
+                    .on_click(cx.listener(move |this, _, w, cx| {
+                        // A drag over the hit's text selected it: that is not a click on it.
+                        if !Selection::active(cx) {
+                            this.go_to_hit(i, w, cx)
+                        }
+                    }))
                     .child(Avatar::new(m.author_id.clone(), name.clone(), accent, 32))
                     .child(
                         div()
@@ -1856,25 +1867,40 @@ impl Vesper {
                                             .ellipsis()
                                             .font_weight(t.weight_strong)
                                             .text_color(t.fg)
-                                            .child(name),
+                                            .child(
+                                                SelText::new((select::FIND, i as i64, 0), name)
+                                                    .pointer(),
+                                            ),
                                     )
                                     .children(room.map(|r| {
                                         div()
                                             .ellipsis()
                                             .text_step(TEXT_XS)
                                             .text_color(t.fg_3)
-                                            .child(format!("in {r}"))
+                                            .child(
+                                                SelText::new(
+                                                    (select::FIND, i as i64, 1),
+                                                    format!("in {r}"),
+                                                )
+                                                .pointer(),
+                                            )
                                     }))
                                     .child(
                                         div()
                                             .flex_none()
                                             .text_step(TEXT_XS)
                                             .text_color(t.fg_3)
-                                            .child(crate::timeline::clock(
-                                                m.created_at,
-                                                loc,
-                                                false,
-                                            )),
+                                            .child(
+                                                SelText::new(
+                                                    (select::FIND, i as i64, 2),
+                                                    crate::timeline::clock(
+                                                        m.created_at,
+                                                        loc,
+                                                        false,
+                                                    ),
+                                                )
+                                                .pointer(),
+                                            ),
                                     )
                                     .child(div().flex_1())
                                     .when(lit, |d| {

@@ -15,13 +15,20 @@ use gpui::{
 use super::c::mix;
 use super::icons::icon;
 use super::motion;
-use super::select::SelText;
+use super::select::{CHAT, Key, SelText};
 use super::theme::{TEXT_BASE, TEXT_LG, TEXT_SM, TEXT_XS, TextStepExt, Tokens};
 use crate::highlight::{Kind, highlight, lang_of};
 use crate::markdown::Md;
 
 pub type OnCopy = Rc<dyn Fn(usize, &str, &mut Window, &mut App)>;
 type OnPress = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// A message's texts are its parts `BODY` + their number (`select.rs` keys); the parts before are the row's own.
+pub const BODY: u32 = 16;
+
+fn key(c: &Ctx, n: usize) -> Key {
+    (CHAT, c.id, BODY + n as u32)
+}
 
 /// What drawing needs besides the tree.
 pub struct Ctx {
@@ -212,14 +219,11 @@ fn paragraph(nodes: &[Md], color: Hsla, c: &Ctx, n: &mut usize) -> AnyElement {
     flat(nodes, base(color), &mut f, c);
     *n += 1;
     let name = format!("md-{}-{n}", c.id);
-    let el = div().debug_selector({
-        let name = name.clone();
-        move || name
-    });
+    let el = div().debug_selector(move || name);
     let r = runs(&f, &c.t);
     let (ranges, hrefs): (Vec<_>, Vec<_>) = f.links.into_iter().unzip();
     el.child(
-        SelText::new(name, f.text)
+        SelText::new(key(c, *n), f.text)
             .with_runs(r)
             .on_link(ranges, move |ix, _, cx| cx.open_url(&hrefs[ix])),
     )
@@ -264,6 +268,11 @@ impl RenderOnce for CopyButton {
 /// `--bg-element` with the `--syn-*` colours, one line per line (a long line is cut, not scrolled).
 fn code_block(v: &str, lang: Option<&String>, c: &Ctx, n: &mut usize) -> AnyElement {
     let t = &c.t;
+    // The language is a text of its own, before the code's.
+    let label = lang.filter(|l| !l.is_empty()).map(|l| {
+        *n += 1;
+        SelText::new(key(c, *n), l.clone())
+    });
     *n += 1;
     let block = *n;
     let toks = match lang_of(lang.map(String::as_str)) {
@@ -321,7 +330,7 @@ fn code_block(v: &str, lang: Option<&String>, c: &Ctx, n: &mut usize) -> AnyElem
                         .font_family(t.font_mono.clone())
                         .text_step(TEXT_XS)
                         .text_color(t.fg_3)
-                        .child(lang.cloned().unwrap_or_default()),
+                        .children(label),
                 )
                 .child(CopyButton {
                     id: ElementId::Name(format!("copy-{id}-{block}").into()),
@@ -337,7 +346,7 @@ fn code_block(v: &str, lang: Option<&String>, c: &Ctx, n: &mut usize) -> AnyElem
                 .text_size(px(13.))
                 .line_height(px(20.))
                 .whitespace_nowrap()
-                .child(SelText::new(format!("code-{id}-{block}"), text).with_runs(r)),
+                .child(SelText::new(key(c, block), text).with_runs(r)),
         )
         .into_any_element()
 }
@@ -374,11 +383,8 @@ fn block(node: &Md, color: Hsla, c: &Ctx, n: &mut usize, depth: usize) -> AnyEle
                 let name = format!("md-{}-{n}", c.id);
                 let r = runs(&f, t);
                 div()
-                    .debug_selector({
-                        let name = name.clone();
-                        move || name
-                    })
-                    .child(SelText::new(name, f.text).with_runs(r))
+                    .debug_selector(move || name)
+                    .child(SelText::new(key(c, *n), f.text).with_runs(r))
             })
             .into_any_element(),
         // `my-2 border-line`
@@ -430,33 +436,85 @@ fn block(node: &Md, color: Hsla, c: &Ctx, n: &mut usize, depth: usize) -> AnyEle
     }
 }
 
-fn blocks(nodes: &[Md], color: Hsla, c: &Ctx, n: &mut usize, depth: usize) -> Vec<AnyElement> {
+fn is_inline(node: &Md) -> bool {
+    matches!(
+        node,
+        Md::Text(_)
+            | Md::Br
+            | Md::B(_)
+            | Md::I(_)
+            | Md::S(_)
+            | Md::Code(_)
+            | Md::Link(_)
+            | Md::Mention(_)
+    )
+}
+
+/// `nodes` as runs of inline nodes (`Ok`, one text each) and blocks (`Err`), in order.
+fn pieces(nodes: &[Md]) -> Vec<Result<&[Md], &Md>> {
     let mut out = vec![];
     let mut start = 0;
     for (i, node) in nodes.iter().enumerate() {
-        let inline = matches!(
-            node,
-            Md::Text(_)
-                | Md::Br
-                | Md::B(_)
-                | Md::I(_)
-                | Md::S(_)
-                | Md::Code(_)
-                | Md::Link(_)
-                | Md::Mention(_)
-        );
-        if inline {
+        if is_inline(node) {
             continue;
         }
         if start < i {
-            out.push(paragraph(&nodes[start..i], color, c, n));
+            out.push(Ok(&nodes[start..i]));
         }
-        out.push(block(node, color, c, n, depth));
+        out.push(Err(node));
         start = i + 1;
     }
     if start < nodes.len() {
-        out.push(paragraph(&nodes[start..], color, c, n));
+        out.push(Ok(&nodes[start..]));
     }
+    out
+}
+
+fn blocks(nodes: &[Md], color: Hsla, c: &Ctx, n: &mut usize, depth: usize) -> Vec<AnyElement> {
+    pieces(nodes)
+        .into_iter()
+        .map(|p| match p {
+            Ok(run) => paragraph(run, color, c, n),
+            Err(node) => block(node, color, c, n, depth),
+        })
+        .collect()
+}
+
+/// Each text `render` draws, by part (`BODY` + its number), as drawn: what a copy takes of a message not on screen.
+pub fn texts(nodes: &[Md], c: &Ctx) -> Vec<(u32, String)> {
+    fn walk(nodes: &[Md], c: &Ctx, n: &mut usize, out: &mut Vec<(u32, String)>) {
+        for p in pieces(nodes) {
+            let run = match p {
+                Ok(run) => run,
+                Err(Md::Quote(k) | Md::H(_, k)) => k,
+                Err(Md::Hr) => continue,
+                Err(Md::Pre(v, lang)) => {
+                    if let Some(l) = lang.as_ref().filter(|l| !l.is_empty()) {
+                        *n += 1;
+                        out.push((key(c, *n).2, l.clone()));
+                    }
+                    *n += 1;
+                    out.push((key(c, *n).2, v.clone()));
+                    continue;
+                }
+                Err(Md::Ul(items) | Md::Ol(_, items)) => {
+                    for li in items {
+                        if let Md::Li(k) = li {
+                            walk(k, c, n, out);
+                        }
+                    }
+                    continue;
+                }
+                Err(other) => std::slice::from_ref(other),
+            };
+            let mut f = Flat::default();
+            flat(run, base(c.t.fg), &mut f, c);
+            *n += 1;
+            out.push((key(c, *n).2, f.text));
+        }
+    }
+    let mut out = vec![];
+    walk(nodes, c, &mut 0, &mut out);
     out
 }
 
@@ -468,17 +526,5 @@ pub fn render(nodes: &[Md], c: &Ctx) -> Vec<AnyElement> {
 
 /// Whether the message ends in a run of text rather than a block.
 pub fn ends_inline(nodes: &[Md]) -> bool {
-    nodes.last().is_some_and(|n| {
-        matches!(
-            n,
-            Md::Text(_)
-                | Md::Br
-                | Md::B(_)
-                | Md::I(_)
-                | Md::S(_)
-                | Md::Code(_)
-                | Md::Link(_)
-                | Md::Mention(_)
-        )
-    })
+    nodes.last().is_some_and(is_inline)
 }

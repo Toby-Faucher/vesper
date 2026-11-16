@@ -67,6 +67,7 @@ actions!(
         PasteFile,
         Dismiss,
         CopySelection,
+        SelectAllText,
         ConfirmDialog,
         FindUp,
         FindDown,
@@ -117,6 +118,11 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-c", CopySelection, None),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-c", CopySelection, None),
+        // Every loaded message (select.rs). The handler passes it on to a focused field's own Ctrl+A.
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-a", SelectAllText, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-a", SelectAllText, None),
         KeyBinding::new("enter", ConfirmDialog, Some(DIALOG)),
         // The switcher's and search's field: the rows move, the field keeps the focus.
         KeyBinding::new("up", FindUp, find_input),
@@ -1338,6 +1344,9 @@ pub fn splices<T: PartialEq>(old: &[(i64, T)], new: &[(i64, T)]) -> Vec<(Range<u
 
 impl Render for Vesper {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // With the texts of the last frame, before they are drawn again.
+        self.drag_scroll(window, cx);
+        select::Selection::new_frame(cx);
         let body = match self.model.screen {
             Screen::Starting => div()
                 .size_full()
@@ -1361,7 +1370,22 @@ impl Render for Vesper {
         div()
             .on_action(cx.listener(Self::dismiss))
             .track_focus(&self.text_focus)
-            .on_action(|_: &CopySelection, _, cx| select::Selection::copy(cx))
+            .on_action(cx.listener(|this, _: &CopySelection, _, cx| {
+                match this.selected_text(cx) {
+                    Some(t) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(t)),
+                    // Nothing selected here: a focused field's own Ctrl+C runs (a binding with no context outranks it).
+                    None => cx.propagate(),
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SelectAllText, window, cx| {
+                // A focused field keeps its own Ctrl+A; the list's (or no one's) focus selects the messages.
+                if window.focused(cx).is_some_and(|f| f != this.text_focus) {
+                    cx.propagate();
+                    return;
+                }
+                select::Selection::select_all(select::CHAT, cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(Self::confirm_dialog))
             .on_action(cx.listener(|this, _: &FindUp, _, cx| this.find_move(false, cx)))
             .on_action(cx.listener(|this, _: &FindDown, _, cx| this.find_move(true, cx)))
