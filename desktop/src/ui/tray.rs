@@ -14,11 +14,12 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use super::Vesper;
 use crate::model::Model;
 
-/// The app icon's pixels (package/icons, made from the web's icon-512.png): RGBA and its width.
+/// The app icon (package/icons, made from the web's icon-512.png), a 64 pixel PNG.
+pub const PNG: &[u8] = include_bytes!("../../package/icons/64.png");
+
+/// The app icon's pixels: RGBA and its width.
 fn pixels() -> Option<(Vec<u8>, u32)> {
-    let img = image::load_from_memory(include_bytes!("../../package/icons/64.png"))
-        .ok()?
-        .into_rgba8();
+    let img = image::load_from_memory(PNG).ok()?.into_rgba8();
     let w = img.width();
     Some((img.into_raw(), w))
 }
@@ -31,9 +32,19 @@ fn icon() -> Option<Icon> {
 
 /// The icon with a red dot at its top right, for unread mentions and DMs. The dot is drawn over `rgba`, a square
 /// RGBA picture `n` pixels wide, with a dark ring so it reads on light and dark bars.
-fn with_dot(mut rgba: Vec<u8>, n: u32) -> Vec<u8> {
+fn with_dot(rgba: Vec<u8>, n: u32) -> Vec<u8> {
     let r = n as f32 / 4.0;
-    let (cx, cy) = (n as f32 - r - 0.5, r - 0.5);
+    dot(rgba, n, r, (n as f32 - r - 0.5, r - 0.5))
+}
+
+/// The dot alone, filling a clear square `n` pixels wide: the taskbar's overlay on Windows.
+pub fn badge(n: u32) -> Vec<u8> {
+    let r = n as f32 / 2.0;
+    dot(vec![0; (n * n * 4) as usize], n, r, (r - 0.5, r - 0.5))
+}
+
+/// Draws a dot of radius `r` centred on `(cx, cy)` over `rgba`, a square RGBA picture `n` pixels wide.
+fn dot(mut rgba: Vec<u8>, n: u32, r: f32, (cx, cy): (f32, f32)) -> Vec<u8> {
     for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = ((i as u32 % n) as f32 - cx, (i as u32 / n) as f32 - cy);
         let d = (x * x + y * y).sqrt();
@@ -114,5 +125,14 @@ mod tests {
         assert_eq!(at(24, 7), [239, 68, 68, 255], "red in the middle");
         assert_eq!(at(31, 7)[..3], [24, 24, 27], "a dark rim");
         assert_eq!(at(4, 28), [0, 0, 0, 0], "the rest is left alone");
+    }
+
+    #[test]
+    fn the_badge_is_a_red_dot_on_a_clear_square() {
+        let rgba = super::badge(32);
+        let at = |x: u32, y: u32| &rgba[((y * 32 + x) * 4) as usize..][..4];
+        assert_eq!(at(16, 16), [239, 68, 68, 255], "red in the middle");
+        assert_eq!(at(31, 16)[..3], [24, 24, 27], "a dark rim");
+        assert_eq!(at(0, 0), [0, 0, 0, 0], "clear corners");
     }
 }

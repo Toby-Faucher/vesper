@@ -512,6 +512,8 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
     fn set_edited(&mut self, _edited: bool) {}
+    // vesper patch: the taskbar button's overlay icon (Windows only). `icon` is square RGBA and its width.
+    fn set_overlay_icon(&self, _icon: Option<(&[u8], u32)>, _label: &str) {}
     fn show_character_palette(&self) {}
     fn titlebar_double_click(&self) {}
     fn on_move_tab_to_new_window(&self, _callback: Box<dyn FnMut()>) {}

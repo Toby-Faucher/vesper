@@ -169,9 +169,14 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   Hyprland ignore minimise. The edges of a floating window on Linux do not resize it (the compositor's own keys do).
   Verified: the buttons render (parity screenshots in a headless sway). Not verified: dragging, double click and the
   buttons on a real desktop, and the Windows title bar (only CI builds it).
-- Message text, code blocks and names can be selected and copied (drag, double click for a word, triple click for all,
-  Ctrl+C), but only inside one text at a time: a drag cannot run across paragraphs or messages as on the web. The room
-  header, cards and other labels are not selectable. Verified by a headless GPUI test, not with a real mouse.
+- Chat text selects and copies as on the web: a drag runs across paragraphs and messages (the list scrolls when it
+  passes the top or bottom edge), double click takes a word, triple click one text, Shift+click extends, and Ctrl+A
+  (Cmd+A) after a click in the list selects every loaded message. Ctrl+C copies the selection, one line per text: day
+  rows, reply quotes, names, times, Pinned, message text, code and its language, (edited), file names and sizes. The
+  pins panel and search results select too, one panel at a time. Reactions, buttons and the hover time beside a
+  grouped message do not. A search result's marks are square now (a text highlight has no corners). Verified by
+  headless GPUI tests (a drag across two messages, Ctrl+A with rows scrolled out, Ctrl+A in the composer), not with a
+  real mouse; the scroll past the list's edge is not verified at all.
 - A second launch brings the running app to the front and exits (a Unix socket, a named pipe on Windows). On Wayland the
   same limit as Show Vesper applies. Verified on Linux by a unit test; the Windows pipe is not verified.
 - An incoming DM call plays the web's ring sound every 2.5 s, and the tray's tooltip says who calls; the window is not
@@ -180,13 +185,16 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - Dialogs take the focus and every click under them, and Esc closes the topmost dialog, card, menu or ring, but Tab is not
   kept inside a dialog.
 - Notifications: a mention or a direct message shows a system notification (freedesktop on Linux, a toast on Windows), and so
-  does a DM call while the window is in the background; a click opens the room. On Windows the toast is shown under
-  PowerShell's app id, because a toast under our own id needs a Start menu shortcut that carries it; so it says "Windows
+  does a DM call while the window is in the background; a click opens the room. On Windows the toast says "Vesper" with
+  its icon: at every start the app registers its app id `Vesper.Desktop` under
+  `HKCU\Software\Classes\AppUserModelId` (no admin) and writes `vesper.png` beside Vesper.exe if it is missing. The
+  installer writes the same key, and its uninstaller removes the key and the picture. A portable copy leaves both behind
+  when its folder is deleted. If the key cannot be written, toasts fall back to PowerShell's app id and say "Windows
   PowerShell". The unread count (mentions, plus unread messages in DMs) is in the window title as on the web, a red dot on
-  the tray icon, and on Linux the launcher's count (`com.canonical.Unity.LauncherEntry`, for `vesper.desktop`: KDE, Dash to
-  Dock, Plank). There is no taskbar overlay icon on Windows: it needs COM calls that are `unsafe`, which the crates forbid.
-  Verified: the rules and the count by unit tests, and the D-Bus calls build. Not verified: a notification on a real
-  desktop, a click on one, and anything on Windows.
+  the tray icon and on the Windows taskbar button (an overlay icon, set through a patch in the vendored gpui since the
+  crates forbid `unsafe`), and on Linux the launcher's count (`com.canonical.Unity.LauncherEntry`, for `vesper.desktop`:
+  KDE, Dash to Dock, Plank). Verified: the rules, the count and the dot's pixels by unit tests, and the D-Bus calls build.
+  Not verified: a notification on a real desktop, a click on one, and anything on Windows (CI only compiles it).
 - The window's size, place and maximised state are kept in the settings file and restored at the next start; a place that
   is on no screen now is dropped and the window is centred at its old size. On Wayland the place is the compositor's.
 - Mute and deafen keys (Settings > Voice, under Keyboard shortcuts) act during a call, on the same key thread as push to

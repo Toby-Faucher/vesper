@@ -30,3 +30,9 @@ and so does closing a large photo, and the GPU hung (`GPU hung` in the log, the 
 texture now waits in a list until a frame submitted after its removal is done. Also there and in
 src/platform/windows/directx_atlas.rs: a removed tile in a texture that still holds others gives its space back (it was
 never freed before). Apply both again unless a new release defers the destroy and frees the tile itself.
+
+A fifth change (src/platform.rs, src/window.rs and src/platform/windows/window.rs): Window::set_overlay_icon puts a
+small RGBA picture over the window's taskbar button on Windows (ITaskbarList3::SetOverlayIcon), or clears it with None.
+Vesper shows its unread dot there; its own crates forbid unsafe, so the COM call lives here. The PlatformWindow method
+does nothing by default, so every other platform is unchanged. Apply it again when updating, unless a new release has
+its own overlay icon API.

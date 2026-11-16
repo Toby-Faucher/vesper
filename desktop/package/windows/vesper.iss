@@ -1,7 +1,8 @@
 ; The Windows installer (Inno Setup 6), built by .github/workflows/desktop-package.yml:
 ;   ISCC /DAppVersion=2.3.0 /DSource=<folder with Vesper.exe and the text files> /O<out> vesper.iss
 ; Per user, no admin: the app goes to %LOCALAPPDATA%\Programs\Vesper, where the app's own updater can swap Vesper.exe.
-; It adds a Start menu entry, an optional desktop shortcut, the vesper:// link handler and an entry in Installed apps.
+; It adds a Start menu entry, an optional desktop shortcut, the vesper:// link handler, the toasts' app id and an entry
+; in Installed apps.
 ; Verified by CI only.
 
 #ifndef AppVersion
@@ -54,10 +55,16 @@ Root: HKCU; Subkey: "Software\Classes\vesper"; ValueType: string; ValueName: "";
 Root: HKCU; Subkey: "Software\Classes\vesper"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\vesper\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\Vesper.exe"",0"
 Root: HKCU; Subkey: "Software\Classes\vesper\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Vesper.exe"" ""%1"""
+; Toasts say "Vesper" with its icon. The app writes the same key at every start, and vesper.png if it is missing
+; (src/notify.rs).
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\Vesper.Desktop"; ValueType: string; ValueName: "DisplayName"; ValueData: "Vesper"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\Vesper.Desktop"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\vesper.png"
 
 [UninstallDelete]
 ; The copy the updater keeps for a rollback.
 Type: files; Name: "{app}\Vesper.exe.old"
+; The toasts' icon, written by the app.
+Type: files; Name: "{app}\vesper.png"
 
 [Run]
 Filename: "{app}\Vesper.exe"; Description: "{cm:LaunchProgram,Vesper}"; Flags: nowait postinstall skipifsilent

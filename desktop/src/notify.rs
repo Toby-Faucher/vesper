@@ -2,8 +2,9 @@
 //! (`web/src/lib/ui/notify.ts`); the count is its title count plus unread direct messages.
 //!
 //! Linux: freedesktop notifications and the launcher's count (`com.canonical.Unity.LauncherEntry`, read by KDE, Dash
-//! to Dock and Plank) over D-Bus with zbus, on one thread. Windows: toasts (`tauri-winrt-notification`). A click
-//! opens the room and brings the window up. Message text goes to the notification only, never to the log.
+//! to Dock and Plank) over D-Bus with zbus, on one thread. Windows: toasts (`tauri-winrt-notification`) under our own
+//! app id (`register`). A click opens the room and brings the window up. Message text goes to the notification only,
+//! never to the log.
 
 use vesper_protocol::{Message, RoomKind};
 
@@ -112,7 +113,7 @@ impl Os {
         let _ = self.tx.send(Msg::Show(t));
     }
 
-    /// The launcher's count (Linux only; Windows has the tray's dot and the title).
+    /// The launcher's count (Linux only; Windows has the dot on the tray and taskbar icons, and the title).
     pub fn count(&self, n: u32) {
         let _ = self.tx.send(Msg::Count(n));
     }
@@ -207,14 +208,19 @@ fn run(
     use std::sync::Arc;
     use tauri_winrt_notification::Toast as WinToast;
 
+    let id = match register() {
+        Ok(()) => APP_ID,
+        Err(e) => {
+            log::warn!("toasts show as Windows PowerShell: {e}");
+            WinToast::POWERSHELL_APP_ID
+        }
+    };
     let clicked = Arc::new(clicked);
     while let Some(m) = rx.blocking_recv() {
         let Msg::Show(t) = m else { continue };
         let clicked = clicked.clone();
         let room = t.room;
-        // shortcut: the toast is under PowerShell's app id, the one that works without a Start menu shortcut that
-        // carries our own id. Use "Vesper" once the installer registers that id.
-        let r = WinToast::new(WinToast::POWERSHELL_APP_ID)
+        let r = WinToast::new(id)
             .title(&t.title)
             .text1(&t.body)
             .on_activated(move |_| {
@@ -226,6 +232,25 @@ fn run(
             log::warn!("notification not shown: {e}");
         }
     }
+}
+
+/// Our app id for toasts. Registered under it, a toast says "Vesper" with our icon; no Start menu shortcut needed.
+#[cfg(windows)]
+const APP_ID: &str = "Vesper.Desktop";
+
+/// Registers `APP_ID` for the current user (no admin), at every start so a portable copy gets it too. The installer
+/// writes the same key and its uninstaller removes it. The icon is `vesper.png` beside Vesper.exe, written if missing;
+/// in a folder we cannot write to, the toast shows without it.
+#[cfg(windows)]
+fn register() -> Result<(), Box<dyn std::error::Error>> {
+    let key = windows_registry::CURRENT_USER
+        .create(format!(r"Software\Classes\AppUserModelId\{APP_ID}"))?;
+    key.set_string("DisplayName", "Vesper")?;
+    let icon = std::env::current_exe()?.with_file_name("vesper.png");
+    if icon.exists() || std::fs::write(&icon, crate::ui::tray::PNG).is_ok() {
+        key.set_string("IconUri", icon.to_string_lossy())?;
+    }
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]

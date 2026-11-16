@@ -31,7 +31,7 @@ use vesper_protocol::{Attachment, AttachmentKind, Message, UserInfo};
 use super::c::{self, Avatar, Ellipsis, MenuItem, mix, popover_frame};
 use super::icons::icon;
 use super::motion::{self, POP, RISE};
-use super::select::{SelText, Selection};
+use super::select::{CHAT, Key, PINS, SelText, Selection};
 use super::theme::{TEXT_SM, TEXT_XS, TextStepExt, Tokens, tokens};
 use super::{
     CancelEdit, ComposerDown, ComposerEscape, ComposerTab, ComposerUp, EDIT_BOX, NewLine,
@@ -54,6 +54,61 @@ pub(super) const IMAGE_FAILED: &str = "The image did not load.";
 const FADE_AFTER: Duration = Duration::from_millis(4000);
 /// The server's limit of pins per room.
 const MAX_PINS: usize = 50;
+
+// A row's selectable texts, in the order drawn (`select.rs` keys). The message's own text is `md::BODY` on.
+const P_DAY: u32 = 0;
+const P_QUOTE: u32 = 1;
+const P_NAME: u32 = 2;
+const P_TIME: u32 = 3;
+const P_PINNED: u32 = 4;
+const P_NOTE: u32 = 1 << 20;
+/// A file card's name, then its type and size: two parts a file.
+const P_FILE: u32 = P_NOTE + 1;
+
+/// A reply's quote line, and where the name is in it.
+fn quote_line(who: &str, excerpt: &str) -> (String, std::ops::Range<usize>) {
+    let ex = plain(&parse(excerpt));
+    let ex = if ex.is_empty() {
+        "a deleted message".into()
+    } else {
+        ex
+    };
+    let at = "Reply to ".len();
+    (format!("Reply to {who}: {ex}"), at..at + who.len())
+}
+
+/// The note at the end of a message's text.
+fn note(msg: &Message, head: bool) -> Option<&'static str> {
+    match (msg.edited_at.is_some(), !head && msg.pinned) {
+        (true, true) => Some("(edited) Pinned"),
+        (true, false) => Some("(edited)"),
+        (false, true) => Some("Pinned"),
+        _ => None,
+    }
+}
+
+/// A message of files has no text; an older one carries the file names as its body: not shown twice.
+fn filler(msg: &Message) -> bool {
+    let names: Vec<&str> = msg.attachments.iter().map(|a| a.name.as_str()).collect();
+    msg.body.is_empty() || names_only(&msg.body, &names)
+}
+
+/// A file drawn as a card, not as a picture.
+fn is_card(a: &Attachment) -> bool {
+    !(a.kind == AttachmentKind::Image && a.size as u64 <= IMAGE_MAX)
+}
+
+/// A card's "PDF file, 1 KB".
+fn card_meta(a: &Attachment) -> String {
+    [
+        type_label(&a.mime, &a.name),
+        file_size(a.size.max(0) as u64),
+    ]
+    .into_iter()
+    .filter(|s| !s.is_empty())
+    .collect::<Vec<_>>()
+    .join(", ")
+}
 
 type OnClick = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -350,7 +405,7 @@ impl Vesper {
                 .text_step(TEXT_XS)
                 .font_weight(t.weight_ui)
                 .text_color(t.fg_3)
-                .child(label)
+                .child(SelText::new((CHAT, id, P_DAY), label))
                 .child(div().flex_1().h(px(1.)).bg(t.line_subtle))
         });
         let new = head.new.then(|| self.new_row(&t, cx)).flatten();
@@ -501,15 +556,7 @@ impl Vesper {
         }
 
         let quote = msg.reply_to.as_ref().map(|r| {
-            let ex = plain(&parse(&r.excerpt));
-            let ex = if ex.is_empty() {
-                "a deleted message".into()
-            } else {
-                ex
-            };
-            let who = s.name_of(&r.author_id);
-            let text = format!("Reply to {who}: {ex}");
-            let name_at = "Reply to ".len()..("Reply to ".len() + who.len());
+            let (text, name_at) = quote_line(&s.name_of(&r.author_id), &r.excerpt);
             let target = r.id;
             let (qh, q_hover) =
                 motion::hover(SharedString::from(format!("quote-{id}")), window, cx);
@@ -527,22 +574,24 @@ impl Vesper {
                 .cursor_pointer()
                 .on_hover(q_hover)
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.model.jump_to(target) {
+                    // A drag over the line selected it: that is not a click on it.
+                    if !Selection::active(cx) && this.model.jump_to(target) {
                         cx.notify();
                     }
                 }))
                 .child(icon("reply").text_color(fg))
                 .child(
-                    div()
-                        .min_w_0()
-                        .ellipsis()
-                        .child(StyledText::new(text).with_highlights([(
-                            name_at,
-                            gpui::HighlightStyle {
-                                color: Some(t.fg_2.into()),
-                                ..Default::default()
-                            },
-                        )])),
+                    div().min_w_0().ellipsis().child(
+                        SelText::new((CHAT, id, P_QUOTE), text)
+                            .pointer()
+                            .with_highlights([(
+                                name_at,
+                                gpui::HighlightStyle {
+                                    color: Some(t.fg_2.into()),
+                                    ..Default::default()
+                                },
+                            )]),
+                    ),
                 )
         });
 
@@ -550,10 +599,9 @@ impl Vesper {
         let anchor = format!("name-{id}");
         let open = {
             let (uid, key) = (msg.author_id.clone(), anchor.clone());
-            let sel = format!("author-{id}");
             move |this: &mut Self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
                 // A drag over the name selected it: that is not a click on it.
-                if !Selection::dragged_in(&sel, cx) {
+                if !Selection::active(cx) {
                     this.open_person(uid.clone(), key.clone(), false, cx)
                 }
             }
@@ -599,16 +647,12 @@ impl Vesper {
                             .hover(|s| s.underline())
                             .on_click(cx.listener(open))
                             .child(self.probe(anchor))
-                            .child(SelText::new(format!("author-{id}"), name).pointer()),
+                            .child(SelText::new((CHAT, id, P_NAME), name).pointer()),
                     )
                     // Baseline to baseline with the 14/20 name: 3 px down.
-                    .child(
-                        div()
-                            .mt(px(3.))
-                            .text_step(TEXT_XS)
-                            .text_color(quiet)
-                            .child(clock(msg.created_at, loc, false)),
-                    )
+                    .child(div().mt(px(3.)).text_step(TEXT_XS).text_color(quiet).child(
+                        SelText::new((CHAT, id, P_TIME), clock(msg.created_at, loc, false)),
+                    ))
                     .when(msg.pinned, |d| {
                         d.child(
                             div()
@@ -619,13 +663,18 @@ impl Vesper {
                                 .text_step(TEXT_XS)
                                 .text_color(quiet)
                                 .child(icon("pin").size(px(12.)).text_color(quiet))
-                                .child("Pinned"),
+                                .child(SelText::new((CHAT, id, P_PINNED), "Pinned")),
                         )
                     }),
             );
         }
         if msg.deleted {
-            content = content.child(div().italic().text_color(quiet).child("Message deleted"));
+            content = content.child(
+                div()
+                    .italic()
+                    .text_color(quiet)
+                    .child(SelText::new((CHAT, id, md::BODY), "Message deleted")),
+            );
         } else if editing {
             content = content.child(self.edit_box(cx));
         } else {
@@ -687,17 +736,8 @@ impl Vesper {
         cx: &mut Context<Self>,
     ) -> Div {
         let id = msg.id;
-        let names: Vec<&str> = msg.attachments.iter().map(|a| a.name.as_str()).collect();
-        // A message of files has no text; an older one carries the file names as its body: not shown twice.
-        let filler = msg.body.is_empty() || names_only(&msg.body, &names);
-        let edited = msg.edited_at.is_some();
-        let note = match (edited, !head && msg.pinned) {
-            (true, true) => Some("(edited) Pinned"),
-            (true, false) => Some("(edited)"),
-            (false, true) => Some("Pinned"),
-            _ => None,
-        }
-        .map(|n| {
+        let filler = filler(msg);
+        let note = note(msg, head).map(|n| {
             div()
                 .flex_none()
                 .ml(px(4.))
@@ -705,7 +745,7 @@ impl Vesper {
                 .text_step(TEXT_XS)
                 .text_color(quiet)
                 .whitespace_nowrap()
-                .child(n)
+                .child(SelText::new((CHAT, id, P_NOTE), n))
         });
         let long = is_long(&msg.body);
         let open = self.tl.expanded.contains(&id);
@@ -715,28 +755,10 @@ impl Vesper {
             let nodes = parse(&msg.body);
             inline = md::ends_inline(&nodes);
             let this = cx.weak_entity();
-            let ctx = md::Ctx {
-                me: self
-                    .model
-                    .state
-                    .me
-                    .as_ref()
-                    .map_or(String::new(), |m| m.user.username.clone()),
-                known: self
-                    .model
-                    .state
-                    .users
-                    .values()
-                    .map(|u| u.username.to_lowercase())
-                    .collect(),
-                t: t.clone(),
+            let ctx = self.md_ctx(
                 id,
-                copied: self
-                    .tl
-                    .copied
-                    .filter(|c| c.0 == id && c.2.elapsed() < Duration::from_secs(2))
-                    .map(|c| c.1),
-                on_copy: Rc::new(move |block, code, _, cx| {
+                t,
+                Rc::new(move |block, code, _, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
                     let _ = this.update(cx, |v, cx| {
                         v.tl.copied = Some((id, block, Instant::now()));
@@ -748,7 +770,7 @@ impl Vesper {
                         .detach();
                     });
                 }),
-            };
+            );
             text = md::render(&nodes, &ctx);
         }
         if let Some(n) = note {
@@ -815,11 +837,123 @@ impl Vesper {
                 ),
             );
         }
-        for a in &msg.attachments {
-            let el = self.attachment(a, cx);
+        for (i, a) in msg.attachments.iter().enumerate() {
+            let el = self.attachment(a, (CHAT, id, P_FILE + 2 * i as u32), cx);
             content = content.child(el);
         }
         content.children(self.reactions(msg, cx))
+    }
+
+    /// What drawing a message's Markdown needs.
+    fn md_ctx(&self, id: i64, t: &Tokens, on_copy: md::OnCopy) -> md::Ctx {
+        let s = &self.model.state;
+        md::Ctx {
+            me: s
+                .me
+                .as_ref()
+                .map_or(String::new(), |m| m.user.username.clone()),
+            known: s
+                .users
+                .values()
+                .map(|u| u.username.to_lowercase())
+                .collect(),
+            t: t.clone(),
+            id,
+            copied: self
+                .tl
+                .copied
+                .filter(|c| c.0 == id && c.2.elapsed() < Duration::from_secs(2))
+                .map(|c| c.1),
+            on_copy,
+        }
+    }
+
+    /// The selected text: in the chat, of the rows scrolled away too.
+    pub(super) fn selected_text(&self, cx: &App) -> Option<String> {
+        let more = match Selection::rows(cx) {
+            Some((CHAT, rows)) => self.chat_texts(rows, cx),
+            _ => vec![],
+        };
+        Selection::selected(cx, more)
+    }
+
+    /// A drag that selects past the list's top or bottom edge scrolls it, faster the further out, as a browser does.
+    pub(super) fn drag_scroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !Selection::dragging(CHAT, cx) {
+            return;
+        }
+        let (p, b) = (window.mouse_position(), self.list.viewport_bounds());
+        let out = if b.size.height <= px(0.) {
+            return;
+        } else if p.y < b.top() {
+            p.y - b.top()
+        } else if p.y > b.bottom() {
+            p.y - b.bottom()
+        } else {
+            return;
+        };
+        self.list
+            .scroll_by(px((out / px(1.)).clamp(-60., 60.) / 3.));
+        Selection::drag(p, cx);
+        window.request_animation_frame();
+    }
+
+    /// Each selectable text of the loaded messages whose ids are in `rows`, as `message_row` draws it: what a copy
+    /// takes, of rows scrolled away too.
+    pub(super) fn chat_texts(
+        &self,
+        rows: std::ops::RangeInclusive<i64>,
+        cx: &App,
+    ) -> Vec<(Key, SharedString)> {
+        let Some(log) = self.model.log() else {
+            return vec![];
+        };
+        let s = &self.model.state;
+        let loc = Locale::system();
+        let mut out = vec![];
+        for (msg, head) in log.messages.iter().zip(&self.heads) {
+            if !rows.contains(&msg.id) {
+                continue;
+            }
+            let id = msg.id;
+            let mut put = |part: u32, text: String| out.push(((CHAT, id, part), text.into()));
+            if let Some(d) = &head.day {
+                put(P_DAY, d.clone());
+            }
+            if let Some(r) = &msg.reply_to {
+                put(P_QUOTE, quote_line(&s.name_of(&r.author_id), &r.excerpt).0);
+            }
+            if head.head {
+                put(P_NAME, s.name_of(&msg.author_id));
+                put(P_TIME, clock(msg.created_at, loc, false));
+                if msg.pinned {
+                    put(P_PINNED, "Pinned".into());
+                }
+            }
+            if msg.deleted {
+                put(md::BODY, "Message deleted".into());
+                continue;
+            }
+            if self.model.editing == Some(id) {
+                continue;
+            }
+            if !filler(msg) {
+                let ctx = self.md_ctx(id, tokens(cx), Rc::new(|_, _, _, _| {}));
+                for (part, text) in md::texts(&parse(&msg.body), &ctx) {
+                    put(part, text);
+                }
+            }
+            if let Some(n) = note(msg, head.head) {
+                put(P_NOTE, n.into());
+            }
+            for (i, a) in msg.attachments.iter().enumerate() {
+                if is_card(a) {
+                    put(P_FILE + 2 * i as u32, a.name.clone());
+                    put(P_FILE + 2 * i as u32 + 1, card_meta(a));
+                }
+            }
+        }
+        out
     }
 
     /// `.tools`: over the row's top right (4 px down on a head row), 1 px padding, a `--line` border, `--radius`,
@@ -1237,9 +1371,9 @@ impl Vesper {
 
     /// An image (`.img`): fetched once with the session cookie, in a 360 x 280 `--bg-element` box until it comes, then
     /// its own shape with no fill; one that fails is a 48 px box with a line of text. Anything else is a card.
-    fn attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) -> AnyElement {
+    fn attachment(&mut self, a: &Attachment, key: Key, cx: &mut Context<Self>) -> AnyElement {
         let t = tokens(cx).clone();
-        if a.kind == AttachmentKind::Image && a.size as u64 <= IMAGE_MAX {
+        if !is_card(a) {
             if !self.images.contains_key(&a.id) {
                 self.images.insert(a.id.clone(), Img::Loading);
                 self.run(vec![Cmd::FetchImage(a.id.clone())]);
@@ -1286,23 +1420,16 @@ impl Vesper {
                 .child(el)
                 .into_any_element();
         }
-        self.card(a, &t, cx).into_any_element()
+        self.card(a, key, &t, cx).into_any_element()
     }
 
     /// `.card`: 360 px at most, 8 px 8 px 8 px 12 px, 12 px gap, a `--line-subtle` border, `--radius`, `--bg-raised`,
     /// 13/20: the file icon, the name and "PDF file, 1 KB", then Open (audio and video, in the system's player: the
     /// web plays them in the card) and Download.
-    fn card(&self, a: &Attachment, t: &Tokens, cx: &mut Context<Self>) -> Div {
+    fn card(&self, a: &Attachment, key: Key, t: &Tokens, cx: &mut Context<Self>) -> Div {
         let id = a.id.clone();
         let (open, save) = (a.clone(), a.clone());
-        let meta = [
-            type_label(&a.mime, &a.name),
-            file_size(a.size.max(0) as u64),
-        ]
-        .into_iter()
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join(", ");
+        let meta = card_meta(a);
         let media = matches!(a.kind, AttachmentKind::Audio | AttachmentKind::Video);
         let hover = (t.bg_hover, t.fg);
         div()
@@ -1328,8 +1455,18 @@ impl Vesper {
                     .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .child(div().ellipsis().text_color(t.fg).child(a.name.clone()))
-                    .child(div().text_step(TEXT_XS).text_color(t.fg_2).child(meta)),
+                    .child(
+                        div()
+                            .ellipsis()
+                            .text_color(t.fg)
+                            .child(SelText::new(key, a.name.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_step(TEXT_XS)
+                            .text_color(t.fg_2)
+                            .child(SelText::new((key.0, key.1, key.2 + 1), meta)),
+                    ),
             )
             .when(media, |d| {
                 let sel = format!("open-{}", a.id);
@@ -2384,6 +2521,10 @@ impl Vesper {
                         .cursor_pointer()
                         .hover(move |s| s.bg(hover))
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            // A drag over the row's text selected it: that is not a click on it.
+                            if Selection::active(cx) {
+                                return;
+                            }
                             this.model.pins = None;
                             if this.model.jump_to(id) {
                                 this.tl.flash = None;
@@ -2407,17 +2548,17 @@ impl Vesper {
                                         .flex()
                                         .items_start()
                                         .gap(px(8.))
-                                        .child(div().min_w_0().ellipsis().font_weight(t.weight_strong).text_color(t.fg).child(name))
+                                        .child(div().min_w_0().ellipsis().font_weight(t.weight_strong).text_color(t.fg).child(SelText::new((PINS, id, 0), name).pointer()))
                                         .child(
                                             div()
                                                 .flex_none()
                                                 .mt(px(2.))
                                                 .text_step(TEXT_XS)
                                                 .text_color(t.fg_2)
-                                                .child(when),
+                                                .child(SelText::new((PINS, id, 1), when).pointer()),
                                         ),
                                 )
-                                .child(div().ellipsis().text_color(t.fg_2).child(text)),
+                                .child(div().ellipsis().text_color(t.fg_2).child(SelText::new((PINS, id, 2), text).pointer())),
                         )
                         .child(
                             c::Button::new(ElementId::Name(format!("unpin-{id}").into()), "Unpin")
