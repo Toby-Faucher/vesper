@@ -169,9 +169,14 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   Hyprland ignore minimise. The edges of a floating window on Linux do not resize it (the compositor's own keys do).
   Verified: the buttons render (parity screenshots in a headless sway). Not verified: dragging, double click and the
   buttons on a real desktop, and the Windows title bar (only CI builds it).
-- Message text, code blocks and names can be selected and copied (drag, double click for a word, triple click for all,
-  Ctrl+C), but only inside one text at a time: a drag cannot run across paragraphs or messages as on the web. The room
-  header, cards and other labels are not selectable. Verified by a headless GPUI test, not with a real mouse.
+- Chat text selects and copies as on the web: a drag runs across paragraphs and messages (the list scrolls when it
+  passes the top or bottom edge), double click takes a word, triple click one text, Shift+click extends, and Ctrl+A
+  (Cmd+A) after a click in the list selects every loaded message. Ctrl+C copies the selection, one line per text: day
+  rows, reply quotes, names, times, Pinned, message text, code and its language, (edited), file names and sizes. The
+  pins panel and search results select too, one panel at a time. Reactions, buttons and the hover time beside a
+  grouped message do not. A search result's marks are square now (a text highlight has no corners). Verified by
+  headless GPUI tests (a drag across two messages, Ctrl+A with rows scrolled out, Ctrl+A in the composer), not with a
+  real mouse; the scroll past the list's edge is not verified at all.
 - A second launch brings the running app to the front and exits (a Unix socket, a named pipe on Windows). On Wayland the
   same limit as Show Vesper applies. Verified on Linux by a unit test; the Windows pipe is not verified.
 - An incoming DM call plays the web's ring sound every 2.5 s, and the tray's tooltip says who calls; the window is not

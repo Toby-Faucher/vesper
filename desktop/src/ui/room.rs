@@ -139,13 +139,28 @@ impl Vesper {
                         .child("Say hello."),
                 )
         } else {
-            div().flex().flex_col().flex_1().min_h_0().child(
-                list(
-                    self.list.clone(),
-                    cx.processor(|this, ix: usize, window, cx| this.message_row(ix, window, cx)),
+            // A press in the list gives it the keys, as on a page: Ctrl+A then selects the messages, not the composer.
+            let focus = self.text_focus.clone();
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                // Before the press reaches what is under it, so a field there (the edit box) still takes the focus.
+                .capture_any_mouse_down(move |e, window, _| {
+                    if e.button == gpui::MouseButton::Left {
+                        window.focus(&focus)
+                    }
+                })
+                .child(
+                    list(
+                        self.list.clone(),
+                        cx.processor(|this, ix: usize, window, cx| {
+                            this.message_row(ix, window, cx)
+                        }),
+                    )
+                    .flex_1(),
                 )
-                .flex_1(),
-            )
         };
         let timeline = div()
             .relative()
