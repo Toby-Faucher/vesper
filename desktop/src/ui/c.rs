@@ -1027,7 +1027,7 @@ impl RenderOnce for MenuItem {
 /// `Dialog.svelte`: over a backdrop of `--bg-app` at 72 %, a 440 px box (1 px `--line-subtle`, `--radius-lg`,
 /// `--bg-raised`, `--shadow-float`): the title (16/24, `--weight-strong`), the body (13/20, `--fg-2`), an optional
 /// footer (right-aligned, 8 px gap, a `--line-subtle` rule above) and a Close button at the top right. Put it last in
-/// a `relative` parent the size of the window. The backdrop takes every click and scroll. The parent holds the focus
+/// a `relative` parent the size of the window. The backdrop takes every click and scroll; a click there closes. The parent holds the focus
 /// (`Vesper::dialog_focus`), where Enter confirms and Esc closes.
 /// shortcut: centred, not the web's `margin: auto` in a scrolling top layer; Tab is not trapped in it.
 #[derive(IntoElement)]
@@ -1079,7 +1079,9 @@ impl RenderOnce for Dialog {
         }
         let mut backdrop: Hsla = t.bg_app.into();
         backdrop.a = 0.72;
+        let on_close = self.on_close.clone();
         div()
+            .id("dialog-backdrop")
             .absolute()
             .inset_0()
             .occlude()
@@ -1087,9 +1089,13 @@ impl RenderOnce for Dialog {
             .items_center()
             .justify_center()
             .bg(backdrop)
+            // A click on the backdrop closes, as the web's: pressed there, not dragged out of the box (the box takes
+            // its own presses, so they never start a click here).
+            .when_some(on_close, |d, f| d.on_click(move |e, w, cx| f(e, w, cx)))
             .child(
                 div()
                     .id("dialog")
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .relative()
                     .flex()
                     .flex_col()

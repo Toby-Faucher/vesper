@@ -145,7 +145,10 @@ impl Vesper {
                 let s = i.size(0);
                 let (w, h) = fit(s.width.0 as f32, s.height.0 as f32, inner_max);
                 let el = img(ImageSource::Render(i.clone())).w(px(w)).h(px(h));
-                (stage(&t).child(el), (w + 42.).max(440.))
+                (
+                    stage(&t).bg(gpui::transparent_black()).child(el),
+                    (w + 42.).max(440.),
+                )
             }
             Some(Pic::Failed) => (
                 stage(&t)
@@ -227,7 +230,7 @@ impl Vesper {
     }
 }
 
-/// `.stage`: at least 96 px tall, the picture centred, `--radius`, `--bg-element`.
+/// `.stage`: at least 96 px tall, the picture centred, `--radius`, `--bg-element` (none once the picture is shown).
 fn stage(t: &Tokens) -> Div {
     div()
         .flex()

@@ -1228,8 +1228,8 @@ fn composer_text(view: &Entity<Vesper>, cx: &mut VisualTestContext) -> String {
     view.read_with(cx, |v, cx| v.composer.read(cx).value().to_string())
 }
 
-/// A dialog takes the focus: Enter confirms it (not the composer under it), and a click on its backdrop reaches
-/// nothing under it.
+/// A dialog takes the focus: Enter confirms it (not the composer under it), and a click on its backdrop closes it and
+/// reaches nothing under it.
 #[gpui::test]
 fn a_dialog_takes_enter_and_blocks_clicks(cx: &mut TestAppContext) {
     let (view, cx, mut rx) = open(cx);
@@ -1244,8 +1244,14 @@ fn a_dialog_takes_enter_and_blocks_clicks(cx: &mut TestAppContext) {
     click(cx, "room-2");
     view.read_with(cx, |v, _| {
         assert_eq!(v.model.active, Some(1), "the backdrop took the click");
-        assert_eq!(v.model.confirm_delete, Some(11));
+        assert_eq!(
+            v.model.confirm_delete, None,
+            "and closed the dialog, as the web's"
+        );
     });
+    click(cx, "more-11");
+    click(cx, "delete-11");
+    drain(&mut rx);
     cx.simulate_keystrokes("enter");
     let cmds = drain(&mut rx);
     assert!(matches!(cmds.as_slice(), [Cmd::Delete(11)]), "{cmds:?}");
@@ -1908,6 +1914,19 @@ fn a_picture_opens_in_the_viewer(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("viewer").is_some());
     cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert!(v.viewer.is_none()));
+
+    // A click in the box keeps it; a click on the backdrop closes it, as the web's. Before, the backdrop took the
+    // click and did nothing, so the app looked frozen.
+    cx.simulate_click(b.center(), Modifiers::none());
+    cx.run_until_parked();
+    let screen = cx.debug_bounds("viewer").unwrap();
+    cx.simulate_click(screen.center(), Modifiers::none());
+    view.read_with(cx, |v, _| assert!(v.viewer.is_some()));
+    cx.simulate_click(
+        screen.origin + gpui::point(gpui::px(4.), gpui::px(4.)),
+        Modifiers::none(),
+    );
     view.read_with(cx, |v, _| assert!(v.viewer.is_none()));
 }
 

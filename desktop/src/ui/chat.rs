@@ -1231,7 +1231,7 @@ impl Vesper {
     }
 
     /// An image (`.img`): fetched once with the session cookie, in a 360 x 280 `--bg-element` box until it comes, then
-    /// its own shape; one that fails is a 48 px box with a line of text. Anything else is a card.
+    /// its own shape with no fill; one that fails is a 48 px box with a line of text. Anything else is a card.
     fn attachment(&mut self, a: &Attachment, cx: &mut Context<Self>) -> AnyElement {
         let t = tokens(cx).clone();
         if a.kind == AttachmentKind::Image && a.size as u64 <= IMAGE_MAX {
@@ -1257,11 +1257,14 @@ impl Vesper {
                 Img::Ready(i) => {
                     let s = i.size(0);
                     let (w, h) = fit(s.width.0 as u32, s.height.0 as u32);
-                    boxed(w as f32, h as f32).child(
-                        img(ImageSource::Render(i.clone()))
-                            .w(px(w as f32))
-                            .h(px(h as f32)),
-                    )
+                    // Loaded: no fill behind it, so a transparent picture blends in.
+                    boxed(w as f32, h as f32)
+                        .bg(gpui::transparent_black())
+                        .child(
+                            img(ImageSource::Render(i.clone()))
+                                .w(px(w as f32))
+                                .h(px(h as f32)),
+                        )
                 }
                 Img::Loading => boxed(BOX.0 as f32, BOX.1 as f32),
                 Img::Failed => boxed(BOX.0 as f32, 48.)
@@ -1371,7 +1374,7 @@ impl Vesper {
         };
         let path = files::cache_dir("open").join(format!("{}.{ext}", a.id));
         if path.exists() {
-            cx.open_with_system(&path);
+            open_file(&path, cx);
         } else {
             self.run(vec![Cmd::Download {
                 id: a.id.clone(),
@@ -2541,6 +2544,17 @@ impl Vesper {
 }
 
 /// A decoded picture as GPUI draws it.
+/// Opens a file in the system's app. On Linux through `open_url`, which first asks the compositor for an activation
+/// token, so the app comes up in front: `open_with_system` runs xdg-open without one, and the desktop may keep the
+/// new window behind Vesper.
+pub(super) fn open_file(path: &std::path::Path, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if let Ok(u) = url::Url::from_file_path(path) {
+        return cx.open_url(u.as_str());
+    }
+    cx.open_with_system(path);
+}
+
 pub(super) fn render_image(p: Picture) -> Option<Arc<RenderImage>> {
     let buf = image::RgbaImage::from_raw(p.width, p.height, p.bgra)?;
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buf)])))

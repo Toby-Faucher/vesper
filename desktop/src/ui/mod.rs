@@ -535,7 +535,7 @@ impl Vesper {
                 cx.default_global::<c::Pictures>()
                     .loaded(user_id, version, image);
             }
-            Event::Downloaded { path, open: true } if main => cx.open_with_system(path),
+            Event::Downloaded { path, open: true } if main => chat::open_file(path, cx),
             Event::Latest { room, .. } => drop(self.tl.loaded.insert(*room)),
             Event::Searched { seq, page } => self.searched(*seq, page.clone(), cx),
             Event::Full { id, picture } => self.full_loaded(id, picture.clone(), window),

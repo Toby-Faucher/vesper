@@ -41,7 +41,7 @@
   {#if a.kind === 'image'}
     {@const s = shown[a.id]}
     <!-- focus() first: Safari does not focus a clicked button, and the viewer gives focus back to the focused element. -->
-    <button type="button" class="img" class:failed={s?.failed} aria-label="Open image {a.name}"
+    <button type="button" class="img" class:failed={s?.failed} class:shown={s && !s.failed} aria-label="Open image {a.name}"
       style:width={s ? `${s.w}px` : null} style:aspect-ratio={s ? `${s.w} / ${s.h}` : null} onclick={(e) => { e.currentTarget.focus(); if (!s?.failed) onview(a.id); }}>
       <img src="/api/uploads/{a.id}" alt={a.name} draggable="false"
         onload={(e) => settle(e.currentTarget as HTMLImageElement, a.id, false)} onerror={(e) => settle(e.currentTarget as HTMLImageElement, a.id, true)}
@@ -83,6 +83,8 @@
     background: var(--bg-element);
     cursor: zoom-in;
   }
+  /* Loaded: no fill behind it, so a transparent image blends in. */
+  .img.shown { background: none; }
   .img img { display: block; width: 100%; height: 100%; object-fit: contain; }
   .img:focus-visible { outline-offset: 2px; }
   .img.failed { cursor: default; }
