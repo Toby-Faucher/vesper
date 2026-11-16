@@ -210,7 +210,8 @@ mod windows {
                         }
                         // The client writes one message and closes its end.
                         let mut buf = Vec::new();
-                        let read = (&mut server).take(MAX_ASK as u64).read_to_end(&mut buf);
+                        let mut limited = (&mut server).take(MAX_ASK as u64);
+                        let read = limited.read_to_end(&mut buf);
                         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), read).await;
                         if let Some(link) = heard(&buf) {
                             show(link);
