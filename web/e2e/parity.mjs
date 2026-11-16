@@ -59,7 +59,7 @@ function stickersRoom({ alice }) {
       const at = 8 + f * 16;
       return x >= at && x < at + 32 && y >= 32 && y < 64 ? 1 + (f % 3) : 0;
     }));
-    await post('a sticker', 'disc.png', pngDisc(160, [214, 140, 72]));
+    await post('a sticker', 'disc.png', pngDisc(1200, [214, 140, 72]));
     await post('and it moves', 'moves.gif', gif(n, [[0, 0, 0], [214, 140, 72], [92, 110, 96], [40, 52, 84]], frames, 200));
     return room;
   })();

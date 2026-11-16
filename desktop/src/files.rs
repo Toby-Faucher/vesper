@@ -55,26 +55,100 @@ pub fn decode_within(bytes: &[u8], max: (u32, u32)) -> Option<Picture> {
         .with_guessed_format()
         .ok()?;
     r.limits(limits());
-    let img = r.decode().ok()?;
-    // `thumbnail` also scales up: only a large picture is made smaller.
-    let (w, h) = max;
-    let img = if img.width() > w || img.height() > h {
-        img.thumbnail(w, h)
+    let img = r.decode().ok()?.into_rgba8();
+    let (w0, h0) = img.dimensions();
+    // Only a large picture is made smaller, never a small one larger.
+    let s = (max.0 as f64 / w0 as f64).min(max.1 as f64 / h0 as f64);
+    let img = if s < 1. {
+        let fit = |v: u32| ((v as f64 * s).round() as u32).max(1);
+        shrink(&img, fit(w0), fit(h0))
     } else {
         img
     };
-    let img = img.into_rgba8();
     let (width, height) = img.dimensions();
-    let mut bgra = img.into_raw();
-    for px in bgra.as_chunks_mut::<4>().0 {
-        px.swap(0, 2);
-    }
     Some(Picture {
         width,
         height,
-        bgra,
+        bgra: to_bgra(img),
         delays: vec![],
     })
+}
+
+/// `img` made `w` x `h`, its colours averaged weighted by their alpha (premultiplied), so the clear pixels, black
+/// with no alpha, do not darken the edges next to them.
+fn shrink(img: &image::RgbaImage, w: u32, h: u32) -> image::RgbaImage {
+    let mut pre = img.clone();
+    premultiply(&mut pre);
+    let mut out = image::imageops::thumbnail(&pre, w, h);
+    unpremultiply(&mut out);
+    out
+}
+
+/// Each colour times its alpha: what a resize must average, or clear pixels darken their neighbours.
+pub fn premultiply(img: &mut image::RgbaImage) {
+    for p in img.pixels_mut() {
+        let a = u16::from(p[3]);
+        for c in &mut p.0[..3] {
+            *c = ((u16::from(*c) * a + 127) / 255) as u8;
+        }
+    }
+}
+
+/// Back to straight alpha after [`premultiply`].
+pub fn unpremultiply(img: &mut image::RgbaImage) {
+    for p in img.pixels_mut() {
+        let a = u16::from(p[3]);
+        for c in &mut p.0[..3] {
+            if let Some(v) = (u16::from(*c) * 255 + a / 2).checked_div(a) {
+                *c = v.min(255) as u8;
+            }
+        }
+    }
+}
+
+/// BGRA as GPUI draws it. A clear pixel takes the colour of the pixels around it (its alpha stays 0): the GPU blends
+/// neighbouring pixels when it draws a picture smaller or larger, and GPUI's shader takes straight alpha, so a clear
+/// pixel's black would darken the edge.
+fn to_bgra(img: image::RgbaImage) -> Vec<u8> {
+    let (w, h) = (img.width() as i64, img.height() as i64);
+    let src = img.into_raw();
+    let mut out = src.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            if src[i + 3] == 0 {
+                let (mut sum, mut n) = ([0u32; 3], 0u32);
+                for (dx, dy) in [
+                    (-1, -1),
+                    (0, -1),
+                    (1, -1),
+                    (-1, 0),
+                    (1, 0),
+                    (-1, 1),
+                    (0, 1),
+                    (1, 1),
+                ] {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                        continue;
+                    }
+                    let j = ((ny * w + nx) * 4) as usize;
+                    let a = u32::from(src[j + 3]);
+                    for c in 0..3 {
+                        sum[c] += u32::from(src[j + c]) * a;
+                    }
+                    n += a;
+                }
+                for c in 0..3 {
+                    if let Some(v) = sum[c].checked_div(n) {
+                        out[i + c] = v as u8;
+                    }
+                }
+            }
+            out.swap(i, i + 2);
+        }
+    }
+    out
 }
 
 /// The frames of an animated GIF or WebP, `None` for anything else.
@@ -121,15 +195,9 @@ fn animated(bytes: &[u8], max: (u32, u32)) -> Option<Picture> {
         let buf = if buf.dimensions() == (w, h) {
             buf
         } else {
-            image::imageops::thumbnail(&buf, w, h)
+            shrink(&buf, w, h)
         };
-        bgra.extend(
-            buf.into_raw()
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .flat_map(|p| [p[2], p[1], p[0], p[3]]),
-        );
+        bgra.extend(to_bgra(buf));
     }
     let (width, height) = size?;
     Some(Picture {
@@ -357,11 +425,33 @@ mod tests {
             [p.bgra[i], p.bgra[i + 1], p.bgra[i + 2], p.bgra[i + 3]]
         };
         assert_eq!(px(10, 10)[3], 0, "clear");
+        let w = p.width;
+        assert_eq!(
+            px(w / 2 - 1, 10),
+            [72, 140, 214, 0],
+            "clear, in the colour next to it"
+        );
         assert_eq!(px(p.width - 10, 10), [72, 140, 214, 255], "amber, BGRA");
         let edge = px(p.width / 2, 10);
         assert!(
             edge[3] == 0 || edge[2] >= 200,
             "an edge pixel is not darkened: {edge:?}"
         );
+        // Stripes of clear and amber, a pixel each, made smaller: every pixel is part clear, and still amber.
+        let img = image::RgbaImage::from_fn(2000, 1000, |x, _| {
+            image::Rgba(if x % 2 == 0 {
+                [0, 0, 0, 0]
+            } else {
+                [214, 140, 72, 255]
+            })
+        });
+        let mut png = vec![];
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let p = decode_picture(&png).unwrap();
+        let i = ((10 * p.width + 101) * 4) as usize;
+        let mid = &p.bgra[i..i + 4];
+        assert!(mid[3] > 60 && mid[3] < 200, "part clear: {mid:?}");
+        assert!(mid[2] >= 200, "not darkened by the clear pixels: {mid:?}");
     }
 }

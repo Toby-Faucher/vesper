@@ -196,13 +196,16 @@ function pngOf(w, h, type, raw) {
   ihdr[9] = type;
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
-// A disc in `rgb` on a fully transparent square (RGBA), to show what is behind a picture's clear parts.
+// A disc in `rgb` with a soft edge (a glow fading out) on a fully transparent square (RGBA), to show what is behind a
+// picture's clear and part-clear pixels once it is drawn smaller.
 export function pngDisc(size, [r, g, b]) {
   const raw = Buffer.alloc((size * 4 + 1) * size);
   const c = (size - 1) / 2;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      if (Math.hypot(x - c, y - c) <= size * 0.4) raw.set([r, g, b, 255], y * (size * 4 + 1) + 1 + x * 4);
+      const d = Math.hypot(x - c, y - c) / size; // 0 at the centre
+      const a = Math.round(255 * Math.min(1, Math.max(0, (0.48 - d) / 0.18)));
+      if (a) raw.set([r, g, b, a], y * (size * 4 + 1) + 1 + x * 4);
     }
   }
   return pngOf(size, size, 6, raw);
