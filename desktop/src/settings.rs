@@ -74,6 +74,41 @@ pub struct Settings {
     pub share_sharp: bool,
     /// The share panel's layout, on this device only like the web's.
     pub share_layout: ShareLayout,
+    /// Settings > Notifications: a system notification for a mention, and for a direct message or a DM call.
+    pub notify_mentions: bool,
+    pub notify_dms: bool,
+    /// Global keys that mute and deafen during a call, `device_query` names like `ptt_key`; `None` is no key.
+    pub mute_key: Option<String>,
+    pub deafen_key: Option<String>,
+    /// Settings > App: a start with the computer opens in the tray, and what the window's close button does.
+    pub start_in_tray: bool,
+    pub on_close: OnClose,
+    /// The window's place and size when it last moved, restored at the next start.
+    pub window: Option<SavedWindow>,
+}
+
+/// What the window's close button does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnClose {
+    /// Always to the tray.
+    Tray,
+    /// Always quit, ending a call.
+    Quit,
+    /// Quit, but a call keeps going with the window in the tray (how it always worked).
+    #[default]
+    #[serde(other)]
+    Call,
+}
+
+/// The window's bounds in global screen pixels, the restored size when it is maximized.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SavedWindow {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub maximized: bool,
 }
 
 impl Default for Settings {
@@ -100,6 +135,14 @@ impl Default for Settings {
             share_kbps: None,
             share_sharp: true,
             share_layout: ShareLayout::Grid,
+            // On, unlike the web: a desktop app needs no permission prompt first.
+            notify_mentions: true,
+            notify_dms: true,
+            mute_key: None,
+            deafen_key: None,
+            start_in_tray: false,
+            on_close: OnClose::Call,
+            window: None,
         }
     }
 }
@@ -118,6 +161,14 @@ impl Settings {
         if crate::voice::ptt::parse_key(&self.ptt_key).is_none() {
             self.ptt_key = Settings::default().ptt_key;
         }
+        for k in [&mut self.mute_key, &mut self.deafen_key] {
+            *k = k
+                .take()
+                .filter(|k| crate::voice::ptt::parse_key(k).is_some());
+        }
+        self.window = self.window.filter(|w| {
+            [w.x, w.y, w.w, w.h].iter().all(|v| v.is_finite()) && w.w >= 200. && w.h >= 200.
+        });
         let max = crate::voice::mix::MAX_VOLUME;
         self.volumes.retain(|_, v| v.is_finite());
         self.volumes
@@ -175,13 +226,17 @@ pub fn path() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("Vesper").join("settings.json"))
 }
 
+/// The argument a start with the computer passes when it should open in the tray.
+pub const IN_TRAY: &str = "--in-tray";
+
 /// Turns starting with the computer on or off: the Run key on Windows, a login item on macOS, an autostart entry on
-/// Linux. The error is a sentence for the user.
-pub fn set_start_with_computer(on: bool) -> Result<(), String> {
+/// Linux (`~/.config/autostart`). `in_tray` adds `--in-tray` to it. The error is a sentence for the user.
+pub fn set_start_with_computer(on: bool, in_tray: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let launch = auto_launch::AutoLaunchBuilder::new()
         .set_app_name("Vesper")
         .set_app_path(&exe.to_string_lossy())
+        .set_args(if in_tray { &[IN_TRAY][..] } else { &[] })
         .build()
         .map_err(|e| format!("Could not set start with the computer: {e}"))?;
     let r = if on {
@@ -224,6 +279,19 @@ mod tests {
             share_kbps: Some(4_000),
             share_sharp: false,
             share_layout: ShareLayout::Dock,
+            notify_mentions: false,
+            notify_dms: false,
+            mute_key: Some("F14".into()),
+            deafen_key: Some("F15".into()),
+            start_in_tray: true,
+            on_close: OnClose::Tray,
+            window: Some(SavedWindow {
+                x: -1900.,
+                y: 40.,
+                w: 1200.,
+                h: 800.,
+                maximized: true,
+            }),
         };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
@@ -289,6 +357,16 @@ mod tests {
             (Denoise::DeepFilter, 64, true)
         );
         assert_eq!(s.volumes, HashMap::from([("a".into(), 50.0)]));
+
+        // Keys that are not keys go, a window too small to use is forgotten, an unknown close choice is the default.
+        std::fs::write(
+            &p,
+            r#"{"mute_key": "Nope", "deafen_key": "F2", "window": {"x": 0, "y": 0, "w": 50, "h": 50, "maximized": false}, "on_close": "later"}"#,
+        )
+        .unwrap();
+        let s = Settings::load(&p);
+        assert_eq!((s.mute_key, s.deafen_key.as_deref()), (None, Some("F2")));
+        assert_eq!((s.window, s.on_close), (None, OnClose::Call));
 
         std::fs::write(&p, "not json").unwrap();
         assert_eq!(Settings::load(&p), Settings::default());

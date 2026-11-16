@@ -128,9 +128,10 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   after a day).
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
   Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
-- Settings (the gear next to your name; Admin for staff and Log out are in the menu on your name; Settings > App holds Start with the computer) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
+- Settings (the gear next to your name; Admin for staff and Log out are in the menu on your name; Settings > App holds Start with the computer, Start in the tray, what Close does and Copy diagnostics) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
   `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets. It also keeps whether the sidebar is hidden
-  (the web keeps that in localStorage), the style and colour scheme, and the ring's switch and volume. It is written to a temporary file and renamed. A value the app cannot read falls
+  (the web keeps that in localStorage), the style and colour scheme, the ring's switch and volume, the notification switches, the mute and deafen keys, and the
+  window's last size and place. It is written to a temporary file and renamed. A value the app cannot read falls
   back to its default alone; a file that is not JSON is kept as `settings.json.bad`.
 - DeepFilterNet runs natively (`vesper-dsp` with tract, the same `=0.21.4` pin and debug-assertions override as the root
   workspace). The app does not ship the model: at the first call it downloads `/dsp/model.tar.gz` from the server it is signed
@@ -142,7 +143,9 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   (`scripts/fetch-model.sh`); without it the test prints `SKIPPED` and passes. CI has no model, so it skips there.
 - Push to talk watches its key globally on Windows, macOS (with Accessibility access) and X11, only during a call. On Wayland it
   works only while the window has focus. As on the web, a press while a text field in Vesper has focus is ignored, and a
-  release always counts. The tray uses KSNI on Linux (no GTK headers needed); a desktop without a tray host shows none.
+  release always counts. The mute and deafen keys (Settings > Voice) work the same way, once per press. The tray uses KSNI
+  on Linux (no GTK headers needed); a desktop without a tray host shows none. The log file and notifications are in
+  [known-issues.md](known-issues.md#desktop-client-v2-in-progress).
 - Sign in: the app asks for the server address (the one you open Vesper at in a browser, e.g. `https://vesper.example.com`), a
   username and a password. Accounts are made in the web app. The session is kept in the OS keyring (Secret Service on Linux,
   for example GNOME Keyring or KWallet); without one the app works but asks you to sign in at every start.

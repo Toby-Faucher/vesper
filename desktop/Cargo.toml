@@ -22,6 +22,7 @@ gpui = "=0.2.2"
 gpui-component = "=0.5.1"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 keyring = "4.2"
+log = { version = "0.4", features = ["std"] }
 opus = "0.3"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "cookies", "rustls-no-provider", "charset", "http2", "system-proxy", "stream"] }
@@ -53,10 +54,14 @@ windows-capture = "1.5"
 ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
 pipewire = "0.9"
 x11rb = { version = "0.13", features = ["randr"] }
+# Notifications (src/notify.rs) and the launcher's unread count (src/badge.rs), over zbus, already in GPUI's tree.
+zbus = { version = "5", default-features = false, features = ["async-io"] }
 
 # The single instance check's named pipe on Windows (src/single.rs).
 [target.'cfg(windows)'.dependencies]
 tokio = { version = "1", features = ["net"] }
+# Toasts with a click handler (src/notify.rs).
+tauri-winrt-notification = "0.8"
 
 # The exe's icon (build.rs). Already in the tree through gpui's own manifest.
 [target.'cfg(windows)'.build-dependencies]

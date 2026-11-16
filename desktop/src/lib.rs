@@ -4,9 +4,11 @@
 pub mod files;
 pub mod highlight;
 pub mod link;
+pub mod logfile;
 pub mod markdown;
 pub mod model;
 pub mod net;
+pub mod notify;
 pub mod searchq;
 pub mod settings;
 pub mod single;
