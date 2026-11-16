@@ -31,6 +31,7 @@ use vesper_protocol::{Attachment, AttachmentKind, Message, UserInfo};
 use super::c::{self, Avatar, Ellipsis, MenuItem, mix, popover_frame};
 use super::icons::icon;
 use super::motion::{self, POP, RISE};
+use super::select::{SelText, Selection};
 use super::theme::{TEXT_SM, TEXT_XS, TextStepExt, Tokens, tokens};
 use super::{
     CancelEdit, ComposerDown, ComposerEscape, ComposerTab, ComposerUp, EDIT_BOX, NewLine,
@@ -549,8 +550,12 @@ impl Vesper {
         let anchor = format!("name-{id}");
         let open = {
             let (uid, key) = (msg.author_id.clone(), anchor.clone());
+            let sel = format!("author-{id}");
             move |this: &mut Self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
-                this.open_person(uid.clone(), key.clone(), false, cx)
+                // A drag over the name selected it: that is not a click on it.
+                if !Selection::dragged_in(&sel, cx) {
+                    this.open_person(uid.clone(), key.clone(), false, cx)
+                }
             }
         };
         let gutter = if head {
@@ -594,7 +599,7 @@ impl Vesper {
                             .hover(|s| s.underline())
                             .on_click(cx.listener(open))
                             .child(self.probe(anchor))
-                            .child(name),
+                            .child(SelText::new(format!("author-{id}"), name).pointer()),
                     )
                     // Baseline to baseline with the 14/20 name: 3 px down.
                     .child(

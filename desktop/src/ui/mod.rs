@@ -16,6 +16,7 @@ mod md;
 pub mod motion;
 mod person;
 mod room;
+mod select;
 pub mod settings;
 mod share;
 mod sidebar;
@@ -63,6 +64,7 @@ actions!(
         ComposerEscape,
         PasteFile,
         Dismiss,
+        CopySelection,
         ConfirmDialog,
         FindUp,
         FindDown,
@@ -108,6 +110,11 @@ pub fn init(cx: &mut App) {
         // Esc anywhere closes the topmost thing (an input's own Esc goes first, and passes it on when it has nothing
         // to close).
         KeyBinding::new("escape", Dismiss, None),
+        // Selected message text (select.rs). A focused field's own Ctrl+C comes first.
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-c", CopySelection, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-c", CopySelection, None),
         KeyBinding::new("enter", ConfirmDialog, Some(DIALOG)),
         // The switcher's and search's field: the rows move, the field keeps the focus.
         KeyBinding::new("up", FindUp, find_input),
@@ -269,6 +276,8 @@ pub struct Vesper {
     pub capturing_key: bool,
     key_problem: &'static str,
     key_focus: FocusHandle,
+    /// Held while text is selected, so Ctrl+C copies it (select.rs).
+    text_focus: FocusHandle,
     settings_error: String,
     /// The Settings and Admin pages' own state.
     page: settings::Page,
@@ -442,6 +451,11 @@ impl Vesper {
             capturing_key: false,
             key_problem: "",
             key_focus: cx.focus_handle(),
+            text_focus: {
+                let f = cx.focus_handle();
+                cx.set_global(select::TextFocus(f.clone()));
+                f
+            },
             settings_error: String::new(),
             page: Default::default(),
             ptt_tx: None,
@@ -1076,6 +1090,8 @@ impl Render for Vesper {
         // `body` of app.css: --bg-app, --fg, 13/20.
         div()
             .on_action(cx.listener(Self::dismiss))
+            .track_focus(&self.text_focus)
+            .on_action(|_: &CopySelection, _, cx| select::Selection::copy(cx))
             .on_action(cx.listener(Self::confirm_dialog))
             .on_action(cx.listener(|this, _: &FindUp, _, cx| this.find_move(false, cx)))
             .on_action(cx.listener(|this, _: &FindDown, _, cx| this.find_move(true, cx)))

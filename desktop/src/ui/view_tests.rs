@@ -2080,3 +2080,84 @@ fn the_meter_and_the_mic_test(cx: &mut TestAppContext) {
         "closing the page stops the test: {sent:?}"
     );
 }
+
+#[gpui::test]
+fn message_text_and_names_select_and_copy(cx: &mut TestAppContext) {
+    use gpui::{Focusable, MouseButton, MouseDownEvent, point, px};
+    let (view, cx, _rx) = open(cx);
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        v.composer.update(cx, |i, cx| i.focus(window, cx))
+    });
+    // A drag across "first\nsecond line" (message 10's text) selects all of it; Ctrl+C copies it.
+    let b = cx.debug_bounds("md-10-1").expect("the text is drawn");
+    let none = Modifiers::none();
+    cx.simulate_mouse_down(b.origin + point(px(1.), px(2.)), MouseButton::Left, none);
+    cx.simulate_mouse_move(
+        b.bottom_right() + point(px(40.), px(-2.)),
+        MouseButton::Left,
+        none,
+    );
+    cx.simulate_mouse_up(b.bottom_right(), MouseButton::Left, none);
+    cx.read(|cx| {
+        assert_eq!(
+            super::select::Selection::selected(cx).as_deref(),
+            Some("first\nsecond line")
+        )
+    });
+    view.update_in(cx, |v, window, cx| {
+        assert!(
+            !v.composer.read(cx).focus_handle(cx).is_focused(window),
+            "the composer let go of the keys"
+        )
+    });
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|c| c.text()).as_deref(),
+        Some("first\nsecond line")
+    );
+
+    // A double click takes the word; a click elsewhere lets it go.
+    let at = b.origin + point(px(4.), px(2.));
+    cx.simulate_event(MouseDownEvent {
+        position: at,
+        button: MouseButton::Left,
+        modifiers: none,
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(at, MouseButton::Left, none);
+    cx.read(|cx| {
+        assert_eq!(
+            super::select::Selection::selected(cx).as_deref(),
+            Some("first")
+        )
+    });
+    let room = cx.debug_bounds("composer").unwrap();
+    cx.simulate_mouse_down(room.center(), MouseButton::Left, none);
+    cx.read(|cx| assert_eq!(super::select::Selection::selected(cx), None));
+    cx.simulate_mouse_up(room.center(), MouseButton::Left, none);
+
+    // A drag over a name selects it and does not open the card (a click does: a_name_in_the_timeline_opens_the_card).
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
+    let n = cx.debug_bounds("name-10").unwrap();
+    cx.simulate_mouse_down(n.origin + point(px(1.), px(4.)), MouseButton::Left, none);
+    cx.simulate_mouse_move(
+        n.top_right() + point(px(20.), px(4.)),
+        MouseButton::Left,
+        none,
+    );
+    cx.simulate_mouse_up(
+        n.top_right() + point(px(20.), px(4.)),
+        MouseButton::Left,
+        none,
+    );
+    cx.read(|cx| {
+        assert_eq!(
+            super::select::Selection::selected(cx).as_deref(),
+            Some("Bob")
+        )
+    });
+    view.read_with(cx, |v, _| assert!(v.person.is_none()));
+}

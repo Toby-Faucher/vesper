@@ -168,6 +168,9 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   Hyprland ignore minimise. The edges of a floating window on Linux do not resize it (the compositor's own keys do).
   Verified: the buttons render (parity screenshots in a headless sway). Not verified: dragging, double click and the
   buttons on a real desktop, and the Windows title bar (only CI builds it).
+- Message text, code blocks and names can be selected and copied (drag, double click for a word, triple click for all,
+  Ctrl+C), but only inside one text at a time: a drag cannot run across paragraphs or messages as on the web. The room
+  header, cards and other labels are not selectable. Verified by a headless GPUI test, not with a real mouse.
 - A second launch brings the running app to the front and exits (a Unix socket, a named pipe on Windows). On Wayland the
   same limit as Show Vesper applies. Verified on Linux by a unit test; the Windows pipe is not verified.
 - An incoming DM call plays the web's ring sound every 2.5 s, and the tray's tooltip says who calls; the window is not
