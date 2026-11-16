@@ -367,7 +367,7 @@ pub struct Message {
     pub reply_to: Option<ReplyPreview>,
     pub reactions: Vec<Reaction>,
     pub attachments: Vec<Attachment>,
-    /// User ids mentioned in the body.
+    /// User ids mentioned in the body; `@everyone` and `@here` add the members they reach.
     pub mentions: Vec<String>,
     pub pinned: bool,
 }

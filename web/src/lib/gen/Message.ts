@@ -14,6 +14,6 @@ export type Message = { id: number, room_id: number, author_id: string, body: st
  */
 updated_at: number, deleted: boolean, reply_to: ReplyPreview | null, reactions: Array<Reaction>, attachments: Array<Attachment>, 
 /**
- * User ids mentioned in the body.
+ * User ids mentioned in the body; `@everyone` and `@here` add the members they reach.
  */
 mentions: Array<string>, pinned: boolean, };

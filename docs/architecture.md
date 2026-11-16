@@ -67,6 +67,7 @@ The "Not verified" list at the end says what was only read.
   | `---`, `***` or `___` alone on a line | a rule |
   | a bare `http://` or `https://` URL | a link |
   | `@name` | a mention |
+  | `@everyone`, `@here` | a mention of every member, or of every member online now (drawn like a mention of you) |
 
   Not supported, shown as typed: raw HTML, images (`![x](y)`), `[text](url)` links (the text could hide where a link goes),
   tables, task lists, backslash escapes, setext (underlined) headings and indented code. An unclosed marker is text.
@@ -417,6 +418,9 @@ an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets th
 - **Replies.** `reply_to` may name a deleted message of the room; the reply shows it as deleted. Allowed on purpose.
 - **Mentions.** `@name` at a word start, the name being `[a-z0-9_]{3,24}` after an ASCII lowercase, at most 20 per message, read again
   on each edit. A name that is unknown, banned or cannot see the room is dropped, so it never counts as a mention.
+  `@everyone` mentions every member who can see the room and is not banned, the author aside; `@here` only those of them
+  with a socket open at that moment. They are stored as mentions of each person, so unread counts, highlights and pushes
+  work as for `@name`. Signup refuses the usernames `everyone` and `here`. The composer offers both (not in a DM).
 - **Reactions.** 1 to 32 bytes with no ASCII letter or digit, whitespace or control character (400). At most 20 different ones per message (409).
 - **Pins.** At most 50 per room (409). A DM has no pins: the pin route answers 403 for a DM message.
 - **Read marker.** `last_read_id` is 0 or a message of that room (else 400), so it cannot be set past future messages. It never

@@ -9,7 +9,8 @@
   import CodeBlock from './CodeBlock.svelte';
 
   let { nodes, me = '' }: { nodes: Md[]; me?: string } = $props();
-  const mine = (u: string) => !!me && u.toLowerCase() === me.toLowerCase();
+  // @everyone and @here reach the reader too: drawn as a mention of them.
+  const mine = (u: string) => ['everyone', 'here'].includes(u.toLowerCase()) || (!!me && u.toLowerCase() === me.toLowerCase());
 </script>
 
 <!-- dir="ltr" isolates each link from bidi characters in the text around it; the shown text is the full href. -->

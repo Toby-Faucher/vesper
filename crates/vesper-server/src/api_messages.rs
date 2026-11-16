@@ -94,18 +94,34 @@ async fn visible_message(
     Ok((msg, room))
 }
 
-/// User ids of the `@names` in `body` that can see `room` and are not banned.
-async fn mentions(st: &AppState, room: &RoomInfo, body: &str) -> Result<Vec<String>, ApiError> {
+/// `@everyone` mentions every member who can see the room; `@here` only those with a socket open.
+/// Neither can be a username (signup refuses them).
+pub const EVERYONE: &str = "everyone";
+pub const HERE: &str = "here";
+
+/// User ids of the `@names` in `body` that can see `room` and are not banned. `@everyone` and
+/// `@here` add the other members (not `author`) who can see it, `@here` only those online now.
+async fn mentions(
+    st: &AppState,
+    room: &RoomInfo,
+    author: &str,
+    body: &str,
+) -> Result<Vec<String>, ApiError> {
     let names: HashSet<String> = mentioned_usernames(body).into_iter().collect();
     if names.is_empty() {
         return Ok(Vec::new());
     }
+    let (all, here) = (names.contains(EVERYONE), names.contains(HERE));
     Ok(st
         .store
         .users()
         .await?
         .into_iter()
-        .filter(|u| names.contains(&u.username) && !u.banned && can_see(u, room))
+        .filter(|u| !u.banned && can_see(u, room))
+        .filter(|u| {
+            names.contains(&u.username)
+                || (u.user_id != author && (all || (here && st.hub.online(&u.user_id))))
+        })
         .map(|u| u.user_id)
         .collect())
 }
@@ -170,7 +186,7 @@ async fn send(
     let room = visible_room(&st, &a.user, id).await?;
     limit(&st, Kind::Message, &a.user.user_id)?;
     let text = body_text(&req.body, !req.attachments.is_empty())?;
-    let mentions = mentions(&st, &room, &text).await?;
+    let mentions = mentions(&st, &room, &a.user.user_id, &text).await?;
     let msg = st
         .store
         .post_message(NewMessage {
@@ -225,7 +241,7 @@ async fn edit(
     }
     limit(&st, Kind::Change, &a.user.user_id)?;
     let text = body_text(&req.body, !msg.attachments.is_empty())?;
-    let mentions = mentions(&st, &room, &text).await?;
+    let mentions = mentions(&st, &room, &a.user.user_id, &text).await?;
     let msg = st
         .store
         .edit_message(id, &a.user.user_id, &text, &mentions, now_ms())
