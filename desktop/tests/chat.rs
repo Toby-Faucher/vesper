@@ -193,7 +193,7 @@ async fn files_upload_attach_and_download_with_the_cookie() {
     let g = a.room("general");
     let dir = tempfile::tempdir().unwrap();
 
-    // A small text file, sent with no text: the body is its name, the kind is file.
+    // A small text file, sent with no text: the body is empty, the kind is file.
     let notes = dir.path().join("notes.txt");
     std::fs::write(&notes, "hello file").unwrap();
     let cmds = a.model.attach(vec![(notes.clone(), 10)]);
@@ -209,7 +209,13 @@ async fn files_upload_attach_and_download_with_the_cookie() {
             .any(|x| !x.attachments.is_empty())
     })
     .await;
-    let f = find(&b, g, "notes.txt").unwrap().attachments[0].clone();
+    let m = b.model.chat.rooms[&g]
+        .messages
+        .iter()
+        .find(|x| !x.attachments.is_empty())
+        .unwrap();
+    assert!(m.body.is_empty());
+    let f = m.attachments[0].clone();
     assert_eq!(
         (f.name.as_str(), f.kind, f.size),
         ("notes.txt", AttachmentKind::File, 10)
