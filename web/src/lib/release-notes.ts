@@ -19,7 +19,7 @@ export const RELEASE_NOTES: readonly Note[] = [
     version: '2.2.0',
     items: [
       'Share your screen from the desktop app, on Windows and Linux.',
-      'Watching shares in the desktop app is smooth, fits the window and tiles like here.',
+      'Shares in the desktop app play smoothly, fit the window and tile like here.',
       'New: @everyone pings the room, @here pings who is online.',
       'Files sent without text no longer show their names as a message.',
       'Failed uploads try again by themselves.',
