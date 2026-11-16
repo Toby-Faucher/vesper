@@ -231,6 +231,44 @@ async fn files_upload_attach_and_download_with_the_cookie() {
     b.until("saved", |m| m.saved.is_some()).await;
     assert_eq!(std::fs::read_to_string(&to).unwrap(), "hello file");
 
+    // A sound: the server finds audio/wav in its first bytes; Open downloads it under the extension of that type
+    // (what the system player is picked by), then hands it over.
+    let wav = dir.path().join("clip.bin");
+    let mut bytes = b"RIFF\x24\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x80\x3e\0\0\0\x7d\0\0\x02\0\x10\0data\0\0\0\0".to_vec();
+    bytes.resize(64, 0);
+    std::fs::write(&wav, &bytes).unwrap();
+    let cmds = a.model.attach(vec![(wav, 64)]);
+    a.run(cmds);
+    a.until("uploaded", |m| !m.tray.done(g).is_empty()).await;
+    send(&mut a, "a sound").await;
+    b.until("the sound", |m| {
+        m.chat.rooms[&g]
+            .messages
+            .iter()
+            .any(|x| x.body == "a sound")
+    })
+    .await;
+    let snd = find(&b, g, "a sound").unwrap().attachments[0].clone();
+    assert_eq!(
+        (snd.kind, snd.mime.as_str()),
+        (AttachmentKind::Audio, "audio/wav")
+    );
+    let ext = vesper_desktop::files::media_ext(&snd.mime).unwrap();
+    let to = dir.path().join("open").join(format!("{}.{ext}", snd.id));
+    b.run(vec![Cmd::Download {
+        id: snd.id.clone(),
+        to: to.clone(),
+        open: true,
+    }]);
+    let path = event(&mut b, "the sound to open", |ev| match ev {
+        Event::Downloaded { path, open: true } => Some(path.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(path, to);
+    assert_eq!(std::fs::read(&to).unwrap(), bytes);
+    assert!(path.extension().is_some_and(|e| e == "wav"));
+
     // An image: the server sees a png, Bob's client fetches it with his cookie and decodes it small.
     let pic = dir.path().join("pic.png");
     image::RgbaImage::from_pixel(800, 400, image::Rgba([0, 128, 255, 255]))

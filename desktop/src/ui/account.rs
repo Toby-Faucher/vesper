@@ -51,13 +51,18 @@ pub fn square_picture(file: &[u8]) -> Result<Vec<u8>, &'static str> {
     if side == 0 {
         return Err(PICTURE_UNREADABLE);
     }
-    let square = img
+    // Premultiplied while resized, as the web's canvas does, so the clear parts do not darken the edges.
+    let mut square = img
         .crop_imm((w - side) / 2, (h - side) / 2, side, side)
-        .resize_exact(
-            PICTURE_PX,
-            PICTURE_PX,
-            image::imageops::FilterType::Lanczos3,
-        );
+        .into_rgba8();
+    crate::files::premultiply(&mut square);
+    let mut square = image::imageops::resize(
+        &square,
+        PICTURE_PX,
+        PICTURE_PX,
+        image::imageops::FilterType::Lanczos3,
+    );
+    crate::files::unpremultiply(&mut square);
     let mut out = std::io::Cursor::new(vec![]);
     square
         .write_to(&mut out, F::Png)

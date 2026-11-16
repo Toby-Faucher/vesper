@@ -290,6 +290,15 @@ impl Fail {
         matches!(self, Fail::Api { status: 401, .. })
     }
 
+    /// Trying again may help: no answer, or the server failed (5xx). Not a full disk (507), too large or a limit.
+    pub fn worth_retrying(self) -> bool {
+        match self {
+            Fail::Network => true,
+            Fail::Api { status, .. } => status >= 500 && status != 507,
+            Fail::NotVesper => false,
+        }
+    }
+
     /// Plain words for the error, the same texts as `web/src/lib/api.ts`.
     pub fn text(self) -> &'static str {
         let code = match self {
@@ -1011,7 +1020,21 @@ impl Net {
                                 let _ = ptx.send(Event::UploadProgress { key, progress: p });
                             }
                         };
-                        let ev = match api.upload(room, &path, progress).await {
+                        let progress = Arc::new(progress);
+                        let mut tries = 0;
+                        let r = loop {
+                            let p = progress.clone();
+                            let r = api.upload(room, &path, move |x| p(x)).await;
+                            match r {
+                                Err(Some(f)) if f.worth_retrying() && tries < UPLOAD_RETRIES => {
+                                    tries += 1;
+                                    tokio::time::sleep(retry_wait(tries)).await;
+                                    progress(0.0);
+                                }
+                                r => break r,
+                            }
+                        };
+                        let ev = match r {
                             Ok(attachment) => {
                                 // A pasted picture was ours to make; it is on the server now.
                                 if path.starts_with(files::cache_dir("paste")) {
@@ -1077,6 +1100,14 @@ const TOO_LARGE: Fail = Fail::Api {
     status: 413,
     code: ApiErrorCode::TooLarge,
 };
+
+/// A failed upload is tried again this many times on its own, then waits for Retry.
+const UPLOAD_RETRIES: u32 = 3;
+
+/// The wait before the `n`th try again: 1, 2, then 4 s.
+fn retry_wait(n: u32) -> Duration {
+    Duration::from_secs(1 << (n.max(1) - 1).min(4))
+}
 
 pub const ATTACH_FAILED: &str = "That file could not be attached. Upload it again.";
 pub const PINS_FULL: &str = "This room has 50 pins, the most it can hold. Unpin one first.";
@@ -1406,6 +1437,22 @@ async fn socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uploads_try_again_only_when_it_can_help() {
+        let api = |status| Fail::Api {
+            status,
+            code: ApiErrorCode::Internal,
+        };
+        assert!(Fail::Network.worth_retrying());
+        assert!(api(500).worth_retrying() && api(503).worth_retrying());
+        for s in [400, 401, 403, 413, 429, 507] {
+            assert!(!api(s).worth_retrying(), "{s}");
+        }
+        assert!(!Fail::NotVesper.worth_retrying());
+        let waits: Vec<_> = (1..=UPLOAD_RETRIES).map(retry_wait).collect();
+        assert_eq!(waits, [1, 2, 4].map(Duration::from_secs));
+    }
 
     #[test]
     fn origin_of_normalises_like_the_server() {

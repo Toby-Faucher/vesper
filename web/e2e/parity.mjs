@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ORIGIN, browser, inVoice, openRoom, signup, sleep, startServer, track } from './lib.mjs';
-import { LONG_ROOM, VIEWPORT, api, backdate, cast, home, photosRoom, plans, rest, shotBrowser } from './shotlib.mjs';
+import { LONG_ROOM, VIEWPORT, api, backdate, cast, gif, home, photosRoom, plans, pngDisc, rest, shotBrowser } from './shotlib.mjs';
 
 const out = fileURLToPath(new URL('parity/', import.meta.url));
 const app = process.env.VESPER_DESKTOP_BIN || fileURLToPath(new URL('../../desktop/target/debug/vesper-desktop', import.meta.url));
@@ -43,6 +43,28 @@ const TRAY = [
 // are taken, and `focus` keeps the focus where the web steps left it. `offline` shoots the desktop while the server is
 // stopped (VESPER_DEV_OFFLINE). Every desktop run gets the web scenes' clock (7:41 PM) and an en-US locale.
 // The desktop has no passkeys, so the web login is shot without the passkey button.
+let stickers;
+// A room with a transparent PNG and a four-frame GIF (index 0 clear), each in its own message.
+function stickersRoom({ alice }) {
+  stickers ??= (async () => {
+    const room = await api(alice.page, 'POST', '/api/rooms', { name: 'stickers' });
+    const up = (name, buf) => alice.page.evaluate(async ([room, name, b64]) => {
+      const r = await fetch(`/api/rooms/${room}/uploads?name=${encodeURIComponent(name)}`, { method: 'POST', body: Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)) });
+      return (await r.json()).attachment.id;
+    }, [room.id, name, buf.toString('base64')]);
+    const post = async (body, file, buf) => api(alice.page, 'POST', `/api/rooms/${room.id}/messages`, { body, reply_to: null, attachments: [await up(file, buf)] });
+    const n = 96;
+    const frames = [0, 1, 2, 3].map((f) => Array.from({ length: n * n }, (_, i) => {
+      const [x, y] = [i % n, Math.floor(i / n)];
+      const at = 8 + f * 16;
+      return x >= at && x < at + 32 && y >= 32 && y < 64 ? 1 + (f % 3) : 0;
+    }));
+    await post('a sticker', 'disc.png', pngDisc(1200, [214, 140, 72]));
+    await post('and it moves', 'moves.gif', gif(n, [[0, 0, 0], [214, 140, 72], [92, 110, 96], [40, 52, 84]], frames, 200));
+    return room;
+  })();
+  return stickers;
+}
 const SCENES = {
   login: {
     web: async () => {
@@ -181,6 +203,38 @@ const SCENES = {
       return page;
     },
     desktop: { user: 'alice', scene: 'room:photos' },
+  },
+  // stickers: a transparent PNG (an amber disc) and an animated GIF (a square that moves, clear around it). The room's
+  // own background must show through both, never black or grey.
+  'image-transparent': {
+    web: async (ctx) => {
+      await stickersRoom(ctx);
+      const page = ctx.alice.page;
+      await home(page);
+      await openRoom(page, 'stickers');
+      await page.locator('article', { hasText: 'and it moves' }).waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('article button img')].every((i) => i.complete && i.naturalWidth));
+      return page;
+    },
+    // Two more desktop frames 300 ms apart: the GIF moved between them.
+    desktop: { user: 'alice', scene: 'room:stickers', frames: [0, 300], now: true },
+  },
+  'image-transparent-viewer': {
+    web: async (ctx) => {
+      await stickersRoom(ctx);
+      const page = ctx.alice.page;
+      await home(page);
+      await openRoom(page, 'stickers');
+      await page.locator('article', { hasText: 'and it moves' }).waitFor();
+      await page.locator('article button img').first().click();
+      await page.getByRole('dialog').getByRole('link', { name: 'Download' }).waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('dialog img')].every((i) => i.complete && i.naturalWidth));
+      await sleep(400);
+      return page;
+    },
+    focus: true,
+    desktop: { user: 'alice', scene: 'room:stickers', env: { VESPER_DEV_VIEWER: '0' } },
+    after: ({ alice }) => alice.page.keyboard.press('Escape'),
   },
   // The first picture of photos open in the viewer: its name, the picture at fit size, Previous, Next and "1 of 2".
   'image-viewer': {
@@ -866,10 +920,10 @@ async function shootDesktop(sway, state, path, dir) {
       return;
     }
     if (state.frames) {
-      // VESPER_DEV_SEND (or the trigger): grab frames that long after the message or the ring came.
+      // VESPER_DEV_SEND (or the trigger): grab frames that long after the message or the ring came (`now`: after ready).
       await state.trigger?.();
       const until = performance.now() + 15000;
-      while (!log.includes('VESPER_DEV_ARRIVED')) {
+      while (!state.now && !log.includes('VESPER_DEV_ARRIVED')) {
         if (performance.now() > until) throw new Error(`no VESPER_DEV_ARRIVED:\n${log.slice(-2000)}`);
         await sleep(2);
       }

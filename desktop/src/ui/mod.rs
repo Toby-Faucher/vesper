@@ -7,6 +7,7 @@ mod banner;
 pub mod c;
 mod call;
 mod chat;
+mod chrome;
 #[cfg(debug_assertions)]
 mod dev;
 mod find;
@@ -15,6 +16,7 @@ mod md;
 pub mod motion;
 mod person;
 mod room;
+mod select;
 mod send;
 pub mod settings;
 mod share;
@@ -32,6 +34,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Application, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement,
@@ -62,6 +65,7 @@ actions!(
         ComposerEscape,
         PasteFile,
         Dismiss,
+        CopySelection,
         ConfirmDialog,
         FindUp,
         FindDown,
@@ -107,6 +111,11 @@ pub fn init(cx: &mut App) {
         // Esc anywhere closes the topmost thing (an input's own Esc goes first, and passes it on when it has nothing
         // to close).
         KeyBinding::new("escape", Dismiss, None),
+        // Selected message text (select.rs). A focused field's own Ctrl+C comes first.
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-c", CopySelection, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-c", CopySelection, None),
         KeyBinding::new("enter", ConfirmDialog, Some(DIALOG)),
         // The switcher's and search's field: the rows move, the field keeps the focus.
         KeyBinding::new("up", FindUp, find_input),
@@ -124,6 +133,9 @@ pub fn init(cx: &mut App) {
 
 /// Starts the network and key threads and opens the window. Returns when the app quits.
 pub fn run() {
+    let crate::single::Claim::First(single) = crate::single::claim() else {
+        return; // another Vesper was running: it shows itself
+    };
     let audio: Arc<dyn crate::voice::AudioDevices> = Arc::new(Cpal);
     // The parity harness's calls run on fake devices (dev.rs).
     #[cfg(debug_assertions)]
@@ -144,10 +156,15 @@ pub fn run() {
         init(cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
+            // The app draws its own window buttons (chrome.rs): no system title bar on Windows, client-side
+            // decorations on Linux. macOS keeps its title bar.
             titlebar: Some(TitlebarOptions {
                 title: Some("Vesper".into()),
+                appears_transparent: cfg!(windows),
                 ..Default::default()
             }),
+            window_decorations: cfg!(target_os = "linux")
+                .then_some(gpui::WindowDecorations::Client),
             // Wayland's activation (the tray's Show Vesper) needs it, and the taskbar matches the window by it.
             app_id: Some("vesper".into()),
             ..Default::default()
@@ -188,6 +205,23 @@ pub fn run() {
             let tray = tray::start(cx, view.downgrade(), handle.into());
             view.update(cx, |v, _| (v._tray, v.audio) = (tray, Some(audio)));
         }
+        // A second launch asks this one to come to the front, as the tray's Show Vesper does.
+        if let Some(l) = single {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            l.serve(move || {
+                let _ = tx.send(());
+            });
+            let window: gpui::AnyWindowHandle = handle.into();
+            cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                while rx.recv().await.is_some() {
+                    let _ = cx.update_window(window, |_, window, cx| {
+                        window.activate_window();
+                        cx.activate(true);
+                    });
+                }
+            })
+            .detach();
+        }
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -221,6 +255,8 @@ pub struct Vesper {
     /// Inline pictures by upload id, and the order they came in.
     images: HashMap<String, chat::Img>,
     image_order: VecDeque<String>,
+    /// A press on a top bar's empty space: the next move drags the window (`chrome.rs`).
+    drag_armed: bool,
     /// The `@` being typed (its byte offset and the text after it), the highlighted person, and an `@` whose list
     /// Esc closed.
     mention: Option<(usize, String)>,
@@ -241,6 +277,8 @@ pub struct Vesper {
     pub capturing_key: bool,
     key_problem: &'static str,
     key_focus: FocusHandle,
+    /// Held while text is selected, so Ctrl+C copies it (select.rs).
+    text_focus: FocusHandle,
     settings_error: String,
     /// The Settings and Admin pages' own state.
     page: settings::Page,
@@ -404,6 +442,7 @@ impl Vesper {
             heads: vec![],
             images: HashMap::new(),
             image_order: VecDeque::new(),
+            drag_armed: false,
             mention: None,
             mention_ix: 0,
             mention_dismissed: None,
@@ -415,6 +454,11 @@ impl Vesper {
             capturing_key: false,
             key_problem: "",
             key_focus: cx.focus_handle(),
+            text_focus: {
+                let f = cx.focus_handle();
+                cx.set_global(select::TextFocus(f.clone()));
+                f
+            },
             settings_error: String::new(),
             page: Default::default(),
             ptt_tx: None,
@@ -1057,6 +1101,8 @@ impl Render for Vesper {
         // `body` of app.css: --bg-app, --fg, 13/20.
         div()
             .on_action(cx.listener(Self::dismiss))
+            .track_focus(&self.text_focus)
+            .on_action(|_: &CopySelection, _, cx| select::Selection::copy(cx))
             .on_action(cx.listener(Self::confirm_dialog))
             .on_action(cx.listener(|this, _: &FindUp, _, cx| this.find_move(false, cx)))
             .on_action(cx.listener(|this, _: &FindDown, _, cx| this.find_move(true, cx)))
@@ -1083,6 +1129,21 @@ impl Render for Vesper {
                 this.window_key(Some(&e.keystroke.key), false);
             }))
             .child(body)
+            // Before the main screen there is no top bar: its top strip moves the window.
+            .when(self.model.screen != Screen::Main, |d| {
+                d.child(
+                    self.draggable(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right(px(16. + chrome::RESERVE))
+                            .h(px(48.)),
+                        cx,
+                    ),
+                )
+            })
+            .children(self.window_controls(window, cx))
             .children(reveal)
     }
 }

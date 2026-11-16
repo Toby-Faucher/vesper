@@ -54,6 +54,10 @@ ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
 pipewire = "0.9"
 x11rb = { version = "0.13", features = ["randr"] }
 
+# The single instance check's named pipe on Windows (src/single.rs).
+[target.'cfg(windows)'.dependencies]
+tokio = { version = "1", features = ["net"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 

@@ -225,6 +225,11 @@ fn shadow(x: f32, y: f32, blur: f32, spread: f32, color: u32) -> BoxShadow {
 }
 
 impl Tokens {
+    /// `--selection`: selected text, the accent at 30 % over whatever is under it (pages, fields, the composer).
+    pub fn selection(&self) -> Hsla {
+        Hsla::from(self.accent).opacity(0.3)
+    }
+
     /// The look for the scheme and the account's accent (a preset id or `#rrggbb`; `None` or a refused colour is
     /// amber), as the web app paints it.
     pub fn new(scheme: Scheme, accent: Option<&str>) -> Tokens {
@@ -368,7 +373,7 @@ pub fn set(t: Tokens, cx: &mut App) {
     th.input = c(t.line);
     th.ring = c(t.focus);
     th.caret = c(t.fg);
-    th.selection = c(t.accent_subtle);
+    th.selection = t.selection();
     th.primary = c(t.accent);
     th.primary_hover = c(t.accent_hover);
     th.primary_active = c(t.accent_hover);

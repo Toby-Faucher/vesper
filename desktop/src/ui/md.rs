@@ -7,14 +7,15 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, ElementId, FontStyle, FontWeight, Hsla, InteractiveElement, InteractiveText,
-    IntoElement, ParentElement, RenderOnce, StatefulInteractiveElement, StrikethroughStyle, Styled,
-    StyledText, TextRun, UnderlineStyle, Window, div, font, px, transparent_black,
+    AnyElement, App, ElementId, FontStyle, FontWeight, Hsla, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, StatefulInteractiveElement, StrikethroughStyle, Styled, TextRun,
+    UnderlineStyle, Window, div, font, px, transparent_black,
 };
 
 use super::c::mix;
 use super::icons::icon;
 use super::motion;
+use super::select::SelText;
 use super::theme::{TEXT_BASE, TEXT_LG, TEXT_SM, TEXT_XS, TextStepExt, Tokens};
 use crate::highlight::{Kind, highlight, lang_of};
 use crate::markdown::Md;
@@ -216,14 +217,11 @@ fn paragraph(nodes: &[Md], color: Hsla, c: &Ctx, n: &mut usize) -> AnyElement {
         move || name
     });
     let r = runs(&f, &c.t);
-    let styled = StyledText::new(f.text).with_runs(r);
-    if f.links.is_empty() {
-        return el.child(styled).into_any_element();
-    }
     let (ranges, hrefs): (Vec<_>, Vec<_>) = f.links.into_iter().unzip();
     el.child(
-        InteractiveText::new(ElementId::Name(name.into()), styled)
-            .on_click(ranges, move |ix, _, cx| cx.open_url(&hrefs[ix])),
+        SelText::new(name, f.text)
+            .with_runs(r)
+            .on_link(ranges, move |ix, _, cx| cx.open_url(&hrefs[ix])),
     )
     .into_any_element()
 }
@@ -339,7 +337,7 @@ fn code_block(v: &str, lang: Option<&String>, c: &Ctx, n: &mut usize) -> AnyElem
                 .text_size(px(13.))
                 .line_height(px(20.))
                 .whitespace_nowrap()
-                .child(StyledText::new(text).with_runs(r)),
+                .child(SelText::new(format!("code-{id}-{block}"), text).with_runs(r)),
         )
         .into_any_element()
 }
@@ -376,8 +374,11 @@ fn block(node: &Md, color: Hsla, c: &Ctx, n: &mut usize, depth: usize) -> AnyEle
                 let name = format!("md-{}-{n}", c.id);
                 let r = runs(&f, t);
                 div()
-                    .debug_selector(move || name)
-                    .child(StyledText::new(f.text).with_runs(r))
+                    .debug_selector({
+                        let name = name.clone();
+                        move || name
+                    })
+                    .child(SelText::new(name, f.text).with_runs(r))
             })
             .into_any_element(),
         // `my-2 border-line`

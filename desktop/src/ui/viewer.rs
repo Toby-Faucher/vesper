@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, App, Context, Div, ImageSource, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, deferred, div, img, px,
+    AnyElement, App, Context, Div, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window, deferred, div, px,
 };
 use vesper_protocol::{Attachment, AttachmentKind};
 
@@ -144,7 +144,7 @@ impl Vesper {
             Some(Pic::Ready(i)) => {
                 let s = i.size(0);
                 let (w, h) = fit(s.width.0 as f32, s.height.0 as f32, inner_max);
-                let el = img(ImageSource::Render(i.clone())).w(px(w)).h(px(h));
+                let el = chat::picture(i, format!("full-{}", a.id), w, h, cx);
                 (
                     stage(&t).bg(gpui::transparent_black()).child(el),
                     (w + 42.).max(440.),

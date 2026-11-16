@@ -31,6 +31,7 @@ use vesper_protocol::{Attachment, AttachmentKind, Message, UserInfo};
 use super::c::{self, Avatar, Ellipsis, MenuItem, mix, popover_frame};
 use super::icons::icon;
 use super::motion::{self, POP, RISE};
+use super::select::{SelText, Selection};
 use super::theme::{TEXT_SM, TEXT_XS, TextStepExt, Tokens, tokens};
 use super::{
     CancelEdit, ComposerDown, ComposerEscape, ComposerTab, ComposerUp, EDIT_BOX, NewLine,
@@ -549,8 +550,12 @@ impl Vesper {
         let anchor = format!("name-{id}");
         let open = {
             let (uid, key) = (msg.author_id.clone(), anchor.clone());
+            let sel = format!("author-{id}");
             move |this: &mut Self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
-                this.open_person(uid.clone(), key.clone(), false, cx)
+                // A drag over the name selected it: that is not a click on it.
+                if !Selection::dragged_in(&sel, cx) {
+                    this.open_person(uid.clone(), key.clone(), false, cx)
+                }
             }
         };
         let gutter = if head {
@@ -594,7 +599,7 @@ impl Vesper {
                             .hover(|s| s.underline())
                             .on_click(cx.listener(open))
                             .child(self.probe(anchor))
-                            .child(name),
+                            .child(SelText::new(format!("author-{id}"), name).pointer()),
                     )
                     // Baseline to baseline with the 14/20 name: 3 px down.
                     .child(
@@ -1260,11 +1265,7 @@ impl Vesper {
                     // Loaded: no fill behind it, so a transparent picture blends in.
                     boxed(w as f32, h as f32)
                         .bg(gpui::transparent_black())
-                        .child(
-                            img(ImageSource::Render(i.clone()))
-                                .w(px(w as f32))
-                                .h(px(h as f32)),
-                        )
+                        .child(picture(i, format!("pic-{}", a.id), w as f32, h as f32, cx))
                 }
                 Img::Loading => boxed(BOX.0 as f32, BOX.1 as f32),
                 Img::Failed => boxed(BOX.0 as f32, 48.)
@@ -2556,8 +2557,33 @@ pub(super) fn open_file(path: &std::path::Path, cx: &mut App) {
 }
 
 pub(super) fn render_image(p: Picture) -> Option<Arc<RenderImage>> {
-    let buf = image::RgbaImage::from_raw(p.width, p.height, p.bgra)?;
-    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buf)])))
+    if p.delays.is_empty() {
+        let buf = image::RgbaImage::from_raw(p.width, p.height, p.bgra)?;
+        return Some(Arc::new(RenderImage::new(vec![image::Frame::new(buf)])));
+    }
+    let len = (p.width * p.height * 4) as usize;
+    let frames = p
+        .bgra
+        .chunks_exact(len)
+        .zip(&p.delays)
+        .map(|(px, &ms)| {
+            let buf = image::RgbaImage::from_raw(p.width, p.height, px.to_vec())?;
+            let delay = image::Delay::from_numer_denom_ms(u32::from(ms), 1);
+            Some(image::Frame::from_parts(buf, 0, 0, delay))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Arc::new(RenderImage::new(frames)))
+}
+
+/// A picture `w` x `h`. An animated one plays (GPUI keeps the frame in the element's state, by `id`); under reduced
+/// motion it has no id, so it stays on its first frame.
+pub(super) fn picture(i: &Arc<RenderImage>, id: String, w: f32, h: f32, cx: &App) -> AnyElement {
+    let el = img(ImageSource::Render(i.clone())).w(px(w)).h(px(h));
+    if i.frame_count() > 1 && !tokens(cx).motion.reduced {
+        el.id(SharedString::from(id)).into_any_element()
+    } else {
+        el.into_any_element()
+    }
 }
 
 /// `.attach`, `.send` and the help IconButton: 32 px, `--radius`, a `--bg-hover` fill on hover in `--dur-1`; Attach
