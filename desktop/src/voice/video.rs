@@ -1,9 +1,13 @@
-//! Watching screen shares: the call engine hands each watched share's VP8 frames to a thread of their own
+//! Watching screen shares: the call engine hands each watched share's VP8 frames to a thread of that share's own
 //! (`vesper-video`), which decodes them (`vp8-decoder`, pure Rust) and turns each picture into BGRA, what GPUI draws.
+//! A thread each, so several shares decode side by side.
+//!
+//! Each picture comes at the size the UI draws it (`Video::size`), never larger than sent: a 1440p share in a smaller
+//! tile is scaled down here, so the UI thread uploads only what it shows.
 //!
 //! Only the newest picture waits for the UI. The next one goes out once the UI has dropped the last, so a slow UI
 //! skips pictures instead of queueing them. Compressed frames cannot be skipped (the next ones predict from them),
-//! so when the decoder falls `QUEUE` frames behind, the engine drops frames and asks the sharer for a keyframe.
+//! so when a decoder falls `QUEUE` frames behind, the engine drops frames and asks the sharer for a keyframe.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -14,7 +18,7 @@ use std::time::Duration;
 
 use vp8_decoder::{DecodeError, Decoder, Picture};
 
-/// Compressed frames waiting for the decoder at most (half a second at 60 fps).
+/// Compressed frames waiting for a decoder at most (half a second at 60 fps).
 pub const QUEUE: usize = 30;
 
 /// A decoded picture of `user_id`'s screen: BGRA, `width * height * 4` bytes, what GPUI's `RenderImage` holds.
@@ -32,20 +36,16 @@ impl fmt::Debug for Frame {
     }
 }
 
-/// From the engine to the decoder thread.
+/// From the engine to a share's decoder thread.
 #[derive(Debug)]
-pub enum In {
+enum In {
     /// One VP8 frame. `gap`: frames before it were lost or dropped, so only a keyframe decodes.
-    Frame {
-        user_id: String,
-        data: Vec<u8>,
-        gap: bool,
-    },
-    /// Start decoding a share (a fresh decoder, waiting for a keyframe) or stop and forget it.
-    Watch { user_id: String, on: bool },
+    Frame { data: Vec<u8>, gap: bool },
+    /// The size the share is drawn at, in device pixels.
+    Size(u32, u32),
 }
 
-/// From the decoder thread to the engine: ask `user_id` for a keyframe. `broken`: a frame did not decode, which
+/// From a decoder thread to the engine: ask `user_id` for a keyframe. `broken`: a frame did not decode, which
 /// counts as the share struggling; otherwise the decoder only waits for its first keyframe.
 #[derive(Debug, PartialEq)]
 pub struct Need {
@@ -53,81 +53,113 @@ pub struct Need {
     pub broken: bool,
 }
 
-/// The engine's end of the decoder thread. Dropping it ends the thread.
-pub struct Video {
+type Emit = Arc<dyn Fn(Frame) + Send + Sync>;
+
+/// One watched share's decoder thread. Dropping it ends the thread.
+struct Worker {
     tx: Sender<In>,
     /// Frames sent and not yet taken by the decoder.
     queued: Arc<AtomicUsize>,
+}
+
+/// The engine's end of the decoder threads. Dropping it ends them.
+pub struct Video {
+    emit: Emit,
+    workers: HashMap<String, Worker>,
+    /// The size each share is drawn at. It can come before the watch (the tile is drawn first).
+    sizes: HashMap<String, (u32, u32)>,
+    need_tx: Sender<Need>,
     pub needs: Receiver<Need>,
 }
 
 impl Video {
-    /// Starts the decoder thread. `emit` gets each picture for the UI.
-    pub fn start(emit: impl Fn(Frame) + Send + 'static) -> Video {
-        let (tx, rx) = channel();
+    /// `emit` gets each picture for the UI, from the share's own thread.
+    pub fn start(emit: impl Fn(Frame) + Send + Sync + 'static) -> Video {
         let (need_tx, needs) = channel();
-        let queued = Arc::new(AtomicUsize::new(0));
-        let q = queued.clone();
-        std::thread::Builder::new()
-            .name("vesper-video".into())
-            .spawn(move || run(&rx, &q, &need_tx, &emit))
-            .expect("the video thread starts");
-        Video { tx, queued, needs }
+        Video {
+            emit: Arc::new(emit),
+            workers: HashMap::new(),
+            sizes: HashMap::new(),
+            need_tx,
+            needs,
+        }
     }
 
-    /// Queues a frame. False when the decoder is `QUEUE` frames behind: the frame was dropped.
+    /// Queues a frame of a watched share (others are ignored). False when its decoder is `QUEUE` frames behind: the
+    /// frame was dropped.
     pub fn frame(&self, user_id: String, data: Vec<u8>, gap: bool) -> bool {
-        if self.queued.load(Ordering::Relaxed) >= QUEUE {
+        let Some(w) = self.workers.get(&user_id) else {
+            return true;
+        };
+        if w.queued.load(Ordering::Relaxed) >= QUEUE {
             return false;
         }
-        self.queued.fetch_add(1, Ordering::Relaxed);
-        let _ = self.tx.send(In::Frame { user_id, data, gap });
+        w.queued.fetch_add(1, Ordering::Relaxed);
+        let _ = w.tx.send(In::Frame { data, gap });
         true
     }
 
-    pub fn watch(&self, user_id: String, on: bool) {
-        let _ = self.tx.send(In::Watch { user_id, on });
+    /// Start decoding a share (a fresh decoder on a thread of its own, waiting for a keyframe), or stop and forget it.
+    pub fn watch(&mut self, user_id: String, on: bool) {
+        if !on {
+            self.workers.remove(&user_id);
+            return;
+        }
+        let (tx, rx) = channel();
+        if let Some(&(w, h)) = self.sizes.get(&user_id) {
+            let _ = tx.send(In::Size(w, h));
+        }
+        let queued = Arc::new(AtomicUsize::new(0));
+        let (q, need, emit, id) = (
+            queued.clone(),
+            self.need_tx.clone(),
+            self.emit.clone(),
+            user_id.clone(),
+        );
+        std::thread::Builder::new()
+            .name("vesper-video".into())
+            .spawn(move || run(&id, &rx, &q, &need, &*emit))
+            .expect("the video thread starts");
+        self.workers.insert(user_id, Worker { tx, queued });
+    }
+
+    pub fn size(&mut self, user_id: String, width: u32, height: u32) {
+        if let Some(w) = self.workers.get(&user_id) {
+            let _ = w.tx.send(In::Size(width, height));
+        }
+        self.sizes.insert(user_id, (width, height));
     }
 }
 
-struct Share {
-    decoder: Decoder,
-    /// The newest picture the UI has not had, as I420 with its size.
-    waiting: Option<(Vec<u8>, u32, u32)>,
-    /// The picture the UI holds. The next one goes once this is dropped.
-    shown: Weak<Vec<u8>>,
-}
-
-fn run(rx: &Receiver<In>, queued: &AtomicUsize, need: &Sender<Need>, emit: &dyn Fn(Frame)) {
-    let mut shares: HashMap<String, Share> = HashMap::new();
+fn run(
+    user_id: &str,
+    rx: &Receiver<In>,
+    queued: &AtomicUsize,
+    need: &Sender<Need>,
+    emit: &dyn Fn(Frame),
+) {
+    let mut decoder = Decoder::new();
+    // The newest picture the UI has not had, as I420 with its size.
+    let mut waiting: Option<(Vec<u8>, u32, u32)> = None;
+    // The picture the UI holds. The next one goes once this is dropped.
+    let mut shown: Weak<Vec<u8>> = Weak::new();
+    // The size the UI draws it at; none until it says.
+    let mut size = None;
     loop {
         match rx.recv_timeout(Duration::from_millis(10)) {
-            Ok(In::Watch { user_id, on: true }) => {
-                let share = Share {
-                    decoder: Decoder::new(),
-                    waiting: None,
-                    shown: Weak::new(),
-                };
-                shares.insert(user_id, share);
-            }
-            Ok(In::Watch { user_id, on: false }) => {
-                shares.remove(&user_id);
-            }
-            Ok(In::Frame { user_id, data, gap }) => {
+            Ok(In::Size(w, h)) => size = Some((w, h)),
+            Ok(In::Frame { data, gap }) => {
                 queued.fetch_sub(1, Ordering::Relaxed);
-                let Some(s) = shares.get_mut(&user_id) else {
-                    continue;
-                };
                 if gap {
-                    s.decoder.reset();
+                    decoder.reset();
                 }
-                let broken = match s.decoder.decode(&data) {
+                let broken = match decoder.decode(&data) {
                     Ok(Some(p)) => {
-                        if s.shown.strong_count() == 0 {
-                            s.shown = hand_over(&user_id, &p, emit);
-                            s.waiting = None;
+                        if shown.strong_count() == 0 {
+                            shown = hand_over(user_id, &p, size, emit);
+                            waiting = None;
                         } else {
-                            s.waiting = Some((p.to_i420(), p.width, p.height));
+                            waiting = Some((p.to_i420(), p.width, p.height));
                         }
                         continue;
                     }
@@ -135,43 +167,68 @@ fn run(rx: &Receiver<In>, queued: &AtomicUsize, need: &Sender<Need>, emit: &dyn 
                     Err(DecodeError::NeedKeyframe) => false,
                     Err(_) => true,
                 };
+                let user_id = user_id.into();
                 let _ = need.send(Need { user_id, broken });
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
         // A picture held back while the UI had the last one.
-        for (id, s) in &mut shares {
-            if s.shown.strong_count() == 0
-                && let Some((i420, w, h)) = s.waiting.take()
-                && let Some(p) = Picture::from_i420(&i420, w, h)
-            {
-                s.shown = hand_over(id, &p, emit);
-            }
+        if shown.strong_count() == 0
+            && let Some((i420, w, h)) = waiting.take()
+            && let Some(p) = Picture::from_i420(&i420, w, h)
+        {
+            shown = hand_over(user_id, &p, size, emit);
         }
     }
 }
 
-fn hand_over(user_id: &str, p: &Picture, emit: &dyn Fn(Frame)) -> Weak<Vec<u8>> {
-    let bgra = Arc::new(bgra(p));
+fn hand_over(
+    user_id: &str,
+    p: &Picture,
+    size: Option<(u32, u32)>,
+    emit: &dyn Fn(Frame),
+) -> Weak<Vec<u8>> {
+    let (width, height) = scaled(p.width, p.height, size);
+    let bgra = Arc::new(bgra(p, width, height));
     let shown = Arc::downgrade(&bgra);
     emit(Frame {
         user_id: user_id.into(),
-        width: p.width,
-        height: p.height,
+        width,
+        height,
         bgra,
     });
     shown
 }
 
-/// I420 to BGRA with BT.601 limited range, VP8's colour space (RFC 6386 section 9.2), in integers.
-pub fn bgra(p: &Picture) -> Vec<u8> {
-    let (w, h) = (p.width as usize, p.height as usize);
+/// A `w` x `h` picture's size inside a box of `size`, at its own aspect ratio, never larger than it is.
+pub fn scaled(w: u32, h: u32, size: Option<(u32, u32)>) -> (u32, u32) {
+    let Some((bw, bh)) = size.filter(|&(bw, bh)| bw > 0 && bh > 0) else {
+        return (w, h);
+    };
+    let s = (f64::from(bw) / f64::from(w)).min(f64::from(bh) / f64::from(h));
+    if s >= 1. {
+        return (w, h);
+    }
+    let r = |n: u32| ((f64::from(n) * s).round() as u32).max(1);
+    (r(w), r(h))
+}
+
+/// I420 to BGRA with BT.601 limited range, VP8's colour space (RFC 6386 section 9.2), in integers, at `w` x `h`: a
+/// smaller size takes the nearest source pixel, so the work follows the size drawn, not the size sent.
+/// shortcut: nearest pixel, no filter; small text in a much smaller tile can shimmer. Average a block if it shows.
+pub fn bgra(p: &Picture, w: u32, h: u32) -> Vec<u8> {
+    let (sw, sh) = (p.width as usize, p.height as usize);
+    let (w, h) = (w as usize, h as usize);
+    let xs: Vec<usize> = (0..w)
+        .map(|x| ((2 * x + 1) * sw / (2 * w)).min(sw - 1))
+        .collect();
     let mut out = vec![255u8; w * h * 4];
     for (y, row) in out.chunks_exact_mut(w * 4).enumerate() {
-        let luma = &p.y[y * p.y_stride..][..w];
-        let (u, v) = (&p.u[y / 2 * p.uv_stride..], &p.v[y / 2 * p.uv_stride..]);
-        for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let sy = ((2 * y + 1) * sh / (2 * h)).min(sh - 1);
+        let luma = &p.y[sy * p.y_stride..][..sw];
+        let (u, v) = (&p.u[sy / 2 * p.uv_stride..], &p.v[sy / 2 * p.uv_stride..]);
+        for (&x, px) in xs.iter().zip(row.as_chunks_mut::<4>().0.iter_mut()) {
             let c = 298 * (i32::from(luma[x]) - 16) + 128;
             let (d, e) = (i32::from(u[x / 2]) - 128, i32::from(v[x / 2]) - 128);
             let clip = |n: i32| (n >> 8).clamp(0, 255) as u8;
@@ -227,7 +284,7 @@ mod tests {
             ((81, 90, 240), [0, 0, 255]),
         ] {
             let i420 = [yuv.0, yuv.0, yuv.0, yuv.0, yuv.1, yuv.2];
-            let out = bgra(&Picture::from_i420(&i420, 2, 2).unwrap());
+            let out = bgra(&Picture::from_i420(&i420, 2, 2).unwrap(), 2, 2);
             for px in out.as_chunks::<4>().0 {
                 for (got, want) in px[..3].iter().zip(want) {
                     assert!(got.abs_diff(want) <= 2, "{yuv:?}: {px:?}");
@@ -235,6 +292,36 @@ mod tests {
                 assert_eq!(px[3], 255);
             }
         }
+    }
+
+    #[test]
+    fn pictures_come_at_the_size_drawn() {
+        assert_eq!(scaled(2560, 1440, Some((1280, 900))), (1280, 720));
+        assert_eq!(scaled(2560, 1440, Some((1920, 1080))), (1920, 1080));
+        assert_eq!(
+            scaled(1280, 720, Some((2560, 1440))),
+            (1280, 720),
+            "never larger"
+        );
+        assert_eq!(scaled(1280, 720, None), (1280, 720));
+        assert_eq!(scaled(1000, 10, Some((10, 10))), (10, 1));
+        // Black on the left, white on the right: halved, one pixel of each.
+        let i420 = [16, 16, 235, 235, 16, 16, 235, 235, 128, 128, 128, 128];
+        let out = bgra(&Picture::from_i420(&i420, 4, 2).unwrap(), 2, 1);
+        assert_eq!(out, [0, 0, 0, 255, 255, 255, 255, 255]);
+
+        // The size can come before the watch, as the tile draws first.
+        let got = Arc::new(Mutex::new(Vec::<Frame>::new()));
+        let g = got.clone();
+        let mut video = Video::start(move |f| g.lock().unwrap().push(f));
+        video.size("ann".into(), 32, 32);
+        video.watch("ann".into(), true);
+        for f in solid(64, 48, (81, 90, 240), 2) {
+            video.frame("ann".into(), f, false);
+        }
+        wait("a picture", || !got.lock().unwrap().is_empty());
+        let f = got.lock().unwrap()[0].clone();
+        assert_eq!((f.width, f.height, f.bgra.len()), (32, 24, 32 * 24 * 4));
     }
 
     fn wait(what: &str, done: impl Fn() -> bool) {
@@ -249,7 +336,7 @@ mod tests {
     fn decodes_only_watched_shares_and_keeps_only_the_newest_picture() {
         let got = Arc::new(Mutex::new(Vec::<Frame>::new()));
         let g = got.clone();
-        let video = Video::start(move |f| g.lock().unwrap().push(f));
+        let mut video = Video::start(move |f| g.lock().unwrap().push(f));
         let frames = solid(64, 48, (81, 90, 240), 10);
 
         // Not watched: nothing is decoded.
@@ -314,7 +401,7 @@ mod tests {
         // Nothing drains this queue: the thread is stuck in emit.
         let (stuck_tx, stuck) = std::sync::mpsc::channel::<()>();
         let stuck = Mutex::new(stuck);
-        let video = Video::start(move |_| {
+        let mut video = Video::start(move |_| {
             let _ = stuck.lock().unwrap().recv();
         });
         let frames = solid(16, 16, (128, 128, 128), 1);

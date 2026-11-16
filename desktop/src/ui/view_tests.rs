@@ -417,76 +417,92 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
     });
 }
 
-/// The share panel with the engine faked: Watch sends the watch, a picture is drawn, the struggle and the end of
-/// the share show as text.
+/// A sharer in room 1's call: `{ "user_id": id, "name": name, ... "share": ... }`.
+fn sharer(id: &str, name: &str) -> vesper_protocol::Peer {
+    serde_json::from_value(
+        json!({ "user_id": id, "name": name, "room_id": 1, "muted": false,
+        "deafened": false, "force_muted": false, "share": { "fps": 60, "bitrate_kbps": 8000 } }),
+    )
+    .unwrap()
+}
+
+/// A `w` x `h` red picture of `id`'s screen.
+fn red(id: &str, w: u32, h: u32) -> crate::voice::Frame {
+    crate::voice::Frame {
+        user_id: id.into(),
+        width: w,
+        height: h,
+        bgra: std::sync::Arc::new([0u8, 0, 255, 255].repeat((w * h) as usize)),
+    }
+}
+
+/// `inner` lies inside `outer`.
+fn inside(inner: gpui::Bounds<gpui::Pixels>, outer: gpui::Bounds<gpui::Pixels>) -> bool {
+    let e = gpui::px(0.5);
+    inner.origin.x + e >= outer.origin.x
+        && inner.origin.y + e >= outer.origin.y
+        && inner.bottom_right().x <= outer.bottom_right().x + e
+        && inner.bottom_right().y <= outer.bottom_right().y + e
+}
+
+/// The share panel with the engine faked, like `SharePanel.svelte`: every share is watched and drawn whole inside its
+/// tile, the struggle shows, a tile hides and shows again, Hide screens and Show, and the layouts.
 #[gpui::test]
-fn the_share_panel_watches_and_draws_a_picture(cx: &mut TestAppContext) {
+fn the_share_panel_watches_every_share_and_fits_each_picture(cx: &mut TestAppContext) {
     let (view, cx, mut rx) = open(cx);
     signed_in(&view, cx);
     click(cx, "join-voice");
     let call = |ev| Event::Voice { call: 1, ev };
     apply(&view, cx, call(VoiceEvent::Offer("offer".into())));
-    let bob = serde_json::from_value(
-        json!({ "user_id": "b", "name": "Bob", "room_id": 1, "muted": false,
-        "deafened": false, "force_muted": false, "share": { "fps": 60, "bitrate_kbps": 8000 } }),
-    )
-    .unwrap();
     let joined = ServerMsg::Joined {
         user_id: "a".into(),
         answer: "answer".into(),
-        peers: vec![bob],
+        peers: vec![sharer("b", "Bob"), sharer("c", "Cat")],
     };
     apply(&view, cx, Event::Server(Box::new(joined)));
-    drain(&mut rx);
-    assert!(cx.debug_bounds("share-panel").is_some());
-    assert!(
-        cx.debug_bounds("share-view").is_none(),
-        "nothing watched yet"
-    );
-
-    click(cx, "share-watch-b");
+    cx.update(|w, _| w.refresh());
+    cx.run_until_parked();
     let cmds = drain(&mut rx);
-    assert!(
-        matches!(
-            cmds.as_slice(),
-            [
-                Cmd::Signal(ClientMsg::Watch { user_id: s, on: true }),
-                Cmd::Voice(VoiceCmd::Watch { user_id: v, on: true })
-            ] if s == "b" && v == "b"
-        ),
-        "{cmds:?}"
-    );
-    assert!(cx.debug_bounds("share-view").is_some());
-    assert!(
-        cx.debug_bounds("share-picture").is_none(),
-        "waiting for a picture"
-    );
+    for id in ["b", "c"] {
+        assert!(
+            cmds.iter().any(|c| matches!(c, Cmd::Signal(ClientMsg::Watch { user_id, on: true }) if user_id == id)),
+            "{id} watched with no click: {cmds:?}"
+        );
+        // The decoder is told the size each tile is drawn at.
+        assert!(
+            cmds.iter().any(|c| matches!(c, Cmd::Voice(VoiceCmd::ShareSize { user_id, width, height })
+                if user_id == id && *width > 0 && (*width as f32 / *height as f32 - 16. / 9.).abs() < 0.02)),
+            "{cmds:?}"
+        );
+    }
 
-    // A 16x9 red picture: the view takes it from the model and draws it.
-    let bgra = [0u8, 0, 255, 255].repeat(16 * 9);
-    let frame = crate::voice::Frame {
-        user_id: "b".into(),
-        width: 16,
-        height: 9,
-        bgra: std::sync::Arc::new(bgra),
-    };
-    apply(&view, cx, call(VoiceEvent::Frame(frame)));
-    assert!(cx.debug_bounds("share-picture").is_some());
+    // Grid: two tiles side by side, inside the stage. A 2560x1440 picture and a 4:3 one, each whole inside its tile.
+    apply(&view, cx, call(VoiceEvent::Frame(red("b", 256, 144))));
+    apply(&view, cx, call(VoiceEvent::Frame(red("c", 160, 120))));
+    let stage = cx.debug_bounds("share-stage").unwrap();
+    let (tb, tc) = (
+        cx.debug_bounds("share-tile-b").unwrap(),
+        cx.debug_bounds("share-tile-c").unwrap(),
+    );
+    assert!(
+        inside(tb, stage) && inside(tc, stage),
+        "{tb:?} {tc:?} in {stage:?}"
+    );
+    assert!(
+        tb.origin.y == tc.origin.y && tb.bottom_right().x <= tc.origin.x,
+        "side by side: {tb:?} {tc:?}"
+    );
     view.read_with(cx, |v, _| {
-        assert!(v.model.call.frame.is_none(), "taken by the view");
-        let (id, image) = v.screen.as_ref().unwrap();
-        assert_eq!(id, "b");
+        assert!(v.model.call.frames.is_empty(), "taken by the view");
+        let image = &v.share.screens["b"];
         let size = image.size(0);
-        assert_eq!((size.width.0, size.height.0), (16, 9));
+        assert_eq!((size.width.0, size.height.0), (256, 144));
         assert_eq!(
             image.as_bytes(0).unwrap()[..4],
             [0, 0, 255, 255],
             "the bytes stay BGRA"
         );
     });
-    let picture = cx.debug_bounds("share-picture").unwrap();
-    let panel = cx.debug_bounds("share-view").unwrap();
-    assert!(picture.size.width > gpui::px(0.) && picture.size.width <= panel.size.width);
 
     apply(
         &view,
@@ -498,17 +514,85 @@ fn the_share_panel_watches_and_draws_a_picture(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("share-struggling").is_some());
 
-    // Bob stops: the picture goes and the panel says so.
+    // Point: the next click inside the picture goes to the server as 0 to 1 of it.
+    drain(&mut rx);
+    click(cx, "share-point-b");
+    let tile = cx.debug_bounds("share-tile-b").unwrap();
+    cx.simulate_click(tile.center(), Modifiers::none());
+    cx.run_until_parked();
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(
+            |c| matches!(c, Cmd::Signal(ClientMsg::Point { user_id, x, y })
+            if user_id == "b" && (x - 0.5).abs() < 0.02 && (y - 0.5).abs() < 0.02)
+        ),
+        "{cmds:?}"
+    );
+    // Zoom: 2x around the middle, and the decoder is asked for pictures twice the size.
+    click(cx, "share-zoom-b");
+    view.read_with(cx, |v, _| assert!(v.share.zoom.contains_key("b")));
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(
+            |c| matches!(c, Cmd::Voice(VoiceCmd::ShareSize { user_id, .. }) if user_id == "b")
+        )
+    );
+    click(cx, "share-zoom-b");
+    // Full screen: the tile fills the window; Esc leaves.
+    click(cx, "share-full-b");
+    view.read_with(cx, |v, _| assert!(v.share.full.is_some()));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |v, _| assert!(v.share.full.is_none()));
+
+    // Hide one: its picture goes, and it is named in the head with Show. Shown again within the grace, the watch
+    // never went off.
+    click(cx, "share-hide-c");
+    view.read_with(cx, |v, _| {
+        assert!(v.model.call.hidden.contains("c") && !v.share.screens.contains_key("c"))
+    });
+    drain(&mut rx);
+    click(cx, "share-show-c");
+    view.read_with(cx, |v, _| assert!(v.model.call.hidden.is_empty()));
+    assert!(
+        !drain(&mut rx)
+            .iter()
+            .any(|c| matches!(c, Cmd::Signal(ClientMsg::Watch { .. })))
+    );
+
+    // Focus: one big tile, the other a thumbnail under it; a click on the thumbnail makes it the big one.
+    click(cx, "share-layout-focus");
+    view.read_with(cx, |v, _| {
+        assert_eq!(
+            v.model.settings.share_layout,
+            crate::settings::ShareLayout::Focus
+        )
+    });
+    // Dock: one column and the divider; chat beside it.
+    click(cx, "share-layout-dock");
+    assert!(cx.debug_bounds("share-divider").is_some());
+    let (tb, tc) = (
+        cx.debug_bounds("share-tile-b").unwrap(),
+        cx.debug_bounds("share-tile-c").unwrap(),
+    );
+    assert!(
+        tb.origin.x == tc.origin.x && tb.bottom_right().y <= tc.origin.y,
+        "one column: {tb:?} {tc:?}"
+    );
+    click(cx, "share-layout-grid");
+
+    // Hide screens: nothing is watched; Show opens the panel again.
+    click(cx, "share-hide-all");
+    view.read_with(cx, |v, _| assert!(!v.model.call.panel_open));
+    click(cx, "share-show-all");
+    view.read_with(cx, |v, _| assert!(v.model.call.panel_open));
+
+    // Bob stops: his picture goes.
     let stop = ServerMsg::PeerShare {
         user_id: "b".into(),
         share: None,
     };
     apply(&view, cx, Event::Server(Box::new(stop)));
-    assert!(cx.debug_bounds("share-notice").is_some());
-    view.read_with(cx, |v, _| {
-        assert!(v.screen.is_none() && v.model.call.watching.is_none());
-        assert_eq!(v.model.call.share_notice, "Bob stopped sharing.");
-    });
+    view.read_with(cx, |v, _| assert!(!v.share.screens.contains_key("b")));
 }
 
 /// Settings from the sidebar: each choice lands in the model, push to talk shows its key and takes a new one from a
@@ -1326,7 +1410,6 @@ fn watching_bob(
         peers: vec![bob],
     };
     apply(view, cx, Event::Server(Box::new(joined)));
-    click(cx, "share-watch-b");
     drain(rx);
 }
 
@@ -1356,7 +1439,7 @@ fn a_share_nobody_draws_is_stopped(cx: &mut TestAppContext) {
     watching_bob(&view, cx, &mut rx);
     // A picture comes, and no frame is drawn (the model is fed without a notify, as a hidden window would).
     view.update(cx, |v, cx| {
-        v.model.call.frame = Some(frame());
+        v.model.call.frames.insert("b".into(), frame());
         v.frame_came(cx);
     });
     cx.executor()

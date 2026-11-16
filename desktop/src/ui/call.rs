@@ -158,7 +158,7 @@ impl Vesper {
                 loop {
                     cx.background_executor().timer(Duration::from_secs(1)).await;
                     let tick = |v: &mut Vesper, cx: &mut Context<Vesper>| {
-                        if v.model.call.frame.is_none() {
+                        if v.model.call.frames.is_empty() {
                             cx.notify();
                         }
                     };

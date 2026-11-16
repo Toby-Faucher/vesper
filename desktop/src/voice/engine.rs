@@ -310,6 +310,11 @@ impl<'a> Engine<'a> {
                 }
                 self.video.watch(user_id, on);
             }
+            VoiceCmd::ShareSize {
+                user_id,
+                width,
+                height,
+            } => self.video.size(user_id, width, height),
             VoiceCmd::Start { .. } | VoiceCmd::Stop => {}
         }
         Ok(())

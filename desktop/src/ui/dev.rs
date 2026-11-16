@@ -36,6 +36,9 @@
 //!   once ready; `VESPER_DEV_VOLUME` sets their volume first.
 //! - `VESPER_DEV_RING`: a username: a DM call from them rings once ready (not from the server: for motion frames).
 //!
+//! - `VESPER_DEV_FRAMES`: once a second on stderr, `VESPER_DEV_FRAMES` with the draws, the share pictures that came,
+//!   and how late a 10 ms timer on the UI thread ran at most (a stall: the UI thread was busy that long).
+//!
 //! Prints `VESPER_DEV_READY` on stderr once the state is reached; the harness takes its picture after that. Then
 //! `VESPER_DEV_OFFLINE` once the socket drops (the harness stops the server for the offline scenes), and
 //! `VESPER_DEV_ARRIVED` once a ring comes (`motion-ring`).
@@ -96,6 +99,9 @@ pub struct Dev {
     offline_said: bool,
     /// A ring came after ready: ARRIVED was printed.
     rang: bool,
+    /// `VESPER_DEV_FRAMES`, and whether its probe runs.
+    frames: bool,
+    probing: bool,
 }
 
 /// A silent microphone paced by the clock, and speakers that drop what they get. `lose` unplugs the microphone a
@@ -210,6 +216,8 @@ impl Dev {
             ring: var("VESPER_DEV_RING"),
             offline_said: false,
             rang: false,
+            frames: var("VESPER_DEV_FRAMES").is_some(),
+            probing: false,
         }
     }
 
@@ -253,8 +261,44 @@ fn ready(what: &str) {
 }
 
 impl Vesper {
+    /// `VESPER_DEV_FRAMES`: a 10 ms timer on the UI thread, and once a second how late it ran at most.
+    fn dev_probe(&mut self, cx: &mut Context<Self>) {
+        self.dev.probing = true;
+        cx.spawn(async move |this, cx| {
+            let tick = Duration::from_millis(10);
+            let (mut since, mut worst, mut sum, mut n) =
+                (Instant::now(), Duration::ZERO, Duration::ZERO, 0u32);
+            let mut last = (0, 0);
+            loop {
+                let t = Instant::now();
+                cx.background_executor().timer(tick).await;
+                // Back on the UI thread: anything past the tick was the thread being busy.
+                let Ok(counts) = this.update(cx, |v, _| (v.draws, v.model.call.pictures)) else {
+                    return;
+                };
+                let late = t.elapsed().saturating_sub(tick);
+                (worst, sum, n) = (worst.max(late), sum + late, n + 1);
+                if since.elapsed() >= Duration::from_secs(1) {
+                    eprintln!(
+                        "VESPER_DEV_FRAMES draws {} pictures {} stall max {} ms mean {:.1} ms",
+                        counts.0 - last.0,
+                        counts.1.saturating_sub(last.1),
+                        worst.as_millis(),
+                        sum.as_secs_f64() * 1000. / f64::from(n.max(1)),
+                    );
+                    (since, worst, sum, n, last) =
+                        (Instant::now(), Duration::ZERO, Duration::ZERO, 0, counts);
+                }
+            }
+        })
+        .detach();
+    }
+
     /// One step towards the asked-for state, after each event from the network.
     pub(super) fn dev_step(&mut self, latest: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dev.frames && !self.dev.probing {
+            self.dev_probe(cx);
+        }
         if !self.dev.shift.is_empty() {
             self.dev.shift(&mut self.model);
         }

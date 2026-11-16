@@ -19,6 +19,17 @@ pub enum Denoise {
     Off,
 }
 
+/// How the share panel lays out the screens (the web's `vesper.shareLayout`). An unknown value reads as Grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShareLayout {
+    Focus,
+    Dock,
+    #[default]
+    #[serde(other)]
+    Grid,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -49,6 +60,8 @@ pub struct Settings {
     /// Settings > Notifications: the ring of a DM call, and its volume, 0 to 100 (the web's `vesper.notify`).
     pub ring: bool,
     pub volume: u32,
+    /// The share panel's layout, on this device only like the web's.
+    pub share_layout: ShareLayout,
 }
 
 impl Default for Settings {
@@ -70,6 +83,7 @@ impl Default for Settings {
             scheme: "dark".into(),
             ring: true,
             volume: 50,
+            share_layout: ShareLayout::Grid,
         }
     }
 }
@@ -183,6 +197,7 @@ mod tests {
             scheme: "system".into(),
             ring: false,
             volume: 30,
+            share_layout: ShareLayout::Dock,
         };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
