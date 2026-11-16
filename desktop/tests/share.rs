@@ -377,6 +377,81 @@ async fn a_desktop_client_watches_decodes_and_stops_watching_a_share() {
     assert!(a.model.call.frame.is_none() && a.model.call.frames == 0);
     assert_eq!(a.model.call.phase, Phase::Joined, "the call goes on");
 
-    // The desktop client's video m-line only receives: the SFU offered bob no video from it.
-    assert_eq!(b.media().remote_video, 0);
+    // The desktop client's video m-line sends, as the web's: the SFU offered bob a video m-line from it.
+    assert_eq!(b.media().remote_video, 1);
+}
+
+/// Ann (desktop) shares the test pattern through the real capture, encode and send path; bob (desktop) watches it
+/// through the SFU and decodes the colour bars.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_desktop_client_shares_its_screen_with_another() {
+    let (_s, mut a, mut b) = two().await;
+    let room = a.room("general");
+    let ann = a.id();
+    let cmds = a.model.join_voice(room);
+    a.run(cmds);
+    let cmds = b.model.join_voice(room);
+    b.run(cmds);
+    common::until_all(&mut [&mut a, &mut b], "both connected", |cs| {
+        cs.iter().all(|c| c.model.call.connected)
+    })
+    .await;
+
+    // Start: the screen opens, share_start goes, bob sees ann share.
+    let cmds = a.model.share(30, 1000, true);
+    a.run(cmds);
+    common::until_all(&mut [&mut a, &mut b], "bob sees ann share", |cs| {
+        cs[0].model.call.mine.is_some_and(|m| m.open) && !cs[1].model.sharers().is_empty()
+    })
+    .await;
+    assert_eq!(b.model.sharers()[0].0, ann);
+
+    // Bob watches: ann's watcher count turns her encoder on, and the bars come out at her size.
+    let now = Instant::now();
+    let mut cmds = b.model.set_share_visible(true, now);
+    cmds.extend(b.model.watch(Some(ann.clone()), now));
+    b.run(cmds);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut last = None;
+    while b.model.call.frames < 10 || a.model.call.mine.and_then(|m| m.figures).is_none() {
+        a.pump();
+        b.pump();
+        // A copy: the next picture comes only once this one is dropped, as the view does.
+        if let Some(f) = b.model.call.take_frame() {
+            last = Some((f.width, f.height, f.bgra.to_vec()));
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out: bob has {} frames, ann's share {:?}",
+            b.model.call.frames,
+            a.model.call.mine
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (w, h, bgra) = last.expect("a picture");
+    assert_eq!((w, h), (320, 180));
+    assert_eq!(a.model.call.mine.unwrap().watchers, 1);
+    // Each bar's middle on row 90: red, green, blue, white (BGRA). The bars slide a pixel a frame, so look near.
+    let px = |x: usize| {
+        let i = (90 * 320 + x) * 4;
+        [bgra[i + 2], bgra[i + 1], bgra[i]]
+    };
+    let near = |got: [u8; 3], want: [u8; 3]| got.iter().zip(want).all(|(g, w)| g.abs_diff(w) < 60);
+    let bars = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
+    let seen: Vec<[u8; 3]> = [40, 120, 200, 280].map(px).to_vec();
+    assert!(
+        bars.iter().all(|b| seen.iter().any(|s| near(*s, *b))),
+        "the four bars: {seen:?}"
+    );
+    println!("ann's share: {:?}", a.model.call.mine.unwrap().figures);
+
+    // Stop: bob's view clears and ann's share is gone.
+    let cmds = a.model.stop_share();
+    a.run(cmds);
+    common::until_all(&mut [&mut a, &mut b], "bob's view cleared", |cs| {
+        cs[1].model.call.watching.is_none()
+    })
+    .await;
+    assert!(a.model.call.mine.is_none());
+    assert_eq!(b.model.call.share_notice, "ann stopped sharing.");
 }

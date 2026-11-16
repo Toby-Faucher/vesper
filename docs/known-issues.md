@@ -174,7 +174,11 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   cannot talk to the server. A socket message of a kind it does not know is skipped.
 - The call's UDP socket is IPv4 only, so an SFU reachable only over IPv6 does not connect.
 - Not verified on real devices or across a real network with NAT: the voice tests run on loopback with fake audio.
-- Screen share: the desktop app can watch, not share. It watches one share at a time, at fit size, without the web's layouts,
+- Screen share from the desktop app ([ADR 0011](decisions/0011-desktop-screen-share-send.md)): the pure Rust VP8 encoder is single
+  threaded, so a 1080p share runs at about 20 fps (from the encoder's own figures, not measured here). Windows and X11 share the
+  primary monitor, with no picker; X11 leaves the cursor out. On Wayland a picture whose buffer is not a plain mapped one (DMA-BUF
+  only) is skipped. Only the test pattern was sent end to end; the real captures are not verified (Windows is only compiled in CI).
+- Screen share: the desktop app watches one share at a time, at fit size, without the web's layouts,
   1:1, zoom, pop-out or pointer. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
   shown when it minimised the window itself, or when pictures came for 2 s and no frame was drawn; the sharer is then told
   to stop after the 10 s grace, and the next frame drawn watches again. Whether a window behind a game stops drawing

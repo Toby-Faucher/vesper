@@ -4,7 +4,9 @@
 //! (`rise`). Without a call, what ended the last one shows under the room header (`call_status`).
 //! The call timer rolls its digits; the bar can be a small pill that opens on hover ([`Bar`]).
 //!
-//! Not here: Share screen and the share card (the desktop does not send a screen), the leave fade (the web fades an
+//! Share screen, its dialog and my share's card are in `send.rs`.
+//!
+//! Not here: the leave fade (the web fades an
 //! inert copy out), Retry microphone and a new microphone's offer (the desktop's engine opens devices again itself).
 
 use std::cell::Cell;
@@ -324,6 +326,7 @@ impl Vesper {
             })
             .collect();
         let (dh, details_hover) = motion::hover("call-details", window, cx);
+        let share = self.share_control(cx);
 
         let row = div()
             .flex()
@@ -417,6 +420,7 @@ impl Vesper {
                     .on_click(cx.listener(|this, _, _, cx| this.act(Model::toggle_deafen, cx))),
                 ),
             )
+            .children(share)
             .when_some(ptt, |d, (key, held)| d.child(ptt_pill(&key, held, &t)))
             .child(sep())
             .child(

@@ -212,7 +212,9 @@ impl Vesper {
         let ring = self.render_ring(window, cx);
         let layer = self.render_layer(window, cx);
         let viewer = self.render_viewer(window, cx);
+        let send = self.share_dialog(cx);
         shell
+            .children(send)
             .children(card)
             .children(confirm)
             .children(ring)

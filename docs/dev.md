@@ -87,6 +87,12 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 - Linux needs the X11, Wayland, Vulkan, fontconfig, ALSA and Opus development headers (the package list is in the `desktop` CI
   job). Arch: `opus` and `alsa-lib`; Debian and Ubuntu: `libopus-dev` and `libasound2-dev`. The `opus` crate links the system
   libopus through pkg-config. Watching a screen share needs nothing more: the VP8 decoder (`vp8-decoder`) is pure Rust.
+- Sending a screen share on Linux needs the PipeWire headers and libclang (the `pipewire` crate generates its bindings with
+  bindgen). Arch: `pipewire` and `clang`; Debian and Ubuntu: `libpipewire-0.3-dev` and `libclang-dev`. Under Wayland it needs
+  xdg-desktop-portal with a backend that has ScreenCast (GNOME, KDE or wlr). The encoder (`vp8-encoder`) is pure Rust. Windows needs
+  nothing more ([ADR 0011](decisions/0011-desktop-screen-share-send.md)).
+- `VESPER_DEV_SHARE=1280x720` (debug builds, with `VESPER_DEV_VOICE`) shares moving colour bars in place of the screen through the
+  real encoder and sender. `desktop/src/ui/dev.rs` lists the `VESPER_DEV_*` variables.
 - Check: `scripts/check-desktop.sh` (fmt, clippy `-D warnings`, tests). It is not part of `scripts/check.sh`; CI runs it as its own job.
 - `desktop/vendor/` holds patched copies of `gpui` 0.2.2 and `gpui-component` 0.5.1 (`[patch.crates-io]` in
   `desktop/Cargo.toml`). Each `PATCHED.txt` says what changed and when to drop it. Both patches stop redraws in an idle

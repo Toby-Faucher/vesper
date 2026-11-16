@@ -223,8 +223,8 @@ unit tests in `hub.rs` and `voice.rs`.
 - Video ([ADR 0009](decisions/0009-video-in-the-sfu.md)): a join offer has one audio m-line and at most one VP8 video m-line. A client with
   video is offered every other video track at join. Packets flow only while `set_sharing(user, true)` holds for the sender and
   `watch(viewer, sharer, true)` for the receiver. Both are per session, so a rejoin starts with neither. The SFU makes an incoming
-  track only from an m-line the client sends on, so the desktop client's receive-only video m-line gets others' screens and is
-  never offered to anyone.
+  track only from an m-line the client sends on. The web's and the desktop's video m-lines are send-only, for their own share
+  (the desktop's capture and encoder: [ADR 0011](decisions/0011-desktop-screen-share-send.md)).
 - Keyframes: `watch(viewer, sharer, true)` sends the sharer a PLI, so the new viewer gets a picture right away. A viewer's own PLI or FIR on a
   forwarded video goes to the sharer as the same kind. Covered by `tests/forwarding.rs` with str0m test clients, not a browser.
 - Share ceiling: the SFU measures each sharer's incoming video in windows of at least a second. When it stays above `share_ceiling_bps`

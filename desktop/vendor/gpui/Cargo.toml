@@ -51,7 +51,8 @@ macos-blade = [
     "objc2-metal",
 ]
 runtime_shaders = []
-screen-capture = ["scap"]
+# vesper patch: the scap dependency is gone (see PATCHED.txt); this feature must stay off.
+screen-capture = []
 test-support = [
     "leak-detection",
     "collections/test-support",
@@ -95,7 +96,6 @@ x11 = [
     "x11-clipboard",
     "filedescriptor",
     "open",
-    "scap?/x11",
 ]
 
 [lib]
@@ -457,12 +457,6 @@ features = ["wgsl-in"]
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dependencies.pathfinder_geometry]
 version = "0.5"
-
-[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies.scap]
-version = "0.0.8-zed"
-optional = true
-default-features = false
-package = "zed-scap"
 
 [target.'cfg(target_os = "macos")'.dependencies.block]
 version = "0.1"

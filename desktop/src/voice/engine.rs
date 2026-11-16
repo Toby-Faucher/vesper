@@ -9,6 +9,7 @@
 //!
 //! Screen shares come in on the video m-lines the SFU adds. The engine passes a watched share's VP8 frames to the
 //! decoder thread (`video.rs`) and asks the sharer for a keyframe (a PLI, which the SFU passes on) when it needs one.
+//! My own share's frames come from its encode thread (`share.rs`) and go out on the video m-line of the join offer.
 
 use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
@@ -27,10 +28,13 @@ use super::denoise::{Capture, Late, Loaded, deep_filter, rnnoise};
 use super::echo::{self, Echo};
 use super::jitter::{Jitter, Pop};
 use super::mix::{Limiter, Meter, Speaking, mix_into, rms, volume_to_gain};
+use super::share::{Out, Sending};
 use super::video::Video;
 use super::{AudioDevices, AudioInput, AudioOutput, FRAME, RATE, Setup, VoiceCmd, VoiceEvent};
 
 const TICK: Duration = Duration::from_millis(20);
+/// The longest wait for the socket while my share sends, so its frames go out soon after they are encoded.
+const SHARE_WAIT: Duration = Duration::from_millis(4);
 /// Captured audio held at most, so a stalled engine does not send old sound later (100 ms).
 const MAX_CAPTURED: usize = FRAME * 5;
 /// Media must be up this long after the answer.
@@ -74,6 +78,9 @@ struct Engine<'a> {
     /// Each SFU address and our address towards it (the socket is bound to 0.0.0.0).
     routes: Vec<(SocketAddr, SocketAddr)>,
     mid: Mid,
+    /// My screen share's m-line, and the share while it runs.
+    video_mid: Mid,
+    sending: Option<Sending>,
     pending: Option<SdpPendingOffer>,
     answered: Option<Instant>,
     connected: bool,
@@ -168,12 +175,11 @@ impl<'a> Engine<'a> {
             .set_stats_interval(Some(Duration::from_secs(2)))
             .build(Instant::now());
         // One audio m-line both ways, as the browser's addTrack makes. Others' voices come on m-lines the SFU adds.
-        // One receive-only video m-line: an offer with a video m-line gets others' screens (ADR 0009), and as this
-        // one never sends, the SFU makes no track of it and offers nobody video from this client. (The web's
-        // m-line is send-only, for its own share.)
+        // One send-only video m-line for my own share, as the web's: an offer with a video m-line also gets others'
+        // screens, on m-lines the SFU adds (ADR 0009).
         let mut change = rtc.sdp_api();
         let mid = change.add_media(MediaKind::Audio, Direction::SendRecv, None, None, None);
-        change.add_media(MediaKind::Video, Direction::RecvOnly, None, None, None);
+        let video_mid = change.add_media(MediaKind::Video, Direction::SendOnly, None, None, None);
         let (offer, pending) = change.apply().expect("adding media is a change");
         emit(VoiceEvent::Offer(offer.to_sdp_string()));
         Ok(Engine {
@@ -181,6 +187,8 @@ impl<'a> Engine<'a> {
             socket,
             routes: vec![],
             mid,
+            video_mid,
+            sending: None,
             pending: Some(pending),
             answered: None,
             connected: false,
@@ -244,7 +252,14 @@ impl<'a> Engine<'a> {
             let wait = timeout
                 .min(tick)
                 .saturating_duration_since(Instant::now())
-                .clamp(Duration::from_millis(1), TICK);
+                .clamp(
+                    Duration::from_millis(1),
+                    if self.sending.is_some() {
+                        SHARE_WAIT
+                    } else {
+                        TICK
+                    },
+                );
             self.socket.set_read_timeout(Some(wait)).map_err(|_| LOST)?;
             match self.socket.recv_from(&mut buf) {
                 Ok((n, source)) => self.receive(&buf[..n], source),
@@ -255,6 +270,7 @@ impl<'a> Engine<'a> {
             while let Ok(need) = self.video.needs.try_recv() {
                 self.need_keyframe(&need.user_id, need.broken);
             }
+            self.send_share();
             let now = Instant::now();
             self.rtc
                 .handle_input(Input::Timeout(now))
@@ -310,6 +326,11 @@ impl<'a> Engine<'a> {
                 }
                 self.video.watch(user_id, on);
             }
+            VoiceCmd::Share(Some(setup)) => match &self.sending {
+                Some(s) => s.set(setup),
+                None => self.sending = Some(Sending::start(self.devices.screen(), setup)),
+            },
+            VoiceCmd::Share(None) => self.sending = None,
             VoiceCmd::Start { .. } | VoiceCmd::Stop => {}
         }
         Ok(())
@@ -472,7 +493,55 @@ impl<'a> Engine<'a> {
                         self.trouble.insert(user, Instant::now());
                     }
                 }
+                Output::Event(Event::KeyframeRequest(r)) if r.mid == self.video_mid => {
+                    if let Some(s) = &self.sending {
+                        s.keyframe();
+                    }
+                }
                 Output::Event(_) => {}
+            }
+        }
+    }
+
+    /// What my share's threads made: frames go out on my video m-line, the rest to the model.
+    fn send_share(&mut self) {
+        let Some(s) = &self.sending else {
+            return;
+        };
+        let outs: Vec<Out> = s.out.try_iter().collect();
+        for o in outs {
+            match o {
+                Out::Frame { data, rtp } => {
+                    let Some(w) = self.rtc.writer(self.video_mid) else {
+                        continue;
+                    };
+                    let Some(pt) = w
+                        .payload_params()
+                        .find(|p| p.spec().codec == Codec::Vp8)
+                        .map(|p| p.pt())
+                    else {
+                        continue;
+                    };
+                    let time = MediaTime::new(rtp, Frequency::NINETY_KHZ);
+                    let _ = w.write(pt, Instant::now(), time, data);
+                }
+                Out::Open => (self.emit)(VoiceEvent::ShareOpen),
+                Out::Figures {
+                    width,
+                    height,
+                    fps,
+                    kbps,
+                } => (self.emit)(VoiceEvent::ShareFigures {
+                    width,
+                    height,
+                    fps,
+                    kbps,
+                }),
+                Out::Ended(why) => {
+                    self.sending = None;
+                    (self.emit)(VoiceEvent::ShareEnded(why));
+                    return;
+                }
             }
         }
     }

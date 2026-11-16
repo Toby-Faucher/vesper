@@ -2075,3 +2075,60 @@ fn the_meter_and_the_mic_test(cx: &mut TestAppContext) {
         "closing the page stops the test: {sent:?}"
     );
 }
+
+/// Share screen from the call bar: the dialog's choices go to the engine, share_start goes once the screen is open, and the
+/// card's Stop ends it. The engine is faked.
+#[gpui::test]
+fn the_call_bar_shares_my_screen(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    click(cx, "join-voice");
+    let voice = |ev| Event::Voice { call: 1, ev };
+    apply(&view, cx, voice(VoiceEvent::Offer("offer".into())));
+    let joined = ServerMsg::Joined {
+        user_id: "a".into(),
+        answer: "answer".into(),
+        peers: vec![],
+    };
+    apply(&view, cx, Event::Server(Box::new(joined)));
+    apply(&view, cx, voice(VoiceEvent::Connected));
+    drain(&mut rx);
+
+    click(cx, "call-share");
+    assert!(cx.debug_bounds("share-dialog").is_some());
+    click(cx, "share-fps");
+    click(cx, "share-fps-0");
+    click(cx, "share-go");
+    // (debug_bounds keeps what a frame drew once, so what went away is read from the view.)
+    view.read_with(cx, |v, _| assert!(v.send.is_none(), "the dialog closes"));
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Cmd::Voice(VoiceCmd::Share(Some(s))) if s.fps == 30 && s.kbps == 8_000 && s.sharp && !s.active
+        )),
+        "{cmds:?}"
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::Signal(_))),
+        "nothing before the screen is open"
+    );
+    apply(&view, cx, voice(VoiceEvent::ShareOpen));
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [Cmd::Signal(ClientMsg::ShareStart {
+            fps: 30,
+            bitrate_kbps: 8_000
+        })]
+    ));
+    assert!(cx.debug_bounds("share-card").is_some());
+    click(cx, "share-stop");
+    assert!(matches!(
+        drain(&mut rx).as_slice(),
+        [
+            Cmd::Signal(ClientMsg::ShareStop),
+            Cmd::Voice(VoiceCmd::Share(None))
+        ]
+    ));
+    view.read_with(cx, |v, _| assert!(v.model.call.mine.is_none()));
+}
