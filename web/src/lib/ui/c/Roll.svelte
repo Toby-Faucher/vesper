@@ -1,7 +1,8 @@
 <script lang="ts">
   // Number flip: each digit of `text` that changes rolls (roll() in motion.ts), up when the number grows. Columns are
   // keyed from the right, so 9 to 10 keeps the ones column and rolls a new tens column in. aria-hidden: the caller
-  // says the number in words.
+  // says the number in words. The out is local: a global one would hold whatever holds the number (the call bar after
+  // Leave, a badge's row) on screen until the digit has rolled away.
   import { untrack } from 'svelte';
   import { roll } from '../motion';
   let { text }: { text: string } = $props();
@@ -14,7 +15,7 @@
   });
 </script>
 
-<span class="roll" aria-hidden="true">{#each [...text] as ch, i (text.length - i)}<span class="col">{#key ch}<span in:roll|global={{ up: dir.up }} out:roll|global={{ up: dir.up }}>{ch}</span>{/key}</span>{/each}</span>
+<span class="roll" aria-hidden="true">{#each [...text] as ch, i (text.length - i)}<span class="col">{#key ch}<span in:roll|global={{ up: dir.up }} out:roll={{ up: dir.up }}>{ch}</span>{/key}</span>{/each}</span>
 
 <style>
   .roll { display: inline-flex; font-variant-numeric: tabular-nums; }
