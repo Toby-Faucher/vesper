@@ -55,6 +55,8 @@ pub fn figures(w: u32, h: u32, fps: f32, kbps: f32) -> String {
 pub fn share_line(sent: Option<(u32, u32, f32, f32)>, watchers: u32) -> String {
     let rest = format!("{watchers} watching");
     match sent {
+        // Nobody watching: the encoder is off, so there are no figures and nothing is starting.
+        _ if watchers == 0 => format!("Sharing · {rest}"),
         Some((w, h, fps, kbps)) if w > 0 => format!("{} · {rest}", figures(w, h, fps, kbps)),
         _ => format!("Starting · {rest}"),
     }
@@ -309,7 +311,9 @@ mod tests {
 
     #[test]
     fn the_share_line_reads_like_the_web() {
-        assert_eq!(share_line(None, 0), "Starting · 0 watching");
+        assert_eq!(share_line(None, 0), "Sharing · 0 watching");
+        assert_eq!(share_line(Some((1920, 1080, 30., 7_960.)), 0), "Sharing · 0 watching");
+        assert_eq!(share_line(None, 1), "Starting · 1 watching");
         assert_eq!(
             share_line(Some((1920, 1080, 29.6, 7_960.)), 2),
             "1920x1080 · 30 fps · 8 Mbps · 2 watching"
