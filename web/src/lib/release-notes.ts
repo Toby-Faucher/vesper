@@ -16,6 +16,14 @@ export function whatsNew(seen: string | null, current: string, notes: readonly N
 
 export const RELEASE_NOTES: readonly Note[] = [
   {
+    version: '2.3.1',
+    items: [
+      'Desktop: drag across many messages to select them, and Ctrl+A selects the chat.',
+      'Desktop: quotes, times, file names, pins and search results can be selected.',
+      'Windows: notifications say Vesper, and the taskbar icon shows unread messages.',
+    ],
+  },
+  {
     version: '2.3.0',
     items: [
       'The desktop app updates itself when you click Update and restart.',
