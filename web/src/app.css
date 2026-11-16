@@ -34,7 +34,7 @@
     @apply bg-app font-sans text-sm text-fg antialiased;
   }
   ::selection {
-    background: var(--accent-subtle);
+    background: var(--selection);
   }
 }
 

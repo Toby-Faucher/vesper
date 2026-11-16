@@ -19,6 +19,9 @@
   --accent: var(--amber-9); --accent-hover: var(--amber-10); --on-accent: var(--gray-1);
   --accent-fg: var(--amber-11); --accent-subtle: var(--amber-3); --accent-line: var(--amber-7);
   --focus: var(--amber-9);
+  /* text selection, everywhere (page, inputs, the composer): the accent at 30% over whatever is under it, so it follows
+     a custom accent and both schemes. docs/ui-design.md has the value for the desktop app. */
+  --selection: color-mix(in srgb, var(--accent) 30%, transparent);
   --danger-fg: #f66d67; --danger-solid: #ba2b2e; --on-danger: var(--gray-12); --danger-subtle: #3a1412;
   --warn-fg: #f7945a; --warn-subtle: #371c0c;
   --ok-fg: #68ca80; --ok-subtle: #102816;

@@ -402,7 +402,7 @@
   }
   /* Only while the layer matches the draft (live): otherwise the textarea draws its own text and the layer hides. */
   .live textarea { color: transparent; caret-color: var(--fg); }
-  .live textarea::selection { background: var(--bg-selected); color: transparent; }
+  .live textarea::selection { background: var(--selection); color: transparent; } /* see-through: the layer's text shows */
   .field:not(.live) .mirror { visibility: hidden; }
   /* Same box, same scroll range, so the same lines wrap; its scrollbar is hidden under the textarea's. */
   .mirror { position: absolute; inset: 0; color: var(--fg); pointer-events: none; scrollbar-color: transparent transparent; }
