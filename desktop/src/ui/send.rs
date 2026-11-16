@@ -2,22 +2,26 @@
 //! the Share screen button (group rooms only), its dialog (frame rate, bitrate, what to keep when the connection
 //! struggles), and while sharing the card with the figures sent, the settings and Stop.
 //!
+//! On Windows and X11 the dialog also lists the screens and windows to share (the browser's own picker does that on
+//! the web, the system's on Wayland). The last choice is kept until the app quits.
+//!
 //! Not here: the web's upload measurement and "Check your speed" link (the bitrate starts at the web's unmeasured
 //! suggestion, 8 Mbps), the Firefox ceiling note, and the card's live preview of the screen.
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
-    Styled, Subscription, div, px,
+    AppContext, Context, ElementId, Entity, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, div, px,
 };
 use gpui_component::slider::{SliderEvent, SliderState};
 use vesper_protocol::RoomKind;
 
 use super::Vesper;
-use super::c::{self, IconButton};
+use super::c::{self, Ellipsis, IconButton};
 use super::theme::{TEXT_XS, TextStepExt, tokens};
 use crate::model::{Model, Phase};
 use crate::settings::{MAX_KBPS, MIN_KBPS, SUGGEST_KBPS};
+use crate::voice::capture::{self, Choice, Source};
 
 /// The open share dialog: the choices so far. `edit`: the running share's settings, else a new share.
 pub struct Dialog {
@@ -25,18 +29,33 @@ pub struct Dialog {
     fps: u8,
     sharp: bool,
     kbps: Entity<SliderState>,
+    /// The screens and windows to choose from (none under Wayland, where the system asks), and the one chosen.
+    pub(super) sources: Vec<Choice>,
+    pub(super) pick: Option<Source>,
     _sub: Subscription,
 }
 
+/// The line chosen when the dialog opens: the last choice while it is still there, else the first (the primary
+/// monitor).
+pub fn first_pick(sources: &[Choice], last: Option<Source>) -> Option<Source> {
+    last.filter(|l| sources.iter().any(|c| c.source == *l))
+        .or(sources.first().map(|c| c.source))
+}
+
+/// Size, frame rate and bitrate, as a tile's hover and the share card show them (`figures` in `line.ts`).
+pub fn figures(w: u32, h: u32, fps: f32, kbps: f32) -> String {
+    format!(
+        "{w}x{h} · {} fps · {} Mbps",
+        fps.round(),
+        (kbps / 100.).round() / 10.
+    )
+}
+
 /// `shareLine` of `web/src/lib/share/line.ts`.
-pub fn share_line(figures: Option<(u32, u32, f32, f32)>, watchers: u32) -> String {
+pub fn share_line(sent: Option<(u32, u32, f32, f32)>, watchers: u32) -> String {
     let rest = format!("{watchers} watching");
-    match figures {
-        Some((w, h, fps, kbps)) if w > 0 => format!(
-            "{w}x{h} · {} fps · {} Mbps · {rest}",
-            fps.round(),
-            (kbps / 100.).round() / 10.
-        ),
+    match sent {
+        Some((w, h, fps, kbps)) if w > 0 => format!("{} · {rest}", figures(w, h, fps, kbps)),
         _ => format!("Starting · {rest}"),
     }
 }
@@ -62,11 +81,15 @@ impl Vesper {
                 .default_value(kbps as f32)
         });
         let sub = cx.subscribe(&kbps, |_, _, _: &SliderEvent, cx| cx.notify());
+        let sources = if edit { vec![] } else { capture::sources() };
+        let pick = first_pick(&sources, self.share_source);
         self.send = Some(Dialog {
             edit,
             fps,
             sharp,
             kbps,
+            sources,
+            pick,
             _sub: sub,
         });
         cx.notify();
@@ -83,14 +106,15 @@ impl Vesper {
         let Some(d) = self.send.take() else { return };
         self.page.select = None;
         let kbps = (d.kbps.read(cx).value().start().round() as u32).clamp(MIN_KBPS, MAX_KBPS);
-        let (fps, sharp) = (d.fps, d.sharp);
+        let (fps, sharp, pick) = (d.fps, d.sharp, d.pick);
+        self.share_source = pick.or(self.share_source);
         self.change_settings(
             |s| {
                 (s.share_fps, s.share_kbps, s.share_sharp) = (u32::from(fps), Some(kbps), sharp);
             },
             cx,
         );
-        self.act(|m| m.share(fps, kbps, sharp), cx);
+        self.act(|m| m.share(fps, kbps, sharp, pick), cx);
     }
 
     /// The call bar's share control: the button, or my running share's card.
@@ -156,6 +180,7 @@ impl Vesper {
     pub(super) fn share_dialog(&mut self, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let d = self.send.as_ref()?;
         let (edit, fps, sharp, slider) = (d.edit, d.fps, d.sharp, d.kbps.clone());
+        let (sources, pick) = (d.sources.clone(), d.pick);
         let kbps = slider.read(cx).value().start();
         let mbps: SharedString = format!("{} Mbps", (kbps / 100.).round() / 10.).into();
         let fps_select = self.select(
@@ -182,12 +207,44 @@ impl Vesper {
                 }
             },
         );
+        let picker = (!sources.is_empty()).then(|| {
+            let rows = sources
+                .iter()
+                .enumerate()
+                .map(|(i, choice)| {
+                    let source = choice.source;
+                    c::radio_row(
+                        ElementId::Name(format!("share-source-{i}").into()),
+                        pick == Some(source),
+                        cx,
+                    )
+                    .h(px(36.))
+                    .debug_selector(move || format!("share-source-{i}"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(d) = this.send.as_mut() {
+                            d.pick = Some(source);
+                        }
+                        cx.notify();
+                    }))
+                    .child(div().min_w_0().ellipsis().child(choice.name.clone()))
+                })
+                .collect();
+            c::Field::new("What to share").child(
+                c::radio_list(rows, cx)
+                    .debug_selector(|| "share-sources".into())
+                    .max_w_full()
+                    .id("share-sources")
+                    .max_h(px(216.))
+                    .overflow_y_scroll(),
+            )
+        });
         let t = tokens(cx);
         let close = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.close_share(cx));
         let body = div()
             .flex()
             .flex_col()
             .gap(px(16.))
+            .children(picker)
             .child(c::Field::new("Frame rate").child(fps_select))
             .child(
                 c::Field::new("Bitrate").value(mbps).child(
@@ -197,7 +254,7 @@ impl Vesper {
                 ),
             )
             .child(c::Field::new("When the connection struggles").child(prefer))
-            .when(!edit, |d| {
+            .when(!edit && sources.is_empty(), |d| {
                 d.child(
                     div()
                         .text_step(TEXT_XS)
@@ -247,7 +304,8 @@ impl Vesper {
 
 #[cfg(test)]
 mod tests {
-    use super::share_line;
+    use super::{first_pick, share_line};
+    use crate::voice::capture::{Choice, Source};
 
     #[test]
     fn the_share_line_reads_like_the_web() {
@@ -260,5 +318,31 @@ mod tests {
             share_line(Some((1280, 720, 60., 2_440.)), 1),
             "1280x720 · 60 fps · 2.4 Mbps · 1 watching"
         );
+    }
+
+    #[test]
+    fn the_dialog_starts_on_the_last_choice_while_it_is_there() {
+        let list = |s: &[Source]| -> Vec<Choice> {
+            s.iter()
+                .map(|&source| Choice {
+                    source,
+                    name: String::new(),
+                })
+                .collect()
+        };
+        let (screen, window) = (Source::Monitor(1), Source::Window(42));
+        let sources = list(&[screen, window]);
+        assert_eq!(
+            first_pick(&sources, None),
+            Some(screen),
+            "the first, the primary"
+        );
+        assert_eq!(first_pick(&sources, Some(window)), Some(window));
+        assert_eq!(
+            first_pick(&sources, Some(Source::Window(7))),
+            Some(screen),
+            "a closed window is gone"
+        );
+        assert_eq!(first_pick(&[], Some(window)), None, "Wayland: no list");
     }
 }

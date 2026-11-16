@@ -207,7 +207,7 @@ impl AudioDevices for FakeAudio {
     }
 
     /// A shared screen is the moving colour bars, 320x180.
-    fn screen(&self) -> OpenScreen {
+    fn screen(&self, _: Option<vesper_desktop::voice::capture::Source>) -> OpenScreen {
         Box::new(|fps| Ok(Box::new(Pattern::new(320, 180, fps)) as Box<dyn share::Screen>))
     }
 }

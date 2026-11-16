@@ -15,6 +15,7 @@ pub mod icons;
 mod md;
 pub mod motion;
 mod person;
+mod popout;
 mod room;
 mod select;
 mod send;
@@ -333,6 +334,10 @@ pub struct Vesper {
     viewer: Option<viewer::Viewer>,
     /// The open share dialog.
     send: Option<send::Dialog>,
+    /// The screen or window last chosen there, for the next share (until the app quits).
+    share_source: Option<crate::voice::capture::Source>,
+    /// The window of the share popped out, while it is open.
+    pop: Option<Entity<popout::PopOut>>,
     find_field: Entity<InputState>,
     after_field: Entity<InputState>,
     before_field: Entity<InputState>,
@@ -489,6 +494,8 @@ impl Vesper {
             find: Default::default(),
             viewer: None,
             send: None,
+            share_source: None,
+            pop: None,
             find_field,
             after_field,
             before_field,

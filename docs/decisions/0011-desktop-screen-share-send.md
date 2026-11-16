@@ -10,11 +10,12 @@ forbidden in our crates and the desktop binary may not take GPL code.
 Decision:
 
 - **Capture, one backend per system** (`desktop/src/voice/capture.rs`):
-  - Windows: Windows Graphics Capture through `windows-capture` (MIT), the primary monitor, with the cursor, BGRA.
+  - Windows: Windows Graphics Capture through `windows-capture` (MIT), the screen or window chosen in the share dialog (its
+    list from the crate's monitor and window enumeration), else the primary monitor, with the cursor, BGRA.
   - Linux under Wayland: the xdg-desktop-portal ScreenCast through `ashpd` (MIT, already in GPUI's tree). Its picker chooses the
     screen or window. Then a PipeWire stream through `pipewire` 0.9 (MIT), with the cursor embedded.
-  - Linux under X11: `GetImage` of the primary monitor through `x11rb` (MIT or Apache-2.0, already in GPUI's tree), polled at the
-    frame rate. No cursor.
+  - Linux under X11: `GetImage` through `x11rb` (MIT or Apache-2.0, already in GPUI's tree) of the monitor (RandR) or window
+    (`_NET_CLIENT_LIST`) chosen in the share dialog, else the primary monitor, polled at the frame rate. No cursor.
   - Not `zed-scap`: its Wayland side needs `pipewire` 0.8, which does not build against PipeWire 1.6 headers (Arch), and its
     `links` clash keeps `pipewire` 0.9 out of the same lockfile. GPUI's optional `scap` dependency is dropped in `desktop/vendor/gpui`
     for the same reason.
@@ -45,7 +46,8 @@ Consequences:
 - The encoder comes in under its target on flat content (its quantizer has a floor), so the figures line can show less than the
   bitrate chosen.
 - Linux builds need the PipeWire headers and libclang (for `pipewire-sys`'s bindgen), listed in [dev.md](../dev.md) and CI.
-- No screen picker on Windows or X11: the primary monitor is shared. No share audio, as on the web.
+- On Windows and X11 the share dialog lists the screens and windows by name (no thumbnails); the last choice is kept until the
+  app quits. No share audio, as on the web.
 
 Verified: on Linux, in a debug build. `desktop/tests/share.rs` (`a_desktop_client_shares_its_screen_with_another`) sends the test pattern
 from one desktop client through the real encoder, engine, server and SFU to another, which decodes the four colour bars. The parity

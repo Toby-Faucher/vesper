@@ -1,10 +1,11 @@
 //! The screen for my share, one backend per system, each run on the share's capture thread (`share.rs`):
 //!
-//! - Windows: Windows Graphics Capture (`windows-capture`) of the primary monitor, with the cursor. Windows draws
-//!   its yellow border round a captured screen.
+//! - Windows: Windows Graphics Capture (`windows-capture`) of the screen or window chosen in the share dialog (else
+//!   the primary monitor), with the cursor. Windows draws its yellow border round what is captured.
 //! - Linux under Wayland: the xdg-desktop-portal ScreenCast (`ashpd`), whose picker chooses the screen or window,
 //!   then its PipeWire stream (`pipewire`), with the cursor.
-//! - Linux under X11: `GetImage` of the primary monitor (`x11rb`), polled at the frame rate, without the cursor.
+//! - Linux under X11: `GetImage` of the monitor (RandR) or window (`_NET_CLIENT_LIST`) chosen in the share dialog
+//!   (else the primary monitor) through `x11rb`, polled at the frame rate, without the cursor.
 //!
 //! Other systems cannot share.
 
@@ -20,22 +21,65 @@ pub const LOST: &str = "The screen capture stopped.";
 #[allow(dead_code)]
 const WAIT: Duration = Duration::from_millis(100);
 
-/// Opens the screen. On Wayland this waits for the system's picker; a cancelled picker is an empty error.
-pub fn open(fps: u32) -> Result<Box<dyn Screen>, String> {
+/// What to share, chosen in the share dialog from `sources`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Source {
+    /// A monitor, by its place in the system's list.
+    Monitor(u32),
+    /// A window, by the system's id for it.
+    Window(u64),
+}
+
+/// One line of the share dialog's list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Choice {
+    pub source: Source,
+    pub name: String,
+}
+
+/// The screens, then the windows, to choose from. Empty under Wayland (the system's picker asks) and where none can
+/// be listed: the share then takes the primary monitor.
+pub fn sources() -> Vec<Choice> {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_some() {
+        return x11::sources().unwrap_or_default();
+    }
+    #[cfg(target_os = "windows")]
+    return windows::sources();
+    #[allow(unreachable_code)]
+    {
+        vec![]
+    }
+}
+
+/// A screen's line: "Screen 2 (DP-1)", or "Screen 2" with no name.
+#[allow(dead_code)]
+fn screen_name(i: usize, name: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() {
+        format!("Screen {}", i + 1)
+    } else {
+        format!("Screen {} ({name})", i + 1)
+    }
+}
+
+/// Opens the screen: `source`, or the primary monitor. On Wayland this waits for the system's picker instead; a
+/// cancelled picker is an empty error.
+pub fn open(fps: u32, source: Option<Source>) -> Result<Box<dyn Screen>, String> {
     #[cfg(target_os = "linux")]
     {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             return wayland::open(fps);
         }
         if std::env::var_os("DISPLAY").is_some() {
-            return x11::open(fps);
+            return x11::open(fps, source);
         }
     }
     #[cfg(target_os = "windows")]
-    return windows::open(fps);
+    return windows::open(fps, source);
     #[allow(unreachable_code)]
     {
-        let _ = fps;
+        let _ = (fps, source);
         Err(NOT_HERE.into())
     }
 }
@@ -314,43 +358,130 @@ mod x11 {
     use std::time::{Duration, Instant};
 
     use x11rb::connection::Connection;
-    use x11rb::protocol::randr::ConnectionExt as _;
-    use x11rb::protocol::xproto::{ConnectionExt as _, ImageFormat};
+    use x11rb::protocol::randr::{ConnectionExt as _, MonitorInfo};
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, ImageFormat};
     use x11rb::rust_connection::RustConnection;
 
-    use super::{LOST, Screen, Shot, failed};
+    use super::{Choice, LOST, Screen, Shot, Source, failed, screen_name};
+
+    /// What is captured: an area of the root window (a monitor, or the whole desktop), or one window.
+    enum Target {
+        Area(i16, i16, u16, u16),
+        Window(u32),
+    }
 
     pub struct X11 {
         conn: RustConnection,
         root: u32,
-        area: (i16, i16, u16, u16),
+        target: Target,
         every: Duration,
         due: Instant,
     }
 
-    pub fn open(fps: u32) -> Result<Box<dyn Screen>, String> {
+    fn monitors(conn: &RustConnection, root: u32) -> Vec<MonitorInfo> {
+        conn.randr_get_monitors(root, true)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|r| r.monitors)
+            .unwrap_or_default()
+    }
+
+    fn atom(conn: &RustConnection, name: &str) -> Option<u32> {
+        Some(
+            conn.intern_atom(false, name.as_bytes())
+                .ok()?
+                .reply()
+                .ok()?
+                .atom,
+        )
+    }
+
+    /// A window's title: `_NET_WM_NAME` (UTF-8), else `WM_NAME`.
+    fn title(conn: &RustConnection, w: u32, net_name: u32, utf8: u32) -> String {
+        let get = |prop: u32, ty: u32| {
+            conn.get_property(false, w, prop, ty, 0, 1024)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map(|r| String::from_utf8_lossy(&r.value).trim().to_string())
+                .filter(|t| !t.is_empty())
+        };
+        get(net_name, utf8)
+            .or_else(|| get(AtomEnum::WM_NAME.into(), AtomEnum::STRING.into()))
+            .unwrap_or_default()
+    }
+
+    pub fn sources() -> Option<Vec<Choice>> {
+        let (conn, n) = x11rb::connect(None).ok()?;
+        let root = conn.setup().roots[n].root;
+        let mut out = vec![];
+        let mut list: Vec<_> = monitors(&conn, root).into_iter().enumerate().collect();
+        list.sort_by_key(|(_, m)| !m.primary); // the primary first, the default choice
+        for (i, m) in list {
+            let name = conn
+                .get_atom_name(m.name)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .map(|r| String::from_utf8_lossy(&r.name).into_owned())
+                .unwrap_or_default();
+            out.push(Choice {
+                source: Source::Monitor(i as u32),
+                name: screen_name(i, &name),
+            });
+        }
+        let (Some(list), Some(net_name), Some(utf8), Some(pid)) = (
+            atom(&conn, "_NET_CLIENT_LIST"),
+            atom(&conn, "_NET_WM_NAME"),
+            atom(&conn, "UTF8_STRING"),
+            atom(&conn, "_NET_WM_PID"),
+        ) else {
+            return Some(out);
+        };
+        let windows: Vec<u32> = conn
+            .get_property(false, root, list, AtomEnum::WINDOW, 0, 4096)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .and_then(|r| r.value32().map(|v| v.collect()))
+            .unwrap_or_default();
+        let me = std::process::id();
+        for w in windows {
+            let theirs = conn
+                .get_property(false, w, pid, AtomEnum::CARDINAL, 0, 1)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .and_then(|r| r.value32().and_then(|mut v| v.next()));
+            let name = title(&conn, w, net_name, utf8);
+            if theirs == Some(me) || name.is_empty() {
+                continue; // my own windows, and ones with no name to show
+            }
+            out.push(Choice {
+                source: Source::Window(u64::from(w)),
+                name,
+            });
+        }
+        Some(out)
+    }
+
+    pub fn open(fps: u32, source: Option<Source>) -> Result<Box<dyn Screen>, String> {
         let (conn, n) = x11rb::connect(None).map_err(|e| failed("X11", e))?;
         let screen = &conn.setup().roots[n];
         let root = screen.root;
-        let whole = (0, 0, screen.width_in_pixels, screen.height_in_pixels);
-        // The primary monitor (else the first), not the whole desktop across all monitors.
-        let area = conn
-            .randr_get_monitors(root, true)
-            .ok()
-            .and_then(|c| c.reply().ok())
-            .and_then(|r| {
-                let m = r
-                    .monitors
-                    .iter()
-                    .find(|m| m.primary)
-                    .or(r.monitors.first())?;
-                Some((m.x, m.y, m.width, m.height))
-            })
-            .unwrap_or(whole);
+        let whole = Target::Area(0, 0, screen.width_in_pixels, screen.height_in_pixels);
+        let target = match source {
+            Some(Source::Window(w)) => Target::Window(w as u32),
+            // The monitor chosen, else the primary (else the first), not the whole desktop across all monitors.
+            _ => {
+                let list = monitors(&conn, root);
+                let m = match source {
+                    Some(Source::Monitor(i)) => list.get(i as usize),
+                    _ => list.iter().find(|m| m.primary).or(list.first()),
+                };
+                m.map_or(whole, |m| Target::Area(m.x, m.y, m.width, m.height))
+            }
+        };
         Ok(Box::new(X11 {
             conn,
             root,
-            area,
+            target,
             every: Duration::from_secs(1) / fps.max(1),
             due: Instant::now(),
         }))
@@ -360,18 +491,35 @@ mod x11 {
         fn next(&mut self) -> Result<Option<Shot>, String> {
             std::thread::sleep(self.due.saturating_duration_since(Instant::now()));
             self.due = Instant::now() + self.every;
-            let (x, y, w, h) = self.area;
             let lost = |e: &dyn std::fmt::Display| {
                 eprintln!("vesper: screen capture: X11: {e}");
                 LOST.to_string()
             };
-            let img = self
+            let (drawable, x, y, w, h) = match self.target {
+                Target::Area(x, y, w, h) => (self.root, x, y, w, h),
+                // Asked each time: the window can change size. Gone, the share ends.
+                Target::Window(win) => {
+                    let g = self
+                        .conn
+                        .get_geometry(win)
+                        .map_err(|e| lost(&e))?
+                        .reply()
+                        .map_err(|e| lost(&e))?;
+                    (win, 0, 0, g.width, g.height)
+                }
+            };
+            let img = match self
                 .conn
-                .get_image(ImageFormat::Z_PIXMAP, self.root, x, y, w, h, !0)
+                .get_image(ImageFormat::Z_PIXMAP, drawable, x, y, w, h, !0)
                 .map_err(|e| lost(&e))?
                 .reply()
-                .map_err(|e| lost(&e))?;
-            // shortcut: assumes the usual 24-bit depth in 32-bit little-endian pixels (BGRx); other visuals are rare.
+            {
+                Ok(img) => img,
+                // A minimised (unmapped) window has no picture until it is back.
+                Err(_) if matches!(self.target, Target::Window(_)) => return Ok(None),
+                Err(e) => return Err(lost(&e)),
+            };
+            // shortcut: assumes the usual 24 or 32-bit depth in 32-bit little-endian pixels (BGRx); other visuals are rare.
             Ok(Some(Shot {
                 width: u32::from(w),
                 height: u32::from(h),
@@ -396,9 +544,11 @@ mod windows {
     use windows_capture::settings::{
         ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
         MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
+        TryIntoCaptureItemWithType,
     };
+    use windows_capture::window::Window;
 
-    use super::{LOST, Screen, Shot, WAIT, failed};
+    use super::{Choice, LOST, Screen, Shot, Source, WAIT, failed, screen_name};
 
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -440,11 +590,65 @@ mod windows {
         control: Option<CaptureControl<Handler, Error>>,
     }
 
-    pub fn open(fps: u32) -> Result<Box<dyn Screen>, String> {
-        let monitor = Monitor::primary().map_err(|e| failed("the primary monitor", e))?;
+    pub fn sources() -> Vec<Choice> {
+        let mut out = vec![];
+        let primary = Monitor::primary().ok();
+        let mut list: Vec<_> = Monitor::enumerate()
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .collect();
+        list.sort_by_key(|(_, m)| Some(*m) != primary); // the primary first, the default choice
+        for (i, m) in list {
+            out.push(Choice {
+                source: Source::Monitor(i as u32),
+                name: screen_name(i, &m.name().unwrap_or_default()),
+            });
+        }
+        // `enumerate` lists only windows that can be captured, none of mine.
+        for w in Window::enumerate().unwrap_or_default() {
+            let name = w.title().unwrap_or_default();
+            if name.trim().is_empty() {
+                continue;
+            }
+            out.push(Choice {
+                source: Source::Window(w.as_raw_hwnd() as usize as u64),
+                name,
+            });
+        }
+        out
+    }
+
+    pub fn open(fps: u32, source: Option<Source>) -> Result<Box<dyn Screen>, String> {
+        match source {
+            Some(Source::Window(id)) => {
+                let w = Window::from_raw_hwnd(id as usize as *mut std::ffi::c_void);
+                if !w.is_valid() {
+                    return Err(failed("the window", "closed"));
+                }
+                start(w, fps)
+            }
+            Some(Source::Monitor(i)) => {
+                let m = Monitor::enumerate()
+                    .ok()
+                    .and_then(|l| l.get(i as usize).copied())
+                    .ok_or_else(|| failed("the monitor", "gone"))?;
+                start(m, fps)
+            }
+            None => start(
+                Monitor::primary().map_err(|e| failed("the primary monitor", e))?,
+                fps,
+            ),
+        }
+    }
+
+    fn start<T: TryIntoCaptureItemWithType + Send + 'static>(
+        item: T,
+        fps: u32,
+    ) -> Result<Box<dyn Screen>, String> {
         let (tx, shots) = channel();
         let settings = Settings::new(
-            monitor,
+            item,
             CursorCaptureSettings::WithCursor,
             DrawBorderSettings::Default,
             SecondaryWindowSettings::Default,
@@ -479,6 +683,32 @@ mod windows {
             if let Some(c) = self.control.take() {
                 let _ = c.stop();
             }
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// Needs a real X server (`DISPLAY`, no `WAYLAND_DISPLAY`), run by hand. Xwayland lists its screens, but its root
+    /// window has no picture (`GetImage` fails with BadMatch), so the capture fails there.
+    #[test]
+    #[ignore]
+    fn x11_lists_the_screens_and_captures_the_one_chosen() {
+        let list = sources();
+        eprintln!("{list:?}");
+        let first = list.first().expect("a screen").source;
+        assert!(matches!(first, Source::Monitor(_)), "screens come first");
+        let mut screen = open(30, Some(first)).unwrap();
+        let shot = screen.next().unwrap().expect("a picture");
+        assert!(shot.width > 0 && shot.data.len() >= shot.stride * shot.height as usize);
+        for c in list
+            .iter()
+            .filter(|c| matches!(c.source, Source::Window(_)))
+        {
+            let mut w = open(30, Some(c.source)).unwrap();
+            assert!(w.next().is_ok(), "{c:?}");
         }
     }
 }
