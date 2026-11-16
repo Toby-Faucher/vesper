@@ -13,7 +13,7 @@ use vesper_protocol::{RoomInfo, RoomKind};
 use super::c::{self, Ellipsis};
 use super::icons::icon;
 use super::theme::{TEXT_BASE, TEXT_SM, TEXT_XS, TextStepExt, tokens};
-use super::{COMPOSER, Vesper, theme};
+use super::{COMPOSER, Vesper, chrome, theme};
 use crate::model::{Model, NOT_REMEMBERED, Phase};
 
 /// `EmptyState.svelte`: the title (16/24, `--weight-strong`), the body (13/20, `--fg-3`, at most 320 px), centred in
@@ -280,10 +280,12 @@ impl Vesper {
                 .h(px(48.))
                 .flex_none()
                 .gap(px(12.))
-                .px(px(16.))
+                .pl(px(16.))
+                .pr(px(16. + chrome::RESERVE))
                 .border_b_1()
                 .border_color(line)
                 .child(b)
+                .child(self.drag_space(cx))
         })
     }
 
@@ -344,11 +346,13 @@ impl Vesper {
                 )
                 .children(popover)
         });
+        let drag = self.drag_space(cx);
         h_flex()
             .h(px(48.))
             .flex_none()
             .gap(px(12.))
-            .px(px(16.))
+            .pl(px(16.))
+            .pr(px(16. + chrome::RESERVE))
             .border_b_1()
             .border_color(t.line_subtle)
             .children(self.show_sidebar(cx))
@@ -370,11 +374,10 @@ impl Vesper {
                     .child(icon("shield").text_color(t.fg_2))
                     .child(n)
             }))
+            // The empty middle moves the window; flex_1, not ml_auto: taffy drops the gaps before an auto margin.
+            .child(drag)
             .child(
-                // flex_1 and justify_end, not ml_auto: taffy drops the gaps before an auto margin.
                 h_flex()
-                    .flex_1()
-                    .justify_end()
                     .gap(px(8.))
                     .children(pins)
                     .child(div().debug_selector(|| "search-button".into()).child(

@@ -163,6 +163,13 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   stays in the taskbar. On a Linux desktop without a tray host there is no tray icon. On Wayland an app cannot raise its own
   window: Show Vesper in the tray asks the compositor to activate it (by its app id, `vesper`), and the compositor may only
   mark it as wanting attention. Not verified on GNOME or KDE; sway does not minimise windows at all.
+- The app draws its own minimise, maximise and close at the top right on Windows and Linux (macOS keeps its title bar).
+  On Linux it asks for client-side decorations; a tiled window goes full screen instead of maximising, and sway and
+  Hyprland ignore minimise. The edges of a floating window on Linux do not resize it (the compositor's own keys do).
+  Verified: the buttons render (parity screenshots in a headless sway). Not verified: dragging, double click and the
+  buttons on a real desktop, and the Windows title bar (only CI builds it).
+- A second launch brings the running app to the front and exits (a Unix socket, a named pipe on Windows). On Wayland the
+  same limit as Show Vesper applies. Verified on Linux by a unit test; the Windows pipe is not verified.
 - An incoming DM call plays the web's ring sound every 2.5 s, and the tray's tooltip says who calls; the window is not
   raised. The ring has no on and off switch or volume in Settings, and the other call sounds (join, leave, mute) are missing.
   Not verified on real speakers.

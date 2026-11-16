@@ -7,6 +7,7 @@ mod banner;
 pub mod c;
 mod call;
 mod chat;
+mod chrome;
 #[cfg(debug_assertions)]
 mod dev;
 mod find;
@@ -31,6 +32,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Application, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement,
@@ -146,10 +148,15 @@ pub fn run() {
         init(cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
+            // The app draws its own window buttons (chrome.rs): no system title bar on Windows, client-side
+            // decorations on Linux. macOS keeps its title bar.
             titlebar: Some(TitlebarOptions {
                 title: Some("Vesper".into()),
+                appears_transparent: cfg!(windows),
                 ..Default::default()
             }),
+            window_decorations: cfg!(target_os = "linux")
+                .then_some(gpui::WindowDecorations::Client),
             // Wayland's activation (the tray's Show Vesper) needs it, and the taskbar matches the window by it.
             app_id: Some("vesper".into()),
             ..Default::default()
@@ -240,6 +247,8 @@ pub struct Vesper {
     /// Inline pictures by upload id, and the order they came in.
     images: HashMap<String, chat::Img>,
     image_order: VecDeque<String>,
+    /// A press on a top bar's empty space: the next move drags the window (`chrome.rs`).
+    drag_armed: bool,
     /// The `@` being typed (its byte offset and the text after it), the highlighted person, and an `@` whose list
     /// Esc closed.
     mention: Option<(usize, String)>,
@@ -421,6 +430,7 @@ impl Vesper {
             heads: vec![],
             images: HashMap::new(),
             image_order: VecDeque::new(),
+            drag_armed: false,
             mention: None,
             mention_ix: 0,
             mention_dismissed: None,
@@ -1092,6 +1102,21 @@ impl Render for Vesper {
                 this.window_key(Some(&e.keystroke.key), false);
             }))
             .child(body)
+            // Before the main screen there is no top bar: its top strip moves the window.
+            .when(self.model.screen != Screen::Main, |d| {
+                d.child(
+                    self.draggable(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right(px(16. + chrome::RESERVE))
+                            .h(px(48.)),
+                        cx,
+                    ),
+                )
+            })
+            .children(self.window_controls(window, cx))
             .children(reveal)
     }
 }

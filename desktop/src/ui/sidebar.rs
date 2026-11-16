@@ -437,11 +437,10 @@ impl Vesper {
                     .pr(px(8.))
                     .pl(px(16.))
                     .child(img(logo(t.fill)).h(px(28.)).w(px(59.)).flex_none())
+                    .child(self.drag_space(cx))
                     .child(
                         div()
-                            .flex_1()
                             .flex()
-                            .justify_end()
                             .child(div().debug_selector(|| "open-switcher".into()).child(
                                 IconButton::new("open-switcher", "command").on_click(cx.listener(
                                     |this, _, w, cx| {
