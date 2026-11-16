@@ -312,7 +312,10 @@ mod tests {
     #[test]
     fn the_share_line_reads_like_the_web() {
         assert_eq!(share_line(None, 0), "Sharing · 0 watching");
-        assert_eq!(share_line(Some((1920, 1080, 30., 7_960.)), 0), "Sharing · 0 watching");
+        assert_eq!(
+            share_line(Some((1920, 1080, 30., 7_960.)), 0),
+            "Sharing · 0 watching"
+        );
         assert_eq!(share_line(None, 1), "Starting · 1 watching");
         assert_eq!(
             share_line(Some((1920, 1080, 29.6, 7_960.)), 2),
