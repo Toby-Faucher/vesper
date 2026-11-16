@@ -25,6 +25,9 @@ struct BladeAtlasState {
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
     initializations: Vec<AtlasTextureId>,
     uploads: Vec<PendingUpload>,
+    // vesper patch: textures let go of, kept until the GPU has finished the frames that may still sample them.
+    retired: Vec<BladeAtlasTexture>,
+    retiring: Vec<(gpu::SyncPoint, Vec<BladeAtlasTexture>)>,
 }
 
 #[cfg(gles)]
@@ -32,6 +35,11 @@ unsafe impl Send for BladeAtlasState {}
 
 impl BladeAtlasState {
     fn destroy(&mut self) {
+        // vesper patch: the retired textures too.
+        let retiring = self.retiring.drain(..).flat_map(|(_, t)| t);
+        for mut texture in self.retired.drain(..).chain(retiring).collect::<Vec<_>>() {
+            texture.destroy(&self.gpu);
+        }
         self.storage.destroy(&self.gpu);
         self.upload_belt.destroy(&self.gpu);
     }
@@ -54,6 +62,8 @@ impl BladeAtlas {
             tiles_by_key: Default::default(),
             initializations: Vec::new(),
             uploads: Vec::new(),
+            retired: Vec::new(),
+            retiring: Vec::new(),
         }))
     }
 
@@ -63,12 +73,29 @@ impl BladeAtlas {
 
     pub fn before_frame(&self, gpu_encoder: &mut gpu::CommandEncoder) {
         let mut lock = self.0.lock();
+        // vesper patch: a retired texture goes once the frame submitted after its removal is done.
+        let state = &mut *lock;
+        let gpu = &state.gpu;
+        state.retiring.retain_mut(|(sp, textures)| {
+            if !gpu.wait_for(sp, 0) {
+                return true;
+            }
+            for texture in textures.iter_mut() {
+                texture.destroy(gpu);
+            }
+            false
+        });
         lock.flush(gpu_encoder);
     }
 
     pub fn after_frame(&self, sync_point: &gpu::SyncPoint) {
         let mut lock = self.0.lock();
         lock.upload_belt.flush(sync_point);
+        // vesper patch: textures removed before this frame were last drawn by an earlier one, done by this point.
+        if !lock.retired.is_empty() {
+            let retired = std::mem::take(&mut lock.retired);
+            lock.retiring.push((sync_point.clone(), retired));
+        }
     }
 
     pub fn get_texture_info(&self, id: AtlasTextureId) -> BladeTextureInfo {
@@ -104,9 +131,10 @@ impl PlatformAtlas for BladeAtlas {
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
 
-        let Some(id) = lock.tiles_by_key.remove(key).map(|tile| tile.texture_id) else {
+        let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+        let id = tile.texture_id;
 
         let Some(texture_slot) = lock.storage[id.kind].textures.get_mut(id.index as usize) else {
             return;
@@ -118,8 +146,13 @@ impl PlatformAtlas for BladeAtlas {
                 lock.storage[id.kind]
                     .free_list
                     .push(texture.id.index as usize);
-                texture.destroy(&lock.gpu);
+                // vesper patch: was `texture.destroy(&lock.gpu)`, while the last frame may still sample it (a GPU hang).
+                lock.retired.push(texture);
             } else {
+                // vesper patch: the tile's space is free again (it was lost before).
+                texture
+                    .allocator
+                    .deallocate(etagere::AllocId::deserialize(tile.tile_id.0));
                 *texture_slot = Some(texture);
             }
         }

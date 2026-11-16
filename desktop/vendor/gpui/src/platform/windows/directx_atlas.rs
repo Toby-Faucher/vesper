@@ -95,9 +95,10 @@ impl PlatformAtlas for DirectXAtlas {
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
 
-        let Some(id) = lock.tiles_by_key.remove(key).map(|tile| tile.texture_id) else {
+        let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+        let id = tile.texture_id;
 
         let textures = match id.kind {
             AtlasTextureKind::Monochrome => &mut lock.monochrome_textures,
@@ -114,6 +115,10 @@ impl PlatformAtlas for DirectXAtlas {
                 textures.free_list.push(texture.id.index as usize);
                 lock.tiles_by_key.remove(key);
             } else {
+                // vesper patch: the tile's space is free again (it was lost before).
+                texture
+                    .allocator
+                    .deallocate(etagere::AllocId::deserialize(tile.tile_id.0));
                 *texture_slot = Some(texture);
             }
         }
