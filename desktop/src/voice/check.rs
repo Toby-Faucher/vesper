@@ -126,7 +126,15 @@ mod tests {
             matches!(ev, VoiceEvent::Level(db) if db > -7.0 && db < -5.0),
             "{ev:?}"
         );
-        assert!(played.lock().unwrap().len() >= 5 * FRAME);
+        // The player runs on its own thread: on a busy machine it can trail the first level, so wait for it.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while played.lock().unwrap().len() < 5 * FRAME {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the mic was not played"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         drop(check);
         while rx.recv_timeout(Duration::from_secs(5)).is_ok() {}
         let n = played.lock().unwrap().len();
