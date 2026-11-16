@@ -156,12 +156,12 @@ impl AudioDevices for FakeAudio {
     fn output(&self, _: Option<&str>) -> Result<Box<dyn AudioOutput>, String> {
         Ok(Box::new(Speakers))
     }
-    fn screen(&self) -> OpenScreen {
+    fn screen(&self, source: Option<crate::voice::capture::Source>) -> OpenScreen {
         match self.share {
             Some((w, h)) => {
                 Box::new(move |fps| Ok(Box::new(Pattern::new(w, h, fps)) as Box<dyn share::Screen>))
             }
-            None => Box::new(crate::voice::capture::open),
+            None => Box::new(move |fps| crate::voice::capture::open(fps, source)),
         }
     }
 }
@@ -568,7 +568,7 @@ impl Vesper {
                     && self.model.call.connected =>
             {
                 self.dev.shared = true;
-                self.act(|m| m.share(60, 8_000, true), cx);
+                self.act(|m| m.share(60, 8_000, true, None), cx);
             }
             Step::Voice
                 if self.model.call.phase == Phase::Joined

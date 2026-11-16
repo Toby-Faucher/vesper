@@ -202,24 +202,31 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - The call's UDP socket is IPv4 only, so an SFU reachable only over IPv6 does not connect.
 - Not verified on real devices or across a real network with NAT: the voice tests run on loopback with fake audio.
 - Screen share from the desktop app ([ADR 0011](decisions/0011-desktop-screen-share-send.md)): the pure Rust VP8 encoder is single
-  threaded, so a 1080p share runs at about 20 fps (from the encoder's own figures, not measured here). Windows and X11 share the
-  primary monitor, with no picker; X11 leaves the cursor out. On Wayland a picture whose buffer is not a plain mapped one (DMA-BUF
+  threaded, so a 1080p share runs at about 20 fps (from the encoder's own figures, not measured here). On Windows and X11 the
+  share dialog lists the screens and windows by name, without thumbnails, and keeps the last choice until the app quits. X11
+  leaves the cursor out, and a minimised window sends nothing until it is back. On Wayland a picture whose buffer is not a plain mapped one (DMA-BUF
   only) is skipped. Only the test pattern was sent end to end; the real captures are not verified (Windows is only compiled in CI).
+  The X11 list was seen to name the screen in a headless sway's Xwayland; the window list needs a window manager that keeps
+  `_NET_CLIENT_LIST`, and the capture needs a real X server (Xwayland's root has no picture): neither verified.
 - Screen share: the desktop app watches one share at a time, at fit size, without the web's layouts,
   1:1, zoom, pop-out or pointer. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
 - Screen share: the desktop app can watch, not share. It shows the shares as the web does (Grid, Focus and Dock, chat
-  beside them, hide, point, zoom, full screen), without pop-out and the figures line. Each share decodes on a thread of
+  beside them, hide, point, zoom, full screen, pop out, the figures line and the buttons' tooltips). The pop-out is a
+  normal window, not kept on top (GPUI 0.2.2 cannot), and its pictures come as sent. The tooltips show by the mouse after
+  GPUI's 500 ms, not centred under the button after 400 ms. Each share decodes on a thread of
   its own, at the size its tile is drawn. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
   shown when it minimised the window itself, or when pictures came for 2 s and no frame was drawn; the sharer is then told
   to stop after the 10 s grace, and the next frame drawn watches again. Whether a window behind a game stops drawing
   depends on the system (not verified). Verified on this machine (debug build, headless sway): three web shares at
-  2560x1440 in each layout. Not verified: a real 60 fps share on a screen, Windows, and macOS.
+  2560x1440 in each layout. The pop-out and the figures line are verified by a headless GPUI test only. Not verified: a real
+  60 fps share on a screen, the pop-out window on a real desktop, Windows, and macOS.
 - Chat: a reply's quote scrolls to the original only when it is loaded (the web also loads it from the server). No search,
   no person cards from a mention (a mention is styled but cannot be clicked), and no "any symbol" reaction box. Day labels
   are in English. Drafts are kept per room in memory only, as on the web.
 - Files: audio and video open in the system's player; there are no inline players and no image viewer. A plain file can only
   be saved, not opened from the app. Pictures over 20 MB show as a card. A GIF shows its first frame. Not verified: dropping
-  files from Explorer, pasting a picture, the save dialog and the system's viewer on Windows.
+  files from Explorer or a Linux file manager (the chat's drop overlay and its routing are verified by a headless GPUI
+  test, with no paths in it: GPUI gives tests no way to make them), pasting a picture, the save dialog and the system's viewer on Windows.
 
 ## Build and deploy
 

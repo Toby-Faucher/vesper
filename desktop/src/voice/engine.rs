@@ -127,6 +127,9 @@ struct Engine<'a> {
     /// When each share last lost packets or frames, and the shares shown as struggling.
     trouble: HashMap<String, Instant>,
     struggling: HashSet<String>,
+    /// Each watched share's frames, bytes and size received since `seen_at`, for its tile's figures line.
+    seen: HashMap<String, Seen>,
+    seen_at: Instant,
     /// Packets received per audio m-line at the last stats window, and this window's samples by user.
     packets: HashMap<Mid, u64>,
     links: Vec<(String, crate::link::Sample)>,
@@ -231,6 +234,8 @@ impl<'a> Engine<'a> {
             asked: HashMap::new(),
             trouble: HashMap::new(),
             struggling: HashSet::new(),
+            seen: HashMap::new(),
+            seen_at: Instant::now(),
             packets: HashMap::new(),
             links: vec![],
             emit,
@@ -323,12 +328,15 @@ impl<'a> Engine<'a> {
                 } else {
                     self.watching.remove(&user_id);
                     self.trouble.remove(&user_id);
+                    self.seen.remove(&user_id);
                 }
                 self.video.watch(user_id, on);
             }
             VoiceCmd::Share(Some(setup)) => match &self.sending {
                 Some(s) => s.set(setup),
-                None => self.sending = Some(Sending::start(self.devices.screen(), setup)),
+                None => {
+                    self.sending = Some(Sending::start(self.devices.screen(setup.source), setup))
+                }
             },
             VoiceCmd::Share(None) => self.sending = None,
             VoiceCmd::ShareSize {
@@ -452,6 +460,7 @@ impl<'a> Engine<'a> {
                     };
                     let links = std::mem::take(&mut self.links);
                     (self.emit)(VoiceEvent::Stats { own, links });
+                    self.share_figures();
                 }
                 Output::Event(Event::MediaIngressStats(s))
                     if self
@@ -558,10 +567,34 @@ impl<'a> Engine<'a> {
             return;
         }
         self.video_mids.insert(user.clone(), mid);
+        let seen = self.seen.entry(user.clone()).or_default();
+        (seen.frames, seen.bytes) = (seen.frames + 1, seen.bytes + data.len());
+        if let Some(size) = vp8_size(&data) {
+            seen.size = size;
+        }
         let gap = self.gaps.remove(&user) || !contiguous;
         if !self.video.frame(user.clone(), data, gap) {
             self.gaps.insert(user.clone());
             self.need_keyframe(&user, true);
+        }
+    }
+
+    /// What each watched share brought since the last time, as the web's tile reads it from `getStats`.
+    fn share_figures(&mut self) {
+        let secs = self.seen_at.elapsed().as_secs_f32().max(0.001);
+        self.seen_at = Instant::now();
+        for (user, s) in &mut self.seen {
+            let (width, height) = s.size;
+            if width > 0 {
+                (self.emit)(VoiceEvent::ShareSeen {
+                    user_id: user.clone(),
+                    width,
+                    height,
+                    fps: s.frames as f32 / secs,
+                    kbps: s.bytes as f32 * 8. / secs / 1000.,
+                });
+            }
+            (s.frames, s.bytes) = (0, 0);
         }
     }
 
@@ -755,6 +788,24 @@ impl<'a> Engine<'a> {
     }
 }
 
+/// A watched share's video since the last figures: frames, bytes, and the size its last keyframe gave.
+#[derive(Default)]
+struct Seen {
+    frames: u32,
+    bytes: usize,
+    size: (u32, u32),
+}
+
+/// A VP8 keyframe's width and height (RFC 6386 section 9.1: the 3-byte tag with bit 0 clear, the start code, then
+/// 14 bits each); none for an interframe.
+pub fn vp8_size(f: &[u8]) -> Option<(u32, u32)> {
+    if f.len() < 10 || f[0] & 1 != 0 || f[3..6] != [0x9d, 0x01, 0x2a] {
+        return None;
+    }
+    let dim = |i: usize| u32::from(u16::from_le_bytes([f[i], f[i + 1]]) & 0x3fff);
+    Some((dim(6), dim(8)))
+}
+
 /// The UDP addresses in an SDP's `a=candidate` lines.
 pub fn sfu_addresses(sdp: &str) -> Vec<SocketAddr> {
     sdp.lines()
@@ -779,6 +830,20 @@ mod tests {
 
     use super::*;
     use crate::settings::Denoise;
+
+    #[test]
+    fn a_keyframe_gives_the_share_size() {
+        let mut enc =
+            vp8_encoder::Encoder::new(vp8_encoder::EncoderConfig::new(320, 180, 30, 500_000))
+                .unwrap();
+        let grey = vec![128; 320 * 180 * 3 / 2];
+        let pic = vp8_encoder::Picture::from_i420(&grey, 320, 180).unwrap();
+        let key = enc.encode(&pic, true).unwrap().unwrap().data;
+        assert_eq!(vp8_size(&key), Some((320, 180)));
+        let next = enc.encode(&pic, false).unwrap().unwrap().data;
+        assert_eq!(vp8_size(&next), None, "an interframe");
+        assert_eq!(vp8_size(&[0; 4]), None);
+    }
 
     #[test]
     fn a_person_not_heard_for_a_while_is_forgotten() {

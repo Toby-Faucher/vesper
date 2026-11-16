@@ -44,6 +44,8 @@ pub struct ShareSetup {
     pub sharp: bool,
     /// Someone watches: encode and send. Otherwise the encoder is off.
     pub active: bool,
+    /// What to share, chosen in the share dialog; none for the system's picker or the primary monitor.
+    pub source: Option<super::capture::Source>,
 }
 
 /// The most pixels sent: 1080p for sharp text, 720p for smooth motion. A bigger screen is scaled down to fit.
@@ -416,6 +418,7 @@ mod tests {
             kbps: 500,
             sharp: true,
             active: false,
+            source: None,
         };
         let s = Sending::start(open, setup);
         assert_eq!(s.out.recv_timeout(Duration::from_secs(5)), Ok(Out::Open));
@@ -455,6 +458,7 @@ mod tests {
             kbps: 500,
             sharp: true,
             active: true,
+            source: None,
         };
         let s = Sending::start(open, setup);
         assert_eq!(

@@ -1,9 +1,10 @@
 //! The screens shared in my call, on the call room's page (`SharePanel.svelte`, `ShareTile.svelte`): a head line,
 //! then a tile per share in one of three layouts (Grid, Focus, Dock) with chat beside them. Every share with a tile is
-//! watched. A tile draws the whole picture inside its 16:9 box (letterboxed), and has Point, Zoom, Full screen and
-//! Hide on hover.
+//! watched. A tile draws the whole picture inside its 16:9 box (letterboxed), and has Point, Zoom, Full screen, Pop
+//! out (`popout.rs`) and Hide on hover, each with its tooltip, and the line with the size, frame rate and bitrate
+//! received.
 //!
-//! Not here: pop out (the web has none in Firefox either), the figures line, the divider's arrow keys.
+//! Not here: the divider's arrow keys.
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -19,9 +20,10 @@ use gpui::{
 };
 
 use super::Vesper;
-use super::c::{self, Avatar};
+use super::c::{self, Avatar, Ellipsis};
 use super::icons::icon;
 use super::motion;
+use super::popout::PopOut;
 use super::theme::{TEXT_XS, TextStepExt, Tokens, tokens};
 use crate::model::Phase;
 use crate::net::Cmd;
@@ -32,6 +34,8 @@ use crate::voice::{Frame, VoiceCmd};
 const GAP: f32 = 12.;
 /// A thumbnail in Focus, `w-44`.
 const THUMB: f32 = 176.;
+/// The size the popped out share's pictures are asked for: as sent, whatever its tile's size.
+const AS_SENT: u32 = 1 << 16;
 
 /// A decoded picture as GPUI's image. The pixels move over without a copy when nothing else holds them.
 pub fn picture(f: Frame) -> Option<Arc<RenderImage>> {
@@ -184,15 +188,14 @@ impl Vesper {
                 cx.drop_image(old, Some(window));
             }
         }
-        let shown: HashSet<String> = self
-            .model
-            .sharers()
-            .into_iter()
-            .map(|(id, _)| id)
-            .filter(|id| self.model.call.shown(id))
-            .collect();
+        if let Some(p) = &self.pop {
+            p.update(cx, |_, cx| cx.notify()); // a new picture of its share, maybe
+        }
+        let sharers: Vec<String> = self.model.sharers().into_iter().map(|(id, _)| id).collect();
+        let c = &self.model.call;
+        let shown: HashSet<String> = sharers.iter().filter(|id| c.shown(id)).cloned().collect();
         let gone: Vec<String> = (self.share.screens.keys())
-            .filter(|id| !shown.contains(*id))
+            .filter(|id| !sharers.contains(*id) || !c.wanted(id))
             .cloned()
             .collect();
         for id in gone {
@@ -272,7 +275,33 @@ impl Vesper {
         cx.notify();
     }
 
-    /// Tells the decoder the size each share is drawn at, in device pixels (twice that zoomed), when it changed.
+    /// Pops a share out into its own window, or back in.
+    fn toggle_pop(&mut self, id: &str, cx: &mut Context<Self>) {
+        let out = self.model.call.popped.as_deref() != Some(id);
+        self.act(
+            |m| m.pop_out(out.then(|| id.to_string()), Instant::now()),
+            cx,
+        );
+        if out && self.pop.is_none() {
+            // After this update: the new window draws at once, and it reads this view.
+            let main = cx.entity();
+            cx.defer(move |cx| {
+                if main.read(cx).pop.is_some() {
+                    return;
+                }
+                let pop = PopOut::open(&main, cx);
+                main.update(cx, |v, cx| {
+                    if pop.is_none() {
+                        v.act(|m| m.pop_out(None, Instant::now()), cx);
+                    }
+                    v.pop = pop;
+                });
+            });
+        }
+    }
+
+    /// Tells the decoder the size each share is drawn at, in device pixels (twice that zoomed), when it changed. The
+    /// share popped out comes as sent: its window can be any size.
     fn share_sizes(&mut self, sizes: Vec<(String, f32, f32)>, window: &Window) {
         let k = window.scale_factor();
         let call = self.model.call.id;
@@ -287,7 +316,11 @@ impl Vesper {
             } else {
                 1.
             };
-            let (width, height) = ((w * k * z).round() as u32, (h * k * z).round() as u32);
+            let (width, height) = if self.model.call.popped.as_ref() == Some(&user_id) {
+                (AS_SENT, AS_SENT)
+            } else {
+                ((w * k * z).round() as u32, (h * k * z).round() as u32)
+            };
             if width == 0 || height == 0 || sent.get(&user_id) == Some(&(width, height)) {
                 continue;
             }
@@ -918,20 +951,27 @@ impl Vesper {
         });
         let full = kind == Tile::Full;
         let toolbar = (!thumb).then(|| {
-            let button = |what: &str, icon: &'static str, pressed: bool, f: Box<ToolFn>| {
+            let button = |what: &str,
+                          tip: &'static str,
+                          icon: &'static str,
+                          pressed: bool,
+                          f: Box<ToolFn>| {
                 let sel = format!("share-{what}-{id}");
                 div().debug_selector(move || sel).child(
                     c::IconButton::new(ElementId::Name(format!("share-{what}-{id}").into()), icon)
+                        .tip(tip)
                         .pressed(pressed)
                         .on_click(cx.listener(move |this, _, window, cx| f(this, window, cx))),
                 )
             };
-            let (u1, u2, u3, u4) = (
+            let (u1, u2, u3, u4, u5) = (
+                id.to_string(),
                 id.to_string(),
                 id.to_string(),
                 id.to_string(),
                 id.to_string(),
             );
+            let popped = c.popped.as_deref() == Some(id);
             chip()
                 .id(ElementId::Name(format!("share-controls-{id}").into()))
                 .absolute()
@@ -943,6 +983,7 @@ impl Vesper {
                 .occlude()
                 .child(button(
                     "point",
+                    "Point",
                     "mousePointerClick",
                     pointing,
                     Box::new(move |this, _, cx| {
@@ -955,6 +996,7 @@ impl Vesper {
                 ))
                 .child(button(
                     "zoom",
+                    "Zoom",
                     "zoomIn",
                     zoom.is_some(),
                     Box::new(move |this, _, cx| {
@@ -967,6 +1009,7 @@ impl Vesper {
                 ))
                 .child(button(
                     "full",
+                    "Full screen",
                     "maximize",
                     full,
                     Box::new(move |this, window, cx| {
@@ -974,7 +1017,15 @@ impl Vesper {
                     }),
                 ))
                 .child(button(
+                    "pop",
+                    "Pop out",
+                    "pictureInPicture2",
+                    popped,
+                    Box::new(move |this, _, cx| this.toggle_pop(&u5, cx)),
+                ))
+                .child(button(
                     "hide",
+                    "Hide",
                     "eyeOff",
                     false,
                     Box::new(move |this, window, cx| {
@@ -984,6 +1035,11 @@ impl Vesper {
                 ))
         });
         let watched = !thumb;
+        let line = c
+            .seen
+            .get(id)
+            .filter(|_| !thumb)
+            .map(|&(w, h, fps, kbps)| super::send::figures(w, h, fps, kbps));
         div()
             .id(tile_id)
             .when(watched, |d| d.debug_selector(|| "share-view".into()))
@@ -1009,20 +1065,37 @@ impl Vesper {
             .children(struggle)
             .children(toolbar)
             .child(
-                div().absolute().left(px(8.)).bottom(px(8.)).child(
-                    chip()
-                        .h(px(24.))
-                        .pr(px(8.))
-                        .pl(px(2.))
-                        .whitespace_nowrap()
-                        .child(Avatar::new(
-                            id.to_string(),
-                            name.to_string(),
-                            accent_of(id),
-                            20,
-                        ))
-                        .child(name.to_string()),
-                ),
+                div()
+                    .absolute()
+                    .left(px(8.))
+                    .right(px(8.))
+                    .bottom(px(8.))
+                    .flex()
+                    .min_w_0()
+                    .gap(px(6.))
+                    .child(
+                        chip()
+                            .flex_none()
+                            .h(px(24.))
+                            .pr(px(8.))
+                            .pl(px(2.))
+                            .whitespace_nowrap()
+                            .child(Avatar::new(
+                                id.to_string(),
+                                name.to_string(),
+                                accent_of(id),
+                                20,
+                            ))
+                            .child(name.to_string()),
+                    )
+                    .children(line.map(|l| {
+                        chip()
+                            .debug_selector(|| "share-figures".into())
+                            .min_w_0()
+                            .px(px(8.))
+                            .opacity(hov)
+                            .child(div().min_w_0().ellipsis().child(l))
+                    })),
             )
     }
 }

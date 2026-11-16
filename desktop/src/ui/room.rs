@@ -184,7 +184,8 @@ impl Vesper {
             // `pt-3` over the timeline (Chat.svelte).
             .child(div().h(px(12.)).flex_none())
             .child(timeline)
-            .child(composer);
+            .child(composer)
+            .child(self.drop_overlay(cx));
         let row = self.share_row(chat, window, cx);
         let dialog = self.delete_dialog(cx);
         if self.timeline_moving() {
@@ -196,14 +197,51 @@ impl Vesper {
             .child(header)
             .children(keyring)
             .children(call_status)
-            .child(row)
-            // Files dropped anywhere on the room go to the tray.
-            .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgb(theme::ACCENT_SUBTLE)))
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
-                this.attach_paths(paths.paths().to_vec(), cx)
-            }));
+            .child(row);
         let shell = self.shell(main, window, cx).children(dialog);
         self.overlays(shell, window, cx)
+    }
+
+    /// Files dragged over the chat (`Chat.svelte`): a dashed accent edge with "Drop to attach" over the timeline and
+    /// composer. Dropped, they go to the upload tray and the composer takes focus. It covers the whole chat, so a
+    /// drop anywhere on it counts; it is clear, and lets the mouse through, until a file drag is over it.
+    fn drop_overlay(&self, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let t = tokens(cx);
+        let mut bg: gpui::Hsla = t.bg_app.into();
+        bg.a = 0.88;
+        div()
+            .id("chat-drop")
+            .absolute()
+            .inset_0()
+            .opacity(0.)
+            .drag_over::<ExternalPaths>(|s, _, _, _| s.opacity(1.))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.attach_paths(paths.paths().to_vec(), cx);
+                this.composer.update(cx, |i, cx| i.focus(window, cx));
+            }))
+            .child(
+                div()
+                    .debug_selector(|| "chat-drop".into())
+                    .absolute()
+                    .top(px(8.))
+                    .left(px(16.))
+                    .right(px(16.))
+                    .bottom(px(16.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                    .border_2()
+                    .border_dashed()
+                    .border_color(t.accent_line)
+                    .rounded(t.radius_lg)
+                    .bg(bg)
+                    .text_color(t.fg)
+                    .text_step(TEXT_BASE)
+                    .font_weight(t.weight_ui)
+                    .child(icon("paperclip").text_color(t.fg))
+                    .child("Drop to attach"),
+            )
     }
 
     /// The main pane's column: while in a call it keeps the call bar's height and 24 px free at its bottom, and the

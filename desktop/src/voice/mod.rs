@@ -59,9 +59,9 @@ pub trait AudioDevices: Send + Sync {
     /// The error is a sentence for the user.
     fn input(&self, name: Option<&str>) -> Result<Box<dyn AudioInput>, String>;
     fn output(&self, name: Option<&str>) -> Result<Box<dyn AudioOutput>, String>;
-    /// How my screen share opens the screen: the real one, or a test pattern.
-    fn screen(&self) -> share::OpenScreen {
-        Box::new(capture::open)
+    /// How my screen share opens the screen (`source`, else the system's choice): the real one, or a test pattern.
+    fn screen(&self, source: Option<capture::Source>) -> share::OpenScreen {
+        Box::new(move |fps| capture::open(fps, source))
     }
 }
 
@@ -139,6 +139,14 @@ pub enum VoiceEvent {
     Devices(String),
     /// The newest picture of a watched screen share.
     Frame(Frame),
+    /// Every 2 s for each watched share: the size, frame rate and bitrate received, for its tile's figures line.
+    ShareSeen {
+        user_id: String,
+        width: u32,
+        height: u32,
+        fps: f32,
+        kbps: f32,
+    },
     /// A watched share loses packets or frames, or stopped doing so. Sent when it changes.
     Struggling { user_id: String, on: bool },
     /// Every 2 s: the call's round trip and loss, and a sample of each person's audio (by user id).

@@ -593,6 +593,36 @@ fn the_share_panel_watches_every_share_and_fits_each_picture(cx: &mut TestAppCon
         )
     );
     click(cx, "share-zoom-b");
+    // The figures received show on the tile.
+    apply(
+        &view,
+        cx,
+        call(VoiceEvent::ShareSeen {
+            user_id: "b".into(),
+            width: 2560,
+            height: 1440,
+            fps: 59.6,
+            kbps: 7_960.,
+        }),
+    );
+    assert!(cx.debug_bounds("share-figures").is_some());
+    // Pop out: a window of its own, asked for pictures as sent; again: back in, and the window closes.
+    drain(&mut rx);
+    click(cx, "share-pop-b");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.call.popped.as_deref(), Some("b"));
+        assert!(v.pop.is_some());
+    });
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), 2);
+    assert!(drain(&mut rx).iter().any(|c| matches!(c,
+        Cmd::Voice(VoiceCmd::ShareSize { user_id, width, .. }) if user_id == "b" && *width == 1 << 16)));
+    click(cx, "share-pop-b");
+    cx.run_until_parked();
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.call.popped, None);
+        assert!(v.pop.is_none(), "the window closed");
+    });
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), 1);
     // Full screen: the tile fills the window; Esc leaves.
     click(cx, "share-full-b");
     view.read_with(cx, |v, _| assert!(v.share.full.is_some()));
@@ -2274,6 +2304,101 @@ fn the_call_bar_shares_my_screen(cx: &mut TestAppContext) {
         ]
     ));
     view.read_with(cx, |v, _| assert!(v.model.call.mine.is_none()));
+}
+
+/// On Windows and X11 the share dialog lists the screens and windows (`capture::sources`, set here by hand): the
+/// one chosen goes with the share and is kept for the next.
+#[gpui::test]
+fn the_share_dialog_picks_a_screen_or_window(cx: &mut TestAppContext) {
+    use crate::voice::capture::{Choice, Source};
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    click(cx, "join-voice");
+    let voice = |ev| Event::Voice { call: 1, ev };
+    apply(&view, cx, voice(VoiceEvent::Offer("offer".into())));
+    let joined = ServerMsg::Joined {
+        user_id: "a".into(),
+        answer: "answer".into(),
+        peers: vec![],
+    };
+    apply(&view, cx, Event::Server(Box::new(joined)));
+    drain(&mut rx);
+
+    click(cx, "call-share");
+    view.update(cx, |v, cx| {
+        let d = v.send.as_mut().unwrap();
+        d.sources = vec![
+            Choice {
+                source: Source::Monitor(0),
+                name: "Screen 1 (DP-1)".into(),
+            },
+            Choice {
+                source: Source::Window(9),
+                name: "Editor".into(),
+            },
+        ];
+        d.pick = Some(Source::Monitor(0));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("share-sources").is_some());
+    click(cx, "share-source-1");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.send.as_ref().unwrap().pick, Some(Source::Window(9)))
+    });
+    click(cx, "share-go");
+    let cmds = drain(&mut rx);
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Cmd::Voice(VoiceCmd::Share(Some(s))) if s.source == Some(Source::Window(9))
+        )),
+        "{cmds:?}"
+    );
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.share_source, Some(Source::Window(9)))
+    });
+}
+
+/// Files dragged from the file manager onto the chat show "Drop to attach", and dropped there they go to the tray
+/// (`attach_paths`, tested with the tray) and the composer takes focus; dropped outside the chat (the sidebar), they
+/// are left alone, as on the web. (GPUI gives tests no way to make `ExternalPaths` with paths in it.)
+#[gpui::test]
+fn files_dropped_on_the_chat_go_to_the_tray(cx: &mut TestAppContext) {
+    use gpui::{ExternalPaths, FileDropEvent, Focusable};
+    let (view, cx, _rx) = open(cx);
+    chat_room(&view, cx);
+    let focused = |cx: &mut VisualTestContext| {
+        view.update_in(cx, |v, window, cx| {
+            v.composer.read(cx).focus_handle(cx).is_focused(window)
+        })
+    };
+    let drop_at = |cx: &mut VisualTestContext, at| {
+        cx.simulate_event(FileDropEvent::Entered {
+            position: at,
+            paths: ExternalPaths::default(),
+        });
+        cx.simulate_event(FileDropEvent::Submit { position: at });
+        cx.run_until_parked();
+    };
+    cx.update(|window, _| window.blur());
+
+    let sidebar = cx.debug_bounds("room-2").unwrap().center();
+    drop_at(cx, sidebar);
+    assert!(!focused(cx), "not on the chat");
+
+    let over = cx.debug_bounds("md-10-1").unwrap().center();
+    cx.simulate_event(FileDropEvent::Entered {
+        position: over,
+        paths: ExternalPaths::default(),
+    });
+    let overlay = cx
+        .debug_bounds("chat-drop")
+        .expect("the drop overlay is drawn");
+    assert!(overlay.contains(&over));
+    cx.simulate_event(FileDropEvent::Exited);
+    drop_at(cx, over);
+    assert!(focused(cx), "dropped on the chat");
 }
 
 #[gpui::test]
