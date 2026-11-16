@@ -50,7 +50,10 @@ impl Vesper {
         if let Some(full) = self.render_full_share(window, cx) {
             return full;
         }
-        let banner = self.render_banner(window, cx);
+        let banner = self
+            .render_banner(window, cx)
+            .into_iter()
+            .chain(self.render_update(cx));
         if self.settings_open {
             let page = self.render_page(window, cx);
             let main = self.main_pane(window, cx).children(banner).child(page);

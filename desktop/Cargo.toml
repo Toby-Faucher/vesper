@@ -58,6 +58,10 @@ x11rb = { version = "0.13", features = ["randr"] }
 [target.'cfg(windows)'.dependencies]
 tokio = { version = "1", features = ["net"] }
 
+# The exe's icon (build.rs). Already in the tree through gpui's own manifest.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
 [lints.rust]
 unsafe_code = "forbid"
 

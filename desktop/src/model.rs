@@ -356,6 +356,22 @@ pub struct Model {
     pub dm_opened: Option<i64>,
     /// Settings > Voice's input level and mic test.
     pub mic: MicCheck,
+    /// A newer release, offered in a bar above the room (`update.rs`).
+    pub update: Update,
+    /// A `vesper://room` link's room, opened once the rooms are known.
+    pub want_room: Option<i64>,
+    /// A `vesper://invite` link's code: the sign in screen offers to create an account with it.
+    pub invite: Option<vesper_protocol::Secret>,
+}
+
+/// Where an update offer is. `Failed` says why and offers it again.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Update {
+    #[default]
+    None,
+    Offered(crate::update::Offer),
+    Installing(crate::update::Offer),
+    Failed(crate::update::Offer, String),
 }
 
 /// `levelHint` of devices.ts over the last 30 levels (3 s).
@@ -460,6 +476,9 @@ impl Default for Model {
             person_error: String::new(),
             dm_opened: None,
             mic: MicCheck::default(),
+            update: Update::None,
+            want_room: None,
+            invite: None,
         }
     }
 }
@@ -480,6 +499,10 @@ impl Model {
             focused: self.focused,
             settings: std::mem::take(&mut self.settings),
             ptt_open: self.ptt_open,
+            update: std::mem::take(&mut self.update),
+            want_room: self.want_room.take(),
+            // An invite is for signing up: gone once signed in.
+            invite: self.invite.take().filter(|_| screen == Screen::SignIn),
             ..Model::default()
         };
     }
@@ -491,6 +514,9 @@ impl Model {
                 | Event::SignedOut { .. }
                 | Event::SignInFailed(_)
                 | Event::NotRemembered
+                | Event::UpdateOffered(_)
+                | Event::UpdateInstalled(_)
+                | Event::UpdateFailed(_)
         );
         // Late events of a session that was signed out here.
         if signed_in_only && self.screen != Screen::Main {
@@ -513,6 +539,21 @@ impl Model {
             }
             Event::SignInFailed(e) => (self.busy, self.error) = (false, e),
             Event::NotRemembered => self.not_remembered = true,
+            Event::UpdateOffered(o) => {
+                if !matches!(self.update, Update::Installing(_)) {
+                    self.update = Update::Offered(o);
+                }
+            }
+            // Here only when the new app did not start (the view starts it and quits).
+            Event::UpdateInstalled(_) | Event::UpdateFailed(_) => {
+                if let Update::Installing(o) = std::mem::take(&mut self.update) {
+                    let why = match ev {
+                        Event::UpdateFailed(e) => e,
+                        _ => "Vesper was updated. Quit and start it again.".into(),
+                    };
+                    self.update = Update::Failed(o, why);
+                }
+            }
             Event::SessionEnded => {
                 self.reset(Screen::SignIn, SESSION_ENDED);
                 return vec![Cmd::Forget];
@@ -705,7 +746,13 @@ impl Model {
             self.rings.clear();
             // Like resync(): events may have been missed while the socket was down, so drop the other rooms and
             // fetch the shown one's newest page again, merged into what is held.
-            let keep = shown.or_else(|| self.state.rooms.first().map(|r| r.id));
+            let link = self
+                .want_room
+                .take()
+                .filter(|id| self.state.find_room(*id).is_some());
+            let keep = shown
+                .or(link)
+                .or_else(|| self.state.rooms.first().map(|r| r.id));
             let kept = keep.and_then(|id| self.chat.rooms.remove(&id));
             self.chat.rooms.clear();
             if let Some(id) = keep {
@@ -1396,6 +1443,72 @@ impl Model {
         }]
     }
 
+    /// "Update and restart" was clicked.
+    pub fn install_update(&mut self) -> Vec<Cmd> {
+        match std::mem::take(&mut self.update) {
+            Update::Offered(o) | Update::Failed(o, _) => {
+                self.update = Update::Installing(o.clone());
+                vec![Cmd::InstallUpdate(o)]
+            }
+            u => {
+                self.update = u;
+                vec![]
+            }
+        }
+    }
+
+    /// Create your account, with the invite of a `vesper://invite` link.
+    pub fn sign_up(
+        &mut self,
+        server: &str,
+        username: &str,
+        display_name: &str,
+        password: &str,
+    ) -> Vec<Cmd> {
+        let Some(invite) = self.invite.clone().filter(|_| !self.busy) else {
+            return vec![];
+        };
+        if [server, username, display_name]
+            .iter()
+            .any(|f| f.trim().is_empty())
+            || password.is_empty()
+        {
+            self.error =
+                "Fill in the server address, a username, a display name and a password.".into();
+            return vec![];
+        }
+        (self.busy, self.error, self.notice) = (true, String::new(), String::new());
+        self.server = server.trim().into();
+        vec![Cmd::Signup {
+            server: self.server.clone(),
+            invite,
+            username: username.trim().into(),
+            display_name: display_name.trim().into(),
+            password: password.into(),
+        }]
+    }
+
+    /// A `vesper://` link. Returns a room to show now; else it waits for the rooms, or for the sign in screen.
+    pub fn open_link(&mut self, link: crate::single::Link) -> Option<i64> {
+        use crate::single::Link;
+        match link {
+            Link::Room(id) if self.screen == Screen::Main && self.state.find_room(id).is_some() => {
+                return Some(id);
+            }
+            Link::Room(id) => self.want_room = Some(id),
+            // Signed in already: an invite is for someone new, so the link only shows the window.
+            Link::Invite { .. } if self.screen == Screen::Main => {}
+            Link::Invite { code, server } => {
+                self.invite = Some(code);
+                if let Some(s) = server {
+                    self.server = s;
+                }
+                self.error.clear();
+            }
+        }
+        None
+    }
+
     pub fn sign_out(&mut self) -> Vec<Cmd> {
         self.reset(Screen::SignIn, "");
         vec![Cmd::Logout]
@@ -1864,6 +1977,83 @@ mod tests {
         let mut m = signed_in();
         assert!(matches!(m.sign_out().as_slice(), [Cmd::Logout]));
         assert_eq!(m.screen, Screen::SignIn);
+    }
+
+    #[test]
+    fn a_room_link_waits_for_the_rooms_and_an_invite_for_the_sign_in_screen() {
+        use crate::single::Link;
+        let mut m = Model::default();
+        assert_eq!(m.open_link(Link::Room(3)), None);
+        let code: vesper_protocol::Secret = "c".repeat(64).into();
+        m.open_link(Link::Invite {
+            code: code.clone(),
+            server: Some("https://v.example".into()),
+        });
+        m.apply(Event::SignedOut {
+            server: Some("https://old.example".into()),
+            notice: String::new(),
+        });
+        assert_eq!(m.invite, Some(code.clone()), "kept on the sign in screen");
+        assert!(m.sign_up("https://v.example", "ann", "", "pw").is_empty());
+        let cmds = m.sign_up("https://v.example", "ann", "Ann", "test-password-1");
+        assert!(matches!(&cmds[..], [Cmd::Signup { invite, .. }] if *invite == code));
+        assert!(
+            m.sign_up("https://v.example", "ann", "Ann", "test-password-1")
+                .is_empty(),
+            "busy"
+        );
+        assert!(
+            !format!("{cmds:?}").contains(&*code),
+            "the code is never printed"
+        );
+        m.apply(Event::SignedIn {
+            me: Box::new(match crate::state::tests::hello() {
+                ServerMsg::Hello { me, .. } => me,
+                _ => unreachable!(),
+            }),
+            server: "https://v.example".into(),
+        });
+        assert_eq!(m.invite, None, "gone once signed in");
+        m.apply(Event::Server(Box::new(crate::state::tests::hello())));
+        assert_eq!(m.active, Some(3), "the link's room, not the first");
+        // Signed in: a room link opens at once, an invite does nothing.
+        assert_eq!(m.open_link(Link::Room(1)), Some(1));
+        m.open_link(Link::Invite { code, server: None });
+        assert_eq!(m.invite, None);
+    }
+
+    #[test]
+    fn an_update_installs_only_on_the_click_and_a_failure_offers_it_again() {
+        let names = [crate::update::asset_name(false), crate::update::SUMS];
+        let assets: Vec<_> = names
+            .iter()
+            .map(|n| serde_json::json!({"name": n, "browser_download_url": format!("https://x/{n}")}))
+            .collect();
+        let json = serde_json::json!({"tag_name": "v99.0.0", "assets": assets}).to_string();
+        let o = crate::update::offer(&json, "2.2.0", false).unwrap();
+        let mut m = signed_in();
+        assert!(m.install_update().is_empty(), "nothing offered");
+        assert!(m.apply(Event::UpdateOffered(o.clone())).is_empty());
+        assert_eq!(m.update, Update::Offered(o.clone()));
+        m.sign_out();
+        assert_eq!(m.update, Update::Offered(o.clone()), "kept over a sign out");
+        assert!(matches!(
+            m.install_update().as_slice(),
+            [Cmd::InstallUpdate(_)]
+        ));
+        assert!(m.install_update().is_empty(), "once");
+        m.apply(Event::UpdateOffered(o.clone()));
+        assert_eq!(
+            m.update,
+            Update::Installing(o.clone()),
+            "a check does not stop it"
+        );
+        m.apply(Event::UpdateFailed("The download failed.".into()));
+        assert_eq!(m.update, Update::Failed(o, "The download failed.".into()));
+        assert!(matches!(
+            m.install_update().as_slice(),
+            [Cmd::InstallUpdate(_)]
+        ));
     }
 
     #[test]

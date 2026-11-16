@@ -53,6 +53,8 @@ pub struct Settings {
     pub input_device: Option<String>,
     pub output_device: Option<String>,
     pub start_with_computer: bool,
+    /// Ask GitHub for a newer release (`update.rs`). Release builds only.
+    pub check_updates: bool,
     /// Each person's volume, 0 to 400 percent, by user id. Applied whenever they are in a call.
     pub volumes: HashMap<String, f32>,
     /// The sidebar is hidden (the web keeps this in localStorage).
@@ -87,6 +89,7 @@ impl Default for Settings {
             input_device: None,
             output_device: None,
             start_with_computer: false,
+            check_updates: true,
             volumes: HashMap::new(),
             sidebar_collapsed: false,
             call_small: false,
@@ -210,6 +213,7 @@ mod tests {
             input_device: Some("USB mic".into()),
             output_device: None,
             start_with_computer: true,
+            check_updates: false,
             volumes: HashMap::from([("0123456789abcdef0123456789abcdef".into(), 250.0)]),
             sidebar_collapsed: true,
             call_small: true,

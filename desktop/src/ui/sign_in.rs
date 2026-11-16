@@ -1,5 +1,6 @@
 //! The first screen, drawn like the web's `Login.svelte` in `AuthCard.svelte`: the logo over one card, anchored near
-//! the top third. The desktop adds the server address field (the web knows its server) and the keyring note.
+//! the top third. The desktop adds the server address field (the web knows its server) and the keyring note. After a
+//! `vesper://invite` link it is the web's `Signup.svelte` instead: Create your account, with a display name.
 
 use std::sync::{Arc, Mutex};
 
@@ -48,6 +49,7 @@ impl Vesper {
         let t = tokens(cx).clone();
         let m = &self.model;
         let insecure = crate::net::insecure(&self.server.read(cx).value());
+        let invite = m.invite.is_some();
         let line = |text: &str, color| {
             div()
                 .text_step(TEXT_SM)
@@ -74,6 +76,15 @@ impl Vesper {
                     }),
             )
             .child(Field::new("Username").child(text_input(&self.username, cx)))
+            .when(invite, |f| {
+                f.child(
+                    Field::new("Display name").child(
+                        div()
+                            .debug_selector(|| "sign-up-name".into())
+                            .child(text_input(&self.display_name, cx)),
+                    ),
+                )
+            })
             .child(Field::new("Password").child(PasswordInput::new(
                 &self.password,
                 self.password_shown,
@@ -89,7 +100,7 @@ impl Vesper {
             )))
             .child(
                 div().debug_selector(|| "sign-in-button".into()).child(
-                    Button::new("sign-in", "Sign in")
+                    Button::new("sign-in", if invite { "Create account" } else { "Sign in" })
                         .primary()
                         .w_full()
                         .loading(m.busy)
@@ -110,8 +121,22 @@ impl Vesper {
                     .text_step(TEXT_XL)
                     .font_weight(SEMIBOLD)
                     .text_color(t.fg)
-                    .child("Sign in"),
+                    .child(if invite {
+                        "Create your account"
+                    } else {
+                        "Sign in"
+                    }),
             )
+            .when(invite, |d| {
+                d.child(
+                    line(
+                        "You were invited to Vesper. Pick a username and a password.",
+                        t.fg_2,
+                    )
+                    .mt(px(-16.))
+                    .mb_5(),
+                )
+            })
             .when(!m.notice.is_empty(), |d| {
                 d.child(
                     line(&m.notice, t.warn_fg)
@@ -134,11 +159,23 @@ impl Vesper {
             .text_center()
             .mt_4()
             .gap_1()
-            .child(line("Need an account? Ask for an invite link.", t.fg_3))
-            .child(line(
-                "Forgot your password? Ask the owner for a reset link.",
-                t.fg_3,
-            ))
+            .when(!invite, |d| {
+                d.child(line("Need an account? Ask for an invite link.", t.fg_3))
+                    .child(line(
+                        "Forgot your password? Ask the owner for a reset link.",
+                        t.fg_3,
+                    ))
+            })
+            .when(invite, |d| {
+                d.child(
+                    Button::new("sign-in-instead", "I have an account. Sign in.")
+                        .variant(super::c::Variant::Ghost)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.model.invite = None;
+                            cx.notify();
+                        })),
+                )
+            })
             .when(m.not_remembered, |d| {
                 d.child(
                     div()

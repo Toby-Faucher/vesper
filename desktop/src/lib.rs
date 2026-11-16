@@ -15,5 +15,6 @@ pub mod store;
 pub mod switcher;
 pub mod timeline;
 pub mod ui;
+pub mod update;
 pub mod uploads;
 pub mod voice;

@@ -62,7 +62,7 @@ impl Section {
             Section::Notifications => "Notifications",
             Section::Appearance => "Appearance",
             Section::Account => "Account",
-            // The web's "Desktop app" is its download page; here it only holds Start with the computer.
+            // The web's "Desktop app" is its download page; here it holds Start with the computer and updates.
             Section::Desktop => "App",
         }
     }
@@ -1365,6 +1365,7 @@ impl Vesper {
     fn render_desktop(&mut self, cx: &mut Context<Self>) -> Div {
         let t = theme::tokens(cx).clone();
         let on = self.model.settings.start_with_computer;
+        let updates = self.model.settings.check_updates;
         let error = self.settings_error.clone();
         v_flex()
             .gap(px(16.))
@@ -1374,6 +1375,15 @@ impl Vesper {
                         .help("Vesper opens when you sign in to your computer.")
                         .on_change(on_bool(cx, |this, on, _, cx| {
                             this.change_settings(|s| s.start_with_computer = on, cx)
+                        })),
+                ),
+            )
+            .child(
+                div().debug_selector(|| "settings-updates".into()).child(
+                    Switch::new("settings-updates", "Check for updates", updates)
+                        .help("Vesper asks GitHub for a new version every few hours. It installs one only when you click Update and restart.")
+                        .on_change(on_bool(cx, |this, on, _, cx| {
+                            this.change_settings(|s| s.check_updates = on, cx)
                         })),
                 ),
             )

@@ -142,6 +142,61 @@ fn the_sign_in_view_sends_a_login(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn an_invite_link_turns_sign_in_into_create_your_account(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    apply(
+        &view,
+        cx,
+        Event::SignedOut {
+            server: None,
+            notice: String::new(),
+        },
+    );
+    assert!(cx.debug_bounds("sign-up-name").is_none());
+    let code = "ab".repeat(32);
+    view.update_in(cx, |v, window, cx| {
+        let link = format!("vesper://invite/{code}?server=https%3A%2F%2Fv.example");
+        v.open_link(&link, window, cx);
+        assert_eq!(v.server.read(cx).value(), "https://v.example");
+        v.username
+            .update(cx, |i, cx| i.set_value("ann", window, cx));
+        v.display_name
+            .update(cx, |i, cx| i.set_value("Ann", window, cx));
+        v.password
+            .update(cx, |i, cx| i.set_value("test-password-1", window, cx));
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("sign-up-name").is_some());
+    drain(&mut rx);
+    click(cx, "sign-in-button");
+    let cmds = drain(&mut rx);
+    assert!(
+        matches!(cmds.as_slice(), [Cmd::Signup { invite, display_name, .. }]
+            if **invite == code && display_name == "Ann"),
+        "{cmds:?}"
+    );
+}
+
+#[gpui::test]
+fn an_update_shows_a_quiet_bar_and_installs_on_the_click(cx: &mut TestAppContext) {
+    let (view, cx, mut rx) = open(cx);
+    signed_in(&view, cx);
+    assert!(cx.debug_bounds("update-banner").is_none());
+    let names = [crate::update::asset_name(false), crate::update::SUMS];
+    let assets: Vec<_> = names
+        .iter()
+        .map(|n| json!({"name": n, "browser_download_url": format!("https://x/{n}")}))
+        .collect();
+    let release = json!({"tag_name": "v99.0.0", "assets": assets}).to_string();
+    let offer = crate::update::offer(&release, "2.2.0", false).unwrap();
+    apply(&view, cx, Event::UpdateOffered(offer));
+    assert!(cx.debug_bounds("update-banner").is_some());
+    drain(&mut rx);
+    click(cx, "update-restart");
+    assert!(matches!(drain(&mut rx).as_slice(), [Cmd::InstallUpdate(_)]));
+}
+
+#[gpui::test]
 fn the_room_view_shows_rooms_and_messages_and_sends(cx: &mut TestAppContext) {
     let (view, cx, mut rx) = open(cx);
     signed_in(&view, cx);

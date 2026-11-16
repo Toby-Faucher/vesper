@@ -133,8 +133,20 @@ pub fn init(cx: &mut App) {
 
 /// Starts the network and key threads and opens the window. Returns when the app quits.
 pub fn run() {
-    let crate::single::Claim::First(single) = crate::single::claim() else {
-        return; // another Vesper was running: it shows itself
+    use crate::single::Claim;
+    let link = crate::single::link_arg();
+    let updated = std::env::args().any(|a| a == crate::update::UPDATED_ARG);
+    let mut tries = 0;
+    let single = loop {
+        match crate::single::claim(link.as_deref()) {
+            // Just updated: the old app is still quitting. Wait for it (up to 10 s), never hand over to it.
+            Claim::First(None) | Claim::Second if updated && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Claim::First(l) => break l,
+            Claim::Second => return, // another Vesper was running: it shows itself and opens the link
+        }
     };
     let audio: Arc<dyn crate::voice::AudioDevices> = Arc::new(Cpal);
     // The parity harness's calls run on fake devices (dev.rs).
@@ -179,6 +191,9 @@ pub fn run() {
                     (v.settings_file, v.ptt_tx) = (file, Some(keys));
                     v.ptt_note = ptt::global_note();
                     v.watch_key();
+                    if let Some(l) = &link {
+                        v.open_link(l, window, cx);
+                    }
                     v
                 });
                 // Closing the window during a call keeps the call: the window goes to the tray (minimised: GPUI
@@ -204,19 +219,44 @@ pub fn run() {
         {
             let tray = tray::start(cx, view.downgrade(), handle.into());
             view.update(cx, |v, _| (v._tray, v.audio) = (tray, Some(audio)));
+            // A release build asks for a newer version at start and every few hours (update.rs).
+            if !cfg!(debug_assertions) {
+                let weak = view.downgrade();
+                cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                    while weak
+                        .update(cx, |v, _| {
+                            if v.model.settings.check_updates {
+                                v.run(vec![net::Cmd::CheckUpdate]);
+                            }
+                        })
+                        .is_ok()
+                    {
+                        cx.background_executor().timer(crate::update::EVERY).await;
+                    }
+                })
+                .detach();
+            }
         }
         // A second launch asks this one to come to the front, as the tray's Show Vesper does.
         if let Some(l) = single {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            l.serve(move || {
-                let _ = tx.send(());
+            l.serve(move |link| {
+                let _ = tx.send(link);
             });
+            let vesper = handle
+                .read(cx)
+                .ok()
+                .and_then(|r| r.view().clone().downcast::<Vesper>().ok())
+                .map(|v| v.downgrade());
             let window: gpui::AnyWindowHandle = handle.into();
             cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-                while rx.recv().await.is_some() {
+                while let Some(link) = rx.recv().await {
                     let _ = cx.update_window(window, |_, window, cx| {
                         window.activate_window();
                         cx.activate(true);
+                        if let (Some(l), Some(v)) = (link, vesper.as_ref()) {
+                            let _ = v.update(cx, |v, cx| v.open_link(&l, window, cx));
+                        }
                     });
                 }
             })
@@ -237,6 +277,8 @@ pub struct Vesper {
     cmds: UnboundedSender<Cmd>,
     server: Entity<InputState>,
     username: Entity<InputState>,
+    /// Create your account's display name (a `vesper://invite` link).
+    display_name: Entity<InputState>,
     password: Entity<InputState>,
     /// The password is shown in clear (the Show toggle).
     password_shown: bool,
@@ -348,6 +390,7 @@ impl Vesper {
         let server =
             cx.new(|cx| InputState::new(window, cx).placeholder("https://vesper.example.com"));
         let username = cx.new(|cx| InputState::new(window, cx));
+        let display_name = cx.new(|cx| InputState::new(window, cx));
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
         let composer = cx.new(|cx| {
             InputState::new(window, cx)
@@ -370,6 +413,7 @@ impl Vesper {
         let mut subs = vec![
             cx.subscribe_in(&server, window, enter),
             cx.subscribe_in(&username, window, enter),
+            cx.subscribe_in(&display_name, window, enter),
             cx.subscribe_in(&password, window, enter),
             cx.subscribe_in(&composer, window, |this, _, e: &InputEvent, _, cx| {
                 if matches!(e, InputEvent::Change) {
@@ -391,7 +435,14 @@ impl Vesper {
             }),
         ];
         // Push to talk ignores a press while one of these has focus.
-        for i in [&server, &username, &password, &composer, &edit] {
+        for i in [
+            &server,
+            &username,
+            &display_name,
+            &password,
+            &composer,
+            &edit,
+        ] {
             let f = i.read(cx).focus_handle(cx);
             subs.push(cx.on_focus(&f, window, |this, w, cx| this.send_typing(w, cx)));
             subs.push(cx.on_blur(&f, window, |this, w, cx| this.send_typing(w, cx)));
@@ -432,6 +483,7 @@ impl Vesper {
             cmds,
             server,
             username,
+            display_name,
             password,
             password_shown: false,
             composer,
@@ -587,6 +639,11 @@ impl Vesper {
             Event::Latest { room, .. } => drop(self.tl.loaded.insert(*room)),
             Event::Searched { seq, page } => self.searched(*seq, page.clone(), cx),
             Event::Full { id, picture } => self.full_loaded(id, picture.clone(), window),
+            // The new build is in place: it starts, waits for this one to quit, and takes over.
+            Event::UpdateInstalled(path) if crate::update::restart(path).is_ok() => {
+                cx.quit();
+                return;
+            }
             _ => {}
         }
         let editing = self.model.editing;
@@ -652,7 +709,12 @@ impl Vesper {
             self.username.read(cx).value(),
             self.password.read(cx).value(),
         );
-        let cmds = self.model.sign_in(&server, &user, &pass);
+        let cmds = if self.model.invite.is_some() {
+            let name = self.display_name.read(cx).value();
+            self.model.sign_up(&server, &user, &name, &pass)
+        } else {
+            self.model.sign_in(&server, &user, &pass)
+        };
         if !cmds.is_empty() {
             // The password is not kept in the field once it is on its way, and a retry is never typed in clear.
             self.password_shown = false;
@@ -662,6 +724,21 @@ impl Vesper {
             });
         }
         self.run(cmds);
+        cx.notify();
+    }
+
+    /// A `vesper://` link, from this launch or a later one: a room opens (now or once the rooms are known), an invite
+    /// turns the sign in screen into Create your account.
+    pub fn open_link(&mut self, link: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(link) = crate::single::link(link) else {
+            return;
+        };
+        if let Some(id) = self.model.open_link(link) {
+            self.open_room(id, window, cx);
+        } else if self.model.invite.is_some() {
+            let s = self.model.server.clone();
+            self.server.update(cx, |i, cx| i.set_value(s, window, cx));
+        }
         cx.notify();
     }
 

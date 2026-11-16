@@ -14,17 +14,13 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use super::Vesper;
 use crate::model::Model;
 
-/// A 32 px amber dot, drawn here so no image file or decoder is needed.
+/// The app icon (package/icons, made from the web's icon-512.png).
 fn icon() -> Option<Icon> {
-    const N: u32 = 32;
-    let rgba = (0..N * N)
-        .flat_map(|i| {
-            let (x, y) = ((i % N) as f32 - 15.5, (i / N) as f32 - 15.5);
-            let alpha = (15.5 - (x * x + y * y).sqrt()).clamp(0.0, 1.0);
-            [0xf5, 0xa5, 0x24, (alpha * 255.0) as u8]
-        })
-        .collect();
-    Icon::from_rgba(rgba, N, N).ok()
+    let img = image::load_from_memory(include_bytes!("../../package/icons/64.png"))
+        .ok()?
+        .into_rgba8();
+    let (w, h) = img.dimensions();
+    Icon::from_rgba(img.into_raw(), w, h).ok()
 }
 
 /// Makes the tray icon and handles its menu. `None` when the system has no tray; the app works without it.
@@ -65,4 +61,12 @@ pub fn start(cx: &mut App, view: WeakEntity<Vesper>, window: AnyWindowHandle) ->
     })
     .detach();
     Some(tray)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_app_icon_decodes() {
+        assert!(super::icon().is_some());
+    }
 }
