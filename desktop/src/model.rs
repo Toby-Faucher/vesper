@@ -1220,21 +1220,11 @@ impl Model {
             return vec![];
         }
         let attachments = self.tray.done(room);
-        // A body is required: a message of files only is sent with their names, as the web does.
-        let body = if body.is_empty() {
-            let names: Vec<&str> = self
-                .tray
-                .of(room)
-                .filter(|i| attachments.iter().any(|a| a.0 == i.key))
-                .map(|i| i.name.as_str())
-                .collect();
-            names.join(", ")
-        } else {
-            body.into()
-        };
-        if body.is_empty() {
+        // A message of files has no text: the body stays empty.
+        if body.is_empty() && attachments.is_empty() {
             return vec![];
         }
+        let body = body.to_string();
         self.error.clear();
         let keys: Vec<u64> = attachments.iter().map(|a| a.0).collect();
         self.tray.set_sending(&keys, true);
@@ -2454,7 +2444,7 @@ mod tests {
         });
         let cmds = m.send("");
         assert!(
-            matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body == "a.txt" && attachments == &[(1, "u1".to_string())]),
+            matches!(cmds.as_slice(), [Cmd::Send { body, attachments, .. }] if body.is_empty() && attachments == &[(1, "u1".to_string())]),
             "{cmds:?}"
         );
         m.apply(Event::Sent {

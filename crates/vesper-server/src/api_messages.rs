@@ -110,7 +110,11 @@ async fn mentions(st: &AppState, room: &RoomInfo, body: &str) -> Result<Vec<Stri
         .collect())
 }
 
-fn body_text(s: &str) -> Result<String, ApiError> {
+/// The trimmed body. Empty is allowed only for a message that has files (`files`).
+fn body_text(s: &str, files: bool) -> Result<String, ApiError> {
+    if files && s.trim().is_empty() {
+        return Ok(String::new());
+    }
     valid_body(s).ok_or_else(|| {
         bad("message: 1 to 4000 characters, no control characters except newline and tab")
     })
@@ -165,7 +169,7 @@ async fn send(
     let req = body(req)?;
     let room = visible_room(&st, &a.user, id).await?;
     limit(&st, Kind::Message, &a.user.user_id)?;
-    let text = body_text(&req.body)?;
+    let text = body_text(&req.body, !req.attachments.is_empty())?;
     let mentions = mentions(&st, &room, &text).await?;
     let msg = st
         .store
@@ -220,7 +224,7 @@ async fn edit(
         return Err(ApiError::new(ApiErrorCode::Forbidden, "not allowed"));
     }
     limit(&st, Kind::Change, &a.user.user_id)?;
-    let text = body_text(&req.body)?;
+    let text = body_text(&req.body, !msg.attachments.is_empty())?;
     let mentions = mentions(&st, &room, &text).await?;
     let msg = st
         .store

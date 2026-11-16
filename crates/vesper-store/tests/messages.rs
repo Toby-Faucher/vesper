@@ -636,3 +636,79 @@ async fn updated_at_rises_on_every_change() {
     assert_eq!(last.get(), 9000, "a later clock is taken as is");
     rose(s.delete_message(m.id, 9000, &a).await.unwrap().0, "delete");
 }
+
+/// Migration 15 rebuilds `messages` to allow an empty live body: every row, reference and index entry survives it.
+#[tokio::test]
+async fn files_only_migration_keeps_rows() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("v.db");
+    Store::create_at_schema(&path, 14).await.unwrap();
+    {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .foreign_keys(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        for q in [
+            "INSERT INTO accounts (id, username, display_name, role, created_at)
+             VALUES ('0123456789abcdef0123456789abcdef', 'ann', 'Ann', 'member', 1)",
+            "INSERT INTO rooms (id, name, position, created_at) VALUES (99, 'games', 1, 1)",
+            "INSERT INTO messages (id, room_id, author_id, body, created_at, updated_at)
+             VALUES (1, 99, '0123456789abcdef0123456789abcdef', 'needle a.png', 1, 1)",
+            "INSERT INTO messages (id, room_id, author_id, body, reply_to, created_at, updated_at)
+             VALUES (2, 99, '0123456789abcdef0123456789abcdef', 'reply', 1, 2, 2)",
+            "INSERT INTO messages (id, room_id, author_id, body, created_at, deleted_at, updated_at)
+             VALUES (3, 99, '0123456789abcdef0123456789abcdef', '', 3, 3, 3)",
+            "INSERT INTO reactions VALUES (1, '0123456789abcdef0123456789abcdef', '+', 1)",
+            "INSERT INTO mentions VALUES ('0123456789abcdef0123456789abcdef', 1)",
+            "INSERT INTO uploads VALUES ('fedcba9876543210fedcba9876543210', 99,
+             '0123456789abcdef0123456789abcdef', 1, 'a.png', 'image/png', 1, 1)",
+        ] {
+            sqlx::query(q).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+    }
+    let s = Store::open(&path).await.unwrap();
+    let check = |q: &'static str| sqlx::query_scalar::<_, String>(q).fetch_all(s.pool());
+    assert_eq!(check("PRAGMA integrity_check").await.unwrap(), ["ok"]);
+    assert!(check("PRAGMA foreign_key_check").await.unwrap().is_empty());
+    let fk: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(s.pool())
+        .await
+        .unwrap();
+    assert_eq!(fk, 1);
+    let page = s.history(99, Cursor::Latest, 50).await.unwrap();
+    let m = &page.messages;
+    assert_eq!(m.len(), 3);
+    assert_eq!(
+        (
+            m[0].reactions.len(),
+            m[0].mentions.len(),
+            m[0].attachments.len()
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(m[1].reply_to.as_ref().unwrap().excerpt, "needle a.png");
+    assert!(m[2].deleted);
+    // The full-text index still finds the old row, and its triggers still run.
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'needle'")
+            .fetch_one(s.pool())
+            .await
+            .unwrap();
+    assert_eq!(n, 1);
+    // A live message may now be empty (the server allows it only with files); a deleted one still must be.
+    sqlx::query(
+        "INSERT INTO messages (room_id, author_id, body, created_at, updated_at)
+         VALUES (99, '0123456789abcdef0123456789abcdef', '', 4, 4)",
+    )
+    .execute(s.pool())
+    .await
+    .unwrap();
+    let bad = sqlx::query(
+        "INSERT INTO messages (room_id, author_id, body, created_at, deleted_at, updated_at)
+         VALUES (99, '0123456789abcdef0123456789abcdef', 'x', 5, 5, 5)",
+    )
+    .execute(s.pool())
+    .await;
+    assert!(bad.is_err());
+}

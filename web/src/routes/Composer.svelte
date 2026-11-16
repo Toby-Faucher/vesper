@@ -144,7 +144,7 @@
     const text = draft;
     const taken = done; // a file that finishes during the send stays for the next one
     const atts = taken.map((i) => i.attachment!);
-    const body = text.trim() || atts.map((a) => a.name).join(', '); // a body is required
+    const body = text.trim(); // empty with files: a message of files has no text
     sending = true;
     error = '';
     try {

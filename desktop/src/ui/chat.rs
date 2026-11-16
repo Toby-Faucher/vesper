@@ -42,7 +42,7 @@ use crate::model::EMOJIS;
 use crate::net::Cmd;
 use crate::timeline::{
     BOX, Locale, RowHead, arrivals, clock, file_size, fit, is_long, mention_query, mentionable,
-    type_label, typing_line,
+    names_only, type_label, typing_line,
 };
 use crate::uploads::UpState;
 
@@ -683,8 +683,8 @@ impl Vesper {
     ) -> Div {
         let id = msg.id;
         let names: Vec<&str> = msg.attachments.iter().map(|a| a.name.as_str()).collect();
-        // A message of files only carries their names as its body: not shown twice.
-        let filler = !msg.attachments.is_empty() && msg.body == names.join(", ");
+        // A message of files has no text; an older one carries the file names as its body: not shown twice.
+        let filler = msg.body.is_empty() || names_only(&msg.body, &names);
         let edited = msg.edited_at.is_some();
         let note = match (edited, !head && msg.pinned) {
             (true, true) => Some("(edited) Pinned"),

@@ -345,7 +345,7 @@ pub struct Unread {
 }
 
 /// A chat message. A deleted one keeps its id and times with an empty body and no reactions,
-/// attachments, mentions or pin.
+/// attachments, mentions or pin. A live one has an empty body only when it has attachments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Message {
@@ -372,7 +372,8 @@ pub struct Message {
     pub pinned: bool,
 }
 
-/// The message a reply points at. `excerpt` is its first 100 characters, empty when it was deleted.
+/// The message a reply points at. `excerpt` is its first 100 characters (the first file's name when it has files and
+/// no text), empty when it was deleted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ReplyPreview {
@@ -530,7 +531,8 @@ pub struct SearchPage {
     pub next_before: Option<i64>,
 }
 
-/// `POST /api/rooms/{id}/messages`. `attachments` are upload ids.
+/// `POST /api/rooms/{id}/messages`. `attachments` are upload ids. `body` may be empty only when there are
+/// attachments: a message of files has no text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SendMessage {

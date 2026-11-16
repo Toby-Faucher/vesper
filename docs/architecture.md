@@ -405,7 +405,10 @@ Chat (`api_messages.rs`, store `messages.rs`): a room you cannot see, and a mess
 an unknown id. Changes are pushed with `Hub::broadcast_room`, so only sockets that can see the room get them. Rules:
 
 - **Body.** NFC, trimmed, 1 to 4000 characters (not bytes), no control characters except newline and tab, else 400. The same
-  rule holds for an edit. Bodies are never logged.
+  rule holds for an edit. A message with files may have an empty body: a message of files has no text (migration
+  `0015_message_files_only.sql` rebuilds `messages` so its check allows that and copies every row). Clients used to send the
+  file names as the body; they still hide a body that is only those names, in any order. A reply to a message of files shows
+  its first file's name. Bodies are never logged.
 - **Who.** Anyone who can see the room posts, reacts and pins. Only the author edits (403 for anyone else, the owner too). The author
   deletes, and a moderator or the owner deletes anyone's (403 for a member on someone else's). A delete is soft: the body is
   emptied, and reactions, mentions and the pin go. A deleted message is 404 for edit, delete, reaction and pin.

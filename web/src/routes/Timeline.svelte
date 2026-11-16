@@ -176,7 +176,7 @@
       // A live message or two, not a page loaded with "Load newer".
       const m = fresh.length <= 3 ? fresh.reverse().find((x) => x.author_id !== myId && !x.deleted) : undefined;
       // A new node each time, so the same text twice ("ok", "ok") is read twice.
-      if (m) announce = { n: announce.n + 1, text: `${user(m.author_id).display_name}: ${plain(parse(m.body))}` };
+      if (m) announce = { n: announce.n + 1, text: `${user(m.author_id).display_name}: ${plain(parse(m.body)) || 'a file'}` };
     }
     lastId = last?.id ?? 0;
     const hadNew = newFrom !== Infinity;
