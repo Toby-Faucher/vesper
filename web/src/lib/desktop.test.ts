@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DOWNLOADS, desktopOs } from './desktop';
+import { DOWNLOADS, PORTABLE, desktopOs, inviteLink } from './desktop';
 
 describe('desktopOs', () => {
   it('picks the build for this system', () => {
@@ -12,6 +12,12 @@ describe('desktopOs', () => {
     expect(desktopOs('Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15')).toBeNull();
   });
   it('links each build by its fixed release name', () => {
-    for (const d of Object.values(DOWNLOADS)) expect(d.url.endsWith(`/latest/download/${d.file}`)).toBe(true);
+    for (const d of [...Object.values(DOWNLOADS), PORTABLE]) expect(d.url.endsWith(`/latest/download/${d.file}`)).toBe(true);
+    expect(DOWNLOADS.windows.file).toBe('vesper-desktop-windows-x64-setup.exe');
+    expect(PORTABLE.file).toBe('vesper-desktop-windows-x64.zip');
+  });
+  it('makes the desktop invite link with this server in it', () => {
+    const code = 'ab'.repeat(32);
+    expect(inviteLink(code, 'https://v.example:8443')).toBe(`vesper://invite/${code}?server=https%3A%2F%2Fv.example%3A8443`);
   });
 });
