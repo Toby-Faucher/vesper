@@ -47,6 +47,9 @@ fn empty_state(title: &'static str, body: &'static str, lift: f32, cx: &App) -> 
 impl Vesper {
     pub(super) fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.sync_share(window, cx);
+        if let Some(full) = self.render_full_share(window, cx) {
+            return full;
+        }
         let banner = self.render_banner(window, cx);
         if self.settings_open {
             let page = self.render_page(window, cx);
@@ -167,7 +170,19 @@ impl Vesper {
             .children(self.saved_line(cx))
             .child(composer);
         let call_status = self.call_status(cx);
-        let share = self.render_share(window, cx);
+        // Chat (`#room-chat`): beside the share panel while it is open, else the rest of the column.
+        let chat = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            // `pt-3` over the timeline (Chat.svelte).
+            .child(div().h(px(12.)).flex_none())
+            .child(timeline)
+            .child(composer);
+        let row = self.share_row(chat, window, cx);
         let dialog = self.delete_dialog(cx);
         if self.timeline_moving() {
             window.request_animation_frame();
@@ -178,11 +193,7 @@ impl Vesper {
             .child(header)
             .children(keyring)
             .children(call_status)
-            .children(share)
-            // `pt-3` over the timeline (Chat.svelte).
-            .child(div().h(px(12.)).flex_none())
-            .child(timeline)
-            .child(composer)
+            .child(row)
             // Files dropped anywhere on the room go to the tray.
             .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgb(theme::ACCENT_SUBTLE)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {

@@ -67,9 +67,18 @@
     return () => clearInterval(t);
   });
 
-  // Full screen at 1:1: one video pixel is one screen pixel, scrolled when it is larger than the screen.
+  // Full screen: the tile fills the screen and the whole picture fits in it, letterboxed like the tile.
   let full = $state(false);
-  const toggleFull = () => (full ? document.exitFullscreen() : tile?.requestFullscreen())?.catch(() => {});
+  const isFull = () => !!tile && document.fullscreenElement === tile;
+  const toggleFull = () => (isFull() ? document.exitFullscreen() : tile?.requestFullscreen())?.catch(() => {});
+  // Esc leaves full screen even when the browser hands the key to the page instead of taking it (a key in a focused
+  // control, an installed app): the page exits itself.
+  function onkeydown(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || !isFull()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void document.exitFullscreen().catch(() => {});
+  }
 
   // Zoom: 2x around transform-origin, which a click moves and a drag pans. Point: the next click inside the picture.
   let zoom = $state<{ x: number; y: number } | null>(null);
@@ -111,14 +120,14 @@
   const marks = $derived(onpick ? [] : shares.markers.filter((m) => m.share === userId));
 </script>
 
-<svelte:document onfullscreenchange={() => (full = !!tile && document.fullscreenElement === tile)} />
+<svelte:document onfullscreenchange={() => (full = isFull())} />
+<svelte:window onkeydowncapture={onkeydown} />
 
-<div class="tile relative aspect-video border border-subtle bg-sidebar {full ? 'flex overflow-auto' : `overflow-hidden ${onpick ? 'w-44 rounded-md' : 'rounded-lg'}`}" role="group"
+<div class="tile relative aspect-video overflow-hidden border border-subtle bg-sidebar {full ? '' : onpick ? 'w-44 rounded-md' : 'rounded-lg'}" role="group"
   aria-label={M.shareTile(u.display_name)} bind:this={tile}>
   <!-- Point and zoom clicks need a pointer; the toolbar buttons below take the keyboard. -->
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class={full ? 'relative m-auto flex-none' : 'absolute inset-0'} bind:clientWidth={fw} bind:clientHeight={fh}
-    style:width={full && vw ? `${vw / devicePixelRatio}px` : null} style:height={full && vh ? `${vh / devicePixelRatio}px` : null}
+  <div class="absolute inset-0" bind:clientWidth={fw} bind:clientHeight={fh}
     style:cursor={pointing ? 'crosshair' : zoom ? 'move' : null}
     style:transform={zoom ? 'scale(2)' : null} style:transform-origin={zoom ? `${zoom.x * 100}% ${zoom.y * 100}%` : null}
     onpointerdown={ondown} onpointermove={onmove} onpointerup={() => (drag = null)} onpointercancel={() => (drag = null)} {onclick}>

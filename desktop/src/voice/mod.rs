@@ -111,6 +111,12 @@ pub enum VoiceCmd {
     },
     /// Share my screen with these settings (the first opens the screen, which may ask which one), or stop.
     Share(Option<ShareSetup>),
+    /// The size `user_id`'s share is drawn at, in device pixels: its pictures come no larger (never larger than sent).
+    ShareSize {
+        user_id: String,
+        width: u32,
+        height: u32,
+    },
     Stop,
 }
 

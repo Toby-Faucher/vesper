@@ -386,7 +386,7 @@ mod tests {
             .unwrap();
         let mut dec = vp8_decoder::Decoder::new();
         let pic = dec.decode(&f.data).unwrap().unwrap();
-        let bgra = super::super::video::bgra(&pic);
+        let bgra = super::super::video::bgra(&pic, pic.width, pic.height);
         // The middle of each bar (the first frame is shifted one pixel): red, green, blue, white.
         for (x, want) in [
             (8, [0, 0, 255]),

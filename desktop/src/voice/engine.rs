@@ -331,6 +331,11 @@ impl<'a> Engine<'a> {
                 None => self.sending = Some(Sending::start(self.devices.screen(), setup)),
             },
             VoiceCmd::Share(None) => self.sending = None,
+            VoiceCmd::ShareSize {
+                user_id,
+                width,
+                height,
+            } => self.video.size(user_id, width, height),
             VoiceCmd::Start { .. } | VoiceCmd::Stop => {}
         }
         Ok(())

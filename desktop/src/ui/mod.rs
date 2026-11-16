@@ -38,8 +38,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Application, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement,
-    Render, RenderImage, Styled, Subscription, Task, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, actions, div, px, rgb, size,
+    Render, Styled, Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, div, px, rgb, size,
 };
 use gpui_component::Root;
 use gpui_component::input::{InputEvent, InputState};
@@ -290,8 +290,8 @@ pub struct Vesper {
     watched: std::cell::Cell<Option<Option<device_query::Keycode>>>,
     /// Why push to talk works only while the window has focus.
     pub ptt_note: Option<&'static str>,
-    /// The watched screen's newest picture, by sharer.
-    screen: Option<(String, Arc<RenderImage>)>,
+    /// The share panel's pictures and state.
+    share: share::ShareView,
     /// Sends the next `watch off` when it is due.
     watch_timer: Option<(Instant, Task<()>)>,
     _tray: Option<tray_icon::TrayIcon>,
@@ -465,7 +465,7 @@ impl Vesper {
             watched: Default::default(),
             save_later: None,
             ptt_note: None,
-            screen: None,
+            share: Default::default(),
             watch_timer: None,
             _tray: None,
             audio: None,
@@ -597,7 +597,7 @@ impl Vesper {
             self.reset_view(window, cx);
         }
         self.sync_ring_sound(cx);
-        if self.model.call.frame.is_some() {
+        if !self.model.call.frames.is_empty() {
             self.frame_came(cx);
         }
         if editing.is_some() && self.model.editing.is_none() {
@@ -755,6 +755,10 @@ impl Vesper {
     /// Esc: closes the topmost thing, in the web's order: a dialog, the person card, a menu or popover, the pins,
     /// then declines the ring shown.
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.share.full.is_some() {
+            self.leave_full(window, cx);
+            return cx.notify();
+        }
         if self.find.layer.is_some() {
             return self.close_layer(window, cx);
         }
@@ -863,7 +867,7 @@ impl Vesper {
                 .await;
             let _ = this.update(cx, |v, cx| {
                 v.frame_check = None;
-                if v.draws == draws && v.model.call.frame.is_some() {
+                if v.draws == draws && !v.model.call.frames.is_empty() {
                     v.share_hidden(cx);
                 }
             });

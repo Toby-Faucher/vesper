@@ -170,7 +170,8 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   (join voice in a room on a silent fake microphone and speakers that play nothing: a real call through the server, no
   audio device opened), `VESPER_DEV_LINKS`, `VESPER_DEV_RTT`, `VESPER_DEV_MIC_LOST`, `VESPER_DEV_DEAFEN`,
   `VESPER_DEV_PTT_HELD`, `VESPER_DEV_PERSON`, `VESPER_DEV_VOLUME` and `VESPER_DEV_RING` for the call scenes, and
-  `VESPER_DEV_THEN` for a step a motion scene films on a Settings page
+  `VESPER_DEV_THEN` for a step a motion scene films on a Settings page, and `VESPER_DEV_FRAMES` (once a second on
+  stderr: frames drawn, share pictures, and the longest the UI thread was busy)
   (`desktop/src/ui/dev.rs` says how each is written); a
   release build does not have that code. The server takes 5 sign ins per name and then one a minute, so the app waits 13 s and signs in
   again when it is refused. To add a scene, add an entry to `SCENES` in `parity.mjs`: the web steps, and the

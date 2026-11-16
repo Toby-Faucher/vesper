@@ -24,6 +24,16 @@ pub const MIN_KBPS: u32 = 500;
 pub const MAX_KBPS: u32 = 30_000;
 /// The suggestion without a measured upload, the web's `suggestKbps(null, ...)`.
 pub const SUGGEST_KBPS: u32 = 8_000;
+/// How the share panel lays out the screens (the web's `vesper.shareLayout`). An unknown value reads as Grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShareLayout {
+    Focus,
+    Dock,
+    #[default]
+    #[serde(other)]
+    Grid,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -60,6 +70,8 @@ pub struct Settings {
     pub share_fps: u32,
     pub share_kbps: Option<u32>,
     pub share_sharp: bool,
+    /// The share panel's layout, on this device only like the web's.
+    pub share_layout: ShareLayout,
 }
 
 impl Default for Settings {
@@ -84,6 +96,7 @@ impl Default for Settings {
             share_fps: 60,
             share_kbps: None,
             share_sharp: true,
+            share_layout: ShareLayout::Grid,
         }
     }
 }
@@ -206,6 +219,7 @@ mod tests {
             share_fps: 30,
             share_kbps: Some(4_000),
             share_sharp: false,
+            share_layout: ShareLayout::Dock,
         };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);

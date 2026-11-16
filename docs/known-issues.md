@@ -190,10 +190,13 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   only) is skipped. Only the test pattern was sent end to end; the real captures are not verified (Windows is only compiled in CI).
 - Screen share: the desktop app watches one share at a time, at fit size, without the web's layouts,
   1:1, zoom, pop-out or pointer. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
+- Screen share: the desktop app can watch, not share. It shows the shares as the web does (Grid, Focus and Dock, chat
+  beside them, hide, point, zoom, full screen), without pop-out and the figures line. Each share decodes on a thread of
+  its own, at the size its tile is drawn. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
   shown when it minimised the window itself, or when pictures came for 2 s and no frame was drawn; the sharer is then told
   to stop after the 10 s grace, and the next frame drawn watches again. Whether a window behind a game stops drawing
-  depends on the system (not verified). Not verified with a real browser sharing, nor how a real 60 fps share looks or keeps
-  up on a screen.
+  depends on the system (not verified). Verified on this machine (debug build, headless sway): three web shares at
+  2560x1440 in each layout. Not verified: a real 60 fps share on a screen, Windows, and macOS.
 - Chat: a reply's quote scrolls to the original only when it is loaded (the web also loads it from the server). No search,
   no person cards from a mention (a mention is styled but cannot be clicked), and no "any symbol" reaction box. Day labels
   are in English. Drafts are kept per room in memory only, as on the web.
