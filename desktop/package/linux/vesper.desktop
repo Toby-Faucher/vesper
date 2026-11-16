@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Vesper
+Comment=Rooms, chat and voice calls
+Exec=vesper-desktop %u
+Icon=vesper
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+MimeType=x-scheme-handler/vesper;
+StartupWMClass=vesper

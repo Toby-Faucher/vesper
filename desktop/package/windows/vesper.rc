@@ -1,0 +1,2 @@
+// The app icon. GPUI loads icon 1 of the exe for every window (taskbar, Alt+Tab); Explorer shows the first one.
+1 ICON "package/windows/vesper.ico"

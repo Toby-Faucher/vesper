@@ -41,6 +41,14 @@ pub enum Cmd {
         username: String,
         password: Secret,
     },
+    /// `POST /api/signup` with an invite (a `vesper://invite` link), then signed in like `Login`.
+    Signup {
+        server: String,
+        invite: Secret,
+        username: String,
+        display_name: String,
+        password: Secret,
+    },
     /// `POST /api/logout`, then forget the stored session.
     Logout,
     /// The server ended the session: close the socket and forget it.
@@ -124,6 +132,10 @@ pub enum Cmd {
     OpenDm(String),
     /// Offline: try the socket now, not at the end of the wait.
     RetryNow,
+    /// Ask GitHub for a newer release (`update.rs`); `Event::UpdateOffered` if there is one, else nothing.
+    CheckUpdate,
+    /// Download, check and swap in the offer: `Event::UpdateInstalled` or `Event::UpdateFailed`.
+    InstallUpdate(crate::update::Offer),
     /// Any other JSON route (the Settings and admin pages). The answer comes back as `Event::Http` with `tag`.
     Http {
         tag: String,
@@ -265,6 +277,10 @@ pub enum Event {
     },
     /// From the mic test started with `Cmd::MicTest`: `Level` or `Failed`.
     MicTest(VoiceEvent),
+    UpdateOffered(crate::update::Offer),
+    /// The new build is in place: start it and quit.
+    UpdateInstalled(PathBuf),
+    UpdateFailed(String),
     /// From the call started with `VoiceCmd::Start { call, .. }`.
     Voice {
         call: u64,
@@ -319,6 +335,17 @@ impl Fail {
             ApiErrorCode::QuotaFull => "The server is out of space for uploads.",
             ApiErrorCode::InviteInvalid | ApiErrorCode::ResetInvalid => "That link does not work.",
             ApiErrorCode::Internal => "Something went wrong on the server. Try again.",
+        }
+    }
+
+    /// The text for a failed signup: the web's for a link that does not work.
+    pub fn signup_text(self) -> &'static str {
+        match self {
+            Fail::Api {
+                code: ApiErrorCode::InviteInvalid,
+                ..
+            } => "This invite link does not work. Ask the person who sent it for a new one.",
+            f => f.login_text(),
         }
     }
 
@@ -477,6 +504,11 @@ impl Api {
     pub async fn login(&self, username: String, password: Secret) -> Result<Me, Fail> {
         let body = serde_json::to_value(LoginReq { username, password }).expect("json");
         self.call(Method::POST, "/api/login", Some(body)).await
+    }
+
+    pub async fn signup(&self, req: vesper_protocol::SignupReq) -> Result<Me, Fail> {
+        let body = serde_json::to_value(req).expect("json");
+        self.call(Method::POST, "/api/signup", Some(body)).await
     }
 
     pub async fn me(&self) -> Result<Me, Fail> {
@@ -935,6 +967,33 @@ impl Net {
         });
     }
 
+    /// A client for the address typed, or `SignInFailed` when it is not one.
+    fn api_for(&self, server: &str) -> Option<Api> {
+        let Some(base) = origin_of(server) else {
+            let e = "Enter the server address, like https://vesper.example.com.";
+            self.emit(Event::SignInFailed(e.into()));
+            return None;
+        };
+        Some(Api::new(base, None))
+    }
+
+    /// Keeps the new session and connects, or says why the sign in failed.
+    async fn after_sign_in(&mut self, api: Api, me: Result<Me, &'static str>) {
+        match me {
+            Ok(me) => {
+                if let Some(cookie) = api.cookie() {
+                    let saved = Saved {
+                        server: api.origin.clone(),
+                        cookie: cookie.into(),
+                    };
+                    self.store(move |s| s.save(&saved)).await;
+                }
+                self.signed_in(api, me);
+            }
+            Err(e) => self.emit(Event::SignInFailed(e.into())),
+        }
+    }
+
     async fn handle(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::Restore => self.restore().await,
@@ -943,24 +1002,30 @@ impl Net {
                 username,
                 password,
             } => {
-                let Some(base) = origin_of(&server) else {
-                    let e = "Enter the server address, like https://vesper.example.com.";
-                    return self.emit(Event::SignInFailed(e.into()));
+                let Some(api) = self.api_for(&server) else {
+                    return;
                 };
-                let api = Api::new(base, None);
-                match api.login(username, password).await {
-                    Ok(me) => {
-                        if let Some(cookie) = api.cookie() {
-                            let saved = Saved {
-                                server: api.origin.clone(),
-                                cookie: cookie.into(),
-                            };
-                            self.store(move |s| s.save(&saved)).await;
-                        }
-                        self.signed_in(api, me);
-                    }
-                    Err(f) => self.emit(Event::SignInFailed(f.login_text().into())),
-                }
+                let me = api.login(username, password).await;
+                self.after_sign_in(api, me.map_err(Fail::login_text)).await;
+            }
+            Cmd::Signup {
+                server,
+                invite,
+                username,
+                display_name,
+                password,
+            } => {
+                let Some(api) = self.api_for(&server) else {
+                    return;
+                };
+                let req = vesper_protocol::SignupReq {
+                    invite,
+                    username,
+                    password,
+                    display_name,
+                };
+                let me = api.signup(req).await;
+                self.after_sign_in(api, me.map_err(Fail::signup_text)).await;
             }
             Cmd::Logout => {
                 // The socket first, so the server's 4001 for this logout is not read as a session ended elsewhere.
@@ -982,6 +1047,23 @@ impl Net {
                 if let Some(c) = &self.conn {
                     let _ = c.out.send(m);
                 }
+            }
+            Cmd::CheckUpdate => {
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    if let Some(o) = crate::update::check().await {
+                        let _ = tx.send(Event::UpdateOffered(o));
+                    }
+                });
+            }
+            Cmd::InstallUpdate(o) => {
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(match crate::update::install(o).await {
+                        Ok(path) => Event::UpdateInstalled(path),
+                        Err(e) => Event::UpdateFailed(e),
+                    });
+                });
             }
             Cmd::RetryNow => {
                 if let Some(c) = &self.conn {

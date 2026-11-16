@@ -145,6 +145,47 @@ impl Vesper {
         )
     }
 
+    /// A newer release (`update.rs`): the web's calm bar, with Update and restart. Nothing installs without the click.
+    pub(super) fn render_update(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        use crate::model::Update;
+        let t = tokens(cx).clone();
+        let (text, busy) = match &self.model.update {
+            Update::None => return None,
+            Update::Offered(o) => (format!("Vesper {} is ready.", o.version), false),
+            Update::Installing(o) => (format!("Downloading Vesper {}.", o.version), true),
+            Update::Failed(_, why) => (why.clone(), false),
+        };
+        Some(
+            div()
+                .debug_selector(|| "update-banner".into())
+                .flex()
+                .flex_none()
+                .min_h(px(40.))
+                .items_center()
+                .gap(px(8.))
+                .pl(px(16.))
+                .pr(px(8.))
+                .border_b_1()
+                .border_color(t.line_subtle)
+                .bg(t.bg_sidebar)
+                .text_color(t.fg_2)
+                .child(div().flex().child(icon("info").text_color(t.fg_3)))
+                .child(div().min_w_0().child(text))
+                .child(
+                    div().debug_selector(|| "update-restart".into()).child(
+                        c::Button::new("update-restart", "Update and restart")
+                            .small()
+                            .loading(busy)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let cmds = this.model.install_update();
+                                this.run(cmds);
+                                cx.notify();
+                            })),
+                    ),
+                ),
+        )
+    }
+
     /// The first ring, bottom right over everything.
     pub(super) fn render_ring(
         &mut self,

@@ -11,6 +11,7 @@ use crate::net::{Cmd, Event};
 use crate::settings::Settings;
 use crate::state::{AppState, Chat, RoomLog, merge_latest, merge_older};
 use crate::uploads::Tray;
+use crate::voice::capture::Source;
 use crate::voice::{Frame, Setup, ShareSetup, VoiceCmd, VoiceEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +78,8 @@ pub struct Mine {
     pub open: bool,
     /// What is sent: width, height, frame rate and kbps, from the encoder every 2 s.
     pub figures: Option<(u32, u32, f32, f32)>,
+    /// The screen or window chosen in the share dialog.
+    pub source: Option<Source>,
 }
 
 impl Mine {
@@ -87,6 +90,7 @@ impl Mine {
             kbps: self.kbps,
             sharp: self.sharp,
             active: self.watchers > 0,
+            source: self.source,
         }
     }
 
@@ -203,6 +207,10 @@ pub struct Call {
     pub pictures: u64,
     /// Watched shares that lose packets or frames.
     pub struggling: HashSet<String>,
+    /// Each watched share's size, frame rate and kbps received, for its tile's figures line.
+    pub seen: HashMap<String, (u32, u32, f32, f32)>,
+    /// The share shown in its own window (`shares.popped`): watched while it is out, panel or not.
+    pub popped: Option<String>,
     /// Why the watched share went away.
     pub share_notice: String,
     /// My own share, from Start sharing until it ends.
@@ -248,6 +256,8 @@ impl Default for Call {
             frames: HashMap::new(),
             pictures: 0,
             struggling: HashSet::new(),
+            seen: HashMap::new(),
+            popped: None,
             share_notice: String::new(),
             mine: None,
             before: None,
@@ -281,6 +291,11 @@ impl Call {
     /// `id`'s share has a tile in the open panel, so it is watched while the view is on screen.
     pub fn shown(&self, id: &str) -> bool {
         self.panel_open && !self.hidden.contains(id)
+    }
+
+    /// `id`'s share is drawn somewhere: a tile in the open panel, or its own window.
+    pub fn wanted(&self, id: &str) -> bool {
+        self.shown(id) || self.popped.as_deref() == Some(id)
     }
 
     /// When the next `watch off` is due, for the view's timer.
@@ -356,6 +371,22 @@ pub struct Model {
     pub dm_opened: Option<i64>,
     /// Settings > Voice's input level and mic test.
     pub mic: MicCheck,
+    /// A newer release, offered in a bar above the room (`update.rs`).
+    pub update: Update,
+    /// A `vesper://room` link's room, opened once the rooms are known.
+    pub want_room: Option<i64>,
+    /// A `vesper://invite` link's code: the sign in screen offers to create an account with it.
+    pub invite: Option<vesper_protocol::Secret>,
+}
+
+/// Where an update offer is. `Failed` says why and offers it again.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Update {
+    #[default]
+    None,
+    Offered(crate::update::Offer),
+    Installing(crate::update::Offer),
+    Failed(crate::update::Offer, String),
 }
 
 /// `levelHint` of devices.ts over the last 30 levels (3 s).
@@ -460,6 +491,9 @@ impl Default for Model {
             person_error: String::new(),
             dm_opened: None,
             mic: MicCheck::default(),
+            update: Update::None,
+            want_room: None,
+            invite: None,
         }
     }
 }
@@ -480,6 +514,10 @@ impl Model {
             focused: self.focused,
             settings: std::mem::take(&mut self.settings),
             ptt_open: self.ptt_open,
+            update: std::mem::take(&mut self.update),
+            want_room: self.want_room.take(),
+            // An invite is for signing up: gone once signed in.
+            invite: self.invite.take().filter(|_| screen == Screen::SignIn),
             ..Model::default()
         };
     }
@@ -491,6 +529,9 @@ impl Model {
                 | Event::SignedOut { .. }
                 | Event::SignInFailed(_)
                 | Event::NotRemembered
+                | Event::UpdateOffered(_)
+                | Event::UpdateInstalled(_)
+                | Event::UpdateFailed(_)
         );
         // Late events of a session that was signed out here.
         if signed_in_only && self.screen != Screen::Main {
@@ -513,6 +554,21 @@ impl Model {
             }
             Event::SignInFailed(e) => (self.busy, self.error) = (false, e),
             Event::NotRemembered => self.not_remembered = true,
+            Event::UpdateOffered(o) => {
+                if !matches!(self.update, Update::Installing(_)) {
+                    self.update = Update::Offered(o);
+                }
+            }
+            // Here only when the new app did not start (the view starts it and quits).
+            Event::UpdateInstalled(_) | Event::UpdateFailed(_) => {
+                if let Update::Installing(o) = std::mem::take(&mut self.update) {
+                    let why = match ev {
+                        Event::UpdateFailed(e) => e,
+                        _ => "Vesper was updated. Quit and start it again.".into(),
+                    };
+                    self.update = Update::Failed(o, why);
+                }
+            }
             Event::SessionEnded => {
                 self.reset(Screen::SignIn, SESSION_ENDED);
                 return vec![Cmd::Forget];
@@ -705,7 +761,13 @@ impl Model {
             self.rings.clear();
             // Like resync(): events may have been missed while the socket was down, so drop the other rooms and
             // fetch the shown one's newest page again, merged into what is held.
-            let keep = shown.or_else(|| self.state.rooms.first().map(|r| r.id));
+            let link = self
+                .want_room
+                .take()
+                .filter(|id| self.state.find_room(*id).is_some());
+            let keep = shown
+                .or(link)
+                .or_else(|| self.state.rooms.first().map(|r| r.id));
             let kept = keep.and_then(|id| self.chat.rooms.remove(&id));
             self.chat.rooms.clear();
             if let Some(id) = keep {
@@ -763,11 +825,18 @@ impl Model {
         self.sync_watches(now)
     }
 
-    /// Open the share panel, or close it (Hide screens): closed, no share is watched.
+    /// Pop a share out into its own window, or back in (`None`): out, it is watched even with the panel closed.
+    pub fn pop_out(&mut self, user: Option<String>, now: Instant) -> Vec<Cmd> {
+        self.call.popped = user;
+        self.sync_watches(now)
+    }
+
+    /// Open the share panel, or close it (Hide screens): closed, no share is watched but the one popped out.
     pub fn set_panel_open(&mut self, open: bool, now: Instant) -> Vec<Cmd> {
-        self.call.panel_open = open;
+        let c = &mut self.call;
+        c.panel_open = open;
         if !open {
-            self.call.frames.clear();
+            c.frames.retain(|id, _| c.popped.as_ref() == Some(id));
         }
         self.sync_watches(now)
     }
@@ -788,17 +857,20 @@ impl Model {
     }
 
     /// Sends `watch` on or off for each sharer, like the web's `syncWatches`: on as soon as the share has a tile in
-    /// the open panel and the view is on screen, off only `WATCH_GRACE` after that stops. The engine is told too, so it decodes only
+    /// the open panel and the view is on screen, or is popped out, off only `WATCH_GRACE` after that stops. The engine is told too, so it decodes only
     /// what is watched. A share that ended keeps its gate, so the off still goes out.
     pub fn sync_watches(&mut self, now: Instant) -> Vec<Cmd> {
         let sharing: HashSet<String> = self.sharers().into_iter().map(|(id, _)| id).collect();
         let c = &mut self.call;
+        if c.popped.as_ref().is_some_and(|p| !sharing.contains(p)) {
+            c.popped = None; // that share ended: its window closes
+        }
         let ids: HashSet<String> = sharing.iter().chain(c.gates.keys()).cloned().collect();
         let mut cmds = vec![];
         for id in ids {
+            let popped = c.popped.as_ref() == Some(&id);
             let want = c.phase == Phase::Joined
-                && c.share_visible
-                && c.shown(&id)
+                && (popped || c.share_visible && c.shown(&id))
                 && sharing.contains(&id);
             let g = c.gates.entry(id.clone()).or_default();
             let on = if want && !g.on {
@@ -817,6 +889,7 @@ impl Model {
                 *g = Gate { on, off_at: None };
             } else {
                 c.gates.remove(&id);
+                c.seen.remove(&id);
             }
             cmds.push(Cmd::Signal(ClientMsg::Watch {
                 user_id: id.clone(),
@@ -998,9 +1071,21 @@ impl Model {
                 c.devices = text;
                 vec![]
             }
+            VoiceEvent::ShareSeen {
+                user_id,
+                width,
+                height,
+                fps,
+                kbps,
+            } => {
+                if c.gates.contains_key(&user_id) {
+                    c.seen.insert(user_id, (width, height, fps, kbps));
+                }
+                vec![]
+            }
             VoiceEvent::Frame(f) => {
-                // A late picture of a share no longer shown is dropped.
-                if c.shown(&f.user_id) {
+                // A late picture of a share no longer drawn is dropped.
+                if c.wanted(&f.user_id) {
                     c.pictures += 1;
                     c.frames.insert(f.user_id.clone(), f);
                 }
@@ -1067,7 +1152,7 @@ impl Model {
 
     /// Share my screen (the share dialog's Start sharing), or change the running share's settings (its Save).
     /// The first opens the screen; `share_start` goes once it is open.
-    pub fn share(&mut self, fps: u8, kbps: u32, sharp: bool) -> Vec<Cmd> {
+    pub fn share(&mut self, fps: u8, kbps: u32, sharp: bool, source: Option<Source>) -> Vec<Cmd> {
         let c = &mut self.call;
         if c.phase != Phase::Joined {
             return vec![];
@@ -1081,6 +1166,7 @@ impl Model {
                     watchers: 0,
                     open: false,
                     figures: None,
+                    source,
                 };
                 (c.mine, c.error) = (Some(m), String::new());
                 vec![Cmd::Voice(VoiceCmd::Share(Some(m.setup())))]
@@ -1394,6 +1480,72 @@ impl Model {
             username: username.trim().into(),
             password: password.into(),
         }]
+    }
+
+    /// "Update and restart" was clicked.
+    pub fn install_update(&mut self) -> Vec<Cmd> {
+        match std::mem::take(&mut self.update) {
+            Update::Offered(o) | Update::Failed(o, _) => {
+                self.update = Update::Installing(o.clone());
+                vec![Cmd::InstallUpdate(o)]
+            }
+            u => {
+                self.update = u;
+                vec![]
+            }
+        }
+    }
+
+    /// Create your account, with the invite of a `vesper://invite` link.
+    pub fn sign_up(
+        &mut self,
+        server: &str,
+        username: &str,
+        display_name: &str,
+        password: &str,
+    ) -> Vec<Cmd> {
+        let Some(invite) = self.invite.clone().filter(|_| !self.busy) else {
+            return vec![];
+        };
+        if [server, username, display_name]
+            .iter()
+            .any(|f| f.trim().is_empty())
+            || password.is_empty()
+        {
+            self.error =
+                "Fill in the server address, a username, a display name and a password.".into();
+            return vec![];
+        }
+        (self.busy, self.error, self.notice) = (true, String::new(), String::new());
+        self.server = server.trim().into();
+        vec![Cmd::Signup {
+            server: self.server.clone(),
+            invite,
+            username: username.trim().into(),
+            display_name: display_name.trim().into(),
+            password: password.into(),
+        }]
+    }
+
+    /// A `vesper://` link. Returns a room to show now; else it waits for the rooms, or for the sign in screen.
+    pub fn open_link(&mut self, link: crate::single::Link) -> Option<i64> {
+        use crate::single::Link;
+        match link {
+            Link::Room(id) if self.screen == Screen::Main && self.state.find_room(id).is_some() => {
+                return Some(id);
+            }
+            Link::Room(id) => self.want_room = Some(id),
+            // Signed in already: an invite is for someone new, so the link only shows the window.
+            Link::Invite { .. } if self.screen == Screen::Main => {}
+            Link::Invite { code, server } => {
+                self.invite = Some(code);
+                if let Some(s) = server {
+                    self.server = s;
+                }
+                self.error.clear();
+            }
+        }
+        None
     }
 
     pub fn sign_out(&mut self) -> Vec<Cmd> {
@@ -1864,6 +2016,83 @@ mod tests {
         let mut m = signed_in();
         assert!(matches!(m.sign_out().as_slice(), [Cmd::Logout]));
         assert_eq!(m.screen, Screen::SignIn);
+    }
+
+    #[test]
+    fn a_room_link_waits_for_the_rooms_and_an_invite_for_the_sign_in_screen() {
+        use crate::single::Link;
+        let mut m = Model::default();
+        assert_eq!(m.open_link(Link::Room(3)), None);
+        let code: vesper_protocol::Secret = "c".repeat(64).into();
+        m.open_link(Link::Invite {
+            code: code.clone(),
+            server: Some("https://v.example".into()),
+        });
+        m.apply(Event::SignedOut {
+            server: Some("https://old.example".into()),
+            notice: String::new(),
+        });
+        assert_eq!(m.invite, Some(code.clone()), "kept on the sign in screen");
+        assert!(m.sign_up("https://v.example", "ann", "", "pw").is_empty());
+        let cmds = m.sign_up("https://v.example", "ann", "Ann", "test-password-1");
+        assert!(matches!(&cmds[..], [Cmd::Signup { invite, .. }] if *invite == code));
+        assert!(
+            m.sign_up("https://v.example", "ann", "Ann", "test-password-1")
+                .is_empty(),
+            "busy"
+        );
+        assert!(
+            !format!("{cmds:?}").contains(&*code),
+            "the code is never printed"
+        );
+        m.apply(Event::SignedIn {
+            me: Box::new(match crate::state::tests::hello() {
+                ServerMsg::Hello { me, .. } => me,
+                _ => unreachable!(),
+            }),
+            server: "https://v.example".into(),
+        });
+        assert_eq!(m.invite, None, "gone once signed in");
+        m.apply(Event::Server(Box::new(crate::state::tests::hello())));
+        assert_eq!(m.active, Some(3), "the link's room, not the first");
+        // Signed in: a room link opens at once, an invite does nothing.
+        assert_eq!(m.open_link(Link::Room(1)), Some(1));
+        m.open_link(Link::Invite { code, server: None });
+        assert_eq!(m.invite, None);
+    }
+
+    #[test]
+    fn an_update_installs_only_on_the_click_and_a_failure_offers_it_again() {
+        let names = [crate::update::asset_name(false), crate::update::SUMS];
+        let assets: Vec<_> = names
+            .iter()
+            .map(|n| serde_json::json!({"name": n, "browser_download_url": format!("https://x/{n}")}))
+            .collect();
+        let json = serde_json::json!({"tag_name": "v99.0.0", "assets": assets}).to_string();
+        let o = crate::update::offer(&json, "2.2.0", false).unwrap();
+        let mut m = signed_in();
+        assert!(m.install_update().is_empty(), "nothing offered");
+        assert!(m.apply(Event::UpdateOffered(o.clone())).is_empty());
+        assert_eq!(m.update, Update::Offered(o.clone()));
+        m.sign_out();
+        assert_eq!(m.update, Update::Offered(o.clone()), "kept over a sign out");
+        assert!(matches!(
+            m.install_update().as_slice(),
+            [Cmd::InstallUpdate(_)]
+        ));
+        assert!(m.install_update().is_empty(), "once");
+        m.apply(Event::UpdateOffered(o.clone()));
+        assert_eq!(
+            m.update,
+            Update::Installing(o.clone()),
+            "a check does not stop it"
+        );
+        m.apply(Event::UpdateFailed("The download failed.".into()));
+        assert_eq!(m.update, Update::Failed(o, "The download failed.".into()));
+        assert!(matches!(
+            m.install_update().as_slice(),
+            [Cmd::InstallUpdate(_)]
+        ));
     }
 
     #[test]
@@ -2418,6 +2647,46 @@ mod tests {
         v
     }
 
+    /// A popped out share is watched with the panel closed and the window off screen, like the web's `wantsWatch`,
+    /// keeps its pictures and figures, and goes back in when the share ends.
+    #[test]
+    fn a_popped_out_share_is_watched_anywhere_until_it_ends() {
+        let mut m = in_call();
+        let t = Instant::now();
+        share(&mut m, "b", true);
+        m.set_panel_open(false, t);
+        assert_eq!(
+            watches(&m.pop_out(Some("b".into()), t)),
+            [("b".into(), true)]
+        );
+        voice(&mut m, picture("b"));
+        assert!(m.call.frames.contains_key("b"), "its pictures come");
+        let seen = VoiceEvent::ShareSeen {
+            user_id: "b".into(),
+            width: 1920,
+            height: 1080,
+            fps: 30.,
+            kbps: 4000.,
+        };
+        voice(&mut m, seen.clone());
+        assert_eq!(m.call.seen.get("b"), Some(&(1920, 1080, 30., 4000.)));
+
+        // Back in, with the panel closed: off after the grace, and its figures go.
+        assert!(m.pop_out(None, t).is_empty());
+        assert_eq!(
+            watches(&m.sync_watches(t + WATCH_GRACE)),
+            [("b".into(), false)]
+        );
+        assert!(m.call.seen.is_empty());
+        voice(&mut m, seen);
+        assert!(m.call.seen.is_empty(), "figures of a share not watched");
+
+        // Out again, then the share ends: it is no longer out.
+        m.pop_out(Some("b".into()), t);
+        share(&mut m, "b", false);
+        assert_eq!(m.call.popped, None);
+    }
+
     #[test]
     fn every_shown_share_is_watched_while_the_view_is_on_screen() {
         let mut m = in_call();
@@ -2509,6 +2778,7 @@ mod tests {
             kbps: 4000,
             sharp: true,
             active,
+            source: Some(Source::Window(7)),
         };
         let start = ClientMsg::ShareStart {
             fps: 30,
@@ -2516,10 +2786,10 @@ mod tests {
         };
         // The screen opens first (the picker); only then does share_start go.
         same!(
-            m.share(30, 4000, true),
+            m.share(30, 4000, true, Some(Source::Window(7))),
             [Cmd::Voice(VoiceCmd::Share(Some(setup(false))))]
         );
-        assert!(m.share(60, 4000, true).is_empty(), "the picker is up");
+        assert!(m.share(60, 4000, true, None).is_empty(), "the picker is up");
         same!(
             voice(&mut m, VoiceEvent::ShareOpen),
             [Cmd::Signal(start.clone())]
@@ -2549,7 +2819,7 @@ mod tests {
         assert_eq!(m.call.error, share_lowered(2500));
         assert!(m.call.error.contains("2.5 Mbps"));
         // New settings refused (share_cap): the old ones come back, the share goes on.
-        m.share(60, 9000, false);
+        m.share(60, 9000, false, None);
         let refused = ServerMsg::Error {
             code: ErrorCode::ShareCap,
             message: String::new(),
@@ -2570,10 +2840,10 @@ mod tests {
         assert!(m.call.mine.is_none());
 
         // A cancelled picker ends it quietly; a failed capture says so.
-        m.share(30, 4000, true);
+        m.share(30, 4000, true, None);
         assert!(voice(&mut m, VoiceEvent::ShareEnded(String::new())).is_empty());
         assert!(m.call.mine.is_none());
-        m.share(30, 4000, true);
+        m.share(30, 4000, true, None);
         voice(&mut m, VoiceEvent::ShareOpen);
         let cmds = voice(
             &mut m,
@@ -2583,7 +2853,7 @@ mod tests {
         assert_eq!(m.call.error, "The screen capture stopped.");
 
         // A new share refused in a DM room ends here with the web's text.
-        m.share(30, 4000, true);
+        m.share(30, 4000, true, None);
         voice(&mut m, VoiceEvent::ShareOpen);
         let refused = ServerMsg::Error {
             code: ErrorCode::Forbidden,
@@ -2593,7 +2863,7 @@ mod tests {
         assert_eq!((m.call.mine, m.call.error.as_str()), (None, SHARE_DM));
 
         // The server cut it: it ends here, and its rate_limited error reads as the cut.
-        m.share(30, 4000, true);
+        m.share(30, 4000, true, None);
         voice(&mut m, VoiceEvent::ShareOpen);
         let cut = ServerMsg::PeerShare {
             user_id: me,

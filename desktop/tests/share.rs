@@ -399,7 +399,7 @@ async fn a_desktop_client_shares_its_screen_with_another() {
     .await;
 
     // Start: the screen opens, share_start goes, bob sees ann share.
-    let cmds = a.model.share(30, 1000, true);
+    let cmds = a.model.share(30, 1000, true, None);
     a.run(cmds);
     common::until_all(&mut [&mut a, &mut b], "bob sees ann share", |cs| {
         cs[0].model.call.mine.is_some_and(|m| m.open) && !cs[1].model.sharers().is_empty()

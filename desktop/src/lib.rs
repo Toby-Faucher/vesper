@@ -4,9 +4,11 @@
 pub mod files;
 pub mod highlight;
 pub mod link;
+pub mod logfile;
 pub mod markdown;
 pub mod model;
 pub mod net;
+pub mod notify;
 pub mod searchq;
 pub mod settings;
 pub mod single;
@@ -15,5 +17,6 @@ pub mod store;
 pub mod switcher;
 pub mod timeline;
 pub mod ui;
+pub mod update;
 pub mod uploads;
 pub mod voice;

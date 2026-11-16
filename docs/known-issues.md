@@ -159,8 +159,9 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   Nobody has listened to it on a real call, on the web or the desktop; only the unit tests on synthetic noise ran.
 - Push to talk needs X11 for a global key on Linux; on Wayland it works only while the window has focus. On macOS it needs
   Accessibility access. A game running as administrator on Windows may hide its keys from the app (not tried).
-- Closing the window during a call minimises it instead of hiding it (GPUI 0.2.2 cannot hide a window on Windows), so it
-  stays in the taskbar. On a Linux desktop without a tray host there is no tray icon. On Wayland an app cannot raise its own
+- Settings > App says what the close button does: quit but keep a call going (the default), always go to the tray, or always
+  quit. Going to the tray minimises the window instead of hiding it (GPUI 0.2.2 cannot hide a window on Windows), so it
+  stays in the taskbar; "Start in the tray" does the same at a start with the computer. On a Linux desktop without a tray host there is no tray icon. On Wayland an app cannot raise its own
   window: Show Vesper in the tray asks the compositor to activate it (by its app id, `vesper`), and the compositor may only
   mark it as wanting attention. Not verified on GNOME or KDE; sway does not minimise windows at all.
 - The app draws its own minimise, maximise and close at the top right on Windows and Linux (macOS keeps its title bar).
@@ -178,6 +179,22 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   Not verified on real speakers.
 - Dialogs take the focus and every click under them, and Esc closes the topmost dialog, card, menu or ring, but Tab is not
   kept inside a dialog.
+- Notifications: a mention or a direct message shows a system notification (freedesktop on Linux, a toast on Windows), and so
+  does a DM call while the window is in the background; a click opens the room. On Windows the toast is shown under
+  PowerShell's app id, because a toast under our own id needs a Start menu shortcut that carries it; so it says "Windows
+  PowerShell". The unread count (mentions, plus unread messages in DMs) is in the window title as on the web, a red dot on
+  the tray icon, and on Linux the launcher's count (`com.canonical.Unity.LauncherEntry`, for `vesper.desktop`: KDE, Dash to
+  Dock, Plank). There is no taskbar overlay icon on Windows: it needs COM calls that are `unsafe`, which the crates forbid.
+  Verified: the rules and the count by unit tests, and the D-Bus calls build. Not verified: a notification on a real
+  desktop, a click on one, and anything on Windows.
+- The window's size, place and maximised state are kept in the settings file and restored at the next start; a place that
+  is on no screen now is dropped and the window is centred at its old size. On Wayland the place is the compositor's.
+- Mute and deafen keys (Settings > Voice, under Keyboard shortcuts) act during a call, on the same key thread as push to
+  talk, with the same limits on Wayland and macOS.
+- The log is `vesper.log` in `Vesper/logs` under the local data dir (`%LOCALAPPDATA%` on Windows, `~/.local/share` on
+  Linux), moved to `vesper.log.1` past 1 MB. It holds the app's info lines, other crates' warnings and panics; no message
+  text, names, cookies or passwords. Settings > App > Copy diagnostics copies the version, system, graphics card, sound
+  devices and the last 100 log lines.
 - Not verified: real keys, a real tray, start with the computer, real audio through DeepFilterNet, and running on Windows.
 - A server newer than the app: the app cannot update itself the way the web reloads. On a newer server version it shows
   "This server runs a newer Vesper. Update the app..." in the banner and keeps working; a `hello` it cannot read shows that it
@@ -185,24 +202,31 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - The call's UDP socket is IPv4 only, so an SFU reachable only over IPv6 does not connect.
 - Not verified on real devices or across a real network with NAT: the voice tests run on loopback with fake audio.
 - Screen share from the desktop app ([ADR 0011](decisions/0011-desktop-screen-share-send.md)): the pure Rust VP8 encoder is single
-  threaded, so a 1080p share runs at about 20 fps (from the encoder's own figures, not measured here). Windows and X11 share the
-  primary monitor, with no picker; X11 leaves the cursor out. On Wayland a picture whose buffer is not a plain mapped one (DMA-BUF
+  threaded, so a 1080p share runs at about 20 fps (from the encoder's own figures, not measured here). On Windows and X11 the
+  share dialog lists the screens and windows by name, without thumbnails, and keeps the last choice until the app quits. X11
+  leaves the cursor out, and a minimised window sends nothing until it is back. On Wayland a picture whose buffer is not a plain mapped one (DMA-BUF
   only) is skipped. Only the test pattern was sent end to end; the real captures are not verified (Windows is only compiled in CI).
+  The X11 list was seen to name the screen in a headless sway's Xwayland; the window list needs a window manager that keeps
+  `_NET_CLIENT_LIST`, and the capture needs a real X server (Xwayland's root has no picture): neither verified.
 - Screen share: the desktop app watches one share at a time, at fit size, without the web's layouts,
   1:1, zoom, pop-out or pointer. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
 - Screen share: the desktop app can watch, not share. It shows the shares as the web does (Grid, Focus and Dock, chat
-  beside them, hide, point, zoom, full screen), without pop-out and the figures line. Each share decodes on a thread of
+  beside them, hide, point, zoom, full screen, pop out, the figures line and the buttons' tooltips). The pop-out is a
+  normal window, not kept on top (GPUI 0.2.2 cannot), and its pictures come as sent. The tooltips show by the mouse after
+  GPUI's 500 ms, not centred under the button after 400 ms. Each share decodes on a thread of
   its own, at the size its tile is drawn. GPUI 0.2.2 cannot tell whether its window is visible, so the app counts the share as not
   shown when it minimised the window itself, or when pictures came for 2 s and no frame was drawn; the sharer is then told
   to stop after the 10 s grace, and the next frame drawn watches again. Whether a window behind a game stops drawing
   depends on the system (not verified). Verified on this machine (debug build, headless sway): three web shares at
-  2560x1440 in each layout. Not verified: a real 60 fps share on a screen, Windows, and macOS.
+  2560x1440 in each layout. The pop-out and the figures line are verified by a headless GPUI test only. Not verified: a real
+  60 fps share on a screen, the pop-out window on a real desktop, Windows, and macOS.
 - Chat: a reply's quote scrolls to the original only when it is loaded (the web also loads it from the server). No search,
   no person cards from a mention (a mention is styled but cannot be clicked), and no "any symbol" reaction box. Day labels
   are in English. Drafts are kept per room in memory only, as on the web.
 - Files: audio and video open in the system's player; there are no inline players and no image viewer. A plain file can only
   be saved, not opened from the app. Pictures over 20 MB show as a card. A GIF shows its first frame. Not verified: dropping
-  files from Explorer, pasting a picture, the save dialog and the system's viewer on Windows.
+  files from Explorer or a Linux file manager (the chat's drop overlay and its routing are verified by a headless GPUI
+  test, with no paths in it: GPUI gives tests no way to make them), pasting a picture, the save dialog and the system's viewer on Windows.
 
 ## Build and deploy
 

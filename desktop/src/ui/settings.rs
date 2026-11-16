@@ -2,12 +2,12 @@
 //! title and Close, then a 200 px section list beside the open section (at most 640 px wide, 800 for Admin), centred.
 //!
 //! Settings has Voice, Notifications, Appearance, Account and App (the web's Desktop app section less its downloads:
-//! Start with the computer). Voice holds what the desktop's own audio does (the devices, the input level and its
-//! marker, the mic test, the noise filter, echo cancellation, the bitrate, push to talk) and the shortcut list. Not
-//! here, as the desktop has no such feature yet: the web's noise gate switch (a gate after DeepFilterNet),
-//! DeepFilterNet tuning, browser noise suppression, auto gain, DTX, levelling, mention notifications, Web Push, the
-//! custom accent colour, adding a passkey, the welcome steps and Diagnostics. Account is in `account.rs`, Admin in
-//! `admin.rs`.
+//! start with the computer, start in the tray, what Close does, and Copy diagnostics). Voice holds what the desktop's
+//! own audio does (the devices, the input level and its marker, the mic test, the noise filter, echo cancellation, the
+//! bitrate, push to talk) and the shortcut list with the global mute and deafen keys. Not here, as the desktop has no
+//! such feature yet: the web's noise gate switch (a gate after DeepFilterNet), DeepFilterNet tuning, browser noise
+//! suppression, auto gain, DTX, levelling, Web Push, the custom accent colour, adding a passkey, the welcome steps and
+//! the web's Diagnostics page. Account is in `account.rs`, Admin in `admin.rs`.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -37,6 +37,15 @@ pub const APPLIES_NEXT_CALL: &str =
     "Echo cancellation, the noise filter, devices and bitrate apply from your next call.";
 pub const CAPTURING: &str = "Press the key to use. Esc cancels.";
 
+/// The mute (1) or deafen (2) key setting.
+fn toggle_key(s: &mut Settings, which: usize) -> &mut Option<String> {
+    if which == 1 {
+        &mut s.mute_key
+    } else {
+        &mut s.deafen_key
+    }
+}
+
 /// The Settings sections, in the web's order (`SETTINGS_SECTIONS` less Diagnostics).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Section {
@@ -62,7 +71,7 @@ impl Section {
             Section::Notifications => "Notifications",
             Section::Appearance => "Appearance",
             Section::Account => "Account",
-            // The web's "Desktop app" is its download page; here it only holds Start with the computer.
+            // The web's "Desktop app" is its download page; here it holds Start with the computer and updates.
             Section::Desktop => "App",
         }
     }
@@ -140,6 +149,8 @@ pub struct Page {
     /// Where the pointer picked a colour scheme: the next look change spreads from there.
     pub(super) reveal_from: Option<Point<Pixels>>,
     reveal: Option<Reveal>,
+    /// Copy diagnostics was pressed.
+    pub copied: bool,
 }
 
 /// The theme switch (`reveal` in motion.ts): a circle grows from the click in the new page colour over the old look
@@ -273,7 +284,7 @@ impl Vesper {
         self.capturing_key = false;
         self.page.select = None;
         match at {
-            At::Settings(Section::Voice) if self.settings_file.is_some() => {
+            At::Settings(Section::Voice | Section::Desktop) if self.settings_file.is_some() => {
                 // cpal can take a moment to list devices; not on the UI thread.
                 let list = cx.background_spawn(async { crate::voice::device_names() });
                 cx.spawn_in(window, async move |this, cx| {
@@ -463,17 +474,22 @@ impl Vesper {
     ) {
         let mut s = self.model.settings.clone();
         f(&mut s);
-        let autostart = (s.start_with_computer != self.model.settings.start_with_computer)
-            .then_some(s.start_with_computer);
+        let was = (
+            self.model.settings.start_with_computer,
+            self.model.settings.start_in_tray,
+        );
+        let autostart = Some((s.start_with_computer, s.start_in_tray)).filter(|&now| now != was);
         self.settings_error.clear();
         let cmds = self.model.set_settings(s);
         self.run(cmds);
         self.watch_key();
-        if let Some(on) = autostart
+        if let Some((on, in_tray)) = autostart
             && self.settings_file.is_some()
-            && let Err(e) = settings::set_start_with_computer(on)
+            && let Err(e) = settings::set_start_with_computer(on, in_tray)
         {
-            self.model.settings.start_with_computer = !on;
+            log::warn!("start with the computer: {e}");
+            let m = &mut self.model.settings;
+            (m.start_with_computer, m.start_in_tray) = was;
             self.settings_error = e;
         }
         self.save_settings();
@@ -506,12 +522,58 @@ impl Vesper {
         let key = (s.push_to_talk && self.model.call.phase != Phase::Idle)
             .then(|| ptt::parse_key(&s.ptt_key))
             .flatten();
+        let in_call = self.model.call.phase != Phase::Idle;
+        let toggles = [&s.mute_key, &s.deafen_key]
+            .map(|k| k.as_deref().filter(|_| in_call).and_then(ptt::parse_key));
+        if self.watched_toggles.replace(toggles) != toggles
+            && let Some(tx) = &self.ptt_tx
+        {
+            let _ = tx.send(KeyMsg::Toggles(toggles));
+        }
         if self.watched.replace(Some(key)) == Some(key) {
             return;
         }
         if let Some(tx) = &self.ptt_tx {
             let _ = tx.send(KeyMsg::Watch(key));
         }
+    }
+
+    /// The box that shows a key and takes a new one on a click: 0 push to talk, 1 mute, 2 deafen.
+    fn key_button(&self, which: usize, key: Option<&String>, cx: &mut Context<Self>) -> Div {
+        let t = theme::tokens(cx).clone();
+        let id = [
+            "settings-ptt-key",
+            "settings-mute-key",
+            "settings-deafen-key",
+        ][which];
+        let on = self.capturing_key && self.capture_for == which;
+        div().debug_selector(move || id.into()).child(
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .h(px(32.))
+                .px(px(12.))
+                .border_1()
+                .border_color(if on { t.accent } else { t.line })
+                .rounded(t.radius)
+                .bg(t.bg_element)
+                .font_weight(t.weight_ui)
+                .text_color(if on { t.accent_fg } else { t.fg })
+                .hover(|s| s.bg(t.bg_hover))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    (this.capturing_key, this.key_problem) = (true, "");
+                    this.capture_for = which;
+                    window.focus(&this.key_focus);
+                    cx.notify();
+                }))
+                .when(on, |d| d.child("Press a key..."))
+                .when(!on, |d| match key {
+                    Some(k) => d.child("Key:").child(kbd(ptt::key_label(k), cx)),
+                    None => d.child("None"),
+                }),
+        )
     }
 
     /// A key pressed while choosing the push-to-talk key.
@@ -529,7 +591,10 @@ impl Vesper {
             match ptt::key_from_window(&k.key) {
                 Ok(name) => {
                     (self.capturing_key, self.key_problem) = (false, "");
-                    self.change_settings(|s| s.ptt_key = name, cx);
+                    match self.capture_for {
+                        0 => self.change_settings(|s| s.ptt_key = name, cx),
+                        n => self.change_settings(|s| *toggle_key(s, n) = Some(name), cx),
+                    }
                 }
                 Err(why) => self.key_problem = why,
             }
@@ -985,47 +1050,19 @@ impl Vesper {
             .justify_between()
             .gap_4()
             .child(text("Key", t.fg, false))
-            .child(
-                div().debug_selector(|| "settings-ptt-key".into()).child(
-                    div()
-                        .id("settings-ptt-key")
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .h(px(32.))
-                        .px(px(12.))
-                        .border_1()
-                        .border_color(if self.capturing_key { t.accent } else { t.line })
-                        .rounded(t.radius)
-                        .bg(t.bg_element)
-                        .font_weight(t.weight_ui)
-                        .text_color(if self.capturing_key {
-                            t.accent_fg
-                        } else {
-                            t.fg
-                        })
-                        .hover(|s| s.bg(t.bg_hover))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            (this.capturing_key, this.key_problem) = (true, "");
-                            window.focus(&this.key_focus);
-                            cx.notify();
-                        }))
-                        .when(self.capturing_key, |d| d.child("Press a key..."))
-                        .when(!self.capturing_key, |d| {
-                            d.child("Key:").child(kbd(ptt::key_label(&s.ptt_key), cx))
-                        }),
-                ),
-            );
+            .child(self.key_button(0, Some(&s.ptt_key), cx));
+        let (cap_on, cap_for) = (self.capturing_key, self.capture_for);
+        let capturing = move |which| cap_on && cap_for == which;
         let ptt_more = s.push_to_talk.then(|| {
             v_flex()
                 .gap(px(6.))
                 .child(key)
-                .when(self.capturing_key, |d| {
+                .when(capturing(0), |d| {
                     d.child(
                         text(CAPTURING, t.fg_2, true).debug_selector(|| "settings-capturing".into()),
                     )
                 })
-                .when(!self.key_problem.is_empty(), |d| {
+                .when(self.capture_for == 0 && !self.key_problem.is_empty(), |d| {
                     d.child(
                         text(self.key_problem, t.warn_fg, true)
                             .debug_selector(|| "settings-key-problem".into()),
@@ -1164,8 +1201,50 @@ impl Vesper {
                 ),
             )
             .children(ptt_more);
+        let toggle_row =
+            |which: usize, name: &'static str, key: Option<&String>, cx: &mut Context<Self>| {
+                let clear = Button::new(SharedString::from(format!("clear-key-{which}")), "Clear")
+                    .variant(Variant::Ghost)
+                    .small()
+                    .disabled(key.is_none())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.change_settings(|s| *toggle_key(s, which) = None, cx)
+                    }));
+                h_flex()
+                    .min_h(px(32.))
+                    .justify_between()
+                    .gap_4()
+                    .child(text(name, t.fg, false))
+                    .child(
+                        h_flex()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .debug_selector(move || format!("clear-key-{which}"))
+                                    .child(clear),
+                            )
+                            .child(self.key_button(which, key, cx)),
+                    )
+            };
+        let toggles = v_flex()
+            .gap(px(6.))
+            .child(toggle_row(1, "Mute key", s.mute_key.as_ref(), cx))
+            .child(toggle_row(2, "Deafen key", s.deafen_key.as_ref(), cx))
+            .when(capturing(1) || capturing(2), |d| {
+                d.child(text(CAPTURING, t.fg_2, true))
+            })
+            .when(self.capture_for > 0 && !self.key_problem.is_empty(), |d| {
+                d.child(text(self.key_problem, t.warn_fg, true))
+            })
+            .child(text(
+                "During a call these keys mute and deafen you, also while other apps have focus.",
+                t.fg_3,
+                true,
+            ))
+            .when_some(self.ptt_note, |d, n| d.child(text(n, t.warn_fg, true)));
         let keys = section()
             .child(h_flex().h(px(32.)).child(h3("Keyboard shortcuts", cx)))
+            .child(toggles)
             .child(super::find::shortcut_list(&t));
         let error = (!self.settings_error.is_empty()).then(|| {
             text(self.settings_error.clone(), t.danger_fg, false)
@@ -1200,8 +1279,51 @@ impl Vesper {
                 super::sound::play_ring(a.clone(), s.output_device.clone(), s.volume);
             }
         });
+        let test = cx.listener(|this, _, _, _| {
+            if let Some(os) = &this.os {
+                os.show(crate::notify::Toast {
+                    title: "Vesper".into(),
+                    body: "Mentions show like this.".into(),
+                    room: 0,
+                });
+            }
+        });
         sections(
             vec![
+                section()
+                    .child(h_flex().h(px(32.)).child(h3("Mentions and direct messages", cx)))
+                    .child(
+                        div().debug_selector(|| "settings-notify-mentions".into()).child(
+                            Switch::new(
+                                "settings-notify-mentions",
+                                "Notify me when someone mentions me",
+                                s.notify_mentions,
+                            )
+                            .on_change(on_bool(cx, |this, on, _, cx| {
+                                this.change_settings(|s| s.notify_mentions = on, cx)
+                            })),
+                        ),
+                    )
+                    .child(
+                        div().debug_selector(|| "settings-notify-dms".into()).child(
+                            Switch::new(
+                                "settings-notify-dms",
+                                "Notify me when someone sends me a direct message",
+                                s.notify_dms,
+                            )
+                            .help("Also when someone calls you while Vesper is in the background. Nothing shows for the room you are looking at.")
+                            .on_change(on_bool(cx, |this, on, _, cx| {
+                                this.change_settings(|s| s.notify_dms = on, cx)
+                            })),
+                        ),
+                    )
+                    .child(
+                        h_flex().child(
+                            Button::new("notify-test", "Send a test notification")
+                                .small()
+                                .on_click(test),
+                        ),
+                    ),
                 section()
                     .child(h_flex().h(px(32.)).child(h3("Sounds", cx)))
                     .child(
@@ -1364,21 +1486,166 @@ impl Vesper {
 
     fn render_desktop(&mut self, cx: &mut Context<Self>) -> Div {
         let t = theme::tokens(cx).clone();
-        let on = self.model.settings.start_with_computer;
+        let s = self.model.settings.clone();
         let error = self.settings_error.clone();
-        v_flex()
-            .gap(px(16.))
-            .child(
-                div().debug_selector(|| "settings-autostart".into()).child(
-                    Switch::new("settings-autostart", "Start with the computer", on)
-                        .help("Vesper opens when you sign in to your computer.")
-                        .on_change(on_bool(cx, |this, on, _, cx| {
-                            this.change_settings(|s| s.start_with_computer = on, cx)
-                        })),
+        let closes =
+            [
+                (
+                    settings::OnClose::Call,
+                    "Quit, but keep a call going in the tray",
                 ),
-            )
-            .when(!error.is_empty(), |d| {
-                d.child(text(error, t.danger_fg, false).debug_selector(|| "settings-error".into()))
+                (settings::OnClose::Tray, "Keep running in the tray"),
+                (settings::OnClose::Quit, "Quit, ending a call"),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (choice, name))| {
+                radio_row(
+                    SharedString::from(format!("on-close-{i}")),
+                    s.on_close == choice,
+                    cx,
+                )
+                .h(px(40.))
+                .debug_selector(move || format!("on-close-{i}"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.change_settings(|s| s.on_close = choice, cx)
+                }))
+                .child(name)
             })
+            .collect();
+        let copy = cx.listener(|this, _, window, cx| {
+            let report = this.diagnostics(window);
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(report));
+            this.page.copied = true;
+            cx.notify();
+        });
+        sections(
+            vec![
+                section()
+                    .child(
+                        div().debug_selector(|| "settings-autostart".into()).child(
+                            Switch::new("settings-autostart", "Start with the computer", s.start_with_computer)
+                                .help("Vesper opens when you sign in to your computer.")
+                                .on_change(on_bool(cx, |this, on, _, cx| {
+                                    this.change_settings(|s| s.start_with_computer = on, cx)
+                                })),
+                        ),
+                    )
+                    .child(
+                        div().debug_selector(|| "settings-in-tray".into()).child(
+                            Switch::new("settings-in-tray", "Start in the tray", s.start_in_tray)
+                                .help("When it starts with the computer, Vesper waits in the tray without opening its window.")
+                                .disabled(!s.start_with_computer)
+                                .on_change(on_bool(cx, |this, on, _, cx| {
+                                    this.change_settings(|s| s.start_in_tray = on, cx)
+                                })),
+                        ),
+                    )
+                    .child(
+                        div().debug_selector(|| "settings-updates".into()).child(
+                            Switch::new("settings-updates", "Check for updates", s.check_updates)
+                                .help("Vesper asks GitHub for a new version every few hours. It installs one only when you click Update and restart.")
+                                .on_change(on_bool(cx, |this, on, _, cx| {
+                                    this.change_settings(|s| s.check_updates = on, cx)
+                                })),
+                        ),
+                    )
+                    .child(
+                        v_flex()
+                            .gap(px(8.))
+                            .child(h3("When you close the window", cx))
+                            .child(radio_list(closes, cx))
+                            .child(text("Quit in the tray menu always quits.", t.fg_3, true)),
+                    )
+                    .when(!error.is_empty(), |d| {
+                        d.child(text(error, t.danger_fg, false).debug_selector(|| "settings-error".into()))
+                    }),
+                section()
+                    .child(h_flex().h(px(32.)).child(h3("Diagnostics", cx)))
+                    .child(text(
+                        "Copies the app version, your system, graphics card and sound devices, and the end of the log, to paste into a bug report. Messages, names and passwords are never in it.",
+                        t.fg_2,
+                        true,
+                    ))
+                    .child(
+                        h_flex()
+                            .gap(px(12.))
+                            .child(
+                                div().debug_selector(|| "copy-diagnostics".into()).child(
+                                    Button::new("copy-diagnostics", "Copy diagnostics").on_click(copy),
+                                ),
+                            )
+                            .when(self.page.copied, |d| d.child(text("Copied.", t.fg_2, true))),
+                    )
+                    .when_some(crate::logfile::dir(), |d, dir| {
+                        d.child(text(format!("Log files: {}", dir.display()), t.fg_3, true))
+                    }),
+            ],
+            cx,
+        )
+    }
+
+    /// The Copy diagnostics report. No message text, names, server address or secrets.
+    pub(super) fn diagnostics(&self, window: &Window) -> String {
+        let s = &self.model.settings;
+        let gpu = window.gpu_specs().map_or("unknown".into(), |g| {
+            format!(
+                "{} ({} {}){}",
+                g.device_name,
+                g.driver_name,
+                g.driver_info,
+                if g.is_software_emulated {
+                    ", software"
+                } else {
+                    ""
+                }
+            )
+        });
+        let session = if cfg!(target_os = "linux") {
+            if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                " (Wayland)"
+            } else {
+                " (X11)"
+            }
+        } else {
+            ""
+        };
+        let list = |v: &[String]| {
+            if v.is_empty() {
+                "not listed".into()
+            } else {
+                v.join(", ")
+            }
+        };
+        let chosen = |d: &Option<String>| d.clone().unwrap_or_else(|| "system default".into());
+        let mut r = format!(
+            "Vesper desktop {}\nSystem: {} {}{session}\nGraphics: {gpu}\nMicrophones: {}\nSpeakers: {}\n\
+             Chosen: {} / {}\nNoise filter: {:?}, echo cancellation {}, push to talk {}\nGlobal keys: {}\n\
+             In a call: {}\n\nLog:\n",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            list(&self.devices.0),
+            list(&self.devices.1),
+            chosen(&s.input_device),
+            chosen(&s.output_device),
+            s.denoise,
+            if s.echo_cancel { "on" } else { "off" },
+            if s.push_to_talk { "on" } else { "off" },
+            self.ptt_note.unwrap_or("available"),
+            if self.model.call.phase == Phase::Idle {
+                "no"
+            } else {
+                "yes"
+            },
+        );
+        for l in crate::logfile::dir()
+            .map(|d| crate::logfile::tail(&d, 100))
+            .unwrap_or_default()
+        {
+            r.push_str(&l);
+            r.push('\n');
+        }
+        r
     }
 }

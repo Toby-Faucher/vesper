@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from '../../lib/ui/c/Icon.svelte';
   import * as I from '../../lib/ui/icons';
-  import { DOWNLOADS, RELEASES_PAGE, desktopOs, type DesktopOs } from '../../lib/desktop';
+  import { DOWNLOADS, PORTABLE, RELEASES_PAGE, desktopOs, type DesktopOs } from '../../lib/desktop';
   // Settings > Desktop app: the download for this system first, the other one under it.
   const mine = desktopOs(navigator.userAgent);
   const order: DesktopOs[] = mine === 'linux' ? ['linux', 'windows'] : ['windows', 'linux'];
@@ -17,7 +17,10 @@
       </a>
     {/each}
   </div>
-  <p>Windows: unzip it and run <code>Vesper.exe</code>. Linux: unpack it and run <code>Vesper/vesper-desktop</code>. Not on macOS yet.
+  <p>Windows: run the installer. It needs no admin rights. Or take the
+    <a class="text-accent-fg underline" href={PORTABLE.url}>portable zip</a>, unzip it anywhere and run <code>Vesper.exe</code>.
+    Linux: unpack it and run <code>Vesper/install.sh</code> to add it to your apps, or run <code>Vesper/vesper-desktop</code> as it is.
+    Not on macOS yet. The app updates itself when you say so.
     Every version is on the <a class="text-accent-fg underline" href={RELEASES_PAGE}>releases page</a>.</p>
 </div>
 

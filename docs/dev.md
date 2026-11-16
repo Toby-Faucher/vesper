@@ -104,8 +104,11 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 - Windows is the main target (the friends use it). CI's `desktop-windows` job builds the app and runs the unit and headless GPUI tests
   on Windows; the real-server tests in `desktop/tests/` are Unix only, because the server crates use Unix file permissions.
   Running the app on Windows is not verified by CI.
-- Builds to try: the `desktop-package` workflow uploads `vesper-desktop-windows-x64-<commit>` (a zip with `Vesper.exe`) and
-  `vesper-desktop-linux-x64-<commit>` (a tarball built on Ubuntu 24.04, glibc 2.39 or newer) for every push to `v2/desktop`. Download it from the workflow run's Artifacts. `desktop/package/README.txt` and `README-linux.txt` are what each package's README says.
+- Builds to try: the `desktop-package` workflow uploads `vesper-desktop-windows-x64-<commit>` (the zip with `Vesper.exe` and
+  the per-user installer made with Inno Setup from `desktop/package/windows/vesper.iss`), `vesper-desktop-linux-x64-<commit>`
+  (the tarball with `install.sh`, and an AppImage, built on Ubuntu 24.04, glibc 2.39 or newer) and
+  `vesper-desktop-release-<commit>` (all of them with `SHA256SUMS`) for every push to `v2/desktop`. Download them from the
+  workflow run's Artifacts. `desktop/package/README.txt` and `README-linux.txt` are what each package's README says.
   The tests start a real `vesper-server` in process (a path dev-dependency, so the first build compiles the server too) on a free
   loopback port over plain http, and draw the views in GPUI's headless test window. No display, keyring or network is needed.
   The voice tests (`desktop/tests/voice.rs`) run whole calls through that server's SFU with a sine for a microphone and a
@@ -113,6 +116,11 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   send VP8 made by `vp8-encoder` (a dev-dependency), so it needs no screen or video file.
   The chat tests (`desktop/tests/chat.rs`) run two clients through edits, deletes, reactions, replies, typing and files,
   with the files in a temp folder.
+- The app icon: `desktop/package/icons/<size>.png` and `desktop/package/windows/vesper.ico` are made from
+  `web/public/icon-512.png`. Make them again if that changes. On Windows `desktop/build.rs` puts the `.ico` into the exe.
+- Updates: a release build checks GitHub's latest release (`desktop/src/update.rs`); debug builds never do.
+- `vesper://` links: `vesper://room/<id>` and `vesper://invite/<code>?server=<address>`. To try one with a debug build, run
+  `cargo run -- 'vesper://room/1'` while another debug build runs: it hands the link over and exits.
 - Files from chat: Save opens the system's save dialog in the Downloads folder. Open (images, audio and video only) downloads
   to `Vesper/open/<id>.<ext>` in the user's cache folder (`%LOCALAPPDATA%`, `~/Library/Caches`, `$XDG_CACHE_HOME`) and hands it
   to the system's app. A download goes to `<name>.part` and is renamed when whole; it is capped at the server's upload limit.
@@ -120,9 +128,10 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   after a day).
 - Voice uses the microphone and speakers chosen in Settings, by name, or the system defaults (cpal: ALSA on Linux, WASAPI on
   Windows). Echo cancellation is `sonora` (pure Rust AEC3), so neither Linux nor Windows needs a system package for it.
-- Settings (the gear next to your name; Admin for staff and Log out are in the menu on your name; Settings > App holds Start with the computer) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
+- Settings (the gear next to your name; Admin for staff and Log out are in the menu on your name; Settings > App holds Start with the computer, Start in the tray, what Close does and Copy diagnostics) are a JSON file, `Vesper/settings.json` in the OS config dir (`%APPDATA%`,
   `~/Library/Application Support`, `$XDG_CONFIG_HOME`). It holds no secrets. It also keeps whether the sidebar is hidden
-  (the web keeps that in localStorage), the style and colour scheme, and the ring's switch and volume. It is written to a temporary file and renamed. A value the app cannot read falls
+  (the web keeps that in localStorage), the style and colour scheme, the ring's switch and volume, the notification switches, the mute and deafen keys, and the
+  window's last size and place. It is written to a temporary file and renamed. A value the app cannot read falls
   back to its default alone; a file that is not JSON is kept as `settings.json.bad`.
 - DeepFilterNet runs natively (`vesper-dsp` with tract, the same `=0.21.4` pin and debug-assertions override as the root
   workspace). The app does not ship the model: at the first call it downloads `/dsp/model.tar.gz` from the server it is signed
@@ -134,7 +143,9 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   (`scripts/fetch-model.sh`); without it the test prints `SKIPPED` and passes. CI has no model, so it skips there.
 - Push to talk watches its key globally on Windows, macOS (with Accessibility access) and X11, only during a call. On Wayland it
   works only while the window has focus. As on the web, a press while a text field in Vesper has focus is ignored, and a
-  release always counts. The tray uses KSNI on Linux (no GTK headers needed); a desktop without a tray host shows none.
+  release always counts. The mute and deafen keys (Settings > Voice) work the same way, once per press. The tray uses KSNI
+  on Linux (no GTK headers needed); a desktop without a tray host shows none. The log file and notifications are in
+  [known-issues.md](known-issues.md#desktop-client-v2-in-progress).
 - Sign in: the app asks for the server address (the one you open Vesper at in a browser, e.g. `https://vesper.example.com`), a
   username and a password. Accounts are made in the web app. The session is kept in the OS keyring (Secret Service on Linux,
   for example GNOME Keyring or KWallet); without one the app works but asks you to sign in at every start.

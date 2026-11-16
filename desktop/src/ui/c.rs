@@ -1,8 +1,10 @@
 //! The web app's base components (`web/src/lib/ui/c/`), with the metrics and colours of their `<style>` blocks. Every
 //! colour comes from the [`Tokens`](super::theme::Tokens) global, so a style or accent change repaints them.
 //!
-//! Button and IconButton fade their hover colours in `--dur-1` (`motion::hover`). Not ported yet: focus-visible
-//! rings (GPUI 0.2.2 has no focus-visible), the press scale (GPUI scales only an svg), tooltips (`data-tip`).
+//! Button and IconButton fade their hover colours in `--dur-1` (`motion::hover`). An IconButton's `tip` is the
+//! `data-tip` tooltip, drawn by GPUI after its 500 ms hover (the web's 400) next to the mouse, not centred under the
+//! button. Not ported yet: focus-visible rings (GPUI 0.2.2 has no focus-visible), the press scale (GPUI scales only
+//! an svg).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -12,7 +14,7 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder;
 use gpui::{Animation, AnimationExt};
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, Entity, Global, Hsla, ImageSource,
+    AnyElement, App, AppContext, ClickEvent, Div, ElementId, Entity, Global, Hsla, ImageSource,
     InteractiveElement, IntoElement, ObjectFit, ParentElement, Pixels, RenderImage, RenderOnce,
     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, StyledImage, Transformation,
     Window, anchored, deferred, div, img, percentage, px, transparent_black,
@@ -226,6 +228,7 @@ pub struct IconButton {
     danger: bool,
     disabled: bool,
     turn: bool,
+    tip: Option<SharedString>,
     on_click: Option<OnClick>,
 }
 
@@ -238,8 +241,14 @@ impl IconButton {
             danger: false,
             disabled: false,
             turn: false,
+            tip: None,
             on_click: None,
         }
+    }
+    /// The label as a tooltip on hover (`tip` in IconButton.svelte).
+    pub fn tip(mut self, label: impl Into<SharedString>) -> Self {
+        self.tip = Some(label.into());
+        self
     }
     /// The Settings gear: a third of a turn on hover (its six teeth line up again), `--dur-3`, ease-out. None under
     /// reduced motion.
@@ -325,11 +334,35 @@ impl RenderOnce for IconButton {
             .when_some(self.on_click.filter(|_| live), |d, f| {
                 d.on_click(move |e, w, cx| f(e, w, cx))
             })
+            .when_some(self.tip, |d, tip| {
+                d.tooltip(move |_, cx| cx.new(|_| Tip(tip.clone())).into())
+            })
             .child(
                 icon(self.icon)
                     .text_color(fg)
                     .with_transformation(Transformation::rotate(gpui::Radians(angle.to_radians()))),
             )
+    }
+}
+
+/// The `[data-tip]::after` box of app.css: 4 px by 8 px, a `--line-subtle` border, `--radius-sm`, `--bg-raised`,
+/// 12/16 text in `--fg`, one line.
+struct Tip(SharedString);
+
+impl gpui::Render for Tip {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let t = tokens(cx);
+        div()
+            .px(px(8.))
+            .py(px(4.))
+            .border_1()
+            .border_color(t.line_subtle)
+            .rounded(t.radius_sm)
+            .bg(t.bg_raised)
+            .text_color(t.fg)
+            .text_step(TEXT_XS)
+            .whitespace_nowrap()
+            .child(self.0.clone())
     }
 }
 

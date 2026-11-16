@@ -15,6 +15,7 @@ pub mod icons;
 mod md;
 pub mod motion;
 mod person;
+mod popout;
 mod room;
 mod select;
 mod send;
@@ -36,10 +37,10 @@ use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Application, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment, ListState, ParentElement,
-    Render, Styled, Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions,
-    actions, div, px, rgb, size,
+    App, AppContext, Application, Bounds, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeyBinding, KeyDownEvent, KeyUpEvent, ListAlignment,
+    ListState, ParentElement, Pixels, Render, Styled, Subscription, Task, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, actions, div, point, px, rgb, size,
 };
 use gpui_component::Root;
 use gpui_component::input::{InputEvent, InputState};
@@ -50,7 +51,7 @@ use crate::model::{Model, Phase, Screen};
 use crate::net::{self, Cmd, Event};
 use crate::store::Keyring;
 use crate::voice::Cpal;
-use crate::voice::ptt::{self, KeyMsg};
+use crate::voice::ptt::{self, KeyMsg, KeyOut};
 
 actions!(
     vesper,
@@ -133,9 +134,24 @@ pub fn init(cx: &mut App) {
 
 /// Starts the network and key threads and opens the window. Returns when the app quits.
 pub fn run() {
-    let crate::single::Claim::First(single) = crate::single::claim() else {
-        return; // another Vesper was running: it shows itself
+    use crate::single::Claim;
+    let link = crate::single::link_arg();
+    let updated = std::env::args().any(|a| a == crate::update::UPDATED_ARG);
+    let mut tries = 0;
+    let single = loop {
+        match crate::single::claim(link.as_deref()) {
+            // Just updated: the old app is still quitting. Wait for it (up to 10 s), never hand over to it.
+            Claim::First(None) | Claim::Second if updated && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Claim::First(l) => break l,
+            Claim::Second => return, // another Vesper was running: it shows itself and opens the link
+        }
     };
+    if let Some(dir) = crate::logfile::dir() {
+        crate::logfile::start(&dir);
+    }
     let audio: Arc<dyn crate::voice::AudioDevices> = Arc::new(Cpal);
     // The parity harness's calls run on fake devices (dev.rs).
     #[cfg(debug_assertions)]
@@ -148,14 +164,38 @@ pub fn run() {
         .map(crate::settings::Settings::load)
         .unwrap_or_default();
     let (open_tx, open_rx) = tokio::sync::mpsc::unbounded_channel();
-    let keys = ptt::spawn(ptt::global_source, move |open| {
-        let _ = open_tx.send(open);
+    let keys = ptt::spawn(ptt::global_source, move |out| {
+        let _ = open_tx.send(out);
+    });
+    // Started by the computer with "Start in the tray" on.
+    let in_tray = std::env::args().any(|a| a == crate::settings::IN_TRAY) && saved.start_in_tray;
+    let (click_tx, mut clicks) = tokio::sync::mpsc::unbounded_channel();
+    let os = crate::notify::Os::start(move |room| {
+        let _ = click_tx.send(room);
     });
     let app = Application::new().with_assets(icons::Assets);
     app.run(move |cx: &mut App| {
         init(cx);
+        let screens: Vec<_> = cx.displays().iter().map(|d| d.bounds()).collect();
+        let window_bounds = match saved.window {
+            Some(w) => {
+                let (at, wh) = (point(px(w.x), px(w.y)), size(px(w.w), px(w.h)));
+                let b = Bounds::new(at, wh);
+                let b = if on_a_screen(b, &screens) {
+                    b
+                } else {
+                    Bounds::centered(None, wh, cx)
+                };
+                if w.maximized {
+                    WindowBounds::Maximized(b)
+                } else {
+                    WindowBounds::Windowed(b)
+                }
+            }
+            None => WindowBounds::centered(size(px(1100.), px(720.)), cx),
+        };
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
+            window_bounds: Some(window_bounds),
             // The app draws its own window buttons (chrome.rs): no system title bar on Windows, client-side
             // decorations on Linux. macOS keeps its title bar.
             titlebar: Some(TitlebarOptions {
@@ -178,16 +218,35 @@ pub fn run() {
                     v.model.settings = saved;
                     (v.settings_file, v.ptt_tx) = (file, Some(keys));
                     v.ptt_note = ptt::global_note();
+                    v.os = Some(os);
                     v.watch_key();
+                    if let Some(l) = &link {
+                        v.open_link(l, window, cx);
+                    }
+                    // Its place and size are kept for the next start.
+                    cx.observe_window_bounds(window, |v, window, cx| {
+                        v.model.settings.window = Some(saved_window(window.window_bounds()));
+                        v.save_settings_soon(cx);
+                    })
+                    .detach();
                     v
                 });
-                // Closing the window during a call keeps the call: the window goes to the tray (minimised: GPUI
-                // 0.2.2 cannot hide a window on Windows). Leave, or Quit in the tray, ends it.
+                if in_tray {
+                    view.update(cx, |v, cx| v.minimised_by_close(cx));
+                    window.minimize_window();
+                }
+                // The close button goes to the tray (minimised: GPUI 0.2.2 cannot hide a window on Windows) or quits,
+                // as Settings > App says. By default it quits unless a call runs, which keeps going in the tray.
                 let weak = view.downgrade();
                 window.on_window_should_close(cx, move |window, cx| {
-                    let view = weak
-                        .upgrade()
-                        .filter(|v| v.read(cx).model.call.phase != Phase::Idle);
+                    let view = weak.upgrade().filter(|v| {
+                        let m = &v.read(cx).model;
+                        match m.settings.on_close {
+                            crate::settings::OnClose::Tray => true,
+                            crate::settings::OnClose::Quit => false,
+                            crate::settings::OnClose::Call => m.call.phase != Phase::Idle,
+                        }
+                    });
                     if let Some(v) = &view {
                         v.update(cx, |v, cx| v.minimised_by_close(cx));
                         window.minimize_window();
@@ -204,19 +263,64 @@ pub fn run() {
         {
             let tray = tray::start(cx, view.downgrade(), handle.into());
             view.update(cx, |v, _| (v._tray, v.audio) = (tray, Some(audio)));
+            // A release build asks for a newer version at start and every few hours (update.rs).
+            if !cfg!(debug_assertions) {
+                let weak = view.downgrade();
+                cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                    while weak
+                        .update(cx, |v, _| {
+                            if v.model.settings.check_updates {
+                                v.run(vec![net::Cmd::CheckUpdate]);
+                            }
+                        })
+                        .is_ok()
+                    {
+                        cx.background_executor().timer(crate::update::EVERY).await;
+                    }
+                })
+                .detach();
+            }
         }
+        // A clicked notification opens its room in the window, brought to the front.
+        let window: gpui::AnyWindowHandle = handle.into();
+        cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+            while let Some(room) = clicks.recv().await {
+                let _ = cx.update_window(window, |root, window, cx| {
+                    window.activate_window();
+                    cx.activate(true);
+                    if let Ok(view) = root.downcast::<Root>()
+                        && let Ok(v) = view.read(cx).view().clone().downcast::<Vesper>()
+                    {
+                        v.update(cx, |v, cx| {
+                            if v.model.state.find_room(room).is_some() {
+                                v.open_room(room, window, cx);
+                            }
+                        });
+                    }
+                });
+            }
+        })
+        .detach();
         // A second launch asks this one to come to the front, as the tray's Show Vesper does.
         if let Some(l) = single {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            l.serve(move || {
-                let _ = tx.send(());
+            l.serve(move |link| {
+                let _ = tx.send(link);
             });
+            let vesper = handle
+                .read(cx)
+                .ok()
+                .and_then(|r| r.view().clone().downcast::<Vesper>().ok())
+                .map(|v| v.downgrade());
             let window: gpui::AnyWindowHandle = handle.into();
             cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-                while rx.recv().await.is_some() {
+                while let Some(link) = rx.recv().await {
                     let _ = cx.update_window(window, |_, window, cx| {
                         window.activate_window();
                         cx.activate(true);
+                        if let (Some(l), Some(v)) = (link, vesper.as_ref()) {
+                            let _ = v.update(cx, |v, cx| v.open_link(&l, window, cx));
+                        }
                     });
                 }
             })
@@ -237,6 +341,8 @@ pub struct Vesper {
     cmds: UnboundedSender<Cmd>,
     server: Entity<InputState>,
     username: Entity<InputState>,
+    /// Create your account's display name (a `vesper://invite` link).
+    display_name: Entity<InputState>,
     password: Entity<InputState>,
     /// The password is shown in clear (the Show toggle).
     password_shown: bool,
@@ -273,8 +379,9 @@ pub struct Vesper {
     pub settings_file: Option<PathBuf>,
     /// Input and output device names for the Settings view.
     pub devices: (Vec<String>, Vec<String>),
-    /// Choosing the push-to-talk key: the next key pressed is it.
+    /// Choosing a key: the next key pressed is it. For push to talk (0), mute (1) or deafen (2).
     pub capturing_key: bool,
+    pub capture_for: usize,
     key_problem: &'static str,
     key_focus: FocusHandle,
     /// Held while text is selected, so Ctrl+C copies it (select.rs).
@@ -288,6 +395,11 @@ pub struct Vesper {
     save_later: Option<Task<()>>,
     /// The key the key thread was last told to watch.
     watched: std::cell::Cell<Option<Option<device_query::Keycode>>>,
+    /// The mute and deafen keys the key thread was last told to watch.
+    watched_toggles: std::cell::Cell<[Option<device_query::Keycode>; 2]>,
+    /// Notifications and the launcher's count (none in tests), and the unread count shown.
+    os: Option<crate::notify::Os>,
+    badge: u32,
     /// Why push to talk works only while the window has focus.
     pub ptt_note: Option<&'static str>,
     /// The share panel's pictures and state.
@@ -333,6 +445,10 @@ pub struct Vesper {
     viewer: Option<viewer::Viewer>,
     /// The open share dialog.
     send: Option<send::Dialog>,
+    /// The screen or window last chosen there, for the next share (until the app quits).
+    share_source: Option<crate::voice::capture::Source>,
+    /// The window of the share popped out, while it is open.
+    pop: Option<Entity<popout::PopOut>>,
     find_field: Entity<InputState>,
     after_field: Entity<InputState>,
     before_field: Entity<InputState>,
@@ -348,6 +464,7 @@ impl Vesper {
         let server =
             cx.new(|cx| InputState::new(window, cx).placeholder("https://vesper.example.com"));
         let username = cx.new(|cx| InputState::new(window, cx));
+        let display_name = cx.new(|cx| InputState::new(window, cx));
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
         let composer = cx.new(|cx| {
             InputState::new(window, cx)
@@ -370,6 +487,7 @@ impl Vesper {
         let mut subs = vec![
             cx.subscribe_in(&server, window, enter),
             cx.subscribe_in(&username, window, enter),
+            cx.subscribe_in(&display_name, window, enter),
             cx.subscribe_in(&password, window, enter),
             cx.subscribe_in(&composer, window, |this, _, e: &InputEvent, _, cx| {
                 if matches!(e, InputEvent::Change) {
@@ -391,7 +509,14 @@ impl Vesper {
             }),
         ];
         // Push to talk ignores a press while one of these has focus.
-        for i in [&server, &username, &password, &composer, &edit] {
+        for i in [
+            &server,
+            &username,
+            &display_name,
+            &password,
+            &composer,
+            &edit,
+        ] {
             let f = i.read(cx).focus_handle(cx);
             subs.push(cx.on_focus(&f, window, |this, w, cx| this.send_typing(w, cx)));
             subs.push(cx.on_blur(&f, window, |this, w, cx| this.send_typing(w, cx)));
@@ -432,6 +557,7 @@ impl Vesper {
             cmds,
             server,
             username,
+            display_name,
             password,
             password_shown: false,
             composer,
@@ -452,6 +578,7 @@ impl Vesper {
             settings_file: None,
             devices: (vec![], vec![]),
             capturing_key: false,
+            capture_for: 0,
             key_problem: "",
             key_focus: cx.focus_handle(),
             text_focus: {
@@ -463,6 +590,9 @@ impl Vesper {
             page: Default::default(),
             ptt_tx: None,
             watched: Default::default(),
+            watched_toggles: Default::default(),
+            os: None,
+            badge: 0,
             save_later: None,
             ptt_note: None,
             share: Default::default(),
@@ -489,6 +619,8 @@ impl Vesper {
             find: Default::default(),
             viewer: None,
             send: None,
+            share_source: None,
+            pop: None,
             find_field,
             after_field,
             before_field,
@@ -518,19 +650,21 @@ impl Vesper {
         }));
     }
 
-    /// The key thread's push to talk, as it opens and closes.
+    /// The key thread's push to talk, as it opens and closes, and its mute and deafen keys.
     pub fn listen_ptt(
         &mut self,
-        mut open: UnboundedReceiver<bool>,
+        mut open: UnboundedReceiver<KeyOut>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         cx.spawn_in(window, async move |this, cx| {
             while let Some(o) = open.recv().await {
-                if this
-                    .update(cx, |v, cx| v.act(|m| m.set_ptt(o), cx))
-                    .is_err()
-                {
+                let r = this.update(cx, |v, cx| match o {
+                    KeyOut::Ptt(open) => v.act(|m| m.set_ptt(open), cx),
+                    KeyOut::Toggle(0) => v.act(Model::toggle_mute, cx),
+                    KeyOut::Toggle(_) => v.act(Model::toggle_deafen, cx),
+                });
+                if r.is_err() {
                     break;
                 }
             }
@@ -538,16 +672,20 @@ impl Vesper {
         .detach();
     }
 
-    /// A key down or up in the window: the push-to-talk key goes to the key thread (all there is on Wayland).
-    /// `None` releases it whatever it was.
+    /// A key down or up in the window: the push-to-talk, mute and deafen keys go to the key thread (all there is on
+    /// Wayland). `None` releases them whatever they were.
     fn window_key(&self, key: Option<&str>, down: bool) {
+        let Some(tx) = &self.ptt_tx else { return };
         let s = &self.model.settings;
-        let ours = key.is_none_or(|k| ptt::key_from_window(k).is_ok_and(|n| n == s.ptt_key));
-        if s.push_to_talk
-            && ours
-            && let Some(tx) = &self.ptt_tx
-        {
+        let name = key.map(ptt::key_from_window);
+        let is = |k: &str| name.as_ref().is_none_or(|n| n.as_deref() == Ok(k));
+        if s.push_to_talk && is(&s.ptt_key) {
             let _ = tx.send(KeyMsg::Window(down));
+        }
+        for (i, k) in [&s.mute_key, &s.deafen_key].into_iter().enumerate() {
+            if k.as_deref().is_some_and(is) {
+                let _ = tx.send(KeyMsg::WindowToggle(i, down));
+            }
         }
     }
 
@@ -572,6 +710,10 @@ impl Vesper {
             }
             return;
         }
+        if let Event::Server(m) = &ev {
+            self.notify(m);
+        }
+        log_event(&ev);
         match &ev {
             Event::Image { id, picture } if main => self.image_loaded(id, picture.clone(), window),
             Event::Avatar {
@@ -587,6 +729,11 @@ impl Vesper {
             Event::Latest { room, .. } => drop(self.tl.loaded.insert(*room)),
             Event::Searched { seq, page } => self.searched(*seq, page.clone(), cx),
             Event::Full { id, picture } => self.full_loaded(id, picture.clone(), window),
+            // The new build is in place: it starts, waits for this one to quit, and takes over.
+            Event::UpdateInstalled(path) if crate::update::restart(path).is_ok() => {
+                cx.quit();
+                return;
+            }
             _ => {}
         }
         let editing = self.model.editing;
@@ -619,9 +766,55 @@ impl Vesper {
                 .update(cx, |i, cx| i.set_value(text, window, cx));
         }
         self.sync_look(window, cx);
+        self.sync_badge(window);
         #[cfg(debug_assertions)]
         self.dev_step(latest, window, cx);
         cx.notify();
+    }
+
+    /// A system notification for a message or a DM call, when the settings want one (`notify.rs`).
+    fn notify(&self, m: &vesper_protocol::ServerMsg) {
+        use vesper_protocol::ServerMsg;
+        let Some(os) = &self.os else { return };
+        let m_ = &self.model;
+        let seen = m_.focused && !self.minimised;
+        let looking_at = m_.active.filter(|_| seen && !self.settings_open);
+        let toast = match m {
+            ServerMsg::MessageNew { message } => {
+                crate::notify::for_message(&m_.state, message, looking_at, &m_.settings)
+            }
+            ServerMsg::RingStart { room_id, user_id }
+                if !m_.rings.iter().any(|r| r.0 == *room_id) =>
+            {
+                crate::notify::for_ring(&m_.state, *room_id, user_id, seen, &m_.settings)
+            }
+            _ => None,
+        };
+        if let Some(t) = toast {
+            os.show(t);
+        }
+    }
+
+    /// The unread count on the window title, the tray icon (a dot) and the Linux launcher, when it changed.
+    fn sync_badge(&mut self, window: &mut Window) {
+        let n = if self.model.screen == Screen::Main {
+            crate::notify::badge(&self.model.state)
+        } else {
+            0
+        };
+        if n == self.badge {
+            return;
+        }
+        let was = std::mem::replace(&mut self.badge, n);
+        window.set_window_title(&crate::notify::title(n));
+        if let Some(t) = &self._tray
+            && (was > 0) != (n > 0)
+        {
+            tray::set_unread(t, n > 0);
+        }
+        if let Some(os) = &self.os {
+            os.count(n);
+        }
     }
 
     /// Profile pictures follow the users: a new or changed one is fetched, an old one let go.
@@ -652,7 +845,12 @@ impl Vesper {
             self.username.read(cx).value(),
             self.password.read(cx).value(),
         );
-        let cmds = self.model.sign_in(&server, &user, &pass);
+        let cmds = if self.model.invite.is_some() {
+            let name = self.display_name.read(cx).value();
+            self.model.sign_up(&server, &user, &name, &pass)
+        } else {
+            self.model.sign_in(&server, &user, &pass)
+        };
         if !cmds.is_empty() {
             // The password is not kept in the field once it is on its way, and a retry is never typed in clear.
             self.password_shown = false;
@@ -662,6 +860,21 @@ impl Vesper {
             });
         }
         self.run(cmds);
+        cx.notify();
+    }
+
+    /// A `vesper://` link, from this launch or a later one: a room opens (now or once the rooms are known), an invite
+    /// turns the sign in screen into Create your account.
+    pub fn open_link(&mut self, link: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(link) = crate::single::link(link) else {
+            return;
+        };
+        if let Some(id) = self.model.open_link(link) {
+            self.open_room(id, window, cx);
+        } else if self.model.invite.is_some() {
+            let s = self.model.server.clone();
+            self.server.update(cx, |i, cx| i.set_value(s, window, cx));
+        }
         cx.notify();
     }
 
@@ -1009,6 +1222,45 @@ impl Vesper {
     }
 }
 
+/// A line in the log for the events that tell what happened to the connection and the session. No names, no text.
+fn log_event(ev: &Event) {
+    match ev {
+        Event::SignedIn { .. } => log::info!("signed in"),
+        Event::SignedOut { .. } => log::info!("signed out"),
+        Event::SessionEnded => log::info!("the server ended the session"),
+        Event::Disconnected => log::warn!("disconnected"),
+        Event::Offline { retry_in } => log::warn!("offline, trying again in {retry_in:?}"),
+        Event::Server(m) if matches!(**m, vesper_protocol::ServerMsg::Hello { .. }) => {
+            log::info!("connected")
+        }
+        _ => {}
+    }
+}
+
+/// A saved window whose top strip is at least 100 by 20 px on one of the screens; else it is moved back on.
+fn on_a_screen(b: Bounds<Pixels>, screens: &[Bounds<Pixels>]) -> bool {
+    let top = Bounds::new(b.origin, size(b.size.width, px(40.)));
+    screens.iter().any(|s| {
+        let i = s.intersect(&top);
+        i.size.width >= px(100.) && i.size.height >= px(20.)
+    })
+}
+
+/// The window's bounds as saved: the restored size when maximized.
+fn saved_window(b: WindowBounds) -> crate::settings::SavedWindow {
+    let (r, maximized) = match b {
+        WindowBounds::Windowed(r) => (r, false),
+        WindowBounds::Maximized(r) | WindowBounds::Fullscreen(r) => (r, true),
+    };
+    crate::settings::SavedWindow {
+        x: r.origin.x.into(),
+        y: r.origin.y.into(),
+        w: r.size.width.into(),
+        h: r.size.height.into(),
+        maximized,
+    }
+}
+
 /// Enter while an input method composes ends the composition (as the system would), and sends nothing. True then.
 fn end_composition(input: &Entity<InputState>, window: &mut Window, cx: &mut App) -> bool {
     use gpui::EntityInputHandler as _;
@@ -1154,7 +1406,38 @@ impl Render for Vesper {
 
 #[cfg(test)]
 mod tests {
-    use super::{splices, until_midnight};
+    use super::{on_a_screen, saved_window, splices, until_midnight};
+    use gpui::{Bounds, WindowBounds, point, px, size};
+
+    #[test]
+    fn a_saved_window_off_every_screen_is_not_used() {
+        let b =
+            |x: f32, y: f32, w: f32, h: f32| Bounds::new(point(px(x), px(y)), size(px(w), px(h)));
+        let screens = [b(0., 0., 1920., 1080.), b(1920., 0., 2560., 1440.)];
+        assert!(on_a_screen(b(100., 100., 1100., 720.), &screens));
+        assert!(
+            on_a_screen(b(3000., 1200., 800., 600.), &screens),
+            "on the second one"
+        );
+        assert!(
+            !on_a_screen(b(-3000., 100., 800., 600.), &screens),
+            "a screen that is gone"
+        );
+        assert!(
+            !on_a_screen(b(-750., 100., 800., 600.), &screens),
+            "50 px left on screen"
+        );
+        assert!(
+            !on_a_screen(b(100., 1070., 800., 600.), &screens),
+            "its top below the screen"
+        );
+        assert!(!on_a_screen(b(100., 100., 800., 600.), &[]));
+        let s = saved_window(WindowBounds::Maximized(b(10., 20., 800., 600.)));
+        assert_eq!(
+            (s.x, s.y, s.w, s.h, s.maximized),
+            (10., 20., 800., 600., true)
+        );
+    }
 
     #[test]
     fn the_day_labels_redraw_just_after_midnight() {

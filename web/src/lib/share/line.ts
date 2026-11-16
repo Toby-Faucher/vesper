@@ -6,5 +6,7 @@ export const figures = (s: Figures): string => `${s.width}x${s.height} · ${Math
 /** The share card's figures line. Not a live region: the numbers change every poll. */
 export function shareLine(s: Figures & { watchers: number }): string {
   const rest = `${s.watchers} watching`;
+  // Nobody watching: the encoder is off, so there are no figures and nothing is starting.
+  if (!s.watchers) return `Sharing · ${rest}`;
   return s.width ? `${figures(s)} · ${rest}` : `Starting · ${rest}`;
 }

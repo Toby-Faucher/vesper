@@ -7,12 +7,14 @@
   import PasswordInput from '../lib/ui/c/PasswordInput.svelte';
   import TextInput from '../lib/ui/c/TextInput.svelte';
   import AuthCard from './AuthCard.svelte';
+  import { desktopOs, inviteLink } from '../lib/desktop';
   import type { Me } from '../lib/gen/Me';
 
   // The code lives in the URL fragment, which the browser never sends to the server. Only the signup body carries it.
   // takeInvite removes it from the address bar and history at once. A used or expired code is only found on submit: the
   // server answers every invite failure the same way, and asking earlier would put the code in a query string.
   const valid = (c: string) => /^[0-9a-f]{64}$/.test(c);
+  const desktop = desktopOs(navigator.userAgent) !== null;
   const first = takeInvite();
   let code = $state(first);
   let badLink = $state(!valid(first));
@@ -80,5 +82,9 @@
       <div class="mt-2 flex flex-col"><Button variant="primary" type="submit" loading={busy}>Create account</Button></div>
     </form>
     {#if error}<p role="alert" class="mt-4 text-danger" tabindex="-1" bind:this={errorEl}>{error}</p>{/if}
+    {#if desktop}
+      <p class="mt-4 text-fg-3">Have the desktop app?
+        <a class="text-accent-fg underline underline-offset-2" href={inviteLink(code, location.origin)}>Open in the desktop app</a></p>
+    {/if}
   {/if}
 </AuthCard>
