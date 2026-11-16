@@ -16,6 +16,18 @@ export function whatsNew(seen: string | null, current: string, notes: readonly N
 
 export const RELEASE_NOTES: readonly Note[] = [
   {
+    version: '2.3.0',
+    items: [
+      'The desktop app updates itself when you click Update and restart.',
+      'A Windows installer, and an AppImage for Linux.',
+      'Desktop notifications, and an unread dot on the tray icon.',
+      'Start in the tray, choose what closing does, and set mute and deafen keys.',
+      'Pick a screen or window to share on Windows and X11.',
+      'Drop files on the chat, and pop a share out into its own window.',
+      'Your share reads "Sharing" while nobody watches.',
+    ],
+  },
+  {
     version: '2.2.0',
     items: [
       'Share your screen from the desktop app, on Windows and Linux.',
