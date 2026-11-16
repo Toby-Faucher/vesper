@@ -104,8 +104,11 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 - Windows is the main target (the friends use it). CI's `desktop-windows` job builds the app and runs the unit and headless GPUI tests
   on Windows; the real-server tests in `desktop/tests/` are Unix only, because the server crates use Unix file permissions.
   Running the app on Windows is not verified by CI.
-- Builds to try: the `desktop-package` workflow uploads `vesper-desktop-windows-x64-<commit>` (a zip with `Vesper.exe`) and
-  `vesper-desktop-linux-x64-<commit>` (a tarball built on Ubuntu 24.04, glibc 2.39 or newer) for every push to `v2/desktop`. Download it from the workflow run's Artifacts. `desktop/package/README.txt` and `README-linux.txt` are what each package's README says.
+- Builds to try: the `desktop-package` workflow uploads `vesper-desktop-windows-x64-<commit>` (the zip with `Vesper.exe` and
+  the per-user installer made with Inno Setup from `desktop/package/windows/vesper.iss`), `vesper-desktop-linux-x64-<commit>`
+  (the tarball with `install.sh`, and an AppImage, built on Ubuntu 24.04, glibc 2.39 or newer) and
+  `vesper-desktop-release-<commit>` (all of them with `SHA256SUMS`) for every push to `v2/desktop`. Download them from the
+  workflow run's Artifacts. `desktop/package/README.txt` and `README-linux.txt` are what each package's README says.
   The tests start a real `vesper-server` in process (a path dev-dependency, so the first build compiles the server too) on a free
   loopback port over plain http, and draw the views in GPUI's headless test window. No display, keyring or network is needed.
   The voice tests (`desktop/tests/voice.rs`) run whole calls through that server's SFU with a sine for a microphone and a
@@ -113,6 +116,11 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
   send VP8 made by `vp8-encoder` (a dev-dependency), so it needs no screen or video file.
   The chat tests (`desktop/tests/chat.rs`) run two clients through edits, deletes, reactions, replies, typing and files,
   with the files in a temp folder.
+- The app icon: `desktop/package/icons/<size>.png` and `desktop/package/windows/vesper.ico` are made from
+  `web/public/icon-512.png`. Make them again if that changes. On Windows `desktop/build.rs` puts the `.ico` into the exe.
+- Updates: a release build checks GitHub's latest release (`desktop/src/update.rs`); debug builds never do.
+- `vesper://` links: `vesper://room/<id>` and `vesper://invite/<code>?server=<address>`. To try one with a debug build, run
+  `cargo run -- 'vesper://room/1'` while another debug build runs: it hands the link over and exits.
 - Files from chat: Save opens the system's save dialog in the Downloads folder. Open (images, audio and video only) downloads
   to `Vesper/open/<id>.<ext>` in the user's cache folder (`%LOCALAPPDATA%`, `~/Library/Caches`, `$XDG_CACHE_HOME`) and hands it
   to the system's app. A download goes to `<name>.part` and is renamed when whole; it is capped at the server's upload limit.

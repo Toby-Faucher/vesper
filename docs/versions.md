@@ -49,10 +49,14 @@ The desktop client (`desktop/`, v2) has its own lockfile that records the server
 `cd desktop && cargo update -p vesper-protocol -p vesper-server -p vesper-sfu -p vesper-store -p vesper-dsp` (only those, never a
 blanket update), or the desktop CI jobs fail with `--locked`.
 
-A release from v2.1.0 on also attaches the desktop builds: the `desktop-package` workflow runs on the tag, then
-`gh run download <run> -D <dir>`, then upload the Windows folder zipped as `vesper-desktop-windows-x64.zip` and the tarball as
-`vesper-desktop-linux-x64.tar.gz` with `gh release upload vX.Y.Z`. Keep those names: Settings > Desktop app links to
-`releases/latest/download/<name>` (`web/src/lib/desktop.ts`).
+A release from v2.1.0 on also attaches the desktop builds. The `desktop-package` workflow runs on the tag. Its last job,
+`release-files`, puts every file in one artifact: `vesper-desktop-windows-x64.zip`, `vesper-desktop-windows-x64-setup.exe`,
+`vesper-desktop-linux-x64.tar.gz`, `vesper-desktop-linux-x64.AppImage` and `SHA256SUMS`. Then
+`gh run download <run> -n vesper-desktop-release-<commit> -D <dir>` and `gh release upload vX.Y.Z <dir>/*`. Attach all five,
+`SHA256SUMS` too: from v2.3.0 the desktop app updates itself only from a release that has it, and only when the file's
+hash matches (`desktop/src/update.rs`). Never edit `SHA256SUMS` by hand. Keep the names: Settings > Desktop app links to
+`releases/latest/download/<name>` (`web/src/lib/desktop.ts`), and the app's updater looks for them. A release without
+the desktop files is not offered to the desktop app.
 
 Each release with a change people can see adds an entry to `web/src/lib/release-notes.ts` in its release pull request: the version and one short line per change, written for the people who use Vesper (no wire, migration or code detail). The "What's new" popup shows those lines once, on the first load after the update. A release without an entry shows no popup.
 

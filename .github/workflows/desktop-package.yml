@@ -1,7 +1,9 @@
 name: desktop-package
-# Builds of the desktop client people can download, kept as workflow artifacts for 30 days: Windows (a release
-# Vesper.exe in a zip) and Linux (a tarball). Runs on pushes to the v2 branch, on release and desktop tags, or by
-# hand. A release attaches its tag's builds to the GitHub release by hand (docs/versions.md).
+# Builds of the desktop client people can download, kept as workflow artifacts for 30 days: Windows (a zip and an
+# installer) and Linux (a tarball with install.sh, and an AppImage). The last job puts them together with SHA256SUMS,
+# which the app's updater checks a download against. Runs on pushes to the v2 branch, on release and desktop tags, or
+# by hand. A release attaches its tag's `vesper-desktop-release-<commit>` files to the GitHub release by hand
+# (docs/versions.md).
 on:
   push:
     branches: [v2/desktop]
@@ -38,11 +40,25 @@ jobs:
           cp desktop/package/README.txt dist/Vesper/README.txt
           cp LICENSE dist/Vesper/LICENSE.txt
           cp desktop/package/THIRD-PARTY.txt dist/Vesper/THIRD-PARTY.txt
-          ls -la dist/Vesper
+          (cd dist && 7z a -tzip vesper-desktop-windows-x64.zip Vesper)
+          ls -la dist dist/Vesper
+      # Inno Setup is on the runner image; installed if a new image drops it.
+      - name: Installer
+        env:
+          MSYS_NO_PATHCONV: 1
+        run: |
+          iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          [ -x "$iscc" ] || choco install innosetup --no-progress -y
+          version=$(grep -m1 '^version = ' desktop/Cargo.toml | cut -d'"' -f2)
+          "$iscc" "/DAppVersion=$version" "/DSource=$(cygpath -w "$PWD/dist/Vesper")" "/O$(cygpath -w "$PWD/dist")" \
+            desktop/package/windows/vesper.iss
+          ls -la dist
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: vesper-desktop-windows-x64-${{ github.sha }}
-          path: dist/Vesper
+          path: |
+            dist/vesper-desktop-windows-x64.zip
+            dist/vesper-desktop-windows-x64-setup.exe
           retention-days: 30
 
   linux:
@@ -68,10 +84,53 @@ jobs:
           cp desktop/package/README-linux.txt dist/Vesper/README.txt
           cp desktop/package/THIRD-PARTY.txt dist/Vesper/THIRD-PARTY.txt
           cp LICENSE dist/Vesper/LICENSE.txt
+          cp desktop/package/linux/install.sh desktop/package/linux/vesper.desktop dist/Vesper/
+          cp -r desktop/package/icons dist/Vesper/icons
           tar -C dist -czf dist/vesper-desktop-linux-x64.tar.gz Vesper
           ls -la dist dist/Vesper
+      # The same app as one file. appimagetool is pinned by version and hash.
+      - name: AppImage
+        run: |
+          app=dist/AppDir
+          install -Dm755 desktop/target/release/vesper-desktop "$app/usr/bin/vesper-desktop"
+          cp desktop/package/linux/vesper.desktop "$app/vesper.desktop"
+          cp desktop/package/icons/256.png "$app/vesper.png"
+          for s in 16 24 32 48 64 128 256 512; do
+            install -Dm644 "desktop/package/icons/$s.png" "$app/usr/share/icons/hicolor/${s}x${s}/apps/vesper.png"
+          done
+          ln -s usr/bin/vesper-desktop "$app/AppRun"
+          curl -fsSLo appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" | sha256sum -c
+          chmod +x appimagetool
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$app" dist/vesper-desktop-linux-x64.AppImage
+          ls -la dist
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: vesper-desktop-linux-x64-${{ github.sha }}
-          path: dist/vesper-desktop-linux-x64.tar.gz
+          path: |
+            dist/vesper-desktop-linux-x64.tar.gz
+            dist/vesper-desktop-linux-x64.AppImage
+          retention-days: 30
+
+  # Every file a release attaches, and SHA256SUMS over them (the updater needs it, see desktop/src/update.rs).
+  release-files:
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: vesper-desktop-*-x64-${{ github.sha }}
+          merge-multiple: true
+          path: release
+      - run: |
+          cd release
+          sha256sum vesper-desktop-* > SHA256SUMS
+          cat SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 5
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: vesper-desktop-release-${{ github.sha }}
+          path: release
           retention-days: 30
