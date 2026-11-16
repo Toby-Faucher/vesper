@@ -16,6 +16,19 @@ export function whatsNew(seen: string | null, current: string, notes: readonly N
 
 export const RELEASE_NOTES: readonly Note[] = [
   {
+    version: '2.2.0',
+    items: [
+      'Share your screen from the desktop app, on Windows and Linux.',
+      'Watching shares in the desktop app is smooth, fits the window and tiles like here.',
+      'New: @everyone pings the room, @here pings who is online.',
+      'Files sent without text no longer show their names as a message.',
+      'Failed uploads try again by themselves.',
+      'A new share is lowered to fit, instead of "too many screens".',
+      'RNNoise is a new noise cancellation choice.',
+      'Selected text uses your accent colour.',
+    ],
+  },
+  {
     version: '2.1.0',
     items: [
       'Vesper now has a desktop app for Windows and Linux.',
