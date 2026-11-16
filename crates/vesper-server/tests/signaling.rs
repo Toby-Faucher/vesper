@@ -2285,7 +2285,7 @@ async fn bad_share_settings_are_refused() {
 }
 
 #[tokio::test]
-async fn share_over_the_room_total_is_refused() {
+async fn share_over_the_room_total_is_lowered_then_refused() {
     let server = TestServer::new().await;
     let room = general(&server).await;
     let mut conns = vec![];
@@ -2293,12 +2293,18 @@ async fn share_over_the_room_total_is_refused() {
         let acct = server.account(name, Role::Member).await;
         conns.push(Conn::joined(&server, &acct, room).await.0);
     }
-    // 30 Mbps to three viewers is 90 000 kbps; a second one would pass the 120 000 cap.
+    // 30 Mbps to three viewers is 90 000 kbps of the 120 000 budget.
     share_start(&conns[0], 60, 30_000);
     // Wait until the first share is in place, so the order is fixed.
     conns[2].until("PeerShare", is_share).await;
+    // A second 30 Mbps share gets what is left: 30 000 / 3 viewers = 10 000, and the sharer is told.
     share_start(&conns[1], 60, 30_000);
-    let m = conns[1]
+    let lowered = |m: &ServerMsg| matches!(m, ServerMsg::PeerShare { share: Some(s), .. } if s.bitrate_kbps == 10_000);
+    conns[1].until("PeerShare to the sharer", lowered).await;
+    conns[0].until("PeerShare to the others", lowered).await;
+    // Nothing is left for a third.
+    share_start(&conns[2], 60, 5_000);
+    let m = conns[2]
         .until("ShareCap", |m| matches!(m, ServerMsg::Error { .. }))
         .await;
     assert!(matches!(
@@ -2308,14 +2314,6 @@ async fn share_over_the_room_total_is_refused() {
             ..
         }
     ));
-    // A smaller second share still fits.
-    share_start(&conns[1], 60, 5_000);
-    conns[0]
-        .until(
-            "PeerShare",
-            |m| matches!(m, ServerMsg::PeerShare { share: Some(s), .. } if s.bitrate_kbps == 5_000),
-        )
-        .await;
 }
 
 #[tokio::test]

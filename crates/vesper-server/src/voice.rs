@@ -148,9 +148,24 @@ impl State {
 /// it (kbps). The highest total the video load test passed (4 people, two cores); higher totals were not tested.
 const MAX_ROOM_SHARE_KBPS: u64 = 120_000;
 
+/// The bitrate a new or changed share gets: what it asked for, lowered to what is left of the room's budget when
+/// other shares (`others`, already counted per viewer) use most of it. None when less than the lowest valid bitrate
+/// is left. The budget counts declared bitrates, not what is really sent.
+fn granted_kbps(asked: u32, others: u64, viewers: u64) -> Option<u32> {
+    if viewers == 0 {
+        return Some(asked);
+    }
+    let left = MAX_ROOM_SHARE_KBPS.saturating_sub(others) / viewers;
+    let granted = u64::from(asked).min(left) as u32;
+    (granted >= MIN_SHARE_KBPS).then_some(granted)
+}
+
+/// The lowest bitrate a share may ask for (kbps).
+const MIN_SHARE_KBPS: u32 = 500;
+
 /// The frame rates and bitrates a share may ask for.
 fn valid_share(info: &ShareInfo) -> bool {
-    matches!(info.fps, 30 | 60) && (500..=30_000).contains(&info.bitrate_kbps)
+    matches!(info.fps, 30 | 60) && (MIN_SHARE_KBPS..=30_000).contains(&info.bitrate_kbps)
 }
 
 fn sfu_error(who: &str, e: JoinError) -> ErrorCode {
@@ -405,8 +420,26 @@ impl Voice {
             .filter_map(|(_, o)| o.share)
             .map(|sh| u64::from(sh.bitrate_kbps) * viewers)
             .sum();
-        if others + u64::from(info.bitrate_kbps) * viewers > MAX_ROOM_SHARE_KBPS {
-            return Err(ErrorCode::ShareCap);
+        let mut info = info;
+        let asked = info.bitrate_kbps;
+        info.bitrate_kbps = granted_kbps(asked, others, viewers).ok_or_else(|| {
+            tracing::info!(
+                asked,
+                others,
+                viewers,
+                "share refused: the room's share budget is used up"
+            );
+            ErrorCode::ShareCap
+        })?;
+        let lowered = info.bitrate_kbps < asked;
+        if lowered {
+            tracing::info!(
+                asked,
+                granted = info.bitrate_kbps,
+                others,
+                viewers,
+                "share lowered to fit the room's budget"
+            );
         }
         let m = st.members.get_mut(user_id).expect("checked above");
         let began = m.share.replace(info).is_none();
@@ -418,7 +451,9 @@ impl Voice {
             user_id: user_id.into(),
             share: Some(info),
         };
-        st.tell(&self.0.hub, room, msg, &[&tx]);
+        // The sharer hears of its own share only when it got less than it asked for, to send at that rate.
+        let skip: &[&Outbox] = if lowered { &[] } else { &[&tx] };
+        st.tell(&self.0.hub, room, msg, skip);
         if began {
             st.send_watchers(user_id);
         }
@@ -718,6 +753,23 @@ impl Voice {
 mod tests {
     use super::*;
     use vesper_sfu::{Sfu, SfuConfig};
+
+    #[test]
+    fn a_share_gets_what_is_left_of_the_budget() {
+        assert_eq!(granted_kbps(10_000, 0, 3), Some(10_000));
+        assert_eq!(granted_kbps(30_000, 90_000, 3), Some(10_000));
+        assert_eq!(
+            granted_kbps(5_000, 118_800, 3),
+            None,
+            "400 kbps left is under the lowest"
+        );
+        assert_eq!(
+            granted_kbps(5_000, 200_000, 3),
+            None,
+            "over already, after people joined"
+        );
+        assert_eq!(granted_kbps(30_000, 0, 0), Some(30_000), "nobody to watch");
+    }
 
     #[tokio::test]
     async fn stale_session_offers_are_not_forwarded() {
