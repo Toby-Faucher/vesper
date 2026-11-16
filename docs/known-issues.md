@@ -159,8 +159,9 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   Nobody has listened to it on a real call, on the web or the desktop; only the unit tests on synthetic noise ran.
 - Push to talk needs X11 for a global key on Linux; on Wayland it works only while the window has focus. On macOS it needs
   Accessibility access. A game running as administrator on Windows may hide its keys from the app (not tried).
-- Closing the window during a call minimises it instead of hiding it (GPUI 0.2.2 cannot hide a window on Windows), so it
-  stays in the taskbar. On a Linux desktop without a tray host there is no tray icon. On Wayland an app cannot raise its own
+- Settings > App says what the close button does: quit but keep a call going (the default), always go to the tray, or always
+  quit. Going to the tray minimises the window instead of hiding it (GPUI 0.2.2 cannot hide a window on Windows), so it
+  stays in the taskbar; "Start in the tray" does the same at a start with the computer. On a Linux desktop without a tray host there is no tray icon. On Wayland an app cannot raise its own
   window: Show Vesper in the tray asks the compositor to activate it (by its app id, `vesper`), and the compositor may only
   mark it as wanting attention. Not verified on GNOME or KDE; sway does not minimise windows at all.
 - The app draws its own minimise, maximise and close at the top right on Windows and Linux (macOS keeps its title bar).
@@ -178,6 +179,22 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   Not verified on real speakers.
 - Dialogs take the focus and every click under them, and Esc closes the topmost dialog, card, menu or ring, but Tab is not
   kept inside a dialog.
+- Notifications: a mention or a direct message shows a system notification (freedesktop on Linux, a toast on Windows), and so
+  does a DM call while the window is in the background; a click opens the room. On Windows the toast is shown under
+  PowerShell's app id, because a toast under our own id needs a Start menu shortcut that carries it; so it says "Windows
+  PowerShell". The unread count (mentions, plus unread messages in DMs) is in the window title as on the web, a red dot on
+  the tray icon, and on Linux the launcher's count (`com.canonical.Unity.LauncherEntry`, for `vesper.desktop`: KDE, Dash to
+  Dock, Plank). There is no taskbar overlay icon on Windows: it needs COM calls that are `unsafe`, which the crates forbid.
+  Verified: the rules and the count by unit tests, and the D-Bus calls build. Not verified: a notification on a real
+  desktop, a click on one, and anything on Windows.
+- The window's size, place and maximised state are kept in the settings file and restored at the next start; a place that
+  is on no screen now is dropped and the window is centred at its old size. On Wayland the place is the compositor's.
+- Mute and deafen keys (Settings > Voice, under Keyboard shortcuts) act during a call, on the same key thread as push to
+  talk, with the same limits on Wayland and macOS.
+- The log is `vesper.log` in `Vesper/logs` under the local data dir (`%LOCALAPPDATA%` on Windows, `~/.local/share` on
+  Linux), moved to `vesper.log.1` past 1 MB. It holds the app's info lines, other crates' warnings and panics; no message
+  text, names, cookies or passwords. Settings > App > Copy diagnostics copies the version, system, graphics card, sound
+  devices and the last 100 log lines.
 - Not verified: real keys, a real tray, start with the computer, real audio through DeepFilterNet, and running on Windows.
 - A server newer than the app: the app cannot update itself the way the web reloads. On a newer server version it shows
   "This server runs a newer Vesper. Update the app..." in the banner and keeps working; a `hello` it cannot read shows that it

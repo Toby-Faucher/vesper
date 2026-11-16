@@ -2301,3 +2301,78 @@ fn message_text_and_names_select_and_copy(cx: &mut TestAppContext) {
     });
     view.read_with(cx, |v, _| assert!(v.person.is_none()));
 }
+
+/// Settings > App: the close button's choice lands in the settings, and Copy diagnostics copies a report without the
+/// signed in name. Settings > Voice: a mute key is taken from a key press and cleared again. Notifications: both
+/// switches.
+#[gpui::test]
+fn the_app_section_and_the_mute_key(cx: &mut TestAppContext) {
+    use super::settings::{At, Section};
+    use crate::settings::OnClose;
+    use crate::voice::ptt::KeyMsg;
+    let (view, cx, _rx) = open(cx);
+    cx.simulate_resize(gpui::size(gpui::px(1280.), gpui::px(2400.)));
+    signed_in(&view, cx);
+    view.update_in(cx, |v, window, cx| {
+        v.open_page(At::Settings(Section::Desktop), window, cx)
+    });
+    cx.run_until_parked();
+    click(cx, "on-close-1");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.settings.on_close, OnClose::Tray)
+    });
+    click(cx, "copy-diagnostics");
+    let report = cx.read_from_clipboard().and_then(|c| c.text()).unwrap();
+    assert!(report.starts_with("Vesper desktop "), "{report}");
+    assert!(!report.contains("Ann"), "no names");
+
+    view.update_in(cx, |v, window, cx| {
+        v.open_page(At::Settings(Section::Notifications), window, cx)
+    });
+    cx.run_until_parked();
+    // A switch without help is one line: its label is at the left, the middle of the row is empty.
+    for s in ["settings-notify-mentions", "settings-notify-dms"] {
+        let b = cx.debug_bounds(s).unwrap();
+        cx.simulate_click(
+            b.origin + gpui::point(gpui::px(20.), gpui::px(16.)),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+    }
+    view.read_with(cx, |v, _| {
+        let s = &v.model.settings;
+        assert!(!s.notify_mentions && !s.notify_dms);
+    });
+
+    let (keys, watched) = std::sync::mpsc::channel();
+    view.update(cx, |v, _| v.ptt_tx = Some(keys));
+    view.update_in(cx, |v, window, cx| {
+        v.open_page(At::Settings(Section::Voice), window, cx)
+    });
+    cx.run_until_parked();
+    click(cx, "settings-mute-key");
+    cx.simulate_keystrokes("m");
+    view.read_with(cx, |v, _| {
+        assert_eq!(v.model.settings.mute_key.as_deref(), Some("M"));
+        assert!(!v.capturing_key);
+    });
+    assert!(
+        watched.try_iter().all(|m| !matches!(m, KeyMsg::Toggles(_))),
+        "no call: no keys watched"
+    );
+    // Out of Settings, the window's M is the mute key.
+    click(cx, "settings-close");
+    cx.simulate_keystrokes("m");
+    assert!(
+        watched
+            .try_iter()
+            .any(|m| m == KeyMsg::WindowToggle(0, true)),
+        "the window's press goes to the key thread"
+    );
+    view.update_in(cx, |v, window, cx| {
+        v.open_page(At::Settings(Section::Voice), window, cx)
+    });
+    cx.run_until_parked();
+    click(cx, "clear-key-1");
+    view.read_with(cx, |v, _| assert_eq!(v.model.settings.mute_key, None));
+}

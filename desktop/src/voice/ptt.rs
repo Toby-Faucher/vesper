@@ -1,7 +1,8 @@
 //! Push to talk. A thread watches one key: globally through `device_query` (it asks the OS whether the key is down,
 //! every 10 ms, so it sees the key while a game has focus and never takes the key away from it), and through the
 //! window's own key events, which is all there is on Wayland. The key opens the mic and a short delay after the
-//! release closes it, so the end of a word is not cut.
+//! release closes it, so the end of a word is not cut. The same thread watches the mute and deafen keys, which act
+//! once per press.
 
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -145,13 +146,27 @@ pub enum KeyMsg {
     /// A text input in the active Vesper window has focus: a press is typing, not talking (the web's
     /// `pttKeyEvent`). A release always counts.
     Typing(bool),
+    /// The mute and deafen keys to watch; `None` each when there is no key or no call.
+    Toggles([Option<Keycode>; 2]),
+    /// The mute (0) or deafen (1) key went down or up in the Vesper window.
+    WindowToggle(usize, bool),
+}
+
+/// From the key thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyOut {
+    /// Push to talk opened or closed the mic.
+    Ptt(bool),
+    /// The mute (0) or deafen (1) key was pressed.
+    Toggle(usize),
 }
 
 /// Starts the key thread. `source` runs on it (an X11 connection must stay on one thread). `emit` gets whether the
-/// mic is open each time it changes. The thread ends when the sender is dropped.
+/// mic is open each time it changes, and each press of a mute or deafen key. The thread ends when the sender is
+/// dropped.
 pub fn spawn(
     source: impl FnOnce() -> Option<Box<dyn KeySource>> + Send + 'static,
-    emit: impl Fn(bool) + Send + 'static,
+    emit: impl Fn(KeyOut) + Send + 'static,
 ) -> Sender<KeyMsg> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
@@ -161,11 +176,12 @@ pub fn spawn(
     tx
 }
 
-fn watch(mut source: Option<Box<dyn KeySource>>, rx: &Receiver<KeyMsg>, emit: &dyn Fn(bool)) {
+fn watch(mut source: Option<Box<dyn KeySource>>, rx: &Receiver<KeyMsg>, emit: &dyn Fn(KeyOut)) {
     let (mut key, mut window, mut ptt) = (None, false, Ptt::default());
     let (mut typing, mut held) = (false, false);
+    let (mut toggles, mut t_window, mut t_held) = ([None; 2], [false; 2], [false; 2]);
     loop {
-        let msg = if key.is_some() {
+        let msg = if key.is_some() || toggles.iter().any(Option::is_some) {
             rx.recv_timeout(POLL)
         } else {
             rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
@@ -175,13 +191,29 @@ fn watch(mut source: Option<Box<dyn KeySource>>, rx: &Receiver<KeyMsg>, emit: &d
                 (key, window, held) = (k, false, false);
                 if k.is_none() {
                     ptt = Ptt::default(); // off closes at once, without the delay
-                    emit(false);
+                    emit(KeyOut::Ptt(false));
                 }
             }
             Ok(KeyMsg::Window(d)) => window = d,
             Ok(KeyMsg::Typing(t)) => typing = t,
+            Ok(KeyMsg::Toggles(t)) => (toggles, t_window, t_held) = (t, [false; 2], [false; 2]),
+            Ok(KeyMsg::WindowToggle(i, d)) => {
+                if let Some(w) = t_window.get_mut(i) {
+                    *w = d;
+                }
+            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
+        }
+        for i in 0..2 {
+            let Some(k) = toggles[i] else { continue };
+            let raw = t_window[i] || source.as_mut().is_some_and(|s| s.down(k));
+            // As push to talk: a press that starts while typing is ignored.
+            let down = raw && (t_held[i] || !typing);
+            if down && !t_held[i] {
+                emit(KeyOut::Toggle(i));
+            }
+            t_held[i] = down;
         }
         let Some(k) = key else { continue };
         let raw = window || source.as_mut().is_some_and(|s| s.down(k));
@@ -189,7 +221,7 @@ fn watch(mut source: Option<Box<dyn KeySource>>, rx: &Receiver<KeyMsg>, emit: &d
         let down = raw && (held || !typing);
         held = down;
         if let Some(open) = ptt.update(down, Instant::now()) {
-            emit(open);
+            emit(KeyOut::Ptt(open));
         }
     }
 }
@@ -256,8 +288,10 @@ mod tests {
         let fake = held.clone();
         let tx = spawn(
             move || Some(Box::new(Fake(fake)) as Box<dyn KeySource>),
-            move |open| {
-                let _ = etx.send((open, Instant::now()));
+            move |out| {
+                if let KeyOut::Ptt(open) = out {
+                    let _ = etx.send((open, Instant::now()));
+                }
             },
         );
         let next = || erx.recv_timeout(Duration::from_secs(2)).expect("an event");
@@ -297,8 +331,10 @@ mod tests {
         let fake = held.clone();
         let tx = spawn(
             move || Some(Box::new(Fake(fake)) as Box<dyn KeySource>),
-            move |open| {
-                let _ = etx.send(open);
+            move |out| {
+                if let KeyOut::Ptt(open) = out {
+                    let _ = etx.send(open);
+                }
             },
         );
         let quiet = |why| {
@@ -326,5 +362,45 @@ mod tests {
         quiet("still held");
         held.store(false, Ordering::SeqCst);
         assert!(!next(), "the release closes it while typing");
+    }
+
+    #[test]
+    fn mute_and_deafen_keys_act_once_per_press() {
+        let held = Arc::new(AtomicBool::new(false));
+        let (etx, erx) = mpsc::channel();
+        let fake = held.clone();
+        let tx = spawn(
+            move || Some(Box::new(Fake(fake)) as Box<dyn KeySource>),
+            move |out| {
+                let _ = etx.send(out);
+            },
+        );
+        let quiet = |why| {
+            let got = erx.recv_timeout(Duration::from_millis(100));
+            assert!(got.is_err(), "{why}: {got:?}")
+        };
+        let next = || erx.recv_timeout(Duration::from_secs(2)).expect("an event");
+        tx.send(KeyMsg::Toggles([Some(Keycode::V), Some(Keycode::B)]))
+            .unwrap();
+        held.store(true, Ordering::SeqCst);
+        assert_eq!(next(), KeyOut::Toggle(0), "the global V mutes");
+        quiet("held is one press");
+        held.store(false, Ordering::SeqCst);
+        quiet("the release does nothing");
+
+        // The window's B and the global source at once are still one press.
+        tx.send(KeyMsg::WindowToggle(1, true)).unwrap();
+        assert_eq!(next(), KeyOut::Toggle(1));
+        tx.send(KeyMsg::WindowToggle(1, false)).unwrap();
+        tx.send(KeyMsg::Typing(true)).unwrap();
+        quiet("the window release does nothing"); // and the thread has both messages
+        held.store(true, Ordering::SeqCst);
+        quiet("a press while typing");
+        held.store(false, Ordering::SeqCst);
+        tx.send(KeyMsg::Typing(false)).unwrap();
+        tx.send(KeyMsg::Toggles([None, None])).unwrap();
+        quiet("nothing held");
+        held.store(true, Ordering::SeqCst);
+        quiet("no call: no keys");
     }
 }
