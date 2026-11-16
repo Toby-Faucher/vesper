@@ -128,7 +128,7 @@ jobs:
           cd release
           sha256sum vesper-desktop-* > SHA256SUMS
           cat SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 5
+          test "$(wc -l < SHA256SUMS)" -eq 4 # the four builds; SHA256SUMS itself makes the fifth file
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: vesper-desktop-release-${{ github.sha }}
