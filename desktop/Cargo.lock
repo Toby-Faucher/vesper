@@ -2701,6 +2701,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast_image_resize"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9c50201dc184ba6553da1695aac20a042efffbe2d84542cee31917c86c3ab1e"
+dependencies = [
+ "cfg-if",
+ "document-features",
+ "num-traits",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "fastrand"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10012,6 +10024,7 @@ dependencies = [
  "device_query",
  "dirs 6.0.0",
  "embed-resource",
+ "fast_image_resize",
  "futures-util",
  "gpui",
  "gpui-component",
@@ -10046,6 +10059,7 @@ dependencies = [
  "windows-capture",
  "windows-registry 0.5.3",
  "x11rb",
+ "yuv",
  "zbus",
 ]
 
@@ -11323,6 +11337,15 @@ dependencies = [
  "quote",
  "syn 3.0.10",
  "synstructure 0.14.0",
+]
+
+[[package]]
+name = "yuv"
+version = "0.8.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d109d1eacc7b034329873d2d848039b365c65ab7d751b19ee84e4921c62c607"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

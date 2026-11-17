@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use vp8_encoder::{Encoder, EncoderConfig, Picture, scale_i420};
+use vp8_encoder::{Encoder, EncoderConfig, Picture};
 
 /// One captured picture: `height` rows of `stride` bytes, each pixel `bpp` bytes with red, green and blue at `rgb`.
 pub struct Shot {
@@ -255,59 +255,116 @@ fn encode(shared: &Shared, out: &Sender<Out>) {
     }
 }
 
-/// The size to send `w` x `h` at: as it is up to the preference's pixels, else scaled down to fit, kept even.
+/// The size to send `w` x `h` at: as it is up to the preference's pixels, else scaled down to fit. Always even, as
+/// I420 wants: an odd edge is cropped.
 pub fn fit(w: u32, h: u32, sharp: bool) -> (u32, u32) {
     let most = if sharp { SHARP_PIXELS } else { SMOOTH_PIXELS };
     let px = u64::from(w) * u64::from(h);
-    if px <= u64::from(most) {
-        return (w.max(1), h.max(1));
-    }
-    let k = (f64::from(most) / px as f64).sqrt();
+    let k = (f64::from(most) / px.max(1) as f64).sqrt().min(1.);
     let even = |n: u32| ((f64::from(n) * k) as u32 & !1).max(2);
     (even(w), even(h))
 }
 
-/// The shot as I420 of `w` x `h`, BT.601 limited range (what the viewers' VP8 decoders turn back into RGB).
+/// The shot as I420 of `w` x `h`, BT.601 limited range (what the viewers' VP8 decoders turn back into RGB). A
+/// smaller size is scaled down in RGB first, so only the pixels sent are converted; both steps use SIMD.
 pub fn to_i420(s: &Shot, w: u32, h: u32) -> Vec<u8> {
+    use yuv::{BufferStoreMut, YuvConversionMode, YuvPlanarImageMut, YuvRange, YuvStandardMatrix};
     let (sw, sh) = (s.width as usize, s.height as usize);
-    let (cw, ch) = (sw.div_ceil(2), sh.div_ceil(2));
-    let mut out = vec![0u8; sw * sh + 2 * cw * ch];
-    let (y_plane, uv) = out.split_at_mut(sw * sh);
-    let (u_plane, v_plane) = uv.split_at_mut(cw * ch);
-    let [r, g, b] = s.rgb;
-    let px = |x: usize, y: usize| {
-        let i = y * s.stride + x * s.bpp;
-        s.data.get(i..i + s.bpp).map_or([0; 3], |p| {
-            [i32::from(p[r]), i32::from(p[g]), i32::from(p[b])]
-        })
+    let whole = s.stride >= sw * s.bpp
+        && s.stride.checked_rem(s.bpp) == Some(0)
+        && s.data.len() >= s.stride * sh;
+    let convert = match (s.bpp, s.rgb) {
+        (4, [2, 1, 0]) if whole => yuv::bgra_to_yuv420, // BGRx too: alpha is not read
+        (4, [0, 1, 2]) if whole => yuv::rgba_to_yuv420,
+        (3, [2, 1, 0]) if whole => yuv::bgr_to_yuv420,
+        (3, [0, 1, 2]) if whole => yuv::rgb_to_yuv420,
+        // shortcut: other layouts (xRGB from some PipeWire streams) are repacked as RGBA, a slower scalar pass.
+        _ => return to_i420(&rgba(s), w, h),
     };
-    for y in 0..sh {
-        for x in 0..sw {
-            let [r, g, b] = px(x, y);
-            y_plane[y * sw + x] = (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16) as u8;
+    let scaled;
+    let (mut data, mut stride) = (&s.data[..], s.stride);
+    // An odd edge is cropped by converting w x h of the shot as it is.
+    if (w, h) != (s.width & !1, s.height & !1) {
+        use fast_image_resize as fr;
+        let kind = if s.bpp == 4 {
+            fr::PixelType::U8x4
+        } else {
+            fr::PixelType::U8x3
+        };
+        // The rows' padding is read as pixels on the right, then cut off (the filter never reads past the cut).
+        let Ok(padded) =
+            fr::images::ImageRef::new((s.stride / s.bpp) as u32, s.height, &s.data, kind)
+        else {
+            return Vec::new();
+        };
+        let Ok(src) = fr::images::CroppedImage::new(&padded, 0, 0, s.width, s.height) else {
+            return Vec::new();
+        };
+        let mut dst = fr::images::Image::new(w, h, kind);
+        let how = fr::ResizeOptions::new()
+            .use_alpha(false)
+            .resize_alg(fr::ResizeAlg::Convolution(fr::FilterType::Box)); // the source area under each pixel
+        // Kept between frames (the encode thread's): setting up its buffers costs about 1 ms a frame.
+        thread_local!(static R: std::cell::RefCell<fr::Resizer> = std::cell::RefCell::new(fr::Resizer::new()));
+        if R.with_borrow_mut(|r| r.resize(&src, &mut dst, &how))
+            .is_err()
+        {
+            return Vec::new();
+        }
+        scaled = dst.into_vec();
+        (data, stride) = (&scaled[..], w as usize * s.bpp);
+    }
+    let (wu, hu) = (w as usize, h as usize);
+    let (cw, ch) = (wu.div_ceil(2), hu.div_ceil(2));
+    let mut out = vec![0u8; wu * hu + 2 * cw * ch];
+    let (y, uv) = out.split_at_mut(wu * hu);
+    let (u, v) = uv.split_at_mut(cw * ch);
+    let mut planes = YuvPlanarImageMut {
+        y_plane: BufferStoreMut::Borrowed(y),
+        y_stride: w,
+        u_plane: BufferStoreMut::Borrowed(u),
+        u_stride: cw as u32,
+        v_plane: BufferStoreMut::Borrowed(v),
+        v_stride: cw as u32,
+        width: w,
+        height: h,
+    };
+    let range = (YuvRange::Limited, YuvStandardMatrix::Bt601);
+    match convert(
+        &mut planes,
+        data,
+        stride as u32,
+        range.0,
+        range.1,
+        YuvConversionMode::Balanced,
+    ) {
+        Ok(()) => out,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The shot repacked as tightly packed RGBA, for a layout the SIMD conversion does not take.
+fn rgba(s: &Shot) -> Shot {
+    let [r, g, b] = s.rgb;
+    let mut data = Vec::with_capacity(s.width as usize * s.height as usize * 4);
+    for y in 0..s.height as usize {
+        for x in 0..s.width as usize {
+            let i = y * s.stride + x * s.bpp;
+            let p = s
+                .data
+                .get(i..i + s.bpp)
+                .map_or([0; 4], |p| [p[r], p[g], p[b], 255]);
+            data.extend_from_slice(&p);
         }
     }
-    for cy in 0..ch {
-        for cx in 0..cw {
-            // The mean of the 2x2 block (an odd edge repeats its last pixel).
-            let mut sum = [0; 3];
-            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let p = px((cx * 2 + dx).min(sw - 1), (cy * 2 + dy).min(sh - 1));
-                (0..3).for_each(|i| sum[i] += p[i]);
-            }
-            let [r, g, b] = sum.map(|c| c / 4);
-            u_plane[cy * cw + cx] = (((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128) as u8;
-            v_plane[cy * cw + cx] = (((112 * r - 94 * g - 18 * b + 128) >> 8) + 128) as u8;
-        }
+    Shot {
+        width: s.width,
+        height: s.height,
+        stride: s.width as usize * 4,
+        bpp: 4,
+        rgb: [0, 1, 2],
+        data,
     }
-    if (w, h) == (s.width, s.height) {
-        return out;
-    }
-    let mut scaled = Vec::new();
-    if let Some(p) = Picture::from_i420(&out, s.width, s.height) {
-        scale_i420(&p, w, h, &mut scaled);
-    }
-    scaled
 }
 
 /// Moving colour bars for tests and the parity harness (`VESPER_DEV_SHARE`): red, green, blue and white, sliding a
@@ -410,6 +467,41 @@ mod tests {
     }
 
     #[test]
+    fn odd_sizes_padded_rows_and_other_layouts_convert() {
+        // Red, 33 x 17 with 8 bytes of padding a row, as BGRx and as xRGB (the slower repacked path).
+        for (rgb, px) in [([2, 1, 0], [0, 0, 255, 0]), ([1, 2, 3], [0, 255, 0, 0])] {
+            let (w, h, stride) = (33u32, 17u32, 33 * 4 + 8);
+            let mut data = vec![7u8; stride * h as usize];
+            for row in data.chunks_exact_mut(stride) {
+                row[..w as usize * 4].as_chunks_mut::<4>().0.fill(px);
+            }
+            let shot = Shot {
+                width: w,
+                height: h,
+                stride,
+                bpp: 4,
+                rgb,
+                data,
+            };
+            assert_eq!(fit(w, h, true), (32, 16), "an odd edge is cropped");
+            for (tw, th) in [(32, 16), (16, 8)] {
+                let i420 = to_i420(&shot, tw, th);
+                let (n, c) = ((tw * th) as usize, (tw * th / 4) as usize);
+                assert_eq!(i420.len(), n + 2 * c, "{rgb:?} {tw}x{th}");
+                // BT.601 limited range red: Y 82, U 90, V 240.
+                let near = |p: &[u8], want: u8| p.iter().all(|&v| v.abs_diff(want) <= 2);
+                assert!(near(&i420[..n], 82), "{rgb:?} {tw}x{th} Y {:?}", &i420[..n]);
+                assert!(near(&i420[n..n + c], 90), "{rgb:?} U {:?}", &i420[n..n + 4]);
+                assert!(
+                    near(&i420[n + c..], 240),
+                    "{rgb:?} V {:?}",
+                    &i420[n + c..n + c + 4]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn frames_flow_only_while_watched_and_a_keyframe_comes_on_request() {
         let open: OpenScreen =
             Box::new(|fps| Ok(Box::new(Pattern::new(64, 32, fps)) as Box<dyn Screen>));
@@ -465,5 +557,86 @@ mod tests {
             s.out.recv_timeout(Duration::from_secs(5)),
             Ok(Out::Ended("No screen.".into()))
         );
+    }
+
+    /// Where a share's time goes, on a real picture (web/e2e/parity/image-viewer-side.png, from
+    /// `desktop/scripts/parity.sh image-viewer`). `cargo test --release --lib -- --ignored share_bench --nocapture`.
+    #[test]
+    #[ignore]
+    fn share_bench() {
+        let png = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../web/e2e/parity/image-viewer-side.png"
+        );
+        let src = image::open(png)
+            .expect("run desktop/scripts/parity.sh image-viewer first")
+            .to_rgba8();
+        let (iw, ih) = (src.width() as usize, src.height() as usize);
+        for (sw, sh) in [(1920u32, 1080u32), (2560, 1440), (3840, 2160)] {
+            for sharp in [true, false] {
+                for (motion, step) in [("scroll", 8usize), ("still", 0)] {
+                    let (w, h) = fit(sw, sh, sharp);
+                    let kbps = 8_000;
+                    let mut enc = Encoder::new(EncoderConfig::new(w, h, 30, kbps * 1000)).unwrap();
+                    let mut dec = vp8_decoder::Decoder::new();
+                    let (mut conv, mut code, mut bytes, mut psnr, mut n) =
+                        (Duration::ZERO, Duration::ZERO, 0, 0., 0.);
+                    for f in 0..40 {
+                        let mut data = vec![0u8; sw as usize * sh as usize * 4];
+                        for (y, row) in data.chunks_exact_mut(sw as usize * 4).enumerate() {
+                            let sy = (y + f * step) % ih;
+                            for (x, p) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                                *p = src.get_pixel((x % iw) as u32, sy as u32).0;
+                            }
+                        }
+                        if f % 2 == 0 {
+                            data[..32 * 4].fill(255); // a blinking block, so a still screen still changes
+                        }
+                        let s = Shot {
+                            width: sw,
+                            height: sh,
+                            stride: sw as usize * 4,
+                            bpp: 4,
+                            rgb: [0, 1, 2],
+                            data,
+                        };
+                        let t = Instant::now();
+                        let i420 = to_i420(&s, w, h);
+                        let t2 = Instant::now();
+                        let pic = Picture::from_i420(&i420, w, h).unwrap();
+                        let out = enc.encode(&pic, f == 0).unwrap().map(|f| f.data);
+                        let t3 = Instant::now();
+                        if f >= 5 {
+                            (conv, code) = (conv + (t2 - t), code + (t3 - t2));
+                        }
+                        let Some(out) = out else { continue };
+                        (bytes, n) = (bytes + out.len(), n + 1.);
+                        let d = dec.decode(&out).unwrap().unwrap();
+                        let (wu, hu) = (w as usize, h as usize);
+                        let mut se = 0f64;
+                        for y in 0..hu {
+                            for x in 0..wu {
+                                let e = f64::from(i420[y * wu + x])
+                                    - f64::from(d.y[y * d.y_stride + x]);
+                                se += e * e;
+                            }
+                        }
+                        psnr += 10. * (255f64 * 255. / (se / (wu * hu) as f64).max(1e-9)).log10();
+                    }
+                    let (c, e) = (
+                        conv.as_secs_f64() * 1000. / 35.,
+                        code.as_secs_f64() * 1000. / 35.,
+                    );
+                    println!(
+                        "BENCH {sw}x{sh} -> {w}x{h} {motion:6} convert+scale {c:5.1} ms  encode {e:5.1} ms  max fps {:5.1}  \
+                         avg frame {:4} KB (budget at 30 fps {} KB)  Y PSNR {:4.1} dB",
+                        1000. / (c + e),
+                        bytes / 40 / 1024,
+                        kbps / 8 / 30 * 1000 / 1024,
+                        psnr / n
+                    );
+                }
+            }
+        }
     }
 }
