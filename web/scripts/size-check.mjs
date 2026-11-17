@@ -45,7 +45,9 @@ export const BUDGET_GZIP_KB = { first: 70, lazy: 35, sum: 200, cssFirst: 12, css
 // 61.60 on the dev machine against 61.32 before, so CI is expected near 61.75. The notes and the dialog are a lazy chunk.
 // 2026-11-15: 61.9 to 62.4 for v2.2.0 (@everyone and @here in the mention list, upload retries, the lowered-share
 // notice and the selection token); measured 62.0 on the dev machine, so CI is expected near 62.2.
-export const RATCHET_GZIP_KB = { first: 62.4 };
+// 2026-11-16: 62.4 to 62.9 for v2.4 resume (the heartbeat in signaling.ts, the resume path in voice.svelte.ts and the
+// banner's call check, all in the shell's socket and call store); measured 62.4 on the dev machine and 62.6 in CI.
+export const RATCHET_GZIP_KB = { first: 62.9 };
 
 // Static imports and re-exports in a built chunk: `import{a as b}from"./x.js"`, `import"./x.js"`, `export*from"./x.js"`.
 // import("./x.js") is dynamic and left out: the `(` cannot follow `import` here.
