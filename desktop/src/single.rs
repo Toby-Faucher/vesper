@@ -30,26 +30,65 @@ fn name() -> Option<&'static str> {
     }
 }
 
-/// What a launch asks of the running app: `show\n`, or `open <link>\n`.
-fn ask(link: Option<&str>) -> Vec<u8> {
-    match link {
-        Some(l) => format!("open {l}\n").into_bytes(),
-        None => b"show\n".to_vec(),
+/// What a launch asks of the running app: `show\n`, or `open <link>\n`, then `token <t>\n` when it was started
+/// with an activation token (`XDG_ACTIVATION_TOKEN`, from the launcher), so the running app may come to the front.
+fn ask(link: Option<&str>, token: Option<&str>) -> Vec<u8> {
+    let mut m = match link {
+        Some(l) => format!("open {l}\n"),
+        None => "show\n".to_string(),
+    };
+    if let Some(t) = token.filter(|t| valid_token(t)) {
+        m.push_str(&format!("token {t}\n"));
     }
+    m.into_bytes()
 }
 
 /// The longest message read: a link is far shorter.
 const MAX_ASK: usize = 4096;
 
-/// `None` for anything else than [`ask`] writes: nothing happens then. `Some(None)` is a plain show.
-fn heard(buf: &[u8]) -> Option<Option<String>> {
+/// What a second launch asked: the link to open, and the launcher's activation token.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Asked {
+    pub link: Option<String>,
+    pub token: Option<String>,
+}
+
+/// The token this launch was started with (Wayland), passed to the running app.
+pub fn token_arg() -> Option<String> {
+    std::env::var("XDG_ACTIVATION_TOKEN")
+        .ok()
+        .filter(|t| valid_token(t))
+}
+
+/// An activation token is an opaque printable string; anything else is not passed on.
+fn valid_token(t: &str) -> bool {
+    !t.is_empty() && t.len() <= 512 && t.bytes().all(|b| b.is_ascii_graphic())
+}
+
+/// `None` for anything else than [`ask`] writes: nothing happens then.
+fn heard(buf: &[u8]) -> Option<Asked> {
     let s = std::str::from_utf8(buf).ok()?.strip_suffix('\n')?;
-    if s == "show" {
-        return Some(None);
+    let mut lines = s.split('\n');
+    let first = lines.next()?;
+    let token = match lines.next() {
+        None => None,
+        Some(l) => Some(
+            l.strip_prefix("token ")
+                .filter(|t| valid_token(t))?
+                .to_string(),
+        ),
+    };
+    if lines.next().is_some() {
+        return None;
     }
-    let l = s.strip_prefix("open ")?;
-    link(l)?;
-    Some(Some(l.to_string()))
+    let link = if first == "show" {
+        None
+    } else {
+        let l = first.strip_prefix("open ")?;
+        link(l)?;
+        Some(l.to_string())
+    };
+    Some(Asked { link, token })
 }
 
 /// A `vesper://` link the app opens.
@@ -104,7 +143,7 @@ mod unix {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
 
-    use super::{Claim, MAX_ASK, ask, heard};
+    use super::{Asked, Claim, MAX_ASK, ask, heard};
 
     pub struct Listener(UnixListener);
 
@@ -124,7 +163,8 @@ mod unix {
 
     pub(super) fn claim_at(path: &Path, link: Option<&str>) -> Claim {
         if let Ok(mut s) = UnixStream::connect(path)
-            && s.write_all(&ask(link)).is_ok()
+            && s.write_all(&ask(link, super::token_arg().as_deref()))
+                .is_ok()
         {
             return Claim::Second;
         }
@@ -137,16 +177,16 @@ mod unix {
     }
 
     impl Listener {
-        /// Calls `show` on a thread of its own each time another launch asks, with its link if it had one.
-        pub fn serve(self, show: impl Fn(Option<String>) + Send + 'static) {
+        /// Calls `show` on a thread of its own each time another launch asks, with its link and token if it had them.
+        pub fn serve(self, show: impl Fn(Asked) + Send + 'static) {
             std::thread::spawn(move || {
                 let Listener(l) = self;
                 for s in l.incoming().flatten() {
                     let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
                     let mut buf = Vec::new();
                     let _ = s.take(MAX_ASK as u64).read_to_end(&mut buf);
-                    if let Some(link) = heard(&buf) {
-                        show(link);
+                    if let Some(asked) = heard(&buf) {
+                        show(asked);
                     }
                 }
             });
@@ -162,7 +202,7 @@ mod windows {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
 
-    use super::{Claim, MAX_ASK, ask, heard};
+    use super::{Asked, Claim, MAX_ASK, ask, heard};
 
     pub struct Listener(NamedPipeServer, String, tokio::runtime::Runtime);
 
@@ -181,7 +221,7 @@ mod windows {
         };
         let asked = rt.block_on(async {
             match ClientOptions::new().open(&pipe) {
-                Ok(mut c) => c.write_all(&ask(link)).await.is_ok(),
+                Ok(mut c) => c.write_all(&ask(link, None)).await.is_ok(),
                 Err(_) => false,
             }
         });
@@ -199,8 +239,8 @@ mod windows {
     }
 
     impl Listener {
-        /// Calls `show` on a thread of its own each time another launch asks, with its link if it had one.
-        pub fn serve(self, show: impl Fn(Option<String>) + Send + 'static) {
+        /// Calls `show` on a thread of its own each time another launch asks, with its link and token if it had them.
+        pub fn serve(self, show: impl Fn(Asked) + Send + 'static) {
             std::thread::spawn(move || {
                 let Listener(mut server, pipe, rt) = self;
                 rt.block_on(async move {
@@ -213,8 +253,8 @@ mod windows {
                         let mut limited = (&mut server).take(MAX_ASK as u64);
                         let read = limited.read_to_end(&mut buf);
                         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), read).await;
-                        if let Some(link) = heard(&buf) {
-                            show(link);
+                        if let Some(asked) = heard(&buf) {
+                            show(asked);
                         }
                         // The next launch talks to a new instance of the pipe.
                         server = match ServerOptions::new()
@@ -246,7 +286,7 @@ mod tests {
             panic!("the stale socket is taken over");
         };
         let (tx, rx) = std::sync::mpsc::channel();
-        l.serve(move |link| tx.send(link).unwrap());
+        l.serve(move |asked| tx.send(asked.link).unwrap());
         let wait = || rx.recv_timeout(std::time::Duration::from_secs(5));
         assert!(matches!(unix::claim_at(&path, None), Claim::Second));
         assert_eq!(wait().expect("the first was asked to show itself"), None);
@@ -284,11 +324,21 @@ mod tests {
         assert_eq!(link(&format!("https://invite/{code}")), None);
         assert_eq!(link("vesper://other/1"), None);
         // The hand-off message: anything else is ignored.
-        assert_eq!(heard(&ask(None)), Some(None));
+        assert_eq!(heard(&ask(None, None)), Some(Asked::default()));
         assert_eq!(
-            heard(&ask(Some("vesper://room/3"))),
-            Some(Some("vesper://room/3".into()))
+            heard(&ask(Some("vesper://room/3"), Some("tok-1"))),
+            Some(Asked {
+                link: Some("vesper://room/3".into()),
+                token: Some("tok-1".into())
+            })
         );
+        assert_eq!(
+            heard(&ask(None, Some("bad token"))),
+            Some(Asked::default()),
+            "a token with a space is not passed on"
+        );
+        assert_eq!(heard(b"show\ntoken a b\n"), None);
+        assert_eq!(heard(b"show\ntoken t\nmore\n"), None);
         assert_eq!(heard(b"open https://evil.example\n"), None);
         assert_eq!(heard(b"show"), None);
         // The code never shows in a log line.

@@ -950,6 +950,18 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
+    // vesper patch: the launcher's token of a second launch; the compositor checks it, not us.
+    fn activate_with_token(&self, token: String) {
+        let state = self.borrow();
+        match &state.globals.activation {
+            Some(activation) => activation.activate(token, &state.surface),
+            None => {
+                drop(state);
+                self.activate();
+            }
+        }
+    }
+
     fn is_active(&self) -> bool {
         self.borrow().active
     }

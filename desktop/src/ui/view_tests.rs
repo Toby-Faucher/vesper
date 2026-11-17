@@ -626,6 +626,10 @@ fn the_share_panel_watches_every_share_and_fits_each_picture(cx: &mut TestAppCon
     // Full screen: the tile fills the window; Esc leaves.
     click(cx, "share-full-b");
     view.read_with(cx, |v, _| assert!(v.share.full.is_some()));
+    // The window's own buttons step aside: they sat on the share's buttons at the top right.
+    view.update_in(cx, |v, window, cx| {
+        assert!(v.window_controls(window, cx).is_none())
+    });
     cx.simulate_keystrokes("escape");
     view.read_with(cx, |v, _| assert!(v.share.full.is_none()));
 
@@ -2667,4 +2671,26 @@ fn the_app_section_and_the_mute_key(cx: &mut TestAppContext) {
     cx.run_until_parked();
     click(cx, "clear-key-1");
     view.read_with(cx, |v, _| assert_eq!(v.model.settings.mute_key, None));
+}
+
+/// A file drag that never ended (Wayland can lose its leave or drop, `client.rs`) left GPUI dragging: no click, window
+/// move or resize worked again. The next real press ends it.
+#[gpui::test]
+fn a_press_ends_a_file_drag_that_never_ended(cx: &mut TestAppContext) {
+    use gpui::{ExternalPaths, FileDropEvent};
+    let (view, cx, _rx) = open(cx);
+    chat_room(&view, cx);
+    settle(cx);
+    let b = cx.debug_bounds("pins-button").expect("drawn");
+    cx.simulate_event(FileDropEvent::Entered {
+        position: b.center(),
+        paths: ExternalPaths::default(),
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|_, app| app.has_active_drag()));
+    click(cx, "pins-button");
+    assert!(!cx.update(|_, app| app.has_active_drag()));
+    view.read_with(cx, |v, _| {
+        assert!(v.model.pins.is_some(), "the click went through")
+    });
 }

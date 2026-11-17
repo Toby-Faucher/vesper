@@ -310,8 +310,8 @@ pub fn run() {
         // A second launch asks this one to come to the front, as the tray's Show Vesper does.
         if let Some(l) = single {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            l.serve(move |link| {
-                let _ = tx.send(link);
+            l.serve(move |asked| {
+                let _ = tx.send(asked);
             });
             let vesper = handle
                 .read(cx)
@@ -320,11 +320,16 @@ pub fn run() {
                 .map(|v| v.downgrade());
             let window: gpui::AnyWindowHandle = handle.into();
             cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-                while let Some(link) = rx.recv().await {
+                while let Some(asked) = rx.recv().await {
                     let _ = cx.update_window(window, |_, window, cx| {
-                        window.activate_window();
+                        // The launcher's token lets the compositor raise us; a token of our own is refused as
+                        // focus stealing.
+                        match asked.token {
+                            Some(t) => window.activate_window_with_token(t),
+                            None => window.activate_window(),
+                        }
                         cx.activate(true);
-                        if let (Some(l), Some(v)) = (link, vesper.as_ref()) {
+                        if let (Some(l), Some(v)) = (asked.link, vesper.as_ref()) {
                             let _ = v.update(cx, |v, cx| v.open_link(&l, window, cx));
                         }
                     });
@@ -1396,6 +1401,13 @@ impl Render for Vesper {
             .on_action(cx.listener(|this, _: &FindBack, _, cx| this.find_back(cx)))
             .on_action(cx.listener(|this, _: &ViewerPrev, _, cx| this.viewer_go(-1, cx)))
             .on_action(cx.listener(|this, _: &ViewerNext, _, cx| this.viewer_go(1, cx)))
+            // The app starts no drags of its own, and the system sends no press during a file drag: a drag still on
+            // at a press is a file drag whose end was lost. It ended every click, move and resize until then.
+            .capture_any_mouse_down(|_, window, cx| {
+                if cx.stop_active_drag(window) {
+                    log::warn!("a file drag that never ended was stopped");
+                }
+            })
             .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
                 this.shortcut_key(e, window, cx);
             }))
