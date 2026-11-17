@@ -18,7 +18,7 @@ export const RELEASE_NOTES: readonly Note[] = [
   {
     version: '2.3.2',
     items: [
-      'Calls survive a short network drop: nobody leaves, no sound plays, and voice keeps going.',
+      'Calls ride out a short network drop: nobody leaves and voice keeps going.',
       'Desktop: sending a screen share is much faster on large screens.',
       'Desktop: clicks work again after a dragged file goes nowhere.',
       'Desktop: the window buttons no longer cover a full screen share.',
