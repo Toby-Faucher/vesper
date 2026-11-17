@@ -1,0 +1,11 @@
+env-libvpx-sys 5.1.3 from crates.io (MPL-2.0, https://github.com/astraw/env-libvpx-sys), the libvpx bindings under
+vpx-rs (the screen share encoder). Everything is the published crate: src/, build.rs and ffi.h unchanged. Left out:
+generated/ (pregenerated bindings, used only without the `generate` feature, which vpx-rs always turns on), the
+regen scripts, README.md and CHANGELOG.md.
+
+The one change, marked "vesper patch" in Cargo.toml: bindgen 0.68.1 became 0.72.1 (already in the tree through GPUI).
+With libclang 23 (Arch, the dev machine) bindgen 0.68.1 wrote vpx_codec_enc_cfg and vpx_codec_dec_cfg as opaque
+structs, and vpx-rs did not compile. 0.72.1 writes them in full; build.rs uses no API that changed.
+
+To update: drop this folder and its [patch.crates-io] entry in desktop/Cargo.toml once a release on crates.io uses a
+bindgen that reads libvpx's headers with current libclang.

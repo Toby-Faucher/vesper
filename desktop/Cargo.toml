@@ -17,6 +17,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 cpal = "0.18"
 device_query = "4.0.1"
 dirs = "6"
+# A share's picture: scaled down in RGB (SIMD), then turned into I420 for the encoder (yuv, SIMD).
+fast_image_resize = "6.1.0"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 gpui = "=0.2.2"
 gpui-component = "=0.5.1"
@@ -42,8 +44,10 @@ url = "2"
 vesper-dsp = { version = "2.3.1", path = "../crates/vesper-dsp", features = ["tract"] }
 vesper-protocol = { version = "2.3.1", path = "../crates/vesper-protocol" }
 vp8-decoder = "=0.1.1"
-# Sending a screen share: the pure Rust encoder of the same team as vp8-decoder.
-vp8-encoder = "=0.1.1"
+# Sending a screen share: libvpx's VP8 encoder in realtime mode, linked statically from desktop/.libvpx
+# (scripts/build-libvpx.sh, docs/dev.md).
+vpx-rs = "0.2.1"
+yuv = "0.8.20"
 
 # Screen capture (desktop/src/voice/capture.rs): Windows Graphics Capture on Windows; on Linux the ScreenCast portal
 # (ashpd, already in GPUI's tree) and a PipeWire stream under Wayland, and x11rb (also GPUI's) under X11.
@@ -76,6 +80,8 @@ unsafe_code = "forbid"
 gpui = { version = "=0.2.2", features = ["test-support"] }
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# A pure Rust VP8 encoder for the tests' fake shares (tests/share.rs, the engine and video tests).
+vp8-encoder = "=0.1.1"
 
 # The real-server tests (tests/server.rs, tests/voice.rs) need the server crates, which use Unix file permissions.
 # Windows CI runs the unit and headless GPUI tests only.
@@ -97,10 +103,6 @@ debug-assertions = false
 [profile.dev.package.vp8-decoder]
 opt-level = 3
 
-# And the encoder, which takes every captured picture of a share.
-[profile.dev.package.vp8-encoder]
-opt-level = 3
-
 # The same for the echo canceller, which runs on every 10 ms of the microphone.
 [profile.dev.package.sonora]
 opt-level = 3
@@ -117,4 +119,8 @@ opt-level = 3
 gpui = { path = "vendor/gpui" }
 # gpui-component 0.5.1 with one fix: an input that was not focused still redrew the window on every caret blink.
 gpui-component = { path = "vendor/gpui-component" }
+# env-libvpx-sys 5.1.3 on a newer bindgen: its own made libvpx's config structs opaque with libclang 23.
+env-libvpx-sys = { path = "vendor/env-libvpx-sys" }
+# vpx-rs 0.2.1 with one fix: it passed cpu-used to libvpx as a pointer, so the encoder's speed was never set.
+vpx-rs = { path = "vendor/vpx-rs" }
 

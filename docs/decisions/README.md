@@ -15,6 +15,7 @@ To change a decision, add a new record that supersedes the old one and set the o
 | [0008](0008-csp.md) | A strict Content-Security-Policy sent by the server | accepted |
 | [0009](0009-video-in-the-sfu.md) | The SFU forwards one VP8 screen per person | accepted |
 | [0010](0010-gpui-desktop-client.md) | A native desktop client in GPUI, beside the web app | accepted |
-| [0011](0011-desktop-screen-share-send.md) | The desktop app sends its screen as VP8 from a pure Rust encoder | accepted |
+| [0011](0011-desktop-screen-share-send.md) | The desktop app sends its screen as VP8 from a pure Rust encoder | accepted, encoder superseded by 0012 |
+| [0012](0012-desktop-share-libvpx.md) | The desktop app encodes its screen with libvpx, linked statically | accepted |
 
 The design itself is in [the spec](../superpowers/specs/2026-10-30-vesper-design.md).

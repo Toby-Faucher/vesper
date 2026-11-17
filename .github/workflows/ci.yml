@@ -83,7 +83,13 @@ jobs:
       - run: >-
           sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
           libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libopus-dev libpipewire-0.3-dev libclang-dev libssl-dev
-          pkg-config
+          pkg-config nasm
+      # Static libvpx for the share encoder (scripts/build-libvpx.sh), kept until the script changes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: desktop/.libvpx
+          key: libvpx-v1-${{ runner.os }}-${{ hashFiles('scripts/build-libvpx.sh') }}
+      - run: scripts/build-libvpx.sh
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: desktop
@@ -101,6 +107,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install --no-self-update
+      # Static libvpx from vcpkg (scripts/build-libvpx.sh), kept until the script changes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: desktop/.libvpx
+          key: libvpx-v1-${{ runner.os }}-${{ hashFiles('scripts/build-libvpx.sh') }}
+      - run: scripts/build-libvpx.sh
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: desktop

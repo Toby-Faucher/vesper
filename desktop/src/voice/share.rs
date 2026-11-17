@@ -1,7 +1,8 @@
 //! Sending my screen share. A capture thread (`vesper-capture`) takes pictures of the screen (`capture.rs`) and keeps
-//! only the newest. An encode thread (`vesper-encode`) turns it into VP8 (`vp8-encoder`, pure Rust) at the share's
-//! frame rate and bitrate, and hands each frame to the call engine, which sends it on its video m-line. Neither runs
-//! on the UI or the call's thread, so a slow encode costs frames, never voice.
+//! only the newest. An encode thread (`vesper-encode`) scales it down and turns it into I420 (`to_i420`, SIMD), then
+//! into VP8 (libvpx in realtime mode through `vpx-rs`, linked statically, ADR 0011) at the share's frame rate and
+//! bitrate, and hands each frame to the call engine, which sends it on its video m-line. Neither runs on the UI or the
+//! call's thread, so a slow encode costs frames, never voice. `share_bench` (ignored) measures each step.
 //!
 //! The encoder runs only while someone watches (`ShareSetup::active`, from the server's watcher count), as the web
 //! turns its encoding off. A still screen gives no new pictures on Wayland and Windows, so the newest one is kept
@@ -11,8 +12,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
-
-use vp8_encoder::{Encoder, EncoderConfig, Picture, scale_i420};
 
 /// One captured picture: `height` rows of `stride` bytes, each pixel `bpp` bytes with red, green and blue at `rgb`.
 pub struct Shot {
@@ -49,8 +48,7 @@ pub struct ShareSetup {
 }
 
 /// The most pixels sent: 1080p for sharp text, 720p for smooth motion. A bigger screen is scaled down to fit.
-/// shortcut: the pure Rust encoder is single threaded (about 20 fps at 1080p on one core); a hardware or libvpx
-/// encoder would allow more, if a 1080p share is too slow for the group.
+/// share_bench on an i7-12700: a 1080p frame from a 4K screen takes about 8 ms in all, so 60 fps has room.
 pub const SHARP_PIXELS: u32 = 1920 * 1080;
 pub const SMOOTH_PIXELS: u32 = 1280 * 720;
 
@@ -185,7 +183,7 @@ fn run_capture(open: OpenScreen, shared: &Shared, out: &Sender<Out>) {
 
 fn encode(shared: &Shared, out: &Sender<Out>) {
     let start = Instant::now();
-    let mut enc: Option<Encoder> = None;
+    let mut enc: Option<Vp8> = None;
     let mut held: Option<Shot> = None;
     let mut fresh = false;
     let mut due = start;
@@ -217,29 +215,24 @@ fn encode(shared: &Shared, out: &Sender<Out>) {
         fresh = false;
         let (w, h) = fit(shot.width, shot.height, setup.sharp);
         let i420 = to_i420(shot, w, h);
-        let Some(pic) = Picture::from_i420(&i420, w, h) else {
-            continue;
-        };
-        let bps = setup.kbps.saturating_mul(1000);
-        let same = enc
+        // A new size or bitrate starts a new encoder (libvpx through vpx-rs cannot change its bitrate), so the
+        // share dialog's change costs one keyframe.
+        if !enc
             .as_ref()
-            .is_some_and(|e| e.config().width == w && e.config().height == h);
-        if !same {
-            enc = Encoder::new(EncoderConfig::new(w, h, setup.fps, bps)).ok();
+            .is_some_and(|e| (e.w, e.h, e.kbps) == (w, h, setup.kbps))
+        {
+            enc = Vp8::new(w, h, setup.kbps);
         }
         let Some(e) = enc.as_mut() else {
             continue;
         };
-        if e.config().bitrate_bps != bps || e.config().fps != setup.fps {
-            e.set_rates(bps, setup.fps);
-        }
         shared.keyframe.store(false, Ordering::Relaxed);
-        let Ok(Some(f)) = e.encode(&pic, key) else {
-            continue; // skipped by rate control
-        };
-        (frames, bytes) = (frames + 1, bytes + f.data.len());
         let rtp = (now - start).as_micros() as u64 * 90 / 1000;
-        if out.send(Out::Frame { data: f.data, rtp }).is_err() {
+        let Some(data) = e.encode(&i420, rtp, 90_000 / u64::from(setup.fps.max(1)), key) else {
+            continue;
+        };
+        (frames, bytes) = (frames + 1, bytes + data.len());
+        if out.send(Out::Frame { data, rtp }).is_err() {
             return;
         }
         let secs = since.elapsed().as_secs_f32();
@@ -255,59 +248,179 @@ fn encode(shared: &Shared, out: &Sender<Out>) {
     }
 }
 
-/// The size to send `w` x `h` at: as it is up to the preference's pixels, else scaled down to fit, kept even.
+/// libvpx's VP8 speed in realtime: -n is a fixed speed n (higher is faster), +n lets libvpx pick by the time left.
+/// share_bench: -6 (WebRTC's) scrolls 1080p text in 2.4 ms at 11 KB a frame; -8 and faster send twice the bytes on
+/// a scroll and lose 3 to 11 dB of PSNR, and are no quicker.
+const CPU_USED: i32 = -6;
+
+/// libvpx's VP8 encoder, set up for a screen as WebRTC does: realtime, no lag, constant bitrate, screen content,
+/// error resilient, keyframes only when asked (a viewer's PLI) or when it starts.
+struct Vp8 {
+    enc: vpx_rs::Encoder<u8>,
+    w: u32,
+    h: u32,
+    kbps: u32,
+}
+
+impl Vp8 {
+    fn new(w: u32, h: u32, kbps: u32) -> Option<Vp8> {
+        use vpx_rs::enc::ctrl::{EncoderControlSet as Set, Vp8ScreenContentMode};
+        use vpx_rs::enc::{CodecId, ErrorResilient, KeyFrameMode, RateControl, Timebase};
+        // Times are on the 90 kHz RTP clock, so a new frame rate needs no new encoder.
+        let clock = Timebase {
+            num: std::num::NonZero::<u32>::MIN,
+            den: std::num::NonZero::new(90_000)?,
+        };
+        let rate = RateControl::ConstantBitRate(kbps);
+        let mut c = vpx_rs::EncoderConfig::<u8>::new(CodecId::VP8, w, h, clock, rate).ok()?;
+        // Half the cores, up to 8 (WebRTC's most for 1080p): the call and the app keep the rest.
+        let cores = std::thread::available_parallelism().map_or(2, |n| n.get() as u32);
+        c.threads = (cores / 2).clamp(1, 8);
+        c.error_resilient = ErrorResilient::DEFAULT;
+        c.lag_in_frames = 0;
+        c.kf_mode = KeyFrameMode::Disabled;
+        c.rc_resize_allowed = None;
+        // Start the rate buffer full: libvpx's default (4 s of an optimal 5) underspends until it fills.
+        c.rc_buf_initial_sz = c.rc_buf_optimal_sz;
+        let mut enc = vpx_rs::Encoder::new(c).ok()?;
+        enc.codec_control_set(Set::CpuUsed(CPU_USED)).ok()?;
+        enc.codec_control_set(Set::Vp8ScreenContentMode(Vp8ScreenContentMode::On))
+            .ok()?;
+        Some(Vp8 { enc, w, h, kbps })
+    }
+
+    /// One frame of I420 at `rtp` (90 kHz) that lasts `ticks`; none if libvpx failed or dropped it.
+    fn encode(&mut self, i420: &[u8], rtp: u64, ticks: u64, key: bool) -> Option<Vec<u8>> {
+        use vpx_rs::enc::{EncoderFrameFlags, EncodingDeadline, Packet};
+        let (w, h) = (self.w as usize, self.h as usize);
+        let pic =
+            vpx_rs::YUVImageData::from_raw_data(vpx_rs::ImageFormat::I420, w, h, i420).ok()?;
+        let flags = if key {
+            EncoderFrameFlags::FORCE_KF
+        } else {
+            EncoderFrameFlags::empty()
+        };
+        let mut packets = self
+            .enc
+            .encode(rtp as i64, ticks, pic, EncodingDeadline::Realtime, flags)
+            .ok()?;
+        packets.find_map(|p| match p {
+            Packet::CompressedFrame(f) => Some(f.data),
+            _ => None,
+        })
+    }
+}
+
+/// The size to send `w` x `h` at: as it is up to the preference's pixels, else scaled down to fit. Always even, as
+/// I420 wants: an odd edge is cropped.
 pub fn fit(w: u32, h: u32, sharp: bool) -> (u32, u32) {
     let most = if sharp { SHARP_PIXELS } else { SMOOTH_PIXELS };
     let px = u64::from(w) * u64::from(h);
-    if px <= u64::from(most) {
-        return (w.max(1), h.max(1));
-    }
-    let k = (f64::from(most) / px as f64).sqrt();
+    let k = (f64::from(most) / px.max(1) as f64).sqrt().min(1.);
     let even = |n: u32| ((f64::from(n) * k) as u32 & !1).max(2);
     (even(w), even(h))
 }
 
-/// The shot as I420 of `w` x `h`, BT.601 limited range (what the viewers' VP8 decoders turn back into RGB).
+/// The shot as I420 of `w` x `h`, BT.601 limited range (what the viewers' VP8 decoders turn back into RGB). A
+/// smaller size is scaled down in RGB first, so only the pixels sent are converted; both steps use SIMD.
 pub fn to_i420(s: &Shot, w: u32, h: u32) -> Vec<u8> {
+    use yuv::{BufferStoreMut, YuvConversionMode, YuvPlanarImageMut, YuvRange, YuvStandardMatrix};
     let (sw, sh) = (s.width as usize, s.height as usize);
-    let (cw, ch) = (sw.div_ceil(2), sh.div_ceil(2));
-    let mut out = vec![0u8; sw * sh + 2 * cw * ch];
-    let (y_plane, uv) = out.split_at_mut(sw * sh);
-    let (u_plane, v_plane) = uv.split_at_mut(cw * ch);
-    let [r, g, b] = s.rgb;
-    let px = |x: usize, y: usize| {
-        let i = y * s.stride + x * s.bpp;
-        s.data.get(i..i + s.bpp).map_or([0; 3], |p| {
-            [i32::from(p[r]), i32::from(p[g]), i32::from(p[b])]
-        })
+    let whole = s.stride >= sw * s.bpp
+        && s.stride.checked_rem(s.bpp) == Some(0)
+        && s.data.len() >= s.stride * sh;
+    let convert = match (s.bpp, s.rgb) {
+        (4, [2, 1, 0]) if whole => yuv::bgra_to_yuv420, // BGRx too: alpha is not read
+        (4, [0, 1, 2]) if whole => yuv::rgba_to_yuv420,
+        (3, [2, 1, 0]) if whole => yuv::bgr_to_yuv420,
+        (3, [0, 1, 2]) if whole => yuv::rgb_to_yuv420,
+        // shortcut: other layouts (xRGB from some PipeWire streams) are repacked as RGBA, a slower scalar pass.
+        _ => return to_i420(&rgba(s), w, h),
     };
-    for y in 0..sh {
-        for x in 0..sw {
-            let [r, g, b] = px(x, y);
-            y_plane[y * sw + x] = (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16) as u8;
+    let scaled;
+    let (mut data, mut stride) = (&s.data[..], s.stride);
+    // An odd edge is cropped by converting w x h of the shot as it is.
+    if (w, h) != (s.width & !1, s.height & !1) {
+        use fast_image_resize as fr;
+        let kind = if s.bpp == 4 {
+            fr::PixelType::U8x4
+        } else {
+            fr::PixelType::U8x3
+        };
+        // The rows' padding is read as pixels on the right, then cut off (the filter never reads past the cut).
+        let Ok(padded) =
+            fr::images::ImageRef::new((s.stride / s.bpp) as u32, s.height, &s.data, kind)
+        else {
+            return Vec::new();
+        };
+        let Ok(src) = fr::images::CroppedImage::new(&padded, 0, 0, s.width, s.height) else {
+            return Vec::new();
+        };
+        let mut dst = fr::images::Image::new(w, h, kind);
+        let how = fr::ResizeOptions::new()
+            .use_alpha(false)
+            .resize_alg(fr::ResizeAlg::Convolution(fr::FilterType::Box)); // the source area under each pixel
+        // Kept between frames (the encode thread's): setting up its buffers costs about 1 ms a frame.
+        thread_local!(static R: std::cell::RefCell<fr::Resizer> = std::cell::RefCell::new(fr::Resizer::new()));
+        if R.with_borrow_mut(|r| r.resize(&src, &mut dst, &how))
+            .is_err()
+        {
+            return Vec::new();
+        }
+        scaled = dst.into_vec();
+        (data, stride) = (&scaled[..], w as usize * s.bpp);
+    }
+    let (wu, hu) = (w as usize, h as usize);
+    let (cw, ch) = (wu.div_ceil(2), hu.div_ceil(2));
+    let mut out = vec![0u8; wu * hu + 2 * cw * ch];
+    let (y, uv) = out.split_at_mut(wu * hu);
+    let (u, v) = uv.split_at_mut(cw * ch);
+    let mut planes = YuvPlanarImageMut {
+        y_plane: BufferStoreMut::Borrowed(y),
+        y_stride: w,
+        u_plane: BufferStoreMut::Borrowed(u),
+        u_stride: cw as u32,
+        v_plane: BufferStoreMut::Borrowed(v),
+        v_stride: cw as u32,
+        width: w,
+        height: h,
+    };
+    let range = (YuvRange::Limited, YuvStandardMatrix::Bt601);
+    match convert(
+        &mut planes,
+        data,
+        stride as u32,
+        range.0,
+        range.1,
+        YuvConversionMode::Balanced,
+    ) {
+        Ok(()) => out,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The shot repacked as tightly packed RGBA, for a layout the SIMD conversion does not take.
+fn rgba(s: &Shot) -> Shot {
+    let [r, g, b] = s.rgb;
+    let mut data = Vec::with_capacity(s.width as usize * s.height as usize * 4);
+    for y in 0..s.height as usize {
+        for x in 0..s.width as usize {
+            let i = y * s.stride + x * s.bpp;
+            let p = s
+                .data
+                .get(i..i + s.bpp)
+                .map_or([0; 4], |p| [p[r], p[g], p[b], 255]);
+            data.extend_from_slice(&p);
         }
     }
-    for cy in 0..ch {
-        for cx in 0..cw {
-            // The mean of the 2x2 block (an odd edge repeats its last pixel).
-            let mut sum = [0; 3];
-            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let p = px((cx * 2 + dx).min(sw - 1), (cy * 2 + dy).min(sh - 1));
-                (0..3).for_each(|i| sum[i] += p[i]);
-            }
-            let [r, g, b] = sum.map(|c| c / 4);
-            u_plane[cy * cw + cx] = (((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128) as u8;
-            v_plane[cy * cw + cx] = (((112 * r - 94 * g - 18 * b + 128) >> 8) + 128) as u8;
-        }
+    Shot {
+        width: s.width,
+        height: s.height,
+        stride: s.width as usize * 4,
+        bpp: 4,
+        rgb: [0, 1, 2],
+        data,
     }
-    if (w, h) == (s.width, s.height) {
-        return out;
-    }
-    let mut scaled = Vec::new();
-    if let Some(p) = Picture::from_i420(&out, s.width, s.height) {
-        scale_i420(&p, w, h, &mut scaled);
-    }
-    scaled
 }
 
 /// Moving colour bars for tests and the parity harness (`VESPER_DEV_SHARE`): red, green, blue and white, sliding a
@@ -381,13 +494,11 @@ mod tests {
         let mut p = Pattern::new(64, 16, 1000);
         let shot = p.next().unwrap().unwrap();
         let i420 = to_i420(&shot, 64, 16);
-        let mut enc = Encoder::new(EncoderConfig::new(64, 16, 30, 2_000_000)).unwrap();
-        let f = enc
-            .encode(&Picture::from_i420(&i420, 64, 16).unwrap(), true)
-            .unwrap()
-            .unwrap();
+        let mut enc = Vp8::new(64, 16, 2_000).unwrap();
+        let f = enc.encode(&i420, 0, 3000, true).unwrap();
+        // libvpx's VP8, read by the viewers' decoder.
         let mut dec = vp8_decoder::Decoder::new();
-        let pic = dec.decode(&f.data).unwrap().unwrap();
+        let pic = dec.decode(&f).unwrap().unwrap();
         let bgra = super::super::video::bgra(&pic, pic.width, pic.height);
         // The middle of each bar (the first frame is shifted one pixel): red, green, blue, white.
         for (x, want) in [
@@ -407,6 +518,41 @@ mod tests {
         }
         // Scaled down, the size is the one asked for.
         assert_eq!(to_i420(&shot, 32, 8).len(), 32 * 8 + 2 * 16 * 4);
+    }
+
+    #[test]
+    fn odd_sizes_padded_rows_and_other_layouts_convert() {
+        // Red, 33 x 17 with 8 bytes of padding a row, as BGRx and as xRGB (the slower repacked path).
+        for (rgb, px) in [([2, 1, 0], [0, 0, 255, 0]), ([1, 2, 3], [0, 255, 0, 0])] {
+            let (w, h, stride) = (33u32, 17u32, 33 * 4 + 8);
+            let mut data = vec![7u8; stride * h as usize];
+            for row in data.chunks_exact_mut(stride) {
+                row[..w as usize * 4].as_chunks_mut::<4>().0.fill(px);
+            }
+            let shot = Shot {
+                width: w,
+                height: h,
+                stride,
+                bpp: 4,
+                rgb,
+                data,
+            };
+            assert_eq!(fit(w, h, true), (32, 16), "an odd edge is cropped");
+            for (tw, th) in [(32, 16), (16, 8)] {
+                let i420 = to_i420(&shot, tw, th);
+                let (n, c) = ((tw * th) as usize, (tw * th / 4) as usize);
+                assert_eq!(i420.len(), n + 2 * c, "{rgb:?} {tw}x{th}");
+                // BT.601 limited range red: Y 82, U 90, V 240.
+                let near = |p: &[u8], want: u8| p.iter().all(|&v| v.abs_diff(want) <= 2);
+                assert!(near(&i420[..n], 82), "{rgb:?} {tw}x{th} Y {:?}", &i420[..n]);
+                assert!(near(&i420[n..n + c], 90), "{rgb:?} U {:?}", &i420[n..n + 4]);
+                assert!(
+                    near(&i420[n + c..], 240),
+                    "{rgb:?} V {:?}",
+                    &i420[n + c..n + c + 4]
+                );
+            }
+        }
     }
 
     #[test]
@@ -465,5 +611,96 @@ mod tests {
             s.out.recv_timeout(Duration::from_secs(5)),
             Ok(Out::Ended("No screen.".into()))
         );
+    }
+
+    /// Where a share's time goes, on a real picture (web/e2e/parity/image-viewer-side.png, from
+    /// `desktop/scripts/parity.sh image-viewer`). `cargo test --release --lib -- --ignored share_bench --nocapture`.
+    #[test]
+    #[ignore]
+    fn share_bench() {
+        let png = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../web/e2e/parity/image-viewer-side.png"
+        );
+        let src = image::open(png)
+            .expect("run desktop/scripts/parity.sh image-viewer first")
+            .to_rgba8();
+        let (iw, ih) = (src.width() as usize, src.height() as usize);
+        for (sw, sh) in [(1920u32, 1080u32), (2560, 1440), (3840, 2160)] {
+            for sharp in [true, false] {
+                // Scrolling 8 px a frame, or still but for a blinking block; and a scroll on a tight budget.
+                for (motion, step, kbps) in [
+                    ("scroll", 8usize, 8_000),
+                    ("still", 0, 8_000),
+                    ("scroll", 8, 2_000),
+                ] {
+                    let (w, h) = fit(sw, sh, sharp);
+                    let mut enc = Vp8::new(w, h, kbps).unwrap();
+                    let mut dec = vp8_decoder::Decoder::new();
+                    let (mut conv, mut code, mut bytes, mut psnr, mut n, mut key) =
+                        (Duration::ZERO, Duration::ZERO, 0, 0., 0., 0);
+                    for f in 0..40 {
+                        let mut data = vec![0u8; sw as usize * sh as usize * 4];
+                        for (y, row) in data.chunks_exact_mut(sw as usize * 4).enumerate() {
+                            let sy = (y + f * step) % ih;
+                            for (x, p) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                                *p = src.get_pixel((x % iw) as u32, sy as u32).0;
+                            }
+                        }
+                        if f % 2 == 0 {
+                            data[..32 * 4].fill(255); // a blinking block, so a still screen still changes
+                        }
+                        let s = Shot {
+                            width: sw,
+                            height: sh,
+                            stride: sw as usize * 4,
+                            bpp: 4,
+                            rgb: [0, 1, 2],
+                            data,
+                        };
+                        let t = Instant::now();
+                        let i420 = to_i420(&s, w, h);
+                        let t2 = Instant::now();
+                        let out = enc.encode(&i420, f as u64 * 3000, 3000, f == 0);
+                        let t3 = Instant::now();
+                        if f >= 5 {
+                            (conv, code) = (conv + (t2 - t), code + (t3 - t2));
+                        }
+                        let Some(out) = out else { continue };
+                        (bytes, n) = (bytes + out.len(), n + f64::from(f >= 5));
+                        if f == 0 {
+                            key = out.len();
+                        }
+                        let d = dec.decode(&out).unwrap().unwrap();
+                        let (wu, hu) = (w as usize, h as usize);
+                        let mut se = 0f64;
+                        for y in 0..hu {
+                            for x in 0..wu {
+                                let e = f64::from(i420[y * wu + x])
+                                    - f64::from(d.y[y * d.y_stride + x]);
+                                se += e * e;
+                            }
+                        }
+                        if f >= 5 {
+                            psnr +=
+                                10. * (255f64 * 255. / (se / (wu * hu) as f64).max(1e-9)).log10();
+                        }
+                    }
+                    let (c, e) = (
+                        conv.as_secs_f64() * 1000. / 35.,
+                        code.as_secs_f64() * 1000. / 35.,
+                    );
+                    println!(
+                        "BENCH {sw}x{sh} -> {w}x{h} {motion:6} {kbps:4} kbps convert+scale {c:5.1} ms  encode {e:5.1} ms  max fps {:5.1}  \
+                         avg frame {:4} KB (budget at 30 fps {} KB, keyframe {} KB)  Y PSNR {:4.1} dB",
+                        1000. / (c + e),
+                        bytes / 40 / 1024,
+                        kbps / 8 / 30 * 1000 / 1024,
+                        key / 1024,
+                        psnr / n
+                    );
+                }
+            }
+        }
     }
 }

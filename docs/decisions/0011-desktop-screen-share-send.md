@@ -1,7 +1,8 @@
 # 0011. The desktop app sends its screen as VP8 from a pure Rust encoder
 
-Status: accepted, 2026-11-15. Builds on [ADR 0009](0009-video-in-the-sfu.md) (one VP8 screen per person) and
-[ADR 0010](0010-gpui-desktop-client.md) (the GPUI desktop client).
+Status: accepted, 2026-11-15; the encoder part superseded by [0012](0012-desktop-share-libvpx.md), 2026-11-16. Builds on
+[ADR 0009](0009-video-in-the-sfu.md) (one VP8 screen per person) and [ADR 0010](0010-gpui-desktop-client.md) (the GPUI desktop
+client).
 
 Context: The desktop app could watch shares but not send one. Toby's friends use Windows, so Windows matters most, and Linux must
 work under Wayland and X11. The SFU forwards VP8 only, one layer, and every viewer (web or desktop) decodes VP8. `unsafe` is

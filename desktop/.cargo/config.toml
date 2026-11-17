@@ -2,3 +2,9 @@
 # refuses. This tells CMake to configure it anyway (Windows builds Opus from source; Linux links the system libopus).
 [env]
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# The screen share encoder links libvpx statically from desktop/.libvpx, which scripts/build-libvpx.sh fills
+# (docs/dev.md). Its bindings are generated from those headers at build time; VPX_VERSION is only a label.
+VPX_LIB_DIR = { value = ".libvpx/lib", relative = true }
+VPX_INCLUDE_DIR = { value = ".libvpx/include", relative = true }
+VPX_VERSION = "1.17.0"
+VPX_STATIC = "1"
