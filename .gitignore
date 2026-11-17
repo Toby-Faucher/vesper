@@ -4,6 +4,8 @@ node_modules/
 crates/vesper-dsp/model/
 web/public/dsp/
 web/dist/
+# Static libvpx for the desktop share encoder, from scripts/build-libvpx.sh.
+desktop/.libvpx/
 # Secrets: deploy/compose.yaml reads its settings from a .env next to it.
 .env
 .env.*

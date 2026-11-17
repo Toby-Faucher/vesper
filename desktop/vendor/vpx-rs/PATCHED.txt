@@ -1,0 +1,12 @@
+vpx-rs 0.2.1 from crates.io (BSD-2-Clause, LICENSE, https://git.hotstart.net/skiselkov/vpx-rs), the safe libvpx API the
+screen share encoder uses (desktop/src/voice/share.rs). Everything is the published crate: src/ unchanged except the
+line marked "vesper patch". Left out: README.md and Cargo.toml.orig, and the readme entry in Cargo.toml.
+
+The fix (src/enc/ctrl.rs, EncoderControlSet::CpuUsed): 0.2.1 passed a reference to the value through
+vpx_codec_control_'s C varargs, where every other control passes the value. libvpx read the pointer's low bits as
+cpu-used and clamped them to 16 or -16, so the speed asked for was never used (share_bench gave the same output for
+every cpu-used). Now it passes the value.
+
+To update: drop this folder and its [patch.crates-io] entry in desktop/Cargo.toml once a release passes the value,
+or copy the new release here and apply the marked line again. Then check that share_bench's timings move with
+CPU_USED in share.rs.

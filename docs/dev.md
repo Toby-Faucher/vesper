@@ -83,19 +83,31 @@ For another machine on the LAN, also set `VESPER_HTTP_BIND=0.0.0.0:8080`, `VESPE
 `desktop/` is the GPUI desktop client, a Cargo workspace of its own with its own `Cargo.lock`
 ([ADR 0010](decisions/0010-gpui-desktop-client.md), [design](superpowers/specs/2026-11-14-desktop-client-design.md)).
 
+- Once per checkout, before the first build: `scripts/build-libvpx.sh`. It builds libvpx 1.17.0 (the screen share encoder) as a
+  static library into `desktop/.libvpx/`, where `desktop/.cargo/config.toml` points the build. On Linux it needs a C compiler,
+  `make`, `curl` and nasm or yasm; with neither it builds a pinned nasm there too, so no root is needed. It takes about 20 s on
+  the dev machine. On Windows (Git Bash) it installs libvpx with vcpkg (`VCPKG_ROOT`, or `VCPKG_INSTALLATION_ROOT` on the
+  GitHub runners). `scripts/check-desktop.sh` and `desktop/scripts/parity.sh` run it first. Without it a plain `cargo build`
+  fails (libvpx headers, or `-lvpx` at the link, not found).
 - Build: `cd desktop && ../scripts/capped.sh cargo build`. Run: `cargo run` there, on a machine with a display.
 - Linux needs the X11, Wayland, Vulkan, fontconfig, ALSA and Opus development headers (the package list is in the `desktop` CI
   job). Arch: `opus` and `alsa-lib`; Debian and Ubuntu: `libopus-dev` and `libasound2-dev`. The `opus` crate links the system
   libopus through pkg-config. Watching a screen share needs nothing more: the VP8 decoder (`vp8-decoder`) is pure Rust.
 - Sending a screen share on Linux needs the PipeWire headers and libclang (the `pipewire` crate generates its bindings with
   bindgen). Arch: `pipewire` and `clang`; Debian and Ubuntu: `libpipewire-0.3-dev` and `libclang-dev`. Under Wayland it needs
-  xdg-desktop-portal with a backend that has ScreenCast (GNOME, KDE or wlr). The encoder (`vp8-encoder`) is pure Rust. Windows needs
-  nothing more ([ADR 0011](decisions/0011-desktop-screen-share-send.md)).
+  xdg-desktop-portal with a backend that has ScreenCast (GNOME, KDE or wlr). The encoder is libvpx, linked statically (above), so
+  the packages need no libvpx on the user's machine ([ADR 0012](decisions/0012-desktop-share-libvpx.md)).
+- How fast a share is sent: `cd desktop && ../scripts/capped.sh cargo test --release --lib -- --ignored share_bench --nocapture
+  --test-threads 1`. It needs `web/e2e/parity/image-viewer-side.png` (`desktop/scripts/parity.sh image-viewer` writes it) and prints,
+  for 1080p, 1440p and 4K screens sent sharp and smooth, the milliseconds a frame takes to convert and to encode, the frame sizes
+  and the luma PSNR after the viewers' decoder.
 - `VESPER_DEV_SHARE=1280x720` (debug builds, with `VESPER_DEV_VOICE`) shares moving colour bars in place of the screen through the
   real encoder and sender. `desktop/src/ui/dev.rs` lists the `VESPER_DEV_*` variables.
 - Check: `scripts/check-desktop.sh` (fmt, clippy `-D warnings`, tests). It is not part of `scripts/check.sh`; CI runs it as its own job.
-- `desktop/vendor/` holds patched copies of `gpui` 0.2.2 and `gpui-component` 0.5.1 (`[patch.crates-io]` in
-  `desktop/Cargo.toml`). Each `PATCHED.txt` says what changed and when to drop it. Both patches stop redraws in an idle
+- `desktop/vendor/` holds patched copies of `gpui` 0.2.2, `gpui-component` 0.5.1, `vpx-rs` 0.2.1 and `env-libvpx-sys` 5.1.3
+  (`[patch.crates-io]` in `desktop/Cargo.toml`). Each `PATCHED.txt` says what changed and when to drop it. `vpx-rs` passed the
+  encoder's speed to libvpx as a pointer, so it was never set; `env-libvpx-sys` needs a newer bindgen for libclang 23. The GPUI
+  patches stop redraws in an idle
   window: GPUI's Wayland frame loop committed about 60 times a second, and an input that was not focused redrew the
   window on every caret blink. Measured in a headless sway with `WAYLAND_DEBUG=1` (surface commits per 10 idle seconds):
   sign in 616 before, 0 after; a room with no focused input 577 before (29 real draws), 13 after (one 0.5 s animation);

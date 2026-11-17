@@ -10,6 +10,7 @@ cap="$root/scripts/capped.sh"
 [ -x "$root/target/release/vesper-server" ] || (cd "$root" && "$cap" cargo build --release -p vesper-server)
 [ -d "$root/web/node_modules" ] || (cd "$root/web" && "$cap" npm ci)
 [ -f "$root/web/dist/index.html" ] || (cd "$root/web" && "$cap" npm run build)
+"$root/scripts/build-libvpx.sh" # the share encoder's static libvpx; nothing to do once built
 # A debug build: the VESPER_DEV_* hooks exist only there. cargo is quick when nothing changed.
 (cd "$root/desktop" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" "$cap" cargo build)
 cd "$root/web"
