@@ -249,7 +249,7 @@ fn encode(shared: &Shared, out: &Sender<Out>) {
 }
 
 /// libvpx's VP8 speed in realtime: -n is a fixed speed n (higher is faster), +n lets libvpx pick by the time left.
-/// share_bench: -6 (WebRTC's) scrolls 1080p text in 2.4 ms at 10 KB a frame; -8 and faster send twice the bytes on
+/// share_bench: -6 (WebRTC's) scrolls 1080p text in 2.4 ms at 11 KB a frame; -8 and faster send twice the bytes on
 /// a scroll and lose 3 to 11 dB of PSNR, and are no quicker.
 const CPU_USED: i32 = -6;
 
@@ -280,6 +280,8 @@ impl Vp8 {
         c.lag_in_frames = 0;
         c.kf_mode = KeyFrameMode::Disabled;
         c.rc_resize_allowed = None;
+        // Start the rate buffer full: libvpx's default (4 s of an optimal 5) underspends until it fills.
+        c.rc_buf_initial_sz = c.rc_buf_optimal_sz;
         let mut enc = vpx_rs::Encoder::new(c).ok()?;
         enc.codec_control_set(Set::CpuUsed(CPU_USED)).ok()?;
         enc.codec_control_set(Set::Vp8ScreenContentMode(Vp8ScreenContentMode::On))

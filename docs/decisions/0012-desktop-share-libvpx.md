@@ -14,8 +14,9 @@ Decision:
 - **Encoder: libvpx 1.17.0** through `vpx-rs` (BSD-2-Clause, a safe API; libvpx is BSD-3-Clause) in realtime mode: one pass, no lag,
   constant bitrate, cpu-used -6 (a fixed speed 6, WebRTC's VP8 setting), screen content mode, error resilient, up to 8 threads (half
   the cores), no automatic keyframes (a viewer's PLI or a new encoder makes one). Times are on the 90 kHz RTP clock, so a new frame
-  rate needs nothing. A new bitrate starts a new encoder (vpx-rs cannot change it in place), which costs one keyframe when the
-  share dialog's bitrate is changed.
+  rate needs nothing. The rate buffer starts full (libvpx's default starts it at 4 s of an optimal 5 and underspends until it
+  fills). A new bitrate starts a new encoder (vpx-rs cannot change it in place), which costs one keyframe when the share dialog's
+  bitrate is changed.
 - **Linked statically on both systems**, so the Linux tarball and AppImage do not depend on a distro's libvpx soname.
   `scripts/build-libvpx.sh` puts it in `desktop/.libvpx/` and `desktop/.cargo/config.toml` points the build there. Linux: built from
   the pinned v1.17.0 source tarball (sha256 checked) with nasm, runtime CPU detection on. Windows: vcpkg's libvpx, triplet
@@ -36,14 +37,21 @@ Why:
   | Screen, sent at | Before | After |
   |---|---|---|
   | 1080p, 1920x1080 | 4.7 + 16.9 ms | 0.5 + 2.4 ms |
-  | 1440p, 1920x1080 | 20.6 + 18.2 ms | 3.8 + 2.2 ms |
-  | 4K, 1920x1080 | 32.7 + 18.1 ms | 5.0 + 2.3 ms |
-  | 1440p, 1280x720 | 14.3 + 7.7 ms | 1.9 + 1.3 ms |
+  | 1440p, 1920x1080 | 20.6 + 18.2 ms | 3.9 + 2.2 ms |
+  | 4K, 1920x1080 | 32.7 + 18.1 ms | 4.8 + 2.3 ms |
+  | 1080p, 1280x720 | 10.2 + 12.2 ms | 1.5 + 2.2 ms |
+  | 1440p, 1280x720 | 14.3 + 7.7 ms | 1.9 + 1.2 ms |
+  | 4K, 1280x720 | 28.0 + 13.6 ms | 3.2 + 2.3 ms |
 
-- Quality is not worse for the bytes: luma PSNR after the viewers' decoder (`vp8-decoder`), frames 5 to 39, scrolling at 8 Mbps,
-  1080p sent at 1080p: 55.3 dB at 20 KB a frame before, 56.8 dB at 10 KB after; 4K sent at 1080p: 54.2 dB at 17 KB before,
-  55.6 dB at 9 KB after. At 2 Mbps the frames stay under the 7 KB budget (5 to 6 KB).
+- Quality for the bytes, as luma PSNR against the encoder's input after the viewers' decoder (`vp8-decoder`), both encoders fed
+  the new conversion, scrolling. At 8 Mbps (40 frames, PSNR of frames 5 to 39) libvpx is sharper with fewer bytes everywhere,
+  for example 1080p sent at 1080p 55.8 dB at 20 KB a frame before, 57.0 dB at 11 KB after; 4K sent at 1080p 54.6 dB at 17 KB,
+  55.6 dB at 9 KB. At 2 Mbps (150 frames, a 7 KB budget) `vp8-encoder` overshoots to 8 KB and libvpx keeps to 7 KB or less:
+  1080p at 1080p 51.6 dB before, 50.0 dB after; 1080p at 720p 44.5, 44.1; 1440p at 1080p 52.8, 53.6; 1440p at 720p 53.4,
+  55.3 (at 4 KB); 4K at 1080p 50.9, 50.9; 4K at 720p 45.5, 45.8. So at a tight bitrate a 1080p screen sent at 1080p is
+  1.6 dB softer, with fewer bytes; the others are equal or better.
 - cpu-used -8 and faster were no quicker on a scroll, sent about twice the bytes and lost 3 to 11 dB; -6 is also WebRTC's choice.
+  WebRTC's small rate buffer (0.5 s to 1 s) capped the keyframe at half the size and lost up to 8 dB here, so it is not used.
 
 Consequences:
 
