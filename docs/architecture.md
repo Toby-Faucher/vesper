@@ -36,10 +36,21 @@ The "Not verified" list at the end says what was only read.
   page and the state it pushes (`state.ts`). After a close it reconnects after a random wait that doubles from 1 to 2 s up to 15 to 30 s, asking `/api/me` first; the wait
   starts over only after a socket stayed up for 10 s.
   It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). Nor after a server build change: the page keeps the build id (`Me.server.build`) of its first `hello`; when a later `hello` or a reconnect's `/api/me` names another, it closes the socket for good without applying that `hello`, so it never acts on messages of a newer protocol, the composer stays blocked like offline, and `ConnectionBanner.svelte` shows "Vesper was updated. Reload to continue." with a Reload button. It compares build ids, not versions, and never reloads by itself, so it can not loop. After the reload, the first `Me` of a sign-in stores `Me.server.version` in `localStorage` (`vesper.seenVersion`, `web/src/lib/whats-new.ts`). When the version stored before is older (by number, so 1.10.0 is after 1.9.0), a lazy chunk shows "What's new": a dialog with the notes from `web/src/lib/release-notes.ts` for each version after it up to the running one, newest first. A first visit, the same version, a rollback, a bad stored value, blocked storage or no matching notes show nothing. It waits while a DM call rings. A `peer_left` with your
-  own `user_id` ends the call in that tab; the socket stays open. A socket that drops mid-call ends the call's media in that tab,
-  but not the call: once the next socket's `hello` is in, the tab joins the same room again by itself (`voice.rejoin` in
-  `voice.svelte.ts`), so the others hear a leave and a join. If no socket is back within 60 s it gives up and says
-  "Disconnected from the server.". Joining any room yourself, or signing out, cancels it.
+  own `user_id` ends the call in that tab; the socket stays open. The socket sends `ping` every 10 s, and when nothing at all
+  has come from the server for 25 s (`signaling.ts`, `SILENT_MS`) it counts the socket as closed with 4004 right away (a
+  browser keeps a silent socket open for minutes) and reconnects at once, with no backoff. A socket that drops mid-call does
+  not end the call: the server keeps it for 60 s and the media (UDP) goes on, so the tab keeps its peer connection, mic,
+  playback and watched shares (`voice.resuming`). Once the next socket's `hello` is in, it moves the call's handlers to that
+  socket and sends `resume` with the call's number from `joined` and its mute state. On `resumed` nothing else happens: no
+  cue, no banner, no new offer unless one was waiting. The call bar's connection line says "Reconnecting" only once the gap
+  passes 4 s (`RECONNECTING_AFTER_MS`), and the connection banner stays hidden while a call resumes. On `resume_failed`, when
+  the peer connection failed meanwhile, or with a server too old to number calls, the call ends in that tab and it joins the
+  same room again by itself (`voice.rejoin`), so the others hear a leave and a join. If no socket is back within 60 s it
+  gives up and says "Disconnected from the server.". Joining any room yourself, or signing out, cancels it. The desktop app
+  does the same (`desktop/src/net.rs` `socket`, `model.rs` `Call::resuming`): `ping` every 10 s, a socket silent for 25 s
+  counts as dropped, and a call the server numbered keeps its engine and peer connection across the reconnect, sends
+  `resume` after the next `hello`, hides the offline banner meanwhile and shows "Reconnecting" in the call bar after 4 s.
+  It gives up after 60 s, checked at each reconnect try and at the next `hello`.
 - **The chat panel** (`web/src/routes/Chat.svelte`, store in `web/src/lib/chat.svelte.ts`) fills the open room's page (`RoomView.svelte`) under its
   header. History, sends, edits, deletes, reactions, pins, read markers, uploads and search go over REST; new and changed messages and
   typing come over the socket. A `message_updated` copy with a smaller `updated_at` than the one held is dropped, and after
@@ -126,8 +137,8 @@ transaction. Messages, reactions, reads, uploads, search, typing and voice use t
 All messages are JSON on one WebSocket per tab, tagged by `type` (`vesper-protocol/src/lib.rs`).
 
 Client to server: `join { room_id, offer }`, `answer { sdp }`, `set_voice_state { muted, deafened }`, `share_start { fps, bitrate_kbps }`, `share_stop`, `watch { user_id, on }`, `point { user_id, x, y }`, `leave`, `check { offer }`,
-`typing { room_id }`, `decline_ring { room_id }`.
-Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is the server's `version` and `build` id), `joined { user_id, answer, peers }`, `offer { sdp }`, `peer_joined`,
+`typing { room_id }`, `decline_ring { room_id }`, `ping`, `resume { room_id, session, muted, deafened }`.
+Server to client: `hello { me, users, rooms, voice, unread }` (`me.server` is the server's `version` and `build` id), `joined { user_id, answer, peers, session }`, `resumed { peers }`, `resume_failed`, `pong`, `offer { sdp }`, `peer_joined`,
 `peer_left`, `peer_state { user_id, muted, deafened, force_muted }`, `peer_share { user_id, share }`, `watchers { count }`, `point { user_id, from, x, y }`, `rooms_changed { rooms }`, `user_updated { user }`,
 `user_created { user }`,
 `force_muted { muted }`, `share_stopped`, `message_new { message }`, `message_updated { message }`, `typing { room_id, user_id }`,
@@ -147,10 +158,11 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `share_cap
    SFU runs and that the offer is well formed. Only then does it end any earlier voice session of the same account, so a
    join refused there leaves that call up. Then it asks the SFU to join SFU room `room-<id>` with the offer. Before it enters
    the user, it checks access again against the newest copy of the room, in case the room changed meanwhile.
-5. The server replies `joined` with the SFU's SDP answer and the peers already in that room. `joined` is queued under the voice
-   lock, so every later presence message for that room follows it.
+5. The server replies `joined` with the SFU's SDP answer, the peers already in that room and the call's `session` number (for
+   `resume`). `joined` is queued under the voice lock, so every later presence message for that room follows it.
 6. When tracks are added or stopped, the SFU makes a new offer. It arrives as `offer`; the client answers with `answer`, one at a time.
-7. `set_voice_state` updates presence. `leave`, a closed socket, a kick, a lost room or the SFU ending the session removes the user.
+7. `set_voice_state` updates presence. `leave`, a kick, a lost room or the SFU ending the session removes the user. A socket that
+   drops does not, at first: see "A call outlives its socket" below.
    `share_start` (group rooms only; also changes the settings of a running share) and `share_stop` set `Peer.share`, which is `null` when
    nobody shares, and tell the room with `peer_share`. A share ends with the call. A share in a DM gets `forbidden`, and one that would take
    the room's shares over their total is lowered to what is left, and the sharer gets its own `peer_share` with that bitrate; only less than 500 kbps left gets `share_cap`. The client then ends a new share, or puts back the settings a change replaced.
@@ -162,7 +174,35 @@ Error codes: `room_full`, `bad_message`, `forbidden`, `rate_limited`, `share_cap
    A moderator's `POST /api/users/{id}/stop-share` ends a share through the same path as `share_stop` (`Voice::moderator_stop_share`):
    the room and the sharer get `peer_share` with `null`, the SFU stops forwarding the video, and the sharer then gets `share_stopped`,
    which the client shows as "A moderator stopped your screen share." Nothing holds afterwards: the sharer may share again.
-8. The server pings every 25 s and drops a socket silent for two periods (`ws.rs`).
+8. The server pings every 25 s. A client sends `ping` every 10 s and the server answers `pong` at once. Once a socket has sent a
+   `ping`, the server drops it after 30 s with no frame from it (three pings lost); a socket that never sent one (an older app)
+   gets two ping periods, 50 s, as before (`ws.rs`, `APP_IDLE`).
+
+### A call outlives its socket
+
+In production a socket sometimes goes silent both ways while the media, which is UDP straight to the SFU, keeps flowing (a stall
+somewhere between the client and the server, seen behind a Cloudflare tunnel). So a socket that ends while its user is in a call
+does not end the call (`Voice::hold`, `voice.rs`): the member and its SFU session stay for `CALL_GRACE` (60 s), and nobody is told.
+This holds for every end but these, which end the call at once as before: `leave`, a close the server chose (sign out, a ban,
+a rate limit, a moderator disconnect; a full queue, 1013, is a stall and holds), and a close frame from the client with any code
+but 4004 (`CLOSE_STALLED`), such as a tab closing (1001). While the call is held the SFU does not close it for an offer left
+unanswered (`SfuHandle::hold`): the client cannot get the offer until it is back, and the server keeps the last unanswered offer.
+
+A new socket takes the call back with `resume { room_id, session, muted, deafened }`, `session` being the number from its
+`joined`. The server reads the user and the room again and checks access as for a join (banned, or the room hidden: refused).
+The call must be the user's current one, in that room, with that number, and joined from the same login session (device):
+another account, another device of the same account, or a stale number gets `resume_failed`, and the call is not touched. On
+success the call's socket becomes the new one (SFU offers and presence messages go there, and a `leave` from the old socket no
+longer ends it), and the socket gets `resumed { peers }` (everyone in the call, you too), `force_muted` with the current value,
+the unanswered SFU offer if there is one (its 10 s answer timeout starts again), and `watchers` if you share. `muted` and
+`deafened` apply as in `set_voice_state`, and the room gets `peer_state` if they changed. A socket already in a call gets
+`bad_message` for a `resume`. A `resume` also works while the old socket is not yet known dead.
+
+When the grace runs out without a `resume`, the call ends exactly as a `leave` (`peer_left` to the room). A sign out, a revoked
+device or a password change ends the held calls of the ended login sessions too (`Voice::end_devices`), since they have no
+socket to close; a ban or a kick ends them as before. A join by the same account (another tab, or the same tab joining again)
+replaces a held call as it replaces any other. The SFU ending the session (ICE lost after about 19 s with no media) ends a held
+call at once, so a closed laptop does not stay in the room for the whole grace.
 
 Each socket may send a burst of 20 messages, then 5 a second (`answer` does not count, since the server asks for it). A message
 over the limit is dropped with `error { code: rate_limited }`. Past 20 such refusals (then 1 a second) the socket closes with 1008.
@@ -195,8 +235,9 @@ takes them out of voice. A moderator disconnect closes all of that user's socket
 client may reconnect. Each socket has a queue of 256 messages and every send is non-blocking: a send to a full queue closes that
 socket with 1013, through a signal outside the queue, so a client that stopped reading cannot hold memory or the task. A closing
 socket leaves the hub and voice first, then waits up to 1 s for the client's close reply. Ending a voice session never closes
-the socket. Each socket's end is logged at info, with why and the close code it sent (`socket of <user_id> ended: no pong in
-time (close code None)`), and the SFU warns `client <user_id> ice disconnected` when a session's media connection times out.
+the socket. Each socket's end is logged at info, with why, the close code it sent and whether its call was kept for a `resume`
+(`socket of <user_id> ended: no pong in time (close code None, call kept: true)`); a held call that runs out logs
+`call of <user_id> ended: no resume in 60s`. The SFU warns `client <user_id> ice disconnected` when a session's media connection times out.
 
 Tests: `crates/vesper-server/tests/signaling.rs` (a real server and sockets, `FakeClient` as the browser's WebRTC side) and the
 unit tests in `hub.rs` and `voice.rs`.
@@ -213,13 +254,13 @@ unit tests in `hub.rs` and `voice.rs`.
   `peer_left` for itself; it may join again, which takes the call back. Each join gets a fresh `session` number
   (`next_session`, `voice.rs`). `answer`, `set_voice_state` and `leave` carry the socket's session and are
   ignored if it is no longer current, because the SFU keys sessions by user alone. SFU offers for a stale session are not
-  forwarded to the new socket.
+  forwarded to the new socket. A `resume` keeps the session number and moves the call to the new socket.
 - Joins are serialised by one lock, so a rejoin finishes closing the old SFU session (up to a timeout) before anyone else joins.
 
 ## SFU ownership
 
 - The SFU thread owns the UDP socket, every str0m `Rtc` client and all media state. Nothing else touches them. The server sends it commands
-  (`join`, `answer`, `leave`, `set_muted`, `set_sharing`, `watch`, `set_advertised`) over a channel and gets `SfuEvent::Offer`,
+  (`join`, `answer`, `leave`, `set_muted`, `set_sharing`, `watch`, `hold`, `set_advertised`) over a channel and gets `SfuEvent::Offer`,
   `SfuEvent::ShareCut` and `SfuEvent::Closed` back per session.
 - Video ([ADR 0009](decisions/0009-video-in-the-sfu.md)): a join offer has one audio m-line and at most one VP8 video m-line. A client with
   video is offered every other video track at join. Packets flow only while `set_sharing(user, true)` holds for the sender and
@@ -233,8 +274,8 @@ unit tests in `hub.rs` and `voice.rs`.
   `SfuEvent::ShareCut` once to that session. Video from a client that is not sharing is dropped before it is measured.
 - `Voice` owns presence: who is in which room, muted, deafened or force-muted, and the socket for each session. It keeps the
   latest copy of each room for visibility checks. It does not touch media.
-- A session ends on ICE timeout, an error, an offer unanswered for `answer_timeout` (10 s), `leave`, or a new join by the same user
-  (`SfuEvent` docs, `vesper-sfu/src/lib.rs`).
+- A session ends on ICE timeout, an error, an offer unanswered for `answer_timeout` (10 s, not while the server holds the session
+  for a `resume`), `leave`, or a new join by the same user (`SfuEvent` docs, `vesper-sfu/src/lib.rs`).
 - Advertised address: with `VESPER_PUBLIC_HOST` set, the server resolves it at start and every 60 s and calls `set_advertised`. A failed
   resolve keeps the old address. Only sessions started afterwards use a changed address, so people in a call rejoin after the public IP changes
   (`public_addr.rs`).
@@ -636,7 +677,8 @@ service, a notification on screen, iOS, Firefox and Safari.
   (400, tested for the stalled login body) and the connection closes, since the body was not read to the end. The bodies are at most 32 KiB.
 - **Uploads and profile pictures:** 30 s idle and 10 minutes in all (`uploads::READ_IDLE`, `READ_TOTAL`): in `read_body` for
   uploads, as layers for `/api/me/avatar`. The partial upload file is deleted when the body stops, errors or the client goes away (one `Drop` guard; tested for the client going away).
-- **WebSocket:** once upgraded the socket leaves hyper, so none of these apply. It has its own ping (25 s, dropped after two silent periods).
+- **WebSocket:** once upgraded the socket leaves hyper, so none of these apply. It has its own ping (25 s, dropped after two silent
+  periods), and a client that sends `ping` every 10 s is dropped after 30 s of silence.
 - **No response timeout.** A client that reads a download slowly keeps its connection ([known-issues.md](known-issues.md#security-and-abuse)).
 
 Tests: `crates/vesper-server/tests/timeouts.rs` over raw TCP (half a head, a kept-alive connection answered twice and then closed when

@@ -399,7 +399,7 @@ async fn only_the_first_join_starts_voice() {
         let j = server
             .state
             .voice
-            .join(&s.user, &general, client.offer().into(), tx)
+            .join(&s.user, &general, client.offer().into(), 0, tx)
             .await
             .unwrap();
         assert_eq!(j.first, first, "{}", s.user.username);

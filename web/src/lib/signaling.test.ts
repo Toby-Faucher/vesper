@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Signaling } from './signaling';
+import { PING_MS, SILENT_MS, STALLED, Signaling } from './signaling';
 import { joinRoom } from './join';
 
 class FakeWS {
@@ -14,12 +14,56 @@ class FakeWS {
   send(s: string) { this.sent.push(s); }
   open() { this.readyState = 1; this.onopen?.(); }
   closed = false;
-  close() { this.closed = true; this.onclose?.({ code: 1000 }); }
+  closeCode?: number;
+  close(code?: number) { this.closed = true; this.closeCode = code; this.onclose?.({ code: 1000 }); }
 }
 const make = () => {
   const s = new Signaling('ws://x/ws', FakeWS as unknown as typeof WebSocket);
   return { s, ws: FakeWS.last };
 };
+
+describe('Signaling heartbeat', () => {
+  afterEach(() => vi.useRealTimers());
+  const pings = (ws: FakeWS) => ws.sent.filter((x) => JSON.parse(x).type === 'ping').length;
+
+  it('pings every 10 s while open, and stops when closed', () => {
+    vi.useFakeTimers();
+    const { s, ws } = make();
+    vi.advanceTimersByTime(PING_MS * 3);
+    expect(pings(ws)).toBe(0); // not open yet
+    ws.open();
+    for (let i = 1; i <= 2; i++) {
+      vi.advanceTimersByTime(PING_MS);
+      ws.onmessage!({ data: '{"type":"pong"}' });
+      expect(pings(ws)).toBe(i);
+    }
+    s.close();
+    vi.advanceTimersByTime(PING_MS * 3);
+    expect(pings(ws)).toBe(2);
+  });
+
+  it('a socket silent for 25 s closes as stalled at once, without waiting for the browser', () => {
+    vi.useFakeTimers();
+    const { s, ws } = make();
+    const cb = vi.fn();
+    s.onClose(cb);
+    ws.open();
+    // Any message counts as heard, so a quiet but working socket stays.
+    vi.advanceTimersByTime(SILENT_MS - 1);
+    ws.onmessage!({ data: '{"type":"pong"}' });
+    vi.advanceTimersByTime(SILENT_MS - 1);
+    expect(cb).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(cb).toHaveBeenCalledExactlyOnceWith(false, STALLED);
+    expect(ws.closeCode).toBe(STALLED);
+    // The browser's own late close changes nothing, and no more pings go out.
+    ws.onclose?.({ code: 1006 });
+    const sent = ws.sent.length;
+    vi.advanceTimersByTime(PING_MS * 3);
+    expect(cb).toHaveBeenCalledOnce();
+    expect(ws.sent.length).toBe(sent);
+  });
+});
 
 describe('Signaling', () => {
   it('sends JSON, queueing until open', () => {

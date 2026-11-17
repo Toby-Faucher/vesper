@@ -166,6 +166,10 @@ pub(crate) enum Command {
         on: bool,
     },
     SetAdvertised(Vec<SocketAddr>),
+    Hold {
+        user: String,
+        on: bool,
+    },
     #[cfg(feature = "test-support")]
     Panic,
 }
@@ -236,6 +240,17 @@ impl SfuHandle {
         self.send(Command::Watch {
             viewer: viewer.into(),
             sharer: sharer.into(),
+            on,
+        });
+    }
+
+    /// Hold `user`'s session while its signaling is away (`on`), or end the hold. A held session is not closed for
+    /// an unanswered offer: its client cannot get the offer until it is back. Ending the hold starts the answer
+    /// timeout of an outstanding offer again, so the client has the whole of it once the offer is sent again.
+    /// Keyed by session: a new join by `user` starts not held.
+    pub fn hold(&self, user: &str, on: bool) {
+        self.send(Command::Hold {
+            user: user.into(),
             on,
         });
     }

@@ -5,7 +5,7 @@ import { badge, resetBadge } from './ui/badge';
 import { onServerMsg } from './ui/notify';
 import { recentKey } from './ui/recent';
 import { tray } from './ui/tray.svelte';
-import { Signaling } from './signaling';
+import { STALLED, Signaling } from './signaling';
 import { applyServerMsg, emptyState, type AppState } from './state';
 import type { Me } from './gen/Me';
 import type { MessagePage } from './gen/MessagePage';
@@ -139,13 +139,14 @@ function open(): void {
     if (byClient) return;
     if (code === 4001) toLogin('Your session ended. Sign in again.');
     else if (code === 4003) session.notice = 'A moderator disconnected you.';
+    else if (code === STALLED) retry(0); // the network was fine a moment ago: try at once, so a call can resume
     else retry();
   });
 }
 
 // A refused upgrade (signed out) looks like a network drop, so ask /api/me before each new socket.
-function retry(): void {
-  const ms = backoffMs(tries++);
+function retry(wait?: number): void {
+  const ms = wait ?? backoffMs(tries++);
   session.retryAt = Date.now() + ms;
   timer = setTimeout(attempt, ms);
 }

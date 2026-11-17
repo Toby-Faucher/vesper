@@ -57,7 +57,7 @@ function setup() {
   const onError = vi.fn();
   return { sent, sig, stream, onError, stop, emit: (m: ServerMsg) => msg(m), close: () => close() };
 }
-const joined: ServerMsg = { type: 'joined', user_id: 'u', answer: 'a', peers: [] };
+const joined: ServerMsg = { type: 'joined', user_id: 'u', answer: 'a', peers: [], session: 0 };
 afterEach(() => vi.unstubAllGlobals());
 
 const str0mSdp = (dir: string) =>
@@ -203,17 +203,42 @@ describe('joinRoom', () => {
     voice.ends.forEach((f) => f());
     expect(ended).toEqual([['u1', 'video'], ['u1', 'audio']]);
   });
-  it('reports post-join errors and cleans up on close', async () => {
+  it('reports post-join errors; a close after the join leaves the call to its owner', async () => {
     const t = setup();
     const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64, onError: t.onError });
     await tick();
-    t.emit(joined);
-    await p;
+    t.emit({ ...joined, session: 7 });
+    const r = await p;
+    expect(r.session).toBe(7);
     t.emit({ type: 'error', code: 'bad_message', message: 'x' });
     expect(t.onError).toHaveBeenCalledOnce();
     expect(t.onError.mock.calls[0][0].message).not.toMatch(/bad_message/);
     t.close();
+    expect(FakePC.last.closed).toBe(false); // kept for a resume; the caller closes it if the call ends
+    expect(t.stop).not.toHaveBeenCalled();
+  });
+  it('a close before the join is answered fails it and cleans up', async () => {
+    const t = setup();
+    const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64 });
+    await tick();
+    t.close();
+    await expect(p).rejects.toThrow('The connection to the server closed.');
     expect(FakePC.last.closed).toBe(true);
     expect(t.stop).toHaveBeenCalled();
+  });
+  it('rebind moves offers and answers to the new socket', async () => {
+    const t = setup();
+    const p = joinRoom(t.sig, { roomId: 1, stream: t.stream, bitrateKbps: 64, onError: t.onError });
+    await tick();
+    t.emit(joined);
+    const r = await p;
+    const t2 = setup();
+    r.rebind(t2.sig);
+    t.emit({ type: 'offer', sdp: str0mSdp('sendonly') }); // the old socket: no longer the call's
+    t2.emit({ type: 'offer', sdp: str0mSdp('sendonly') });
+    await vi.waitFor(() => expect(t2.sent.map((m) => m.type)).toEqual(['answer']));
+    expect(t.sent.map((m) => m.type)).toEqual(['join']);
+    t2.emit({ type: 'error', code: 'bad_message', message: 'x' });
+    expect(t.onError).toHaveBeenCalledOnce();
   });
 });

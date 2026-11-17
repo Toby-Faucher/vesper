@@ -41,6 +41,8 @@ pub const TOO_NEW: &str =
     "This server runs a newer Vesper that this app cannot talk to. Update the app.";
 /// How long a call whose socket dropped waits for it to come back, like the web's `REJOIN_MS`.
 pub const REJOIN_FOR: Duration = Duration::from_secs(60);
+/// A resume that takes longer than this shows "Reconnecting" in the call bar, as on the web.
+pub const RECONNECTING_AFTER: Duration = Duration::from_secs(4);
 /// A share stops being watched this long after its view went away, like the web's `WATCH_GRACE_MS`, so a quick
 /// look at another room costs no keyframe wait.
 pub const WATCH_GRACE: Duration = Duration::from_secs(10);
@@ -177,6 +179,10 @@ pub struct Call {
     pub speaking: Vec<String>,
     /// The room to join again once the socket is back, and since when.
     pub rejoin: Option<(i64, Instant)>,
+    /// The server's number for this call, from `joined`, for `resume` (0 from an older server: no resume).
+    pub session: u64,
+    /// The socket dropped mid-call, and since when: the call and its engine go on, and the next socket takes it back.
+    pub resuming: Option<Instant>,
     /// Why the last call ended or what went wrong in this one.
     pub error: String,
     /// What the noise filter does, or why DeepFilterNet is not running.
@@ -240,6 +246,8 @@ impl Default for Call {
             me_speaking: false,
             speaking: vec![],
             rejoin: None,
+            session: 0,
+            resuming: None,
             error: String::new(),
             filter: String::new(),
             echo_off: String::new(),
@@ -294,6 +302,12 @@ impl Call {
     }
 
     /// `id`'s share is drawn somewhere: a tile in the open panel, or its own window.
+    /// A resume has taken longer than `RECONNECTING_AFTER`: the call bar says "Reconnecting". A shorter gap shows nothing.
+    pub fn reconnecting(&self, now: Instant) -> bool {
+        self.resuming
+            .is_some_and(|t| now.saturating_duration_since(t) >= RECONNECTING_AFTER)
+    }
+
     pub fn wanted(&self, id: &str) -> bool {
         self.shown(id) || self.popped.as_deref() == Some(id)
     }
@@ -583,7 +597,17 @@ impl Model {
                     self.notice.clear(); // the next hello says it again
                 }
                 self.retry_at = Some(Instant::now() + retry_in);
-                // The media goes with the socket; the call is joined again once a new one is up.
+                // The server keeps the call for a while and the media (UDP) runs on its own: the engine goes on, and
+                // the next socket takes the call back. Past REJOIN_FOR (checked at each try) it is over.
+                let c = &mut self.call;
+                if c.phase == Phase::Joined && c.session > 0 {
+                    let since = *c.resuming.get_or_insert_with(Instant::now);
+                    if since.elapsed() < REJOIN_FOR {
+                        return vec![];
+                    }
+                    return self.end_call(CALL_DROPPED, false);
+                }
+                // Without a call number the media goes with the socket; the call is joined again once a new one is up.
                 let Some(room) = self.call.room else {
                     return vec![];
                 };
@@ -779,6 +803,19 @@ impl Model {
             if !dms.is_empty() {
                 cmds.push(Cmd::SeedActivity(dms));
             }
+            if let Some(since) = self.call.resuming {
+                let c = &self.call;
+                if since.elapsed() < REJOIN_FOR {
+                    cmds.push(Cmd::Signal(ClientMsg::Resume {
+                        room_id: c.room.expect("a call has a room"),
+                        session: c.session,
+                        muted: c.muted,
+                        deafened: c.deafened,
+                    }));
+                } else {
+                    cmds.extend(self.end_call(CALL_DROPPED, false));
+                }
+            }
             if let Some((room, since)) = self.call.rejoin.take() {
                 if since.elapsed() < REJOIN_FOR {
                     cmds.extend(self.join_voice(room));
@@ -904,8 +941,10 @@ impl Model {
     fn call_msg(&mut self, m: &ServerMsg) -> Vec<Cmd> {
         let c = &mut self.call;
         match m {
-            ServerMsg::Joined { answer, .. } if c.phase == Phase::Joining => {
-                c.phase = Phase::Joined;
+            ServerMsg::Joined {
+                answer, session, ..
+            } if c.phase == Phase::Joining => {
+                (c.phase, c.session) = (Phase::Joined, *session);
                 let mut cmds = vec![Cmd::Voice(VoiceCmd::Answer(answer.clone()))];
                 // A force mute that came while joining.
                 if c.muted || c.deafened {
@@ -915,6 +954,17 @@ impl Model {
             }
             ServerMsg::Offer { sdp } if c.phase == Phase::Joined => {
                 vec![Cmd::Voice(VoiceCmd::Offer(sdp.clone()))]
+            }
+            ServerMsg::Resumed { .. } if c.resuming.is_some() => {
+                c.resuming = None;
+                vec![]
+            }
+            // The server ended the call meanwhile: end it here and join the room again on this socket.
+            ServerMsg::ResumeFailed if c.resuming.is_some() => {
+                let room = c.room.expect("a call has a room");
+                let mut cmds = self.end_call("", false);
+                cmds.extend(self.join_voice(room));
+                cmds
             }
             // My own id: another device took the call, a moderator removed me, or access was lost.
             ServerMsg::PeerLeft { user_id }
@@ -2198,6 +2248,7 @@ mod tests {
             user_id: "a".into(),
             answer: "ans".into(),
             peers: vec![],
+            session: 0,
         };
         assert!(
             matches!(server(&mut m, joined).as_slice(), [Cmd::Voice(VoiceCmd::Answer(a))] if a == "ans")
@@ -2575,6 +2626,93 @@ mod tests {
         m.call.rejoin = m.call.rejoin.map(|(r, t)| (r, t - REJOIN_FOR));
         let cmds = server(&mut m, hello());
         assert!(!cmds.iter().any(|c| matches!(c, Cmd::Voice(_))));
+        assert_eq!(m.call.error, CALL_DROPPED);
+    }
+
+    /// In a call the server numbered (session 5), with the socket just dropped.
+    fn resuming() -> Model {
+        let mut m = in_call();
+        m.call.session = 5;
+        let cmds = m.apply(Event::Offline {
+            retry_in: std::time::Duration::from_secs(1),
+        });
+        assert!(cmds.is_empty(), "the engine goes on: {cmds:?}");
+        m
+    }
+
+    #[test]
+    fn a_dropped_socket_resumes_the_call_quietly() {
+        let mut m = resuming();
+        // The call goes on as it was: no stop, no error, no rejoin, no banner, and no "Reconnecting" yet.
+        assert_eq!((m.call.phase, m.call.room), (Phase::Joined, Some(1)));
+        assert!(m.call.error.is_empty() && m.call.rejoin.is_none());
+        let at = m.call.resuming.expect("resuming");
+        assert!(!m.call.reconnecting(at + Duration::from_secs(1)));
+        assert!(m.call.reconnecting(at + RECONNECTING_AFTER));
+        // Further tries change nothing.
+        assert!(
+            m.apply(Event::Offline {
+                retry_in: std::time::Duration::from_secs(2)
+            })
+            .is_empty()
+        );
+        m.toggle_mute(); // while away: the resume carries it
+        let cmds = server(&mut m, hello());
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                Cmd::Signal(ClientMsg::Resume {
+                    room_id: 1,
+                    session: 5,
+                    muted: true,
+                    deafened: false
+                })
+            )),
+            "{cmds:?}"
+        );
+        assert!(!cmds.iter().any(|c| matches!(c, Cmd::Voice(_))), "{cmds:?}");
+        let cmds = server(&mut m, ServerMsg::Resumed { peers: vec![] });
+        assert!(!cmds.iter().any(|c| matches!(c, Cmd::Voice(_))), "{cmds:?}");
+        assert!(m.call.resuming.is_none());
+        assert_eq!(m.call.phase, Phase::Joined);
+        // Offers on the new socket reach the same engine.
+        let cmds = server(&mut m, ServerMsg::Offer { sdp: "o2".into() });
+        assert!(matches!(cmds.as_slice(), [Cmd::Voice(VoiceCmd::Offer(s))] if s == "o2"));
+    }
+
+    #[test]
+    fn a_failed_resume_ends_the_call_and_joins_again() {
+        let mut m = resuming();
+        server(&mut m, hello());
+        let cmds = server(&mut m, ServerMsg::ResumeFailed);
+        assert!(
+            cmds.iter().any(|c| matches!(c, Cmd::Voice(VoiceCmd::Stop))),
+            "{cmds:?}"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Cmd::Voice(VoiceCmd::Start { .. }))),
+            "{cmds:?}"
+        );
+        assert_eq!((m.call.phase, m.call.room), (Phase::Starting, Some(1)));
+        assert!(m.call.resuming.is_none());
+    }
+
+    #[test]
+    fn a_resume_too_late_ends_the_call() {
+        let mut m = resuming();
+        m.call.resuming = m.call.resuming.map(|t| t - REJOIN_FOR);
+        let cmds = server(&mut m, hello());
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Voice(VoiceCmd::Stop))));
+        assert!(!cmds.iter().any(|c| matches!(c, Cmd::Signal(_))));
+        assert_eq!(m.call.error, CALL_DROPPED);
+        // The same at a later try while still offline.
+        let mut m = resuming();
+        m.call.resuming = m.call.resuming.map(|t| t - REJOIN_FOR);
+        let cmds = m.apply(Event::Offline {
+            retry_in: std::time::Duration::from_secs(2),
+        });
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Voice(VoiceCmd::Stop))));
         assert_eq!(m.call.error, CALL_DROPPED);
     }
 
@@ -3235,6 +3373,7 @@ mod tests {
             user_id: "a".into(),
             answer: "ans".into(),
             peers: vec![],
+            session: 0,
         };
         assert!(sent(&server(&mut m, joined)), "Joined sends it");
         assert!(sent(&m.toggle_mute()));

@@ -332,6 +332,7 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
         user_id: "a".into(),
         answer: "answer".into(),
         peers: vec![bob],
+        session: 0,
     };
     apply(&view, cx, Event::Server(Box::new(joined)));
     apply(
@@ -513,6 +514,7 @@ fn the_share_panel_watches_every_share_and_fits_each_picture(cx: &mut TestAppCon
         user_id: "a".into(),
         answer: "answer".into(),
         peers: vec![sharer("b", "Bob"), sharer("c", "Cat")],
+        session: 0,
     };
     apply(&view, cx, Event::Server(Box::new(joined)));
     cx.update(|w, _| w.refresh());
@@ -1494,6 +1496,7 @@ fn watching_bob(
         user_id: "a".into(),
         answer: "answer".into(),
         peers: vec![bob],
+        session: 0,
     };
     apply(view, cx, Event::Server(Box::new(joined)));
     drain(rx);
@@ -2262,6 +2265,7 @@ fn the_call_bar_shares_my_screen(cx: &mut TestAppContext) {
         user_id: "a".into(),
         answer: "answer".into(),
         peers: vec![],
+        session: 0,
     };
     apply(&view, cx, Event::Server(Box::new(joined)));
     apply(&view, cx, voice(VoiceEvent::Connected));
@@ -2320,6 +2324,7 @@ fn the_share_dialog_picks_a_screen_or_window(cx: &mut TestAppContext) {
         user_id: "a".into(),
         answer: "answer".into(),
         peers: vec![],
+        session: 0,
     };
     apply(&view, cx, Event::Server(Box::new(joined)));
     drain(&mut rx);

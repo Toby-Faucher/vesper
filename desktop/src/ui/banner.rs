@@ -57,7 +57,8 @@ impl Vesper {
         self.banner.was_online |= m.online;
         let want: Option<(String, bool)> = if !m.notice.is_empty() {
             Some((m.notice.clone(), false))
-        } else if m.online || !self.banner.was_online {
+        } else if m.online || !self.banner.was_online || m.call.resuming.is_some() {
+            // A call that resumes on the next socket shows only the call bar's quiet line.
             None
         } else {
             Some(match m.retry_at {

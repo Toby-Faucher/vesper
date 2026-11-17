@@ -11,7 +11,8 @@ use axum::response::{IntoResponse, Response};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Instant;
 use vesper_protocol::{
-    CLOSE_SESSION_ENDED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Me, ServerMsg, ShareInfo, UserInfo,
+    CLOSE_SESSION_ENDED, CLOSE_STALLED, ClientMsg, ErrorCode, MAX_MSG_BYTES, Me, ServerMsg,
+    ShareInfo, UserInfo,
 };
 use vesper_store::{StoreError, now_ms};
 
@@ -19,7 +20,7 @@ use crate::AppState;
 use crate::api_accounts::ApiError;
 use crate::api_rooms::{listed, visible_room};
 use crate::auth::{cookie_token, hash_token};
-use crate::hub::{Inbox, Outbox, outbox};
+use crate::hub::{CLOSE_TOO_SLOW, Inbox, Outbox, outbox};
 use crate::limits::{Bucket, Kind};
 use crate::voice::JoinResult;
 
@@ -35,6 +36,10 @@ const MSG_REFILL: Duration = Duration::from_millis(200);
 /// Refused messages a socket may send (20, then 1 a second) before it is closed.
 const REFUSED_BURST: f64 = 20.0;
 const REFUSED_REFILL: Duration = Duration::from_secs(1);
+/// A client that sends `ping` does so every 10 s, so 30 s with no frame from it means the socket
+/// is dead (three pings lost). A client that never sent one (an older app) only answers the
+/// WebSocket pings, so it gets two ping intervals (50 s) as before.
+const APP_IDLE: Duration = Duration::from_secs(30);
 
 struct Budget {
     msgs: Bucket,
@@ -208,32 +213,37 @@ async fn handle(
     let mut budget = Budget::new(std::time::Instant::now());
     let mut ping = tokio::time::interval(st.ping_interval);
     let mut last_seen = Instant::now();
-    // Why the socket ended, for the log: a dropped call is otherwise silent here.
-    let why = loop {
+    // How long the client may stay silent: shorter once it showed it sends `ping`.
+    let mut idle = st.ping_interval * 2;
+    // Why the socket ended, for the log: a dropped call is otherwise silent here. Every end but
+    // a close the server chose for a reason (sign out, rate limit) or a plain close by the client
+    // (a tab closed) keeps the call for a `resume`.
+    let (why, keep_call) = loop {
         tokio::select! {
             biased;
-            _ = close.changed() => break "closed by the server",
+            _ = close.changed() => break ("closed by the server", *close.borrow() == Some(CLOSE_TOO_SLOW)),
             Some(m) = queue.recv() => {
                 let text = serde_json::to_string(&m).expect("ServerMsg serialises");
                 if !send(&mut socket, &mut close, Message::text(text)).await {
-                    break "write failed";
+                    break ("write failed", true);
                 }
             }
+            // Catches clients that vanished without a FIN (NAT drop, power loss, a stalled tunnel).
+            _ = tokio::time::sleep_until(last_seen + idle) => break ("no pong in time", true),
             _ = ping.tick() => {
-                // Catches clients that vanished without a FIN (NAT drop, power loss).
-                if last_seen.elapsed() > st.ping_interval * 2 {
-                    break "no pong in time";
-                }
                 if !send(&mut socket, &mut close, Message::Ping(Default::default())).await {
-                    break "ping write failed";
+                    break ("ping write failed", true);
                 }
             }
             msg = socket.recv() => {
                 let text = match msg {
                     Some(Ok(Message::Text(t))) => t,
-                    Some(Ok(Message::Close(_))) => break "closed by the client",
-                    Some(Err(_)) => break "read failed",
-                    None => break "connection ended",
+                    Some(Ok(Message::Close(f))) => {
+                        let stalled = f.is_some_and(|f| f.code == CLOSE_STALLED);
+                        break ("closed by the client", stalled);
+                    }
+                    Some(Err(_)) => break ("read failed", true),
+                    None => break ("connection ended", true),
                     Some(Ok(_)) => {
                         last_seen = Instant::now();
                         continue;
@@ -241,6 +251,9 @@ async fn handle(
                 };
                 last_seen = Instant::now();
                 let parsed = serde_json::from_str::<ClientMsg>(&text);
+                if matches!(parsed, Ok(ClientMsg::Ping)) {
+                    idle = idle.min(APP_IDLE);
+                }
                 match admit_msg(&mut budget, &parsed, std::time::Instant::now()) {
                     Admit::Yes => {}
                     Admit::RateLimited => {
@@ -253,7 +266,7 @@ async fn handle(
                         continue;
                     }
                 }
-                let error = calls.dispatch(&st, &user_id, &tx, parsed).await;
+                let error = calls.dispatch(&st, &user_id, session_id, &tx, parsed).await;
                 if let Some((code, message)) = error {
                     tx.send(ServerMsg::Error { code, message });
                 }
@@ -262,9 +275,15 @@ async fn handle(
     };
     // Leave first, so the room sees PeerLeft now, not after the close handshake below.
     st.app.hub.remove(conn);
-    calls.end(&st);
+    if keep_call {
+        calls.hold(&st, &tx);
+    } else {
+        calls.end(&st, &tx);
+    }
     let code = *close.borrow();
-    tracing::info!("socket of {user_id} ended: {why} (close code {code:?})");
+    tracing::info!(
+        "socket of {user_id} ended: {why} (close code {code:?}, call kept: {keep_call})"
+    );
     if let Some(code) = code {
         close_handshake(&mut socket, code).await;
     }
@@ -303,18 +322,49 @@ impl Calls {
         &mut self,
         st: &WsState,
         user_id: &str,
+        device: i64,
         tx: &Outbox,
         parsed: Result<ClientMsg, serde_json::Error>,
     ) -> Option<(ErrorCode, String)> {
         let voice = &st.app.voice;
         match (parsed, &self.joined) {
             (Err(e), _) => Some((ErrorCode::BadMessage, format!("bad message: {e}"))),
+            (Ok(ClientMsg::Ping), _) => {
+                tx.send(ServerMsg::Pong);
+                None
+            }
+            (Ok(ClientMsg::Resume { .. }), Some(j)) if voice.is_current(&j.user_id, j.session) => {
+                Some((ErrorCode::BadMessage, "already joined: leave first".into()))
+            }
+            (
+                Ok(ClientMsg::Resume {
+                    room_id,
+                    session,
+                    muted,
+                    deafened,
+                }),
+                _,
+            ) => {
+                let call = Resume {
+                    room_id,
+                    session,
+                    device,
+                    muted,
+                    deafened,
+                };
+                match resume(st, user_id, call, tx).await {
+                    Ok(Some(j)) => self.joined = Some(j),
+                    Ok(None) => tx.send(ServerMsg::ResumeFailed),
+                    Err(e) => return Some(e),
+                }
+                None
+            }
             (Ok(ClientMsg::Join { .. }), Some(j)) if voice.is_current(&j.user_id, j.session) => {
                 Some((ErrorCode::BadMessage, "already joined: leave first".into()))
             }
             // Not joined, or the session ended under us (kick, other tab, SFU).
             (Ok(ClientMsg::Join { room_id, offer }), _) => {
-                match join(st, user_id, room_id, offer, tx).await {
+                match join(st, user_id, room_id, offer, device, tx).await {
                     Ok(j) => {
                         self.joined = Some(j);
                         None
@@ -392,7 +442,7 @@ impl Calls {
                 .map(|code| (code, "Bad pointer position.".into())),
             // Ends the call and the connection check, whichever runs.
             (Ok(ClientMsg::Leave), j) if j.is_some() || self.check.is_some() => {
-                self.end(st);
+                self.end(st, tx);
                 None
             }
             (Ok(_), _) => Some((ErrorCode::BadMessage, "join first".into())),
@@ -400,14 +450,62 @@ impl Calls {
     }
 
     /// Leave the call and end the connection check, whichever runs.
-    fn end(&mut self, st: &WsState) {
+    fn end(&mut self, st: &WsState, tx: &Outbox) {
         if let Some(j) = self.joined.take() {
-            st.app.voice.leave(&j.user_id, j.session);
+            st.app.voice.leave_from(&j.user_id, j.session, tx);
         }
         if let Some(c) = self.check.take() {
             st.app.voice.end_check(&c);
         }
     }
+
+    /// The socket dropped: hold the call for a `resume`, end the connection check.
+    fn hold(&mut self, st: &WsState, tx: &Outbox) {
+        if let Some(j) = self.joined.take() {
+            st.app.voice.hold(&j.user_id, j.session, tx);
+        }
+        self.end(st, tx);
+    }
+}
+
+/// What a `resume` names: the call, and the login session the socket belongs to.
+struct Resume {
+    room_id: i64,
+    session: u64,
+    device: i64,
+    muted: bool,
+    deafened: bool,
+}
+
+/// Look the user and the room up (as `join` does, so a ban or a lost room counts), then take the
+/// call back. `Ok(None)` when there is no such call of this device to take back.
+async fn resume(
+    st: &WsState,
+    user_id: &str,
+    call: Resume,
+    tx: &Outbox,
+) -> Result<Option<JoinResult>, (ErrorCode, String)> {
+    let internal = |e: vesper_store::StoreError| {
+        tracing::error!("store: {e}");
+        (ErrorCode::Internal, "server error".to_string())
+    };
+    let user = st.app.store.user(user_id).await.map_err(internal)?;
+    let room = match visible_room(&st.app, &user, call.room_id).await {
+        Ok(room) => room,
+        Err(StoreError::NotFound) => return Ok(None),
+        Err(e) => return Err(internal(e)),
+    };
+    let Resume {
+        session,
+        device,
+        muted,
+        deafened,
+        ..
+    } = call;
+    Ok(st
+        .app
+        .voice
+        .resume(&user, &room, session, device, muted, deafened, tx))
 }
 
 /// Charge the socket's budget for a message. `answer` is exempt, since the server asks for it.
@@ -430,6 +528,7 @@ async fn join(
     user_id: &str,
     room_id: i64,
     offer: String,
+    device: i64,
     tx: &Outbox,
 ) -> Result<JoinResult, (ErrorCode, String)> {
     let internal = |e: vesper_store::StoreError| {
@@ -446,7 +545,7 @@ async fn join(
     let j = st
         .app
         .voice
-        .join(&user, &room, offer, tx.clone())
+        .join(&user, &room, offer, device, tx.clone())
         .await
         .map_err(|code| voice_error(st, code))?;
     st.app.voice.ring(&room, user_id);

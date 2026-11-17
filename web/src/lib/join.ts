@@ -3,6 +3,7 @@
 import type { Peer } from './gen/Peer';
 import { tuneOpus } from './audio/opus';
 import { applyBitrate } from './devices';
+import type { ServerMsg } from './gen/ServerMsg';
 import { SIGNAL_MESSAGES, type Signaling } from './signaling';
 
 type Kind = 'audio' | 'video';
@@ -21,7 +22,13 @@ export async function joinRoom(
     onRemoteStream?: (id: string, s: MediaStream, kind: Kind) => void;
     onRemoteStreamEnd?: (id: string, kind: Kind) => void;
   },
-): Promise<{ pc: RTCPeerConnection; peers: Peer[]; userId: string; off: () => void; video: RTCRtpSender }> {
+): Promise<{
+  pc: RTCPeerConnection; peers: Peer[]; userId: string; off: () => void; video: RTCRtpSender;
+  /** The call's number for `resume` (0 from an older server: no resume). */
+  session: number;
+  /** Moves the call's handlers (SFU offers, errors) to a new socket, for a resume. */
+  rebind: (s: Signaling) => void;
+}> {
   // Browsers configure their Opus encoder from the REMOTE description, and str0m's carries only
   // minptime/useinbandfec, so remote SDP is tuned before it is applied. The local offer is tuned too
   // (cheap; it states what we want to receive).
@@ -49,25 +56,29 @@ export async function joinRoom(
     t.addEventListener('ended', () => live.get(key) === t && drop(key)); // a late end of the old track keeps the new one
   };
 
+  let cur = sig; // the socket of the call: a resume moves it to a new one
   let chain = Promise.resolve(); // renegotiation offers must run one at a time
   const handleOffer = async (sdp: string) => {
     await pc.setRemoteDescription({ type: 'offer', sdp: tune(sdp) });
     const a = await pc.createAnswer();
     const ans = tune(a.sdp ?? '');
     await pc.setLocalDescription({ type: 'answer', sdp: ans });
-    sig.send({ type: 'answer', sdp: ans });
+    cur.send({ type: 'answer', sdp: ans });
   };
 
   let settled = false;
   // The socket outlives the call: off() drops this call's handlers.
   const offs: (() => void)[] = [];
   const off = () => offs.splice(0).forEach((f) => f());
-  const joined = new Promise<{ answer: string; peers: Peer[]; user_id: string }>((resolve, reject) => {
+  const joined = new Promise<{ answer: string; peers: Peer[]; user_id: string; session?: number }>((resolve, reject) => {
+    // Before the join is answered a close fails it. After, the call outlives the socket (the caller resumes it or ends it).
     offs.push(sig.onClose(() => {
+      if (settled) return;
       pc.close();
       opts.stream.getTracks().forEach((t) => t.stop());
       [...live.keys()].forEach(drop);
-      if (!settled) reject(new Error('The connection to the server closed.'));
+      settled = true;
+      reject(new Error('The connection to the server closed.'));
     }));
     offs.push(sig.onMessage((m) => {
       if (m.type === 'joined') {
@@ -92,8 +103,18 @@ export async function joinRoom(
   await pc.setLocalDescription({ type: 'offer', sdp });
   sig.send(opts.check ? { type: 'check', offer: sdp } : { type: 'join', room_id: opts.roomId, offer: sdp });
 
+  const onCall = (m: ServerMsg) => {
+    if (m.type === 'error') report(Object.assign(new Error(SIGNAL_MESSAGES[m.code] ?? 'The server refused that. Try again.'), { code: m.code }));
+    else if (m.type === 'offer') chain = chain.then(() => handleOffer(m.sdp)).catch(report);
+  };
+  const rebind = (s: Signaling) => {
+    off();
+    cur = s;
+    offs.push(s.onMessage(onCall));
+  };
+
   try {
-    const { answer, peers, user_id } = await joined;
+    const { answer, peers, user_id, session = 0 } = await joined;
     await pc.setRemoteDescription({ type: 'answer', sdp: tune(answer) });
     const audio = pc.getSenders().find((x) => x.track?.kind === 'audio');
     if (audio) {
@@ -103,7 +124,7 @@ export async function joinRoom(
       p.encodings?.forEach((e) => (e.priority = e.networkPriority = 'high'));
       await audio.setParameters(p).catch(() => {});
     }
-    return { pc, peers, userId: user_id, off, video };
+    return { pc, peers, userId: user_id, off, video, session, rebind };
   } catch (e) {
     off();
     pc.close();

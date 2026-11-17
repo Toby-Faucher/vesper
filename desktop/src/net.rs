@@ -812,8 +812,11 @@ impl Api {
 pub const PAGE: u32 = 50;
 /// The retry count starts over only after a socket stayed up this long.
 const STABLE: Duration = Duration::from_secs(10);
-/// The server pings every 25 s, so a socket silent this long is dead (laptop sleep, a NAT timeout).
-const READ_TIMEOUT: Duration = Duration::from_millis(if cfg!(test) { 300 } else { 60_000 });
+/// The app sends `ping` this often and the server answers `pong`, so a working socket is never quiet for long.
+const PING_EVERY: Duration = Duration::from_millis(if cfg!(test) { 100 } else { 10_000 });
+/// Nothing at all from the server for this long: the socket is dead (laptop sleep, a NAT timeout, a stalled tunnel), as
+/// on the web (`SILENT_MS`). The server keeps a call for a resume meanwhile.
+const READ_TIMEOUT: Duration = Duration::from_millis(if cfg!(test) { 300 } else { 25_000 });
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(if cfg!(test) { 300 } else { 15_000 });
 
 /// Retry `n` waits a random 50 to 100% of min(30 s, 2 s * 2^n), like the web app.
@@ -1447,6 +1450,8 @@ async fn socket(
                 let mut code = None;
                 let idle = tokio::time::sleep(READ_TIMEOUT);
                 tokio::pin!(idle);
+                let mut ping =
+                    tokio::time::interval_at(tokio::time::Instant::now() + PING_EVERY, PING_EVERY);
                 loop {
                     let frame = tokio::select! {
                         f = ws.next() => {
@@ -1454,6 +1459,13 @@ async fn socket(
                             f
                         }
                         () = &mut idle => break,
+                        _ = ping.tick() => {
+                            let text = serde_json::to_string(&ClientMsg::Ping).expect("json");
+                            if ws.send(WsMsg::text(text)).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
                         Some(m) = out.recv() => {
                             let text = serde_json::to_string(&m).expect("json");
                             if ws.send(WsMsg::text(text)).await.is_err() {
@@ -1670,6 +1682,43 @@ mod tests {
         })
         .await;
         assert!(matches!(first_event(hung).await, Event::Offline { .. }));
+    }
+
+    /// The app pings, and a server that answers each ping keeps the socket up well past the read timeout; a server
+    /// that stops answering (`a_silent_socket...`) does not.
+    #[tokio::test]
+    async fn pings_keep_an_answering_socket_up() {
+        static PINGS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let api = silent(|s| async move {
+            let mut ws = tokio_tungstenite::accept_async(s).await.unwrap();
+            while let Some(Ok(WsMsg::Text(t))) = ws.next().await {
+                if serde_json::from_str::<ClientMsg>(&t).is_ok_and(|m| m == ClientMsg::Ping) {
+                    PINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let pong = serde_json::to_string(&ServerMsg::Pong).unwrap();
+                    ws.send(WsMsg::text(pong)).await.unwrap();
+                }
+            }
+        })
+        .await;
+        let (tx, mut rx) = unbounded_channel();
+        let (_out, out_rx) = unbounded_channel();
+        let h = tokio::spawn(socket(
+            api,
+            tx,
+            out_rx,
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        // Four read timeouts: only pongs come, never Offline.
+        let until = tokio::time::Instant::now() + READ_TIMEOUT * 4;
+        while let Ok(ev) = tokio::time::timeout_at(until, rx.recv()).await {
+            let ev = ev.unwrap();
+            assert!(
+                matches!(&ev, Event::Server(m) if **m == ServerMsg::Pong),
+                "{ev:?}"
+            );
+        }
+        h.abort();
+        assert!(PINGS.load(std::sync::atomic::Ordering::Relaxed) >= 8);
     }
 
     /// A loopback "server" that answers one request with `status` and `body`.

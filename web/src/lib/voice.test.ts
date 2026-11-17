@@ -487,6 +487,94 @@ describe('in a call', () => {
     expect(voice.rejoin).toBe(1);
   });
 
+  // A call the server numbered: a drop keeps it, and the next socket resumes it.
+  async function resumable() {
+    const rebind = vi.fn();
+    joinRoom.mockImplementation(async () => ({ pc: fakePc(), userId: me, off: vi.fn(), peers: [], video: { replaceTrack: vi.fn() }, session: 5, rebind }));
+    const p = v.join(1);
+    h.capture!.resolve(fakeCapture());
+    expect(await p).toBe(false);
+    return { rebind, pc: voice.pc as unknown as ReturnType<typeof fakePc> };
+  }
+
+  it('a drop keeps the call; the next socket resumes it on the same peer connection, with no cue and no rejoin', async () => {
+    const { rebind, pc } = await resumable();
+    const cues = chime.mock.calls.length;
+    lose();
+    expect(voice.joined).toBe(true);
+    expect(voice.resuming).toBe(true);
+    expect(voice.rejoin).toBe(null);
+    expect(pc.close).not.toHaveBeenCalled();
+    // A short gap shows nothing; a longer one a quiet "Reconnecting".
+    expect(voice.reconnecting).toBe(false);
+    vi.advanceTimersByTime(v.RECONNECTING_AFTER_MS);
+    expect(voice.reconnecting).toBe(true);
+    regain();
+    expect(rebind).toHaveBeenCalledWith(sig);
+    expect(sig.sent).toContainEqual({ type: 'resume', room_id: 1, session: 5, muted: false, deafened: false });
+    sig.emit({ type: 'resumed', peers: [] });
+    flushSync();
+    expect(voice.resuming).toBe(false);
+    expect(voice.reconnecting).toBe(false);
+    expect(voice.joined).toBe(true);
+    expect(voice.pc).toBe(pc);
+    expect(joinRoom).toHaveBeenCalledTimes(1); // no new peer connection, no new mic
+    expect(createCapture).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(REJOIN_MS); // the give-up timer went with the resume
+    expect(voice.error).toBe('');
+    expect(chime.mock.calls.length).toBe(cues); // no lost, disconnect or connect cue for the gap
+  });
+
+  it('a call that cannot resume (an older server gave no number) still plays the lost cue', async () => {
+    await joined();
+    chime.mockClear();
+    lose();
+    expect(chime).toHaveBeenCalledWith('lost', null, expect.any(Number));
+  });
+
+  it('a muted call resumes muted', async () => {
+    await resumable();
+    v.toggleMute();
+    lose();
+    regain();
+    expect(sig.sent).toContainEqual({ type: 'resume', room_id: 1, session: 5, muted: true, deafened: false });
+  });
+
+  it('resume_failed ends the call here and joins the room again', async () => {
+    const { pc } = await resumable();
+    lose();
+    regain();
+    sig.emit({ type: 'resume_failed' });
+    flushSync();
+    expect(pc.close).toHaveBeenCalled();
+    expect(voice.resuming).toBe(false);
+    h.capture!.resolve(fakeCapture());
+    await vi.waitFor(() => expect(voice.joined).toBe(true));
+    expect(joinRoom).toHaveBeenCalledTimes(2);
+    expect(joinRoom.mock.calls.at(-1)![1]).toMatchObject({ roomId: 1 });
+  });
+
+  it('a peer connection that failed during the gap is not resumed: the room is joined again', async () => {
+    const { pc } = await resumable();
+    lose();
+    (pc as { connectionState?: string }).connectionState = 'failed';
+    regain();
+    expect(sig.sent.some((m) => (m as { type: string }).type === 'resume')).toBe(false);
+    expect(pc.close).toHaveBeenCalled();
+    h.capture!.resolve(fakeCapture());
+    await vi.waitFor(() => expect(joinRoom).toHaveBeenCalledTimes(2));
+  });
+
+  it('no socket back within a minute ends a resuming call and says so', async () => {
+    const { pc } = await resumable();
+    lose();
+    vi.advanceTimersByTime(REJOIN_MS);
+    expect(voice.joined).toBe(false);
+    expect(voice.resuming).toBe(false);
+    expect(voice.error).toBe(DISCONNECTED);
+    expect(pc.close).toHaveBeenCalled();
+  });
+
   it('a drop while not in a call rejoins nothing', async () => {
     lose();
     expect(voice.rejoin).toBe(null);

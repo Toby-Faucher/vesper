@@ -212,6 +212,11 @@ fn handle_command(
                 }
             }
         }
+        Command::Hold { user, on } => {
+            if let Some(c) = live(clients, &user) {
+                c.hold(on);
+            }
+        }
         Command::SetAdvertised(addrs) => {
             check_advertised(socket_addr, &addrs);
             *advertised = addrs;
