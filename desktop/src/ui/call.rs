@@ -217,7 +217,11 @@ impl Vesper {
             .map(|r| r.name.clone())
             .unwrap_or_default();
         let grade = quality(c.quality.as_ref());
-        let q_text = quality_text(c.quality.as_ref());
+        let q_text = if c.reconnecting(Instant::now()) {
+            "Reconnecting".to_string()
+        } else {
+            quality_text(c.quality.as_ref())
+        };
         let q_color = if grade == Some(Grade::Poor) {
             t.warn_fg
         } else {

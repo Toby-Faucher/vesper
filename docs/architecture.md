@@ -46,7 +46,11 @@ The "Not verified" list at the end says what was only read.
   passes 4 s (`RECONNECTING_AFTER_MS`), and the connection banner stays hidden while a call resumes. On `resume_failed`, when
   the peer connection failed meanwhile, or with a server too old to number calls, the call ends in that tab and it joins the
   same room again by itself (`voice.rejoin`), so the others hear a leave and a join. If no socket is back within 60 s it
-  gives up and says "Disconnected from the server.". Joining any room yourself, or signing out, cancels it.
+  gives up and says "Disconnected from the server.". Joining any room yourself, or signing out, cancels it. The desktop app
+  does the same (`desktop/src/net.rs` `socket`, `model.rs` `Call::resuming`): `ping` every 10 s, a socket silent for 25 s
+  counts as dropped, and a call the server numbered keeps its engine and peer connection across the reconnect, sends
+  `resume` after the next `hello`, hides the offline banner meanwhile and shows "Reconnecting" in the call bar after 4 s.
+  It gives up after 60 s, checked at each reconnect try and at the next `hello`.
 - **The chat panel** (`web/src/routes/Chat.svelte`, store in `web/src/lib/chat.svelte.ts`) fills the open room's page (`RoomView.svelte`) under its
   header. History, sends, edits, deletes, reactions, pins, read markers, uploads and search go over REST; new and changed messages and
   typing come over the socket. A `message_updated` copy with a smaller `updated_at` than the one held is dropped, and after

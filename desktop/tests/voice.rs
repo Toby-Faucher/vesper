@@ -214,10 +214,25 @@ async fn force_mute_a_lost_socket_and_another_device() {
     })
     .await;
 
-    // The server drops bob's socket: the call goes with it and comes back with the next socket.
+    // A stall (here the server's "too slow" close, 1013): the server holds bob's call, the engine runs on, and the next
+    // socket resumes it. The same call, never left.
+    let call = b.model.call.id;
+    s.state.hub.close_user(&bob, 1013);
+    until_all(&mut [&mut a, &mut b], "bob's socket drops", |c| {
+        c[1].model.call.resuming.is_some()
+    })
+    .await;
+    until_all(&mut [&mut a, &mut b], "bob resumed and heard", |c| {
+        c[1].model.call.resuming.is_none() && c[1].model.online && hears(c[0], 440.0)
+    })
+    .await;
+    assert_eq!((b.model.call.id, b.model.call.phase), (call, Phase::Joined));
+    assert!(a.model.state.voice.iter().any(|p| p.user_id == bob));
+
+    // The server ends bob's socket on purpose (1012): the call goes with it, the resume fails, and bob joins again.
     s.state.hub.close_user(&bob, 1012);
-    until_all(&mut [&mut a, &mut b], "bob waits to rejoin", |c| {
-        c[1].model.call.rejoin.is_some()
+    until_all(&mut [&mut a, &mut b], "bob joins again", |c| {
+        c[1].model.call.id != call
     })
     .await;
     until_all(&mut [&mut a, &mut b], "bob rejoined and heard", |c| {
