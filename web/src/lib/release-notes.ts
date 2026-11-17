@@ -16,6 +16,15 @@ export function whatsNew(seen: string | null, current: string, notes: readonly N
 
 export const RELEASE_NOTES: readonly Note[] = [
   {
+    version: '2.3.2',
+    items: [
+      'Calls survive a short network drop: nobody leaves, no sound plays, and voice keeps going.',
+      'Desktop: sending a screen share is much faster on large screens.',
+      'Desktop: clicks work again after a dragged file goes nowhere.',
+      'Desktop: the window buttons no longer cover a full screen share.',
+    ],
+  },
+  {
     version: '2.3.1',
     items: [
       'Desktop: drag across many messages to select them, and Ctrl+A selects the chat.',

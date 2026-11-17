@@ -10025,7 +10025,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vesper-desktop"
-version = "2.3.1"
+version = "2.3.2"
 dependencies = [
  "ashpd 0.11.1",
  "auto-launch",
@@ -10076,7 +10076,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-dsp"
-version = "2.3.1"
+version = "2.3.2"
 dependencies = [
  "deep_filter",
  "ndarray",
@@ -10086,7 +10086,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-protocol"
-version = "2.3.1"
+version = "2.3.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -10095,7 +10095,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-server"
-version = "2.3.1"
+version = "2.3.2"
 dependencies = [
  "argon2 0.6.0",
  "aws-lc-rs",
@@ -10125,7 +10125,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-sfu"
-version = "2.3.1"
+version = "2.3.2"
 dependencies = [
  "str0m",
  "tokio",
@@ -10134,7 +10134,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-store"
-version = "2.3.1"
+version = "2.3.2"
 dependencies = [
  "getrandom 0.3.4",
  "serde_json",
