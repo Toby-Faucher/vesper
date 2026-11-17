@@ -177,8 +177,11 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
   grouped message do not. A search result's marks are square now (a text highlight has no corners). Verified by
   headless GPUI tests (a drag across two messages, Ctrl+A with rows scrolled out, Ctrl+A in the composer), not with a
   real mouse; the scroll past the list's edge is not verified at all.
-- A second launch brings the running app to the front and exits (a Unix socket, a named pipe on Windows). On Wayland the
-  same limit as Show Vesper applies. Verified on Linux by a unit test; the Windows pipe is not verified.
+- A second launch brings the running app to the front and exits (a Unix socket, a named pipe on Windows). On Wayland it
+  passes on the activation token its launcher gave it (`XDG_ACTIVATION_TOKEN`), which compositors honour where they
+  refuse the app's own; a launch from a terminal has none, and the Show Vesper limit applies. Hyprland ignores every
+  activation unless `misc:focus_on_activate = true`. Verified on Linux by unit tests; the activation on a real
+  compositor and the Windows pipe are not verified.
 - An incoming DM call plays the web's ring sound every 2.5 s, and the tray's tooltip says who calls; the window is not
   raised. The ring has no on and off switch or volume in Settings, and the other call sounds (join, leave, mute) are missing.
   Not verified on real speakers.

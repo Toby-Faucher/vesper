@@ -23,7 +23,8 @@ pub const RESERVE: f32 = if SHOWN {
 impl Vesper {
     /// The three buttons, floating at the window's top right over the 48 px top bar.
     pub(super) fn window_controls(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
-        if !SHOWN {
+        // A full screen share has its own buttons at the top right; Esc or its button leaves it.
+        if !SHOWN || self.share.full.is_some() {
             return None;
         }
         let restore = window.is_maximized() || window.is_fullscreen();

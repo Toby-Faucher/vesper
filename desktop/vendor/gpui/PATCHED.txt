@@ -36,3 +36,14 @@ small RGBA picture over the window's taskbar button on Windows (ITaskbarList3::S
 Vesper shows its unread dot there; its own crates forbid unsafe, so the COM call lives here. The PlatformWindow method
 does nothing by default, so every other platform is unchanged. Apply it again when updating, unless a new release has
 its own overlay icon API.
+
+A sixth change (src/platform/linux/wayland/client.rs, Wayland file drops): Enter read the dragged file list on a task
+and only then recorded the drag, so a Leave or Drop that came first was ignored and the late Entered left GPUI dragging
+for good (no click, move or resize worked until the next drag). The drag is now recorded at Enter; the task enters
+only while that same offer is current; a Drop before the list was read is an Exited. Apply it again when updating,
+unless the new release records the drag before reading the list.
+
+A seventh change (src/platform.rs, src/window.rs and src/platform/linux/wayland/window.rs): Window::
+activate_window_with_token activates with an xdg-activation token that another process got from its launcher (a
+second Vesper launch passes its XDG_ACTIVATION_TOKEN). Compositors refuse the app's own fresh token as focus stealing.
+Every other platform activates as before. Apply it again when updating, unless the new release takes a token.

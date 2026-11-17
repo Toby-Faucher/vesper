@@ -4119,6 +4119,13 @@ impl Window {
         self.platform_window.activate();
     }
 
+    /// vesper patch: activate the window with an activation token from the launcher of another process
+    /// (`XDG_ACTIVATION_TOKEN`). Wayland compositors honour it where they refuse a token of the app's own; elsewhere
+    /// this is `activate_window`.
+    pub fn activate_window_with_token(&self, token: String) {
+        self.platform_window.activate_with_token(token);
+    }
+
     /// Minimize the current window at the platform level.
     pub fn minimize_window(&self) {
         self.platform_window.minimize();

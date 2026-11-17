@@ -119,8 +119,14 @@ async fn require_origin(State(st): State<AppState>, req: Request, next: Next) ->
 
 /// Start the SFU and the HTTP server. Returns the bound HTTP address and the serving task.
 pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::io::Result<()>>)> {
+    // Resolved before the SFU starts, so it does not warn of no addresses while the refresh below has not run yet.
+    let advertised = match &cfg.public_host {
+        Some(host) => public_addr::resolve_public(host, cfg.udp_port_public).await,
+        None => vec![],
+    };
     let sfu = Sfu::spawn(SfuConfig {
         bind: cfg.udp_bind,
+        advertised,
         ..Default::default()
     })?;
     // Not in start_with_sfu: tests crash the SFU on purpose and must survive it.

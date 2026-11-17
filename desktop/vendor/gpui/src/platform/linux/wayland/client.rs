@@ -243,6 +243,8 @@ pub struct DragState {
     data_offer: Option<wl_data_offer::WlDataOffer>,
     window: Option<WaylandWindowStatePtr>,
     position: Point<Pixels>,
+    /// vesper patch: Entered went to the window (the file list was read).
+    entered: bool,
 }
 
 pub struct ClickState {
@@ -575,6 +577,7 @@ impl WaylandClient {
                 data_offer: None,
                 window: None,
                 position: Point::default(),
+                entered: false,
             },
             click: ClickState {
                 last_click: Instant::now(),
@@ -1911,6 +1914,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                     let Some(drag_window) = get_window(&mut state, &surface.id()) else {
                         return;
                     };
+                    // vesper patch: the drag is known from Enter on, so a Leave or Drop that comes before the file
+                    // list is read ends it. Before, both were dropped and the late Entered left GPUI dragging.
+                    state.drag.data_offer = Some(data_offer.clone());
+                    state.drag.window = Some(drag_window.clone());
+                    state.drag.position = Point::new(x.into(), y.into());
+                    state.drag.entered = false;
 
                     const ACTIONS: DndAction = DndAction::Copy;
                     data_offer.set_actions(ACTIONS, ACTIONS);
@@ -1946,24 +1955,26 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                                 .filter_map(|path| Url::parse(path).log_err())
                                 .filter_map(|url| url.to_file_path().log_err())
                                 .collect();
-                            let position = Point::new(x.into(), y.into());
 
+                            let client = this.get_client();
+                            let mut state = client.borrow_mut();
+                            // vesper patch: the drag already left or dropped (or another began): nothing to enter.
+                            if state.drag.data_offer.as_ref() != Some(&data_offer) {
+                                return;
+                            }
                             // Prevent dropping text from other programs.
                             if paths.is_empty() {
+                                state.drag.data_offer = None;
+                                state.drag.window = None;
                                 data_offer.destroy();
                                 return;
                             }
 
+                            state.drag.entered = true;
                             let input = PlatformInput::FileDrop(FileDropEvent::Entered {
-                                position,
+                                position: state.drag.position,
                                 paths: crate::ExternalPaths(paths),
                             });
-
-                            let client = this.get_client();
-                            let mut state = client.borrow_mut();
-                            state.drag.data_offer = Some(data_offer);
-                            state.drag.window = Some(drag_window.clone());
-                            state.drag.position = position;
 
                             drop(state);
                             drag_window.handle_input(input);
@@ -1972,7 +1983,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                 }
             }
             wl_data_device::Event::Motion { x, y, .. } => {
-                let Some(drag_window) = state.drag.window.clone() else {
+                let Some(drag_window) = state.drag.window.clone().filter(|_| state.drag.entered) else {
                     return;
                 };
                 let position = Point::new(x.into(), y.into());
@@ -1991,6 +2002,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
 
                 state.drag.data_offer = None;
                 state.drag.window = None;
+                state.drag.entered = false;
 
                 let input = PlatformInput::FileDrop(FileDropEvent::Exited {});
                 drop(state);
@@ -2001,15 +2013,23 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                     return;
                 };
                 let data_offer = state.drag.data_offer.clone().unwrap();
-                data_offer.finish();
+                // vesper patch: dropped before the file list was read: nothing entered, nothing to drop.
+                let entered = std::mem::take(&mut state.drag.entered);
+                if entered {
+                    data_offer.finish();
+                }
                 data_offer.destroy();
 
                 state.drag.data_offer = None;
                 state.drag.window = None;
 
-                let input = PlatformInput::FileDrop(FileDropEvent::Submit {
-                    position: state.drag.position,
-                });
+                let input = if entered {
+                    PlatformInput::FileDrop(FileDropEvent::Submit {
+                        position: state.drag.position,
+                    })
+                } else {
+                    PlatformInput::FileDrop(FileDropEvent::Exited {})
+                };
                 drop(state);
                 drag_window.handle_input(input);
             }
