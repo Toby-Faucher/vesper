@@ -54,7 +54,7 @@
   });
   const user = (p: Peer) => session.state.users[p.user_id] ?? { user_id: p.user_id, display_name: p.name, accent: '' };
   const LEVEL = { good: 3, fair: 2, poor: 1, unknown: 0 } as const;
-  const qText = $derived(voice.quality === 'good' ? 'Good connection' : voice.quality === 'unknown' ? 'Checking connection' : qualityText(voice.quality, voice.diag));
+  const qText = $derived(voice.reconnecting ? 'Reconnecting' : voice.quality === 'good' ? 'Good connection' : voice.quality === 'unknown' ? 'Checking connection' : qualityText(voice.quality, voice.diag));
   const [qWords, qFigure = ''] = $derived(qText.split(': '));
   const key = $derived(keyName(voice.settings.pushToTalk.key));
   const warning = $derived(

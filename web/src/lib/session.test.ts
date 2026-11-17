@@ -89,6 +89,19 @@ describe('session', () => {
     session.connect(); // the Reconnect button
     expect(FakeWS.all).toHaveLength(2);
   });
+  it('a socket silent for 25 s is closed and a new one opens at once, with no backoff', async () => {
+    const { session } = await load();
+    session.connect();
+    FakeWS.all[0].hello();
+    await vi.advanceTimersByTimeAsync(24_999);
+    expect(session.online).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(session.online).toBe(false);
+    await vi.advanceTimersByTimeAsync(10); // the /api/me check, then the socket: well under the shortest backoff (1 s)
+    expect(FakeWS.all).toHaveLength(2);
+    FakeWS.all[1].hello();
+    expect(session.online).toBe(true);
+  });
   it('backoff doubles from 1 to 2 s up to 15 to 30 s, with jitter', async () => {
     const { backoffMs } = await load();
     vi.spyOn(Math, 'random').mockReturnValue(0);

@@ -25,6 +25,7 @@ import type { CallTally } from './call-summary';
 import type { ServerMsg } from './gen/ServerMsg';
 import type { ShareSettings } from './share/prefs';
 import { clearShares, shares, type Mine } from './share/state.svelte';
+import type { Signaling } from './signaling';
 
 // Accessing localStorage itself throws when storage is blocked.
 const storage = (() => { try { return localStorage; } catch { return null; } })();
@@ -62,12 +63,21 @@ class Voice {
   retrying = $state(false);
   /** The room of a call whose socket dropped: joined again on the next socket, for up to REJOIN_MS. */
   rejoin = $state<number | null>(null);
+  /** The socket dropped mid-call, and the call goes on: the next socket takes it back (`resume`), for up to REJOIN_MS. */
+  resuming = $state(false);
+  /** A resume has taken longer than RECONNECTING_AFTER_MS: the call bar says "Reconnecting". A shorter gap shows nothing. */
+  reconnecting = $state(false);
   /** "Even out voices" (Settings > Voice), saved in this browser. */
   levelling = $state(loadLevelling());
 }
 export const voice = new Voice();
 
 let callOff: (() => void) | undefined; // drops the call's handlers from the shared socket
+let callSession = 0; // the server's number for this call, for `resume` (0: an older server, no resume)
+let callRebind: ((s: Signaling) => void) | undefined; // moves the call's handlers to a new socket
+let quietTimer: ReturnType<typeof setTimeout> | undefined; // sets voice.reconnecting
+/** A resume that takes longer than this shows "Reconnecting" in the call bar. */
+export const RECONNECTING_AFTER_MS = 4000;
 let playback: Playback | undefined;
 let sender: RTCRtpSender | undefined;
 let video: RTCRtpSender | undefined; // the screen share's sender, from joinRoom
@@ -88,6 +98,18 @@ function cancelRejoin() {
   clearTimeout(rejoinTimer);
   voice.rejoin = null;
 }
+/** Ends the call here and joins `room` again once a socket is up, giving up after REJOIN_MS. */
+function rejoinLater(room: number | null) {
+  teardown();
+  clearTimeout(rejoinTimer);
+  voice.rejoin = room;
+  rejoinTimer = setTimeout(() => {
+    voice.rejoin = null;
+    voice.error = DISCONNECTED;
+  }, REJOIN_MS);
+}
+// The media of the call still runs: a resume can keep it.
+const mediaUp = () => !!voice.pc && voice.pc.connectionState !== 'failed' && voice.pc.connectionState !== 'closed';
 const tracks = new Map<string, string>(); // remote track id to user_id, for the per-person stats
 
 // The call code (call-stack.ts) is a chunk of its own: loaded at idle after start (startVoice), on a hover, focus or press
@@ -236,11 +258,28 @@ export function startVoice(): () => void {
       if (room === null || !session.online || voice.joined || voice.joining) return;
       untrack(() => void join(room));
     });
+    // A new socket is up while the call goes on: take the call back on it. The answer is `resumed` or `resume_failed`.
+    $effect(() => {
+      const s = session.sig;
+      if (!voice.resuming || !s || !session.online) return;
+      untrack(() => {
+        if (!mediaUp()) return rejoinLater(voice.joinedRoom); // the media died meanwhile: nothing to keep
+        callRebind?.(s);
+        s.send({ type: 'resume', room_id: voice.joinedRoom ?? 0, session: callSession, muted: voice.muted, deafened: voice.deafened });
+      });
+    });
     // Call events on the shared socket. It is replaced after a reconnect, so this re-subscribes.
     $effect(() => {
       const s = session.sig;
       if (!s) return;
       const offMsg = s.onMessage((m) => {
+        if (m.type === 'resumed' && voice.resuming) {
+          voice.resuming = voice.reconnecting = false;
+          clearTimeout(quietTimer);
+          clearTimeout(rejoinTimer);
+        } else if (m.type === 'resume_failed' && voice.resuming) {
+          rejoinLater(voice.joinedRoom); // the server ended the call: join it again on this socket
+        }
         if (m.type === 'peer_left') {
           playback?.remove(m.user_id);
           if (voice.speaking.has(m.user_id)) voice.speaking = new Set([...voice.speaking].filter((i) => i !== m.user_id));
@@ -259,16 +298,23 @@ export function startVoice(): () => void {
           }
         }
       });
-      // The socket dropped: the media goes with it, but the call is joined again as soon as a new socket is up.
-      const offClose = s.onClose(() => {
+      // The socket dropped. The server keeps the call for a while and the media runs on its own, so the call goes on and
+      // the next socket takes it back. Without a call number (an older server), or when the media is gone, the call ends
+      // here and is joined again as soon as a new socket is up. A close the server meant (4001, 4003) or ours ends it.
+      const offClose = s.onClose((byClient, code) => {
         if (!voice.joined) return;
-        const room = voice.joinedRoom;
-        teardown();
-        voice.rejoin = room;
-        rejoinTimer = setTimeout(() => {
-          voice.rejoin = null;
-          voice.error = DISCONNECTED;
-        }, REJOIN_MS);
+        if (!byClient && code !== 4001 && code !== 4003 && callSession && mediaUp()) {
+          voice.resuming = true;
+          clearTimeout(quietTimer);
+          quietTimer = setTimeout(() => (voice.reconnecting = true), RECONNECTING_AFTER_MS);
+          clearTimeout(rejoinTimer);
+          rejoinTimer = setTimeout(() => {
+            teardown();
+            voice.error = DISCONNECTED;
+          }, REJOIN_MS);
+          return;
+        }
+        rejoinLater(voice.joinedRoom);
       });
       return () => {
         offMsg();
@@ -332,6 +378,11 @@ function teardown() {
   tally = undefined;
   callOff?.();
   callOff = undefined;
+  callSession = 0;
+  callRebind = undefined;
+  if (voice.resuming) clearTimeout(rejoinTimer);
+  clearTimeout(quietTimer);
+  voice.resuming = voice.reconnecting = false;
   voice.joinedRoom = null;
   clearInterval(poll);
   clearInterval(statsPoll);
@@ -473,6 +524,8 @@ export async function join(roomId: number): Promise<boolean> {
       },
     });
     callOff = r.off;
+    callSession = r.session ?? 0;
+    callRebind = r.rebind;
     voice.userId = r.userId;
     voice.pc = r.pc;
     voice.joinedBitrate = voice.settings.bitrateKbps;

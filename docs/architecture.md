@@ -36,10 +36,17 @@ The "Not verified" list at the end says what was only read.
   page and the state it pushes (`state.ts`). After a close it reconnects after a random wait that doubles from 1 to 2 s up to 15 to 30 s, asking `/api/me` first; the wait
   starts over only after a socket stayed up for 10 s.
   It does not reconnect after 4001 (it goes to `/login`) or 4003 (it says a moderator disconnected you). Nor after a server build change: the page keeps the build id (`Me.server.build`) of its first `hello`; when a later `hello` or a reconnect's `/api/me` names another, it closes the socket for good without applying that `hello`, so it never acts on messages of a newer protocol, the composer stays blocked like offline, and `ConnectionBanner.svelte` shows "Vesper was updated. Reload to continue." with a Reload button. It compares build ids, not versions, and never reloads by itself, so it can not loop. After the reload, the first `Me` of a sign-in stores `Me.server.version` in `localStorage` (`vesper.seenVersion`, `web/src/lib/whats-new.ts`). When the version stored before is older (by number, so 1.10.0 is after 1.9.0), a lazy chunk shows "What's new": a dialog with the notes from `web/src/lib/release-notes.ts` for each version after it up to the running one, newest first. A first visit, the same version, a rollback, a bad stored value, blocked storage or no matching notes show nothing. It waits while a DM call rings. A `peer_left` with your
-  own `user_id` ends the call in that tab; the socket stays open. A socket that drops mid-call ends the call's media in that tab,
-  but not the call: once the next socket's `hello` is in, the tab joins the same room again by itself (`voice.rejoin` in
-  `voice.svelte.ts`), so the others hear a leave and a join. If no socket is back within 60 s it gives up and says
-  "Disconnected from the server.". Joining any room yourself, or signing out, cancels it.
+  own `user_id` ends the call in that tab; the socket stays open. The socket sends `ping` every 10 s, and when nothing at all
+  has come from the server for 25 s (`signaling.ts`, `SILENT_MS`) it counts the socket as closed with 4004 right away (a
+  browser keeps a silent socket open for minutes) and reconnects at once, with no backoff. A socket that drops mid-call does
+  not end the call: the server keeps it for 60 s and the media (UDP) goes on, so the tab keeps its peer connection, mic,
+  playback and watched shares (`voice.resuming`). Once the next socket's `hello` is in, it moves the call's handlers to that
+  socket and sends `resume` with the call's number from `joined` and its mute state. On `resumed` nothing else happens: no
+  cue, no banner, no new offer unless one was waiting. The call bar's connection line says "Reconnecting" only once the gap
+  passes 4 s (`RECONNECTING_AFTER_MS`), and the connection banner stays hidden while a call resumes. On `resume_failed`, when
+  the peer connection failed meanwhile, or with a server too old to number calls, the call ends in that tab and it joins the
+  same room again by itself (`voice.rejoin`), so the others hear a leave and a join. If no socket is back within 60 s it
+  gives up and says "Disconnected from the server.". Joining any room yourself, or signing out, cancels it.
 - **The chat panel** (`web/src/routes/Chat.svelte`, store in `web/src/lib/chat.svelte.ts`) fills the open room's page (`RoomView.svelte`) under its
   header. History, sends, edits, deletes, reactions, pins, read markers, uploads and search go over REST; new and changed messages and
   typing come over the socket. A `message_updated` copy with a smaller `updated_at` than the one held is dropped, and after

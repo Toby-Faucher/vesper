@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { motion } from '../lib/ui/motion';
   import { session } from '../lib/session.svelte';
+  import { voice } from '../lib/voice.svelte';
   import { UI_MESSAGES } from '../lib/ui/messages-first';
   import Button from '../lib/ui/c/Button.svelte';
   import Icon from '../lib/ui/c/Icon.svelte';
@@ -29,7 +30,8 @@
   });
   const secs = $derived(session.retryAt === null ? 0 : Math.max(1, Math.ceil((session.retryAt - now) / 1000)));
   const kind = $derived(
-    session.stale || session.notice || session.online ? null : session.retryAt !== null ? 'retry' : wasOnline ? 'now' : slow ? 'connecting' : null,
+    // A call that resumes on the next socket shows only the call bar's quiet line, no banner.
+    session.stale || session.notice || session.online || voice.resuming ? null : session.retryAt !== null ? 'retry' : wasOnline ? 'now' : slow ? 'connecting' : null,
   );
   $effect(() => {
     if (kind === 'retry' || kind === 'now') said = UI_MESSAGES.reconnectingSr;
