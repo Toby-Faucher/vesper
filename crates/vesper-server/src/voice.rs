@@ -11,6 +11,11 @@
 //! Who gets what: `PeerJoined` and `PeerState` go to every socket that can see the room except
 //! the session's own socket (it has `Joined` or sent the change). `PeerLeft` also goes to the
 //! session's own socket, which is how a tab learns its call ended (kick, other tab, SFU).
+//!
+//! A socket that drops without `Leave` does not end its call at once: the member is held for
+//! [`CALL_GRACE`] while the media goes on over UDP, and nobody is told. A new socket of the same
+//! device takes the call back with `resume` (see [`Voice::resume`]); otherwise the grace ends it
+//! as a leave would. The SFU ending the session (ICE lost) ends a held call at once, as always.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,6 +33,9 @@ use crate::hub::{Hub, Outbox};
 
 /// How long a rejoin waits for the SFU to confirm the old session closed.
 const REPLACE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long the call of a socket that dropped waits for a `resume` before it ends. The web and
+/// desktop clients notice a silent socket within 25 s and reconnect a few seconds later.
+pub const CALL_GRACE: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JoinResult {
@@ -47,6 +55,8 @@ struct Inner {
     /// How long a DM ring lasts if nobody answers.
     ring_timeout: Duration,
     next_session: AtomicU64,
+    /// [`CALL_GRACE`], shorter in tests.
+    grace: Mutex<Duration>,
     /// Serialises joins, so a rejoin finishes closing the old session before anyone else joins
     /// and the room-size check cannot race another join.
     join_lock: tokio::sync::Mutex<()>,
@@ -83,7 +93,14 @@ struct Member {
     /// Sharers whose screen this member receives.
     watching: HashSet<String>,
     session: u64,
+    /// The login session (device) that joined: only it may `resume` the call.
+    device: i64,
+    /// The socket of the call. A `resume` swaps in the new one.
     tx: Outbox,
+    /// Set while the socket is gone and the call waits for a `resume`: the grace timer's token.
+    away: Option<u64>,
+    /// The SFU offer that has no answer yet, sent again on `resume` (it may have been lost).
+    offer: Option<String>,
     /// Fires once the SFU reports this session closed.
     sfu_closed: Option<oneshot::Receiver<()>>,
 }
@@ -186,6 +203,7 @@ impl Voice {
             max_room_size,
             ring_timeout,
             next_session: AtomicU64::new(1),
+            grace: Mutex::new(CALL_GRACE),
             join_lock: tokio::sync::Mutex::new(()),
             state: Mutex::default(),
         }))
@@ -199,15 +217,22 @@ impl Voice {
         self.0.state.lock().expect("voice lock poisoned")
     }
 
+    /// Test seam: how long a dropped socket's call waits for a `resume` ([`CALL_GRACE`]).
+    #[doc(hidden)]
+    pub fn set_call_grace(&self, grace: Duration) {
+        *self.0.grace.lock().expect("grace lock poisoned") = grace;
+    }
+
     /// Check access, replace any earlier session of the same user, start the SFU session and
-    /// enter `room`. `user` and `room` must be fresh from the store. On success `Joined` has
-    /// been queued on `tx`. The room cap, a dead SFU and a malformed offer are refused before
+    /// enter `room` from the login session `device`. `user` and `room` must be fresh from the
+    /// store. On success `Joined` has been queued on `tx`. The room cap, a dead SFU and a malformed offer are refused before
     /// the user's earlier session ends; an SFU refusal after that ends it.
     pub async fn join(
         &self,
         user: &UserInfo,
         room: &RoomInfo,
         offer: String,
+        device: i64,
         tx: Outbox,
     ) -> Result<JoinResult, ErrorCode> {
         if user.banned || !can_see(user, room) {
@@ -225,7 +250,7 @@ impl Voice {
         }
         vesper_sfu::check_offer(&offer).map_err(|e| sfu_error(user_id, e))?;
 
-        if let Some(mut old) = self.remove(user_id, None, Some(&tx))
+        if let Some(mut old) = self.remove(user_id, |_| true, Some(&tx))
             && let Some(closed) = old.sfu_closed.take()
             && tokio::time::timeout(REPLACE_TIMEOUT, closed).await.is_err()
         {
@@ -261,7 +286,10 @@ impl Voice {
                 share: None,
                 watching: HashSet::new(),
                 session,
+                device,
                 tx: tx.clone(),
+                away: None,
+                offer: None,
                 sfu_closed: Some(closed_rx),
             };
             let peers = st
@@ -275,6 +303,7 @@ impl Voice {
                 user_id: user_id.clone(),
                 answer: ok.answer_sdp,
                 peers,
+                session,
             });
             if force_muted {
                 tx.send(ServerMsg::ForceMuted { muted: true });
@@ -290,13 +319,10 @@ impl Voice {
             }
         }
 
-        tokio::spawn(self.clone().forward_events(
-            user_id.clone(),
-            session,
-            ok.events,
-            tx,
-            closed_tx,
-        ));
+        tokio::spawn(
+            self.clone()
+                .forward_events(user_id.clone(), session, ok.events, closed_tx),
+        );
         Ok(JoinResult {
             user_id: user_id.clone(),
             session,
@@ -321,6 +347,7 @@ impl Voice {
             user_id: id.clone(),
             answer: ok.answer_sdp,
             peers: vec![],
+            session: 0,
         });
         Ok(JoinResult {
             user_id: id,
@@ -339,22 +366,24 @@ impl Voice {
         self.lock().checks.len()
     }
 
-    /// Pump one session's SFU events to its socket until the SFU closes the session.
+    /// Pump one session's SFU events to its socket until the SFU closes the session. The socket
+    /// is the member's at the time, so after a `resume` they go to the new one.
     async fn forward_events(
         self,
         user_id: String,
         session: u64,
         mut events: mpsc::UnboundedReceiver<SfuEvent>,
-        tx: Outbox,
         closed_tx: oneshot::Sender<()>,
     ) {
         while let Some(ev) = events.recv().await {
             match ev {
                 // A replaced or left session's offers must not reach a socket that rejoined.
-                SfuEvent::Offer(sdp) if self.is_current(&user_id, session) => {
-                    tx.send(ServerMsg::Offer { sdp });
+                SfuEvent::Offer(sdp) => {
+                    if let Some(m) = self.lock().current_mut(&user_id, session) {
+                        m.offer = Some(sdp.clone());
+                        m.tx.send(ServerMsg::Offer { sdp });
+                    }
                 }
-                SfuEvent::Offer(_) => {}
                 SfuEvent::ShareCut => self.cut_share(&user_id, session),
                 SfuEvent::Closed => break,
             }
@@ -367,7 +396,114 @@ impl Voice {
 
     /// Leave if `session` is still `user_id`'s current one; true if it was.
     pub fn leave(&self, user_id: &str, session: u64) -> bool {
-        self.remove(user_id, Some(session), None).is_some()
+        self.remove(user_id, |m| m.session == session, None)
+            .is_some()
+    }
+
+    /// The socket `tx` leaves its call, only if it is still the call's socket: a socket whose
+    /// call was resumed on another one cannot end it.
+    pub fn leave_from(&self, user_id: &str, session: u64, tx: &Outbox) {
+        self.remove(user_id, |m| m.session == session && m.tx.same(tx), None);
+    }
+
+    /// The socket `tx` dropped without `Leave`: hold its call for the grace, waiting for a
+    /// `resume`. Nothing if `tx` is no longer the call's socket.
+    pub fn hold(&self, user_id: &str, session: u64, tx: &Outbox) {
+        let token = self.0.next_session.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut st = self.lock();
+            let Some(m) = st.current_mut(user_id, session).filter(|m| m.tx.same(tx)) else {
+                return;
+            };
+            m.away = Some(token);
+            // Under the lock, like every SFU command that must not pass a leave.
+            self.0.sfu.hold(user_id, true);
+        }
+        let grace = *self.0.grace.lock().expect("grace lock poisoned");
+        let (voice, user_id) = (self.clone(), user_id.to_string());
+        tokio::spawn(async move {
+            tokio::time::sleep(grace).await;
+            if voice
+                .remove(&user_id, |m| m.away == Some(token), None)
+                .is_some()
+            {
+                tracing::info!("call of {user_id} ended: no resume in {grace:?}");
+            }
+        });
+    }
+
+    /// Give the call of `user` (session `session` in `room`, joined from the login session
+    /// `device`) to the socket `tx`, held or not. `user` and `room` must be fresh from the store:
+    /// access is checked again as for a join. On success `Resumed`, then what the client may
+    /// have missed, is queued on `tx`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resume(
+        &self,
+        user: &UserInfo,
+        room: &RoomInfo,
+        session: u64,
+        device: i64,
+        muted: bool,
+        deafened: bool,
+        tx: &Outbox,
+    ) -> Option<JoinResult> {
+        if user.banned || !can_see(user, room) {
+            return None;
+        }
+        let user_id = &user.user_id;
+        let mut st = self.lock();
+        if !st.rooms.get(&room.id).is_some_and(|r| can_see(user, r)) {
+            return None;
+        }
+        let m = st
+            .current_mut(user_id, session)
+            .filter(|m| m.room == room.id && m.device == device)?;
+        m.tx = tx.clone();
+        m.away = None;
+        self.0.sfu.hold(user_id, false);
+        let muted = muted || m.force_muted;
+        let changed = (m.muted, m.deafened) != (muted, deafened);
+        (m.muted, m.deafened) = (muted, deafened);
+        let (force_muted, offer, sharing) = (m.force_muted, m.offer.clone(), m.share.is_some());
+        let state = m.state_msg(user_id);
+        let peers = st
+            .members
+            .iter()
+            .filter(|(_, o)| o.room == room.id)
+            .map(|(id, o)| o.peer(id))
+            .collect();
+        tx.send(ServerMsg::Resumed { peers });
+        // Always: a force mute may have been set or lifted meanwhile.
+        tx.send(ServerMsg::ForceMuted { muted: force_muted });
+        if let Some(sdp) = offer {
+            tx.send(ServerMsg::Offer { sdp });
+        }
+        if sharing {
+            st.send_watchers(user_id);
+        }
+        if changed {
+            st.tell(&self.0.hub, room.id, state, &[tx]);
+        }
+        Some(JoinResult {
+            user_id: user_id.clone(),
+            session,
+            first: false,
+        })
+    }
+
+    /// End the calls joined from login sessions for which `ended(user_id, device)` is true (sign
+    /// out, a revoked device, a password change): a held call has no socket left to close.
+    pub fn end_devices(&self, ended: impl Fn(&str, i64) -> bool) {
+        let gone: Vec<(String, u64)> = self
+            .lock()
+            .members
+            .iter()
+            .filter(|(id, m)| ended(id, m.device))
+            .map(|(id, m)| (id.clone(), m.session))
+            .collect();
+        for (id, session) in gone {
+            self.leave(&id, session);
+        }
     }
 
     pub fn is_current(&self, user_id: &str, session: u64) -> bool {
@@ -593,7 +729,7 @@ impl Voice {
 
     /// Take `user_id` out of voice (moderator kick). False if they were not in voice.
     pub fn kick(&self, user_id: &str) -> bool {
-        self.remove(user_id, None, None).is_some()
+        self.remove(user_id, |_| true, None).is_some()
     }
 
     /// Set or lift a force-mute and tell the user's sockets with `ForceMuted`. It holds across
@@ -646,24 +782,25 @@ impl Voice {
     /// Pass an SDP answer to the SFU, unless `session` has been replaced: the SFU cannot tell
     /// which offer an answer belongs to.
     pub fn answer(&self, user_id: &str, session: u64, sdp: String) {
-        if self.is_current(user_id, session) {
+        if let Some(m) = self.lock().current_mut(user_id, session) {
+            m.offer = None;
             self.0.sfu.answer(user_id, sdp);
         }
     }
 
-    /// Remove `user_id` (only if `session` is current, when given), tell the room and the
-    /// session's own socket, and end the SFU session. The SFU leave is sent under the lock: a
+    /// Remove `user_id` (only if `which` holds for its member), tell the room and the session's
+    /// own socket, and end the SFU session. The SFU leave is sent under the lock: a
     /// rejoin's `remove` takes the same lock before its SFU join, so this Leave can never land
     /// after (and kill) that Join. `joining` is the socket of a rejoin, which gets `Joined`
     /// instead.
     fn remove(
         &self,
         user_id: &str,
-        session: Option<u64>,
+        which: impl FnOnce(&Member) -> bool,
         joining: Option<&Outbox>,
     ) -> Option<Member> {
         let mut st = self.lock();
-        if session.is_some_and(|s| st.members.get(user_id).is_none_or(|m| m.session != s)) {
+        if !st.members.get(user_id).is_some_and(which) {
             return None;
         }
         let m = st.members.remove(user_id)?;
@@ -754,6 +891,24 @@ mod tests {
     use super::*;
     use vesper_sfu::{Sfu, SfuConfig};
 
+    fn member(tx: Outbox, share: Option<ShareInfo>, session: u64) -> Member {
+        Member {
+            room: 1,
+            name: "n".into(),
+            muted: false,
+            deafened: false,
+            force_muted: false,
+            share,
+            watching: HashSet::new(),
+            session,
+            device: 1,
+            tx,
+            away: None,
+            offer: None,
+            sfu_closed: None,
+        }
+    }
+
     #[test]
     fn a_share_gets_what_is_left_of_the_budget() {
         assert_eq!(granted_kbps(10_000, 0, 3), Some(10_000));
@@ -782,14 +937,20 @@ mod tests {
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
         let (tx, mut rx) = crate::hub::outbox();
         let (closed_tx, closed_rx) = oneshot::channel();
-        // Session 7 of "u" is not current (nobody is in any room).
-        let pump = tokio::spawn(voice.forward_events("u".into(), 7, ev_rx, tx, closed_tx));
+        voice.lock().members.insert("u".into(), member(tx, None, 8));
+        // Session 7 of "u" is not current: 8 is.
+        let pump = tokio::spawn(
+            voice
+                .clone()
+                .forward_events("u".into(), 7, ev_rx, closed_tx),
+        );
         ev_tx.send(SfuEvent::Offer("v=0".into())).unwrap();
         ev_tx.send(SfuEvent::Closed).unwrap();
         pump.await.unwrap();
         closed_rx.await.expect("closed signal fires");
         assert!(rx.queue.try_recv().is_err(), "nothing forwarded");
         assert_eq!(*rx.close.borrow(), None, "no close");
+        assert!(voice.is_current("u", 8), "the current session stays");
     }
 
     #[tokio::test]
@@ -815,18 +976,6 @@ mod tests {
             ui_accent: None,
         };
         hub.add(bob, 1, b_tx.clone());
-        let member = |tx, share| Member {
-            room: 1,
-            name: "n".into(),
-            muted: false,
-            deafened: false,
-            force_muted: false,
-            share,
-            watching: HashSet::new(),
-            session: 5,
-            tx,
-            sfu_closed: None,
-        };
         let info = ShareInfo {
             fps: 30,
             bitrate_kbps: 2000,
@@ -840,8 +989,9 @@ mod tests {
                     ..RoomInfo::default()
                 },
             );
-            st.members.insert("alice".into(), member(a_tx, Some(info)));
-            st.members.insert("bob".into(), member(b_tx, None));
+            st.members
+                .insert("alice".into(), member(a_tx, Some(info), 5));
+            st.members.insert("bob".into(), member(b_tx, None, 5));
         }
         voice.cut_share("alice", 5);
         let gone = ServerMsg::PeerShare {

@@ -369,6 +369,32 @@ async fn unanswered_offer_closes_client() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_held_session_outlives_an_unanswered_offer() {
+    let t = Ctx::new(SfuConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        answer_timeout: Duration::from_millis(300),
+        ..Default::default()
+    });
+    t.h.set_advertised(vec![t.h.local_addr()]);
+    let a = t.join_silent("r", "a").await;
+    t.h.hold("a", true);
+    let _b = t.join("r", "b").await;
+    t.wait_until("a offered b's track", CONNECT, || !a.offers().is_empty())
+        .await;
+    // Several answer timeouts go by while held.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(!a.closed(), "a held session was closed");
+    // The hold ends: the client gets the whole timeout again, then the offer is answered.
+    t.h.hold("a", false);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!a.closed(), "ending the hold kept the old offer time");
+    let answer = a.client.accept_offer(&a.offers()[0]).expect("answer");
+    t.h.answer("a", answer);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(!a.closed(), "an answered offer closed the session");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn leave_after_rejoin_closes_the_live_session() {
     let t = Ctx::loopback();
     let first = t.join("r", "u").await;

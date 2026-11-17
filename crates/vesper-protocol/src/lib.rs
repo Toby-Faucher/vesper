@@ -19,6 +19,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CLOSE_SESSION_ENDED: u16 = 4001;
 /// WebSocket close code: a moderator disconnected this user.
 pub const CLOSE_DISCONNECTED: u16 = 4003;
+/// WebSocket close code a client sends when it gives up on a silent socket. The server keeps the client's call for
+/// a `resume`, as after a drop. Any other close by the client ends the call at once.
+pub const CLOSE_STALLED: u16 = 4004;
 
 /// A running screen share: the frame rate and video bitrate its sender chose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -105,6 +108,18 @@ pub enum ClientMsg {
         #[ts(type = "number")]
         room_id: i64,
     },
+    /// Heartbeat: the server answers `pong` at once. Clients send one every 10 s.
+    Ping,
+    /// Take back the call of a socket that dropped. `session` is from its `joined`; `muted` and `deafened` are the
+    /// state now. Answered with `resumed`, or `resume_failed` (then join again).
+    Resume {
+        #[ts(type = "number")]
+        room_id: i64,
+        #[ts(type = "number")]
+        session: u64,
+        muted: bool,
+        deafened: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -123,7 +138,20 @@ pub enum ServerMsg {
         user_id: String,
         answer: String,
         peers: Vec<Peer>,
+        /// This call's number, for `resume`. 0 (no resume) from an older server.
+        #[serde(default)]
+        #[ts(type = "number")]
+        session: u64,
     },
+    /// The call is back on this socket, on the same media session. `peers` is everyone in the call now, you too. An
+    /// SFU offer left unanswered meanwhile follows.
+    Resumed {
+        peers: Vec<Peer>,
+    },
+    /// No call to take back (it ended, or it is not this device's): join again.
+    ResumeFailed,
+    /// The answer to `ping`.
+    Pong,
     Offer {
         sdp: String,
     },

@@ -153,6 +153,7 @@ pub(crate) async fn session_of(
 pub(crate) async fn drop_presented_session(h: &HeaderMap, st: &AppState) -> Result<(), ApiError> {
     if let Some((sid, old)) = session_of(h, st).await? {
         st.hub.close_session(sid, CLOSE_SESSION_ENDED);
+        st.voice.end_devices(|_, d| d == sid);
         match st.store.delete_session(&old.user_id, sid).await {
             Ok(()) | Err(StoreError::NotFound) => {}
             Err(e) => return Err(e.into()),
@@ -343,6 +344,7 @@ async fn logout(State(st): State<AppState>, a: Authed) -> Result<Response, ApiEr
         .delete_session(&a.user.user_id, a.session_id)
         .await?;
     st.hub.close_session(a.session_id, CLOSE_SESSION_ENDED);
+    st.voice.end_devices(|_, d| d == a.session_id);
     let cookie = clear_cookie(st.cfg.secure_cookies);
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response())
 }
@@ -430,6 +432,8 @@ async fn change_password(
         .await?;
     st.hub
         .close_user_except(&a.user.user_id, Some(a.session_id), CLOSE_SESSION_ENDED);
+    let (me, keep) = (&a.user.user_id, a.session_id);
+    st.voice.end_devices(|u, d| u == me && d != keep);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -494,6 +498,7 @@ async fn revoke(
     let Path(id) = id.map_err(|_| ApiError::new(ApiErrorCode::NotFound, "not found"))?;
     st.store.delete_session(&a.user.user_id, id).await?;
     st.hub.close_session(id, CLOSE_SESSION_ENDED);
+    st.voice.end_devices(|_, d| d == id);
     if id == a.session_id {
         let cookie = clear_cookie(st.cfg.secure_cookies);
         return Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response());

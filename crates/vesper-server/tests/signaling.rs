@@ -75,6 +75,8 @@ struct Conn {
     /// The code of the server's close frame, once one arrived.
     close_code: Arc<Mutex<Option<u16>>>,
     hello: ServerMsg,
+    /// The call number from the last `Joined`, for `Resume`.
+    session: u64,
 }
 
 impl Conn {
@@ -83,10 +85,21 @@ impl Conn {
     }
 
     async fn open_with(server: &TestServer, s: &Session, small_buffer: bool) -> Conn {
+        let client = Arc::new(FakeClient::new().expect("fake client"));
+        Conn::open_client(server, s, small_buffer, client).await
+    }
+
+    /// A socket whose offers are answered by `client`: the media side of a call that outlives
+    /// its first socket.
+    async fn open_client(
+        server: &TestServer,
+        s: &Session,
+        small_buffer: bool,
+        client: Arc<FakeClient>,
+    ) -> Conn {
         let ws = connect(server.addr, Some(&s.cookie), Some(ORIGIN), small_buffer)
             .await
             .expect("websocket connects");
-        let client = Arc::new(FakeClient::new().expect("fake client"));
         let (out, mut out_rx) = mpsc::unbounded_channel::<Message>();
         let (msgs_tx, mut msgs) = mpsc::unbounded_channel();
         let (freeze, mut frozen) = oneshot::channel::<()>();
@@ -157,6 +170,7 @@ impl Conn {
             thaw: Some(thaw),
             close_code,
             hello,
+            session: 0,
         }
     }
 
@@ -226,7 +240,15 @@ impl Conn {
         self.join(room_id);
         loop {
             match self.next().await {
-                ServerMsg::Joined { user_id, peers, .. } => return (self, user_id, peers),
+                ServerMsg::Joined {
+                    user_id,
+                    peers,
+                    session,
+                    ..
+                } => {
+                    self.session = session;
+                    return (self, user_id, peers);
+                }
                 ServerMsg::PeerJoined { .. }
                 | ServerMsg::PeerLeft { .. }
                 | ServerMsg::PeerState { .. } => {}
@@ -721,7 +743,7 @@ async fn join_with_room_read_before_restrict_follows_new_rule() {
     let (tx, _rx) = vesper_server::hub::outbox();
     let client = FakeClient::new().unwrap();
     let r = voice
-        .join(&bob.user, &stale, client.offer().into(), tx)
+        .join(&bob.user, &stale, client.offer().into(), 0, tx)
         .await;
     assert!(r.is_ok(), "{r:?}");
     let (_a, a_id, _) = Conn::joined(&server, &alice, open).await;
@@ -731,7 +753,7 @@ async fn join_with_room_read_before_restrict_follows_new_rule() {
     let (tx, _rx2) = vesper_server::hub::outbox();
     let client2 = FakeClient::new().unwrap();
     let r = voice
-        .join(&dave.user, &stale, client2.offer().into(), tx)
+        .join(&dave.user, &stale, client2.offer().into(), 0, tx)
         .await;
     assert_eq!(r, Err(ErrorCode::Forbidden));
     assert_eq!(voice.peers(|_| true).len(), 2, "bob and alice");
@@ -854,13 +876,13 @@ async fn two_joins_race_for_the_twelfth_place() {
     };
     for i in 0..11 {
         let (s, tx, offer) = join(format!("user{i}")).await;
-        voice.join(&s.user, &room, offer, tx).await.unwrap();
+        voice.join(&s.user, &room, offer, 0, tx).await.unwrap();
     }
     let (x, x_tx, x_offer) = join("userx".into()).await;
     let (y, y_tx, y_offer) = join("usery".into()).await;
     let (rx, ry) = tokio::join!(
-        voice.join(&x.user, &room, x_offer, x_tx),
-        voice.join(&y.user, &room, y_offer, y_tx),
+        voice.join(&x.user, &room, x_offer, 0, x_tx),
+        voice.join(&y.user, &room, y_offer, 0, y_tx),
     );
     assert!(
         matches!(
@@ -935,7 +957,7 @@ async fn banned_user_cannot_join() {
     let r = server
         .state
         .voice
-        .join(&user, &room, client.offer().into(), tx)
+        .join(&user, &room, client.offer().into(), 0, tx)
         .await;
     assert_eq!(r, Err(ErrorCode::Forbidden));
     assert!(server.state.voice.peers(|_| true).is_empty());
@@ -1285,6 +1307,11 @@ async fn check_does_not_touch_presence_or_own_call() {
 #[tokio::test]
 async fn malformed_and_oversized_messages_do_not_crash() {
     let server = TestServer::new().await;
+    // A failed read holds the call like any drop; a short grace ends it here.
+    server
+        .state
+        .voice
+        .set_call_grace(Duration::from_millis(200));
     let room = general(&server).await;
     let alice = server.account("alice", Role::Member).await;
     let xavier = server.account("xavier", Role::Member).await;
@@ -1328,8 +1355,12 @@ async fn malformed_and_oversized_messages_do_not_crash() {
 }
 
 #[tokio::test]
-async fn abrupt_close_removes_presence() {
+async fn abrupt_close_removes_presence_after_the_grace() {
     let server = TestServer::new().await;
+    server
+        .state
+        .voice
+        .set_call_grace(Duration::from_millis(300));
     let room = general(&server).await;
     let alice = server.account("alice", Role::Member).await;
     let bob = server.account("bob", Role::Member).await;
@@ -1742,6 +1773,11 @@ async fn unanswered_pings_remove_presence() {
         spawn_sfu(),
     )
     .await;
+    // The call is held after the socket died; a short grace so its end shows here.
+    server
+        .state
+        .voice
+        .set_call_grace(Duration::from_millis(200));
     let room = general(&server).await;
     let alice = server.account("alice", Role::Member).await;
     let bob = server.account("bob", Role::Member).await;
@@ -1789,6 +1825,8 @@ async fn socket_cap_rejects_extra_upgrade_and_releases_slot() {
 async fn rejoin_while_old_socket_closes_keeps_new_session() {
     for i in 0..10 {
         let server = TestServer::new().await;
+        // No grace: the old call ends as soon as its socket drops, which is the race tested here.
+        server.state.voice.set_call_grace(Duration::ZERO);
         let room = general(&server).await;
         let alice = server.account("alice", Role::Member).await;
         let bob = server.account("bob", Role::Member).await;
@@ -2534,4 +2572,248 @@ async fn self_watch_is_ignored() {
     });
     share_start(&a, 30, 2000);
     assert_eq!(watchers(&mut a).await, 0);
+}
+
+// Resume: a call outlives its socket for the grace, and a new socket of the same device takes it back.
+
+fn resume_msg(room_id: i64, session: u64) -> ClientMsg {
+    ClientMsg::Resume {
+        room_id,
+        session,
+        muted: false,
+        deafened: false,
+    }
+}
+
+/// Fail if a `PeerLeft` for `user_id` reaches `c` within `wait`.
+async fn no_peer_left(c: &mut Conn, user_id: &str, wait: Duration) {
+    let deadline = tokio::time::Instant::now() + wait;
+    while let Ok(m) = tokio::time::timeout_at(deadline, c.msgs.recv()).await {
+        let m = m.expect("socket still open");
+        assert!(
+            !matches!(&m, ServerMsg::PeerLeft { user_id: u } if u == user_id),
+            "{m:?}"
+        );
+    }
+}
+
+/// Alice and bob in a call with tracks negotiated, then alice's socket dies without a word.
+/// Returns (alice's media client, her call number, bob's socket, room, alice, bob).
+async fn alice_drops(server: &TestServer) -> (Arc<FakeClient>, u64, Conn, i64, Session, Session) {
+    let room = general(server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (a, _, _) = Conn::joined(server, &alice, room).await;
+    let (b, _, _) = Conn::joined(server, &bob, room).await;
+    wait_until("tracks negotiated", || {
+        a.client.remote_tracks() == 1 && b.client.remote_tracks() == 1
+    })
+    .await;
+    let (client, session) = (a.client.clone(), a.session);
+    assert!(session > 0, "joined carries the call number");
+    a.drop_abruptly();
+    (client, session, b, room, alice, bob)
+}
+
+#[tokio::test]
+async fn ping_gets_pong() {
+    let server = TestServer::new().await;
+    let alice = server.account("alice", Role::Member).await;
+    let mut c = Conn::open(&server, &alice).await;
+    c.send(&ClientMsg::Ping);
+    assert_eq!(c.next().await, ServerMsg::Pong);
+}
+
+#[tokio::test]
+async fn a_dropped_socket_keeps_its_call_and_a_resume_takes_it_back() {
+    let server = TestServer::new().await;
+    let (client, session, mut b, room, alice, _bob) = alice_drops(&server).await;
+    let a_id = alice.user.user_id.clone();
+    // Nobody hears of the drop, and alice is still in voice.
+    no_peer_left(&mut b, &a_id, Duration::from_millis(800)).await;
+    assert!(
+        server
+            .state
+            .voice
+            .peers(|_| true)
+            .iter()
+            .any(|p| p.user_id == a_id)
+    );
+    // A new socket of the same device, with the same media client, takes the call back.
+    let mut a2 = Conn::open_client(&server, &alice, false, client.clone()).await;
+    a2.send(&ClientMsg::Resume {
+        room_id: room,
+        session,
+        muted: true,
+        deafened: false,
+    });
+    let peers = match a2
+        .until("Resumed", |m| matches!(m, ServerMsg::Resumed { .. }))
+        .await
+    {
+        ServerMsg::Resumed { peers } => peers,
+        _ => unreachable!(),
+    };
+    assert_eq!(peers.len(), 2, "{peers:?}");
+    assert!(
+        peers.iter().any(|p| p.user_id == a_id && p.muted),
+        "{peers:?}"
+    );
+    assert_eq!(a2.next().await, ServerMsg::ForceMuted { muted: false });
+    // The state sent with the resume reaches the room.
+    let st = b
+        .until("PeerState", |m| matches!(m, ServerMsg::PeerState { .. }))
+        .await;
+    assert!(matches!(st, ServerMsg::PeerState { user_id, muted: true, .. } if user_id == a_id));
+    // Later SFU offers go to the new socket: carol's track reaches alice's old media session.
+    let carol = server.account("carol", Role::Member).await;
+    let (c, _, _) = Conn::joined(&server, &carol, room).await;
+    wait_until("carol's track at alice", || client.remote_tracks() == 2).await;
+    c.client.send_audio(10);
+    wait_until("carol heard by alice", || !client.received().is_empty()).await;
+    // The resumed socket owns the call: its Leave ends it at once.
+    a2.send(&ClientMsg::Leave);
+    let left = b
+        .until("PeerLeft", |m| matches!(m, ServerMsg::PeerLeft { .. }))
+        .await;
+    assert_eq!(left, ServerMsg::PeerLeft { user_id: a_id });
+}
+
+#[tokio::test]
+async fn a_held_call_ends_after_the_grace_and_cannot_be_resumed() {
+    let server = TestServer::new().await;
+    server
+        .state
+        .voice
+        .set_call_grace(Duration::from_millis(500));
+    let (client, session, mut b, room, alice, _bob) = alice_drops(&server).await;
+    let a_id = alice.user.user_id.clone();
+    let t0 = Instant::now();
+    let left = b
+        .until("PeerLeft", |m| matches!(m, ServerMsg::PeerLeft { .. }))
+        .await;
+    assert_eq!(left, ServerMsg::PeerLeft { user_id: a_id });
+    assert!(
+        t0.elapsed() >= Duration::from_millis(400),
+        "{:?}",
+        t0.elapsed()
+    );
+    let mut a2 = Conn::open_client(&server, &alice, false, client).await;
+    a2.send(&resume_msg(room, session));
+    a2.until("ResumeFailed", |m| *m == ServerMsg::ResumeFailed)
+        .await;
+}
+
+#[tokio::test]
+async fn leave_and_a_plain_close_end_the_call_at_once() {
+    let server = TestServer::new().await;
+    let room = general(&server).await;
+    let alice = server.account("alice", Role::Member).await;
+    let bob = server.account("bob", Role::Member).await;
+    let (mut b, _, _) = Conn::joined(&server, &bob, room).await;
+    let a_id = alice.user.user_id.clone();
+    let is_left = |m: &ServerMsg| matches!(m, ServerMsg::PeerLeft { user_id } if *user_id == alice.user.user_id);
+    // The grace is a minute: both ends below come well before.
+    let (a, _, _) = Conn::joined(&server, &alice, room).await;
+    a.send(&ClientMsg::Leave);
+    b.until("PeerLeft after Leave", is_left).await;
+    // A tab that closes says so with a close frame (1001): no grace.
+    let (a, _, _) = Conn::joined(&server, &alice, room).await;
+    let frame = tokio_tungstenite::tungstenite::protocol::CloseFrame {
+        code: 1001.into(),
+        reason: "".into(),
+    };
+    a.out.send(Message::Close(Some(frame))).unwrap();
+    b.until("PeerLeft after a close", is_left).await;
+    // A client that gives up on a stalled socket closes with CLOSE_STALLED: the call is held.
+    let (a, _, _) = Conn::joined(&server, &alice, room).await;
+    let frame = tokio_tungstenite::tungstenite::protocol::CloseFrame {
+        code: vesper_protocol::CLOSE_STALLED.into(),
+        reason: "".into(),
+    };
+    a.out.send(Message::Close(Some(frame))).unwrap();
+    no_peer_left(&mut b, &a_id, Duration::from_millis(800)).await;
+}
+
+#[tokio::test]
+async fn only_the_same_device_and_call_can_resume() {
+    let server = TestServer::new().await;
+    let (client, session, mut b, room, alice, _bob) = alice_drops(&server).await;
+    let a_id = alice.user.user_id.clone();
+    // Bob (in the call himself) cannot take alice's call.
+    b.send(&resume_msg(room, session));
+    // He is in a call on this socket already.
+    b.expect_error(ErrorCode::BadMessage).await;
+    let carol = server.account("carol", Role::Member).await;
+    let mut c = Conn::open(&server, &carol).await;
+    c.send(&resume_msg(room, session));
+    c.until("ResumeFailed", |m| *m == ServerMsg::ResumeFailed)
+        .await;
+    // Alice on another device, and alice naming another call or room, are refused too.
+    let laptop = server.session(&alice.user).await;
+    let mut other = Conn::open(&server, &laptop).await;
+    other.send(&resume_msg(room, session));
+    other
+        .until("ResumeFailed", |m| *m == ServerMsg::ResumeFailed)
+        .await;
+    let mut a2 = Conn::open_client(&server, &alice, false, client).await;
+    a2.send(&resume_msg(room, session + 1000));
+    a2.until("ResumeFailed", |m| *m == ServerMsg::ResumeFailed)
+        .await;
+    a2.send(&resume_msg(room + 1000, session));
+    a2.until("ResumeFailed", |m| *m == ServerMsg::ResumeFailed)
+        .await;
+    // None of that touched the call: the right device still gets it back.
+    a2.send(&resume_msg(room, session));
+    a2.until("Resumed", |m| matches!(m, ServerMsg::Resumed { .. }))
+        .await;
+    no_peer_left(&mut b, &a_id, Duration::from_millis(300)).await;
+}
+
+#[tokio::test]
+async fn sign_out_ends_a_held_call() {
+    let server = TestServer::new().await;
+    let (_client, _session, mut b, _room, alice, _bob) = alice_drops(&server).await;
+    no_peer_left(&mut b, &alice.user.user_id, Duration::from_millis(300)).await;
+    let (status, _, _) = server.call(post("/api/logout", json!({}), &alice)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let left = b
+        .until("PeerLeft", |m| matches!(m, ServerMsg::PeerLeft { .. }))
+        .await;
+    assert_eq!(
+        left,
+        ServerMsg::PeerLeft {
+            user_id: alice.user.user_id
+        }
+    );
+}
+
+/// An SFU offer made while the socket was gone is not answered in time: the held session lives
+/// on, and the offer comes again on the resume.
+#[tokio::test]
+async fn an_offer_made_during_the_gap_comes_again_on_resume() {
+    let sfu = vesper_sfu::Sfu::spawn(vesper_sfu::SfuConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        answer_timeout: Duration::from_millis(300),
+        ..Default::default()
+    })
+    .unwrap();
+    let server = TestServer::with(|_| {}, sfu).await;
+    let (client, session, mut b, room, alice, _bob) = alice_drops(&server).await;
+    let carol = server.account("carol", Role::Member).await;
+    let (_c, _, _) = Conn::joined(&server, &carol, room).await;
+    // Well past the answer timeout, with an offer for carol's track waiting for alice.
+    no_peer_left(&mut b, &alice.user.user_id, Duration::from_millis(1500)).await;
+    assert_eq!(
+        client.remote_tracks(),
+        1,
+        "the offer did not reach alice yet"
+    );
+    let mut a2 = Conn::open_client(&server, &alice, false, client.clone()).await;
+    a2.send(&resume_msg(room, session));
+    a2.until("Resumed", |m| matches!(m, ServerMsg::Resumed { .. }))
+        .await;
+    // The connection task answers the resent offer with alice's media client.
+    wait_until("carol's track at alice", || client.remote_tracks() == 2).await;
+    no_peer_left(&mut b, &alice.user.user_id, Duration::from_millis(600)).await;
 }

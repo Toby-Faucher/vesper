@@ -55,6 +55,11 @@ impl Outbox {
         }
     }
 
+    /// Both feed the same socket.
+    pub fn same(&self, other: &Outbox) -> bool {
+        self.queue.same_channel(&other.queue)
+    }
+
     /// Close the socket with `code`. The first code wins.
     pub fn close(&self, code: u16) {
         self.close.send_if_modified(|c| {
@@ -151,7 +156,7 @@ impl Hub {
     /// [`Hub::broadcast_room`], but not to the sockets `skip` feeds.
     pub fn broadcast_room_except(&self, room: &RoomInfo, msg: ServerMsg, skip: &[&Outbox]) {
         for c in self.lock().conns.values() {
-            if can_see(&c.user, room) && !skip.iter().any(|s| s.queue.same_channel(&c.tx.queue)) {
+            if can_see(&c.user, room) && !skip.iter().any(|s| s.same(&c.tx)) {
                 c.tx.send(msg.clone());
             }
         }

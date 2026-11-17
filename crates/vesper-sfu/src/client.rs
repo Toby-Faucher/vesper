@@ -85,6 +85,8 @@ pub(crate) struct Client {
     /// Our outstanding offer and when it was sent.
     pending: Option<(SdpPendingOffer, Instant)>,
     answer_timeout: Duration,
+    /// The server holds this session while its signaling is away: no answer timeout (see `SfuHandle::hold`).
+    held: bool,
     share_ceiling_bps: u64,
     share_ceiling_secs: u32,
     /// Rate of the incoming video while sharing, and how many windows in a row were over the ceiling.
@@ -120,6 +122,7 @@ impl Client {
             advertised,
             pending: None,
             answer_timeout: cfg.answer_timeout,
+            held: false,
             share_ceiling_bps: cfg.share_ceiling_bps,
             share_ceiling_secs: cfg.share_ceiling_secs,
             share_rate: RateMeter::new(),
@@ -147,6 +150,14 @@ impl Client {
         let _ = self.events.send(SfuEvent::Closed);
     }
 
+    /// See `SfuHandle::hold`.
+    pub fn hold(&mut self, on: bool) {
+        self.held = on;
+        if !on && let Some((_, sent)) = &mut self.pending {
+            *sent = Instant::now();
+        }
+    }
+
     pub fn handle_input(&mut self, input: Input) {
         if !self.rtc.is_alive() {
             return;
@@ -161,7 +172,8 @@ impl Client {
         if !self.rtc.is_alive() {
             return Propagated::Noop;
         }
-        if let Some((_, sent)) = &self.pending
+        if !self.held
+            && let Some((_, sent)) = &self.pending
             && sent.elapsed() > self.answer_timeout
         {
             // No more offers can go out until this one is answered: end it so the server rejoins.
