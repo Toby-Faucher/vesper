@@ -4,6 +4,7 @@
 "crates/vesper-server/tests/signaling.rs" = 3
 "crates/vesper-server/tests/timeouts.rs" = 4
 "crates/vesper-sfu/tests/forwarding.rs" = 2
+"desktop/src/ui/view_tests.rs" = 1
 "desktop/src/voice/check.rs" = 1
 "desktop/src/voice/denoise.rs" = 2
 "desktop/src/voice/video.rs" = 1
@@ -18,6 +19,7 @@
 "crates/vesper-server/tests/timeouts.rs" = 1
 "crates/vesper-server/tests/uploads.rs" = 1
 "crates/vesper-sfu/tests/forwarding.rs" = 9
+"desktop/src/ui/view_tests.rs" = 1
 "desktop/src/voice/check.rs" = 1
 "desktop/src/voice/denoise.rs" = 1
 "desktop/src/voice/share.rs" = 1
