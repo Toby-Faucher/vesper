@@ -47,6 +47,9 @@ jobs:
   lint-rust:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      # Rule changes change the counts, so caltrop and ast-grep are pinned. Bump with caltrop.toml in the same PR.
+      CALTROP_REF: f3dc3f8ce01d3b617bf04498d6082996afc8f138
     steps:
       - uses: actions/checkout@v7.0.1
       # Installs the toolchain pinned in rust-toolchain.toml (rustfmt, clippy, wasm32 target).
@@ -56,7 +59,13 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The runner image ships shellcheck; install it anyway in case a new image drops it.
       - run: command -v shellcheck || (sudo apt-get update && sudo apt-get install -y shellcheck)
-      - run: scripts/check.sh fmt clippy shell scripts secrets wording
+      # caltrop (test-honesty checks) is cloned outside the checkout so it is not scanned.
+      - run: |
+          git clone https://github.com/Toby-Faucher/caltrop "$RUNNER_TEMP/caltrop"
+          git -C "$RUNNER_TEMP/caltrop" checkout "$CALTROP_REF"
+          pipx install ast-grep-cli==0.44.1
+          echo "$RUNNER_TEMP/caltrop" >> "$GITHUB_PATH"
+      - run: scripts/check.sh fmt clippy shell scripts secrets wording caltrop
 
   test-rust:
     runs-on: ubuntu-24.04

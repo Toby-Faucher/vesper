@@ -1,0 +1,28 @@
+[allow.no-deadline-poll]
+"crates/vesper-server/tests/cli.rs" = 4
+"crates/vesper-server/tests/push.rs" = 1
+"crates/vesper-server/tests/signaling.rs" = 3
+"crates/vesper-server/tests/timeouts.rs" = 4
+"crates/vesper-sfu/tests/forwarding.rs" = 2
+"desktop/src/voice/check.rs" = 1
+"desktop/src/voice/denoise.rs" = 2
+"desktop/src/voice/video.rs" = 1
+"desktop/tests/chat.rs" = 1
+"desktop/tests/common/mod.rs" = 1
+"desktop/tests/share.rs" = 2
+
+[allow.no-fixed-sleep]
+"crates/vesper-server/src/uploads.rs" = 1
+"crates/vesper-server/tests/push.rs" = 2
+"crates/vesper-server/tests/signaling.rs" = 3
+"crates/vesper-server/tests/timeouts.rs" = 1
+"crates/vesper-server/tests/uploads.rs" = 1
+"crates/vesper-sfu/tests/forwarding.rs" = 9
+"desktop/src/voice/check.rs" = 1
+"desktop/src/voice/denoise.rs" = 1
+"desktop/src/voice/share.rs" = 1
+"desktop/src/voice/video.rs" = 5
+"desktop/tests/voice.rs" = 2
+
+[allow.no-test-swap]
+"desktop/src/net.rs" = 3
