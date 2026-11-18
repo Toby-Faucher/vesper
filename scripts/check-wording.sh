@@ -13,12 +13,12 @@ cd "$root" || exit 2
 banned=${WORDING_BANNED:-$here/wording-banned.txt}
 pat=$(grep -v '^[[:space:]]*\(#\|$\)' "$banned" | paste -sd'|')
 [ -n "$pat" ] || { echo "no patterns in $banned" >&2; exit 2; }
-bad=0
-while IFS= read -r f; do
-  if grep -nEi -- "$pat" "$f" | sed "s|^|$f:|" | grep .; then bad=1; fi
-done < <(git ls-files --cached --others --exclude-standard -- '*.md' 'web/src/*.svelte' 'web/src/*.ts' \
-  | grep -v -e '\.test\.ts$' -e '^web/src/lib/gen/' | sort)
-if [ $bad = 1 ]; then
+# One grep over every file (one per file took 2.5 s for about 400 files). Matches are judged by output, not by
+# exit code: xargs reports 123 whenever any batch had no match.
+hits=$(git ls-files -z --cached --others --exclude-standard -- '*.md' 'web/src/*.svelte' 'web/src/*.ts' \
+  | grep -zv -e '\.test\.ts$' -e '^web/src/lib/gen/' | sort -z | xargs -0 -r grep -nEiH -- "$pat" || true)
+if [ -n "$hits" ]; then
+  printf '%s\n' "$hits"
   echo "wording check failed: rewrite the lines above in plain words" >&2
   exit 1
 fi

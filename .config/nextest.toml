@@ -15,3 +15,5 @@ fail-fast = false
 [[profile.default.overrides]]
 filter = 'test(=abrupt_disconnect_closes_client) | test(=abrupt_close_removes_presence) | test(=unanswered_pings_remove_presence)'
 slow-timeout = { period = "30s", terminate-after = 3 }
+# Start them first: the ICE-timeout test alone takes about 20 s and, started last, ran alone for the final 9 s.
+priority = 100
