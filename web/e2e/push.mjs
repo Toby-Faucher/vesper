@@ -20,7 +20,7 @@ if (!existsSync(new URL(process.env.VESPER_SERVER_BIN, new URL('..', import.meta
   process.exit(1);
 }
 process.env.VESPER_PUSH_SUBJECT = 'mailto:e2e@example.invalid';
-const { ORIGIN, browser, cli, cspViolations, logout, openRoom, signup, sleep, startServer } = await import('./lib.mjs');
+const { ORIGIN, browser, cli, cspViolations, logout, openRoom, signup, sleep, startServer, until } = await import('./lib.mjs');
 
 const b64 = (b) => Buffer.from(b).toString('base64url');
 
@@ -119,13 +119,14 @@ try {
   await toggle.check();
   await b.getByText(/^On for this device/).waitFor();
   // Both kinds start off; bob turns them on.
-  for (const name of ['Mentions', 'Direct messages', 'Someone starts voice']) {
+  const device = () => b.evaluate(() => fetch('/api/push').then((r) => r.json()).then((i) => i.devices[0]));
+  for (const [name, key] of [['Mentions', 'mentions'], ['Direct messages', 'dms'], ['Someone starts voice', 'voice']]) {
     const s = b.getByRole('switch', { name, exact: true });
     assert.equal(await s.isChecked(), false, `${name} starts off`);
     await s.check();
-    await sleep(300);
+    await until(`${name} saved`, 5000, async () => (await device())[key]);
   }
-  const kinds = await b.evaluate(() => fetch('/api/push').then((r) => r.json()).then((i) => i.devices[0]));
+  const kinds = await device();
   assert.deepEqual([kinds.mentions, kinds.dms, kinds.voice], [true, true, true], 'switches saved');
   assert.equal(await b.evaluate(() => navigator.serviceWorker.ready.then((r) => r.active?.scriptURL)), `${ORIGIN}/sw.js`);
   await b.getByRole('list', { name: 'Devices that get notifications' }).getByText('This device').waitFor();
@@ -162,7 +163,7 @@ try {
 
   // bob closes Vesper: no socket, so a mention and the start of voice reach him by push, without the message text.
   await b.close();
-  await sleep(500);
+  await sleep(500); // the server sees the socket close; no page is left to tell when it did
   await openRoom(a, 'general');
   const general = Number(new URL(a.url()).pathname.split('/')[2]);
   const r = await a.evaluate((id) => fetch(`/api/rooms/${id}/messages`, {
@@ -192,7 +193,7 @@ try {
   assert.equal(await b2.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => !!r)), false, 'worker after logout');
   console.log('logout removes the worker: ok');
 
-  await sleep(300);
+  await sleep(300); // a stray push would land by now; nothing to wait for when none comes
   assert.equal(got.length, 0, 'unexpected pushes');
   assert.deepEqual(await cspViolations(a), [], 'CSP violations');
   assert.deepEqual([...alice.errors, ...bob.errors], [], 'page errors');

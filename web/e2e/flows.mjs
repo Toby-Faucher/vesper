@@ -141,7 +141,7 @@ try {
   await a.getByRole('heading', { name: 'How others see you' }).waitFor();
   await a.getByLabel('Display name').fill('alice a');
   await a.getByLabel('Display name').press('Escape');
-  await sleep(300);
+  await sleep(300); // a navigation would start by now; nothing to wait for when Esc does nothing
   assert.equal(new URL(a.url()).pathname, '/welcome', 'Esc in the name field left the welcome steps');
   assert.equal(await a.getByLabel('Display name').inputValue(), 'alice a', 'Esc lost the typed name');
   await a.getByRole('button', { name: 'Skip for now' }).click();
@@ -321,8 +321,9 @@ try {
   await b.getByRole('button', { name: 'Mute', exact: true }).waitFor();
   await b.getByRole('button', { name: 'Leave' }).click();
   await inVoice(a, 'bob').waitFor({ state: 'detached' });
-  await sleep(300);
-  assert.deepEqual(await b.evaluate(() => window.__tones), [...CUE.connect, ...CUE.mute, ...CUE.unmute, ...CUE.disconnect], 'call sound sequence');
+  const cues = [...CUE.connect, ...CUE.mute, ...CUE.unmute, ...CUE.disconnect];
+  await b.waitForFunction((n) => window.__tones.length >= n, cues.length, { timeout: 5000 }).catch(() => {});
+  assert.deepEqual(await b.evaluate(() => window.__tones), cues, 'call sound sequence');
   console.log('call sounds: ok');
 
   // A Voice setting persists over a reload. Settings opened from its address closes to the last room, in place, and Esc
@@ -374,7 +375,7 @@ try {
     await post('no mention in this one');
     await post('hey @bob can you look at this');
     await b.waitForFunction(() => window.__shown.length > 0);
-    await sleep(500);
+    await sleep(500); // a second notification would show by now; no later event marks its absence
     assert.deepEqual(await shown(), [{ title: 'alice mentioned you in general', body: 'hey @bob can you look at this', tag: String(general) }]);
     await b.waitForFunction(() => document.title === '(1) Vesper');
     // A click on the notification closes it and opens the room at the message.
@@ -394,8 +395,10 @@ try {
     assert.ok(await b.getByRole('switch', { name: 'Mute and deafen' }).isChecked(), 'mute and deafen sounds should be on by default');
     await sw.uncheck();
     assert.equal(await b.evaluate(() => JSON.parse(localStorage.getItem('vesper.notify')).mentions), false);
+    await b.waitForFunction(() => document.title === 'Vesper', null, { timeout: 5000 });
     await post('@bob again, with the switch off');
-    await sleep(1000);
+    // The title count comes from the same message, after the notification decision: once it shows, a notification would have too.
+    await b.waitForFunction(() => document.title === '(1) Vesper', null, { timeout: 5000 });
     assert.deepEqual(await shown(), [], 'a notification with the switch off');
     await sw.check();
     assert.equal(await b.evaluate(() => window.__asked), 1, 'turning the switch on did not ask');
@@ -435,7 +438,7 @@ try {
     assert.ok(await card.evaluate((e) => e.getAnimations().length > 0), 'the open motion was over before the second click');
     await name.click();
     await card.waitFor({ state: 'hidden' });
-    await sleep(300);
+    await sleep(300); // a late toggle event would throw by now; nothing to wait for when it does not
     assert.deepEqual(bob.errors, [], 'page errors after a person card unmounted while open');
     console.log('a name or a mention in a message opens the person card: ok');
   }
@@ -631,7 +634,7 @@ try {
   // the caret with it); Ctrl+Alt+Up works there.
   const above = await a.getByRole('navigation', { name: 'Rooms' }).getByRole('link').evaluateAll((l) => l.map((x) => x.getAttribute('href')));
   await a.keyboard.press('Alt+ArrowUp');
-  await sleep(200);
+  await sleep(200); // a room change would show by now; nothing to wait for when it does not
   assert.equal(a.url(), `${ORIGIN}/r/${music.id}`, 'Alt+Up in the composer changed the room');
   await a.keyboard.press('Control+Alt+ArrowUp');
   await a.waitForURL(`${ORIGIN}${above[above.indexOf(`/r/${music.id}`) - 1]}`);
@@ -852,7 +855,7 @@ try {
       await roomLink(g, 'general').click();
       await g.getByRole('button', { name: 'Settings' }).click();
       await g.locator('#main').getByRole('heading', { level: 2, name: 'Voice' }).waitFor();
-      await sleep(700);
+      await sleep(700); // stay on Settings while the delayed (500 ms) message loads land: that is the case under test
       await g.keyboard.press('Escape');
     }
     await g.unroute(/\/api\/rooms\/\d+\/messages/);
@@ -1066,7 +1069,7 @@ try {
   await updated.waitFor({ timeout: 40000 });
   await composer(a).fill('sent after the update');
   await composer(a).press('Enter');
-  await sleep(2000);
+  await sleep(2000); // a send would land by now; the stale tab sends nothing, so there is no event to wait for
   assert.equal(await composer(a).inputValue(), 'sent after the update', 'the stale tab sent its text');
   const hist = await call(a, 'GET', `/api/rooms/${here}/messages`);
   assert.ok(!hist.messages.some((m) => m.body === 'sent after the update'), 'the stale tab posted a message');
@@ -1076,7 +1079,7 @@ try {
   await updated.getByRole('button', { name: 'Reload' }).click();
   await signedIn(a);
   await a.waitForURL(/\/r\/\d+$/);
-  await sleep(1000);
+  await sleep(1000); // the banner would come back by now; nothing marks the build check as done
   assert.equal(await updated.count(), 0, 'the banner is back after Reload');
   console.log('a new build asks open tabs to reload, blocks sends, no loop: ok');
   console.log('e2e flows: PASS');

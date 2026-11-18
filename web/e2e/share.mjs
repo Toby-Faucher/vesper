@@ -4,7 +4,7 @@
 // alice's video, that Stop removes bob's panel, and that a DM call has no "Share screen" button.
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: node e2e/share.mjs
 import assert from 'node:assert/strict';
-import { ORIGIN, browser, cli, openRoom, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, openRoom, signup, sleep, startServer, until } from './lib.mjs';
 
 // A 1280x720 canvas that redraws every 33 ms, so the encoder always has new content.
 const fakeScreen = () => {
@@ -35,16 +35,6 @@ const join = async (page) => {
   await page.getByRole('button', { name: 'Join' }).click();
   await page.getByRole('button', { name: 'Leave' }).waitFor();
 };
-
-// Polls `fn` until it returns truthy; fails with `what` after `ms`. Returns the elapsed ms.
-async function until(what, ms, fn) {
-  const t0 = Date.now();
-  for (;;) {
-    if (await fn()) return Date.now() - t0;
-    assert.ok(Date.now() - t0 < ms, `${what}: not within ${ms} ms`);
-    await sleep(250);
-  }
-}
 
 // The first stats record of `type` (and video kind where it has one) over the open connections.
 const stat = (page, type, pick) =>
@@ -101,9 +91,7 @@ try {
   let ms = await until('bob tile video', 10000, async () => (await tileVideoWidth(bob.page)) > 0);
   console.log(`tile video: ${ms} ms, ${await tileVideoWidth(bob.page)} px wide`);
   const rx0 = await bytesReceived(bob.page);
-  await sleep(2000);
-  const rx1 = await bytesReceived(bob.page);
-  assert.ok(rx1 > rx0, `bob's inbound video bytes did not grow (${rx0} -> ${rx1})`);
+  await until(`bob's inbound video bytes did not grow from ${rx0}`, 5000, async () => (await bytesReceived(bob.page)) > rx0);
 
   // Alice's card counts bob, and the SFU's transport-cc feedback lets her estimate pass 2 Mbps.
   await alice.page.getByText('1 watching').waitFor({ timeout: 5000 });
@@ -116,7 +104,7 @@ try {
 
   // Watched baseline: alice's video payload rate over 3 s.
   const w0 = await outVideo(alice.page);
-  await sleep(3000);
+  await sleep(3000); // a rate over a fixed window
   const w1 = await outVideo(alice.page);
   const watchedRate = (w1.bytes - w0.bytes) / 3;
   console.log(`watched: ${Math.round(watchedRate)} B/s, ${(w1.enc - w0.enc) / 3} frames/s encoded`);
