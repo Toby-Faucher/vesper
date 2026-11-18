@@ -358,3 +358,18 @@ jobs:
         with:
           path: web/public/dsp
           key: ${{ steps.dsp-cache.outputs.cache-primary-key }}
+
+  # Keeps only the newest cache of each kind on main (scripts/prune-caches.py). Superseded copies otherwise sit in the
+  # repo's 10 GB until GitHub evicts something, often a cache a job still uses.
+  prune-caches:
+    needs: [lint-rust, test-rust, web, e2e, dsp-wasm, desktop, desktop-windows]
+    if: ${{ !cancelled() && github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: python3 -I scripts/prune-caches.py --apply
+        env:
+          GH_TOKEN: ${{ github.token }}
