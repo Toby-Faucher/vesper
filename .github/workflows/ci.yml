@@ -119,11 +119,12 @@ jobs:
         with:
           path: ~/apt-archives
           key: apt-desktop-v1-${{ runner.os }}
-      # Only what the build links or reads headers from: Vulkan is loaded at run time (ash), x11rb is pure Rust,
-      # nothing uses OpenSSL. libxcb headers come in as dependencies of libxkbcommon-x11-dev.
+      # Only what the build links or reads headers from: Vulkan is loaded at run time (ash) and nothing uses OpenSSL.
+      # libx11-xcb-dev (and with it libx11-dev) is for the x11 crate's build script, which looks them up with pkg-config.
       - run: >-
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libxkbcommon-x11-dev
-          libwayland-dev libfontconfig-dev libfreetype-dev libasound2-dev libopus-dev libpipewire-0.3-dev libclang-dev pkg-config
+          libx11-xcb-dev libwayland-dev libfontconfig-dev libfreetype-dev libasound2-dev libopus-dev libpipewire-0.3-dev
+          libclang-dev pkg-config
       - run: sudo chown -R "$USER" ~/apt-archives
       # Static libvpx for the share encoder (scripts/build-libvpx.sh), kept until the script changes.
       - id: libvpx
