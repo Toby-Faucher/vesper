@@ -63,7 +63,12 @@ jobs:
       - run: |
           git clone https://github.com/Toby-Faucher/caltrop "$RUNNER_TEMP/caltrop"
           git -C "$RUNNER_TEMP/caltrop" checkout "$CALTROP_REF"
-          pipx install ast-grep-cli==0.44.1
+          # ast-grep 0.44.1 prebuilt binary (about 1 s, pipx took about 3 s); the checksum is GitHub's asset digest.
+          curl -fsSL -o "$RUNNER_TEMP/ast-grep.zip" \
+            https://github.com/ast-grep/ast-grep/releases/download/0.44.1/app-x86_64-unknown-linux-gnu.zip
+          echo "611f9e5e76f2611ecea1a35dd3468ceedf600641a11224b80341d79c6ee7b9dd  $RUNNER_TEMP/ast-grep.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/ast-grep.zip" -d "$RUNNER_TEMP/ast-grep"
+          echo "$RUNNER_TEMP/ast-grep" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/caltrop" >> "$GITHUB_PATH"
       - run: scripts/check.sh fmt clippy shell scripts secrets wording caltrop
 
@@ -138,11 +143,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
-      - run: rustup toolchain install --no-self-update
       - uses: taiki-e/install-action@v2.87.31
         with:
           tool: cargo-deny@0.20.2
+      # cargo-deny only needs `cargo metadata`: the runner's stable cargo saves the pinned toolchain's 10 s download.
       - run: scripts/check.sh deny
+        env:
+          RUSTUP_TOOLCHAIN: stable
 
   web:
     runs-on: ubuntu-24.04
@@ -265,7 +272,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       # With the wasm build above this is `scripts/check.sh dsp`; the tests run whether or not the cache hit.
-      - run: scripts/check.sh denoiser audiolab
+      - run: scripts/check.sh dsp-tests
       - if: github.ref == 'refs/heads/main' && steps.dsp-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

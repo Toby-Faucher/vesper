@@ -20,8 +20,9 @@ Steps:
   scripts   every other scripts/test-*.sh
   shell     shellcheck scripts/*.sh (skipped with a note if shellcheck is missing)
   caltrop   caltrop check . (test-honesty rules, allowlist in caltrop.toml; needs caltrop and ast-grep, see docs/dev.md)
-  web       npm ci, then \`npm run ci\` in web/ (svelte-check, vitest, vite build, gzip size budget)
-  dsp       not in the full run: denoiser audiolab wasm
+  web       npm ci in web/, svelte-check and vitest side by side, vite build, gzip size budget
+  dsp       not in the full run: dsp-tests wasm
+  dsp-tests denoiser and audiolab in one nextest run (side by side, vesper-dsp built once)
   denoiser  vesper-dsp native tests (fetches the model)
   audiolab  vesper-audiolab tests (fetches the DNSMOS model)
   wasm      scripts/build-dsp.sh (needs the wasm-bindgen CLI at the Cargo.lock version)
@@ -34,8 +35,8 @@ for a in "$@"; do
   case $a in
     -h | --help) usage; exit 0 ;;
     fast) steps+=(fmt clippy test caltrop) ;;
-    dsp) steps+=(denoiser audiolab wasm) ;;
-    fmt | clippy | test | bindings | deny | secrets | wording | scripts | shell | caltrop | web | denoiser | audiolab | wasm) steps+=("$a") ;;
+    dsp) steps+=(dsp-tests wasm) ;;
+    fmt | clippy | test | bindings | deny | secrets | wording | scripts | shell | caltrop | web | denoiser | audiolab | dsp-tests | wasm) steps+=("$a") ;;
     *) echo "unknown step: $a" >&2; usage >&2; exit 2 ;;
   esac
 done
@@ -55,11 +56,12 @@ run_step() {
     clippy) step "clippy"; capped cargo clippy --locked --workspace --all-targets -- -D warnings ;;
     # No doc tests exist yet; nextest skips them, so add `cargo test --doc --workspace` with the first.
     # vesper-audiolab needs the models and turns on vesper-dsp's tract feature, so it runs in `dsp`.
-    test) step "nextest"; capped cargo nextest run --locked --workspace --exclude vesper-audiolab --profile ci ;;
+    test) step "nextest"; capped cargo nextest run --locked --workspace --exclude vesper-audiolab --profile ci; ran_test=1 ;;
     bindings)
       step "ts-rs bindings up to date"
       # The vesper-protocol export tests rewrite web/src/lib/gen (TS_RS_EXPORT_DIR in .cargo/config.toml).
-      capped cargo nextest run --locked -p vesper-protocol --profile ci
+      # The test step already ran the export tests in this invocation; only run them when it did not.
+      [ -n "${ran_test:-}" ] || capped cargo nextest run --locked -p vesper-protocol --profile ci
       git diff --exit-code -- "$gen"
       [ -z "$(git status --porcelain -- "$gen")" ] || { git status --short -- "$gen"; echo "untracked bindings above: commit them" >&2; exit 1; }
       ;;
@@ -88,9 +90,15 @@ run_step() {
       caltrop check .
       ;;
     web)
-      step "web: npm ci, then npm run ci"
+      step "web: npm ci, svelte-check and vitest side by side, build, size"
       capped npm --prefix web ci --no-audit --no-fund
-      capped npm --prefix web run ci
+      # `npm run ci` without its order: svelte-check and vitest are independent, so they run side by side.
+      capped npm --prefix web run check & check_pid=$!
+      test_rc=0; capped npm --prefix web test || test_rc=$?
+      check_rc=0; wait "$check_pid" || check_rc=$?
+      [ "$test_rc" = 0 ] && [ "$check_rc" = 0 ] || { echo "web: svelte-check exit $check_rc, vitest exit $test_rc" >&2; exit 1; }
+      capped npm --prefix web run build
+      capped npm --prefix web run size
       ;;
     denoiser)
       step "denoiser: native tests"
@@ -101,6 +109,12 @@ run_step() {
       step "audio lab tests"
       [ -f research/models/sig_bak_ovr.onnx ] || research/scripts/fetch-dnsmos.sh
       capped cargo nextest run --locked -p vesper-audiolab --profile ci
+      ;;
+    dsp-tests)
+      step "denoiser and audio lab tests"
+      [ -f crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz ] || scripts/fetch-model.sh
+      [ -f research/models/sig_bak_ovr.onnx ] || research/scripts/fetch-dnsmos.sh
+      capped cargo nextest run --locked -p vesper-dsp -p vesper-audiolab --features vesper-dsp/tract --profile ci
       ;;
     wasm) step "denoiser wasm build"; capped scripts/build-dsp.sh ;;
   esac
