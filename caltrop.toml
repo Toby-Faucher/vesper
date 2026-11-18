@@ -45,7 +45,8 @@
 "desktop/src/voice/denoise.rs" = 1
 
 [allow.no-test-swap]
-"crates/vesper-server/src/push.rs" = 2
+"crates/vesper-server/src/lib.rs" = 1
+"crates/vesper-server/src/push.rs" = 1
 "crates/vesper-sfu/src/lib.rs" = 3
 "crates/vesper-sfu/src/room.rs" = 1
 "desktop/src/net.rs" = 3

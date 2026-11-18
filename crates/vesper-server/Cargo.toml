@@ -44,8 +44,6 @@ tempfile = "3"
 futures-util = { workspace = true, features = ["sink"] }
 tokio-tungstenite.workspace = true
 vesper-sfu = { workspace = true, features = ["test-support"] }
-# Turns on `test-push` for the integration tests only (they are a separate crate).
-vesper-server = { path = ".", features = ["test-push"] }
 
 [lints]
 workspace = true

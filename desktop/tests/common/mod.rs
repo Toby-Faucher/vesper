@@ -71,7 +71,7 @@ impl Server {
             .await
             .unwrap();
         let hub = vesper_server::hub::Hub::default();
-        let push = vesper_server::push::Push::new(store.clone(), hub.clone(), None)
+        let push = vesper_server::push::Push::new(store.clone(), hub.clone(), None, false)
             .await
             .unwrap();
         let state = AppState {

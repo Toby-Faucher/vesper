@@ -651,8 +651,9 @@ Notifications while Vesper is closed (issue #58): "alice mentioned you in Games"
   most 8 sends run at once and 256 wait or run; past that a push is dropped (a debug log line), so a mention storm cannot grow a
   backlog. A port other than 443 is refused from the raw text (`http::Uri` reads `:65979` as no port), and so is a path that does not
   start with `/`. A second session may take over an endpoint already stored only when its keys match too (the same browser, signed in
-  as someone else); otherwise 409, so knowing an endpoint is not enough to take another person's pushes. The `test-push` cargo feature (tests and the push e2e) also allows
-  `http://127.0.0.1:<port>`; it is a compile error in a release build.
+  as someone else); otherwise 409, so knowing an endpoint is not enough to take another person's pushes. Tests pass `allow_loopback` to `Push::new`, and the `test-push`
+  cargo feature (the push e2e build only) does the same; both also allow `http://127.0.0.1:<port>`. Production passes false, and
+  `test-push` is a compile error in a release build.
 - **App badge** (`web/src/lib/ui/badge.ts`): the page sets the installed app's badge to the sum of unread mentions (`Unread.mentions`) and clears it at 0, sending only changes; the worker sets a plain mark (no number) on a mention push. Only where `navigator.setAppBadge` exists (Chromium on Windows and macOS, Safari 17 installed apps); Firefox has none and nothing happens. Unit tests with a stub (`badge.test.ts`, `sw.test.ts`); not seen on a real installed app.
 - **The worker** shows the notification (tag `<kind>-<room id>`, so a voice push never replaces a mention), focuses an open Vesper tab and asks it to open the room (the app navigates
   in place, so a call goes on) or opens `/r/<id>`, and resubscribes on `pushsubscriptionchange` with the device's switches. It has
