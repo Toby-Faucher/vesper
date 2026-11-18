@@ -4,7 +4,7 @@
 # VESPER_NO_CAP=1 runs them plain (CI runners).
 set -euo pipefail
 
-all=(fmt clippy test bindings deny secrets wording scripts shell web)
+all=(fmt clippy test bindings deny secrets wording scripts shell caltrop web)
 usage() {
   cat <<EOF
 Usage: scripts/check.sh [step]...
@@ -19,12 +19,13 @@ Steps:
   wording   scripts/check-wording.sh (stock phrases and em dashes in docs and web strings)
   scripts   every other scripts/test-*.sh
   shell     shellcheck scripts/*.sh (skipped with a note if shellcheck is missing)
+  caltrop   caltrop check . (test-honesty rules, allowlist in caltrop.toml; needs caltrop and ast-grep, see docs/dev.md)
   web       npm ci, then \`npm run ci\` in web/ (svelte-check, vitest, vite build, gzip size budget)
   dsp       not in the full run: denoiser audiolab wasm
   denoiser  vesper-dsp native tests (fetches the model)
   audiolab  vesper-audiolab tests (fetches the DNSMOS model)
   wasm      scripts/build-dsp.sh (needs the wasm-bindgen CLI at the Cargo.lock version)
-  fast      fmt clippy test
+  fast      fmt clippy test caltrop
 EOF
 }
 
@@ -32,9 +33,9 @@ steps=()
 for a in "$@"; do
   case $a in
     -h | --help) usage; exit 0 ;;
-    fast) steps+=(fmt clippy test) ;;
+    fast) steps+=(fmt clippy test caltrop) ;;
     dsp) steps+=(denoiser audiolab wasm) ;;
-    fmt | clippy | test | bindings | deny | secrets | wording | scripts | shell | web | denoiser | audiolab | wasm) steps+=("$a") ;;
+    fmt | clippy | test | bindings | deny | secrets | wording | scripts | shell | caltrop | web | denoiser | audiolab | wasm) steps+=("$a") ;;
     *) echo "unknown step: $a" >&2; usage >&2; exit 2 ;;
   esac
 done
@@ -80,6 +81,11 @@ run_step() {
       else
         echo "skipped: shellcheck is not installed (CI runs it)"
       fi
+      ;;
+    caltrop)
+      step "caltrop"
+      command -v caltrop >/dev/null || { echo "caltrop is not installed: see docs/dev.md" >&2; exit 1; }
+      caltrop check .
       ;;
     web)
       step "web: npm ci, then npm run ci"

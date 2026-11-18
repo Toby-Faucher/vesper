@@ -12,6 +12,7 @@ Deploying: [deploy.md](deploy.md). Last updated 2026-11-01.
 - The `wasm-bindgen` CLI at exactly the version of the `wasm-bindgen` crate in `Cargo.lock`. `scripts/build-dsp.sh` compares them and prints
   the install command: `cargo install wasm-bindgen-cli --version <ver> --locked`.
 - `curl` and `sha256sum`, for `scripts/fetch-model.sh`.
+- `caltrop` and ast-grep 0.44.1, for `scripts/check.sh caltrop`. Install steps are in the [caltrop README](https://github.com/Toby-Faucher/caltrop#install).
 - Optional: `shellcheck` (`scripts/check.sh shell` skips without it, CI runs it) and `just` (a thin wrapper over the scripts).
 
 ## Build the denoiser first
