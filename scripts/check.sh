@@ -14,7 +14,7 @@ Steps:
   clippy    clippy -D warnings
   test      nextest, ci profile (the SFU ICE-timeout test alone takes about 20 s)
   bindings  fail if the committed ts-rs bindings in web/src/lib/gen differ from the Rust types
-  deny      cargo deny check (advisories need network)
+  deny      cargo deny check, root and desktop/ lockfiles (advisories need network)
   secrets   scripts/check-secrets.sh and its test, scripts/test-check-secrets.sh
   wording   scripts/check-wording.sh (stock phrases and em dashes in docs and web strings)
   scripts   every other scripts/test-*.sh
@@ -65,7 +65,12 @@ run_step() {
       git diff --exit-code -- "$gen"
       [ -z "$(git status --porcelain -- "$gen")" ] || { git status --short -- "$gen"; echo "untracked bindings above: commit them" >&2; exit 1; }
       ;;
-    deny) step "cargo deny"; capped cargo deny --locked check ;;
+    deny)
+      step "cargo deny"
+      capped cargo deny --locked check
+      # desktop/ is its own workspace and lockfile (the app users download): same rules, same deny.toml.
+      capped cargo deny --locked --manifest-path desktop/Cargo.toml --config deny.toml check
+      ;;
     secrets) step "check-secrets"; scripts/check-secrets.sh && scripts/test-check-secrets.sh ;;
     wording) step "check-wording"; scripts/check-wording.sh ;;
     scripts)
