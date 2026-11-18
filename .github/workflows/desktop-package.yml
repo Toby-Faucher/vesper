@@ -37,6 +37,9 @@ jobs:
         with:
           workspaces: desktop
           key: release
+          # Tag runs cannot read each other's caches (GitHub scopes caches to the ref and main), so saving one only
+          # fills the 10 GB limit and pushes out ci's caches.
+          save-if: false
       - run: cargo build --release --locked
         working-directory: desktop
       - name: Package
@@ -87,6 +90,9 @@ jobs:
         with:
           workspaces: desktop
           key: release
+          # Tag runs cannot read each other's caches (GitHub scopes caches to the ref and main), so saving one only
+          # fills the 10 GB limit and pushes out ci's caches.
+          save-if: false
       - run: cargo build --release --locked
         working-directory: desktop
       # The binary must not ask for a shared libvpx (distros name it differently).

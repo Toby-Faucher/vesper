@@ -98,6 +98,39 @@ strip = true
 
 [profile.dev.package.tract-core]
 debug-assertions = false
+# Unoptimised, the denoiser model runs about 5 times slower in tests; optimise all of tract.
+opt-level = 3
+
+[profile.dev.package.tract-data]
+opt-level = 3
+
+[profile.dev.package.tract-hir]
+opt-level = 3
+
+[profile.dev.package.tract-linalg]
+opt-level = 3
+
+[profile.dev.package.tract-nnef]
+opt-level = 3
+
+[profile.dev.package.tract-onnx]
+opt-level = 3
+
+[profile.dev.package.tract-onnx-opl]
+opt-level = 3
+
+[profile.dev.package.tract-pulse]
+opt-level = 3
+
+[profile.dev.package.tract-pulse-opl]
+opt-level = 3
+
+# Every test login hashes with argon2id (19 MiB, 2 passes); unoptimised that is about 7 times slower.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
 
 # A debug build decodes a 1080p share too slowly to keep up; optimise the decoder alone.
 [profile.dev.package.vp8-decoder]
