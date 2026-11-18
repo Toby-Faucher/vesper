@@ -2,7 +2,7 @@
 """Usage: scripts/prune-caches.py [--apply] [LIST.json]
 
 Keeps only the newest Actions cache of each kind on main, so superseded copies do not fill the repo's 10 GB and push
-out the caches jobs still use. A kind is a key up to its first hash-like part (8 or more hex characters), for example
+out the caches jobs still use. A kind is a key with its hash-like parts (8 or more hex characters) removed, for example
 `v0-rust-e2e-Linux-x64` or `libvpx-v1-Windows`. Reads `gh cache list --ref refs/heads/main --json id,key,createdAt`
 (or LIST.json), prints what it would delete, and deletes it with --apply.
 """
@@ -15,11 +15,9 @@ HASH = re.compile(r"^[0-9a-f]{8,}$")
 
 
 def kind(key):
-    parts = key.split("-")
-    for i, p in enumerate(parts):
-        if HASH.match(p):
-            return "-".join(parts[:i])
-    return key
+    # Drop every hash part, keep the rest: `v0-rust-vendor-<hash>-Linux-x64-...` and the same key for Windows must stay
+    # two kinds (only the first hash differs before the OS name).
+    return "-".join(p for p in key.split("-") if not HASH.match(p))
 
 
 def stale(caches):
