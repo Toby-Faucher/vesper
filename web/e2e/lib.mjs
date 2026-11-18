@@ -15,6 +15,16 @@ const web = fileURLToPath(new URL('..', import.meta.url));
 const bin = process.env.VESPER_SERVER_BIN || '../target/release/vesper-server';
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Polls `fn` every 100 ms until it returns truthy; throws with `what` after `ms`. Returns the elapsed ms.
+export async function until(what, ms, fn) {
+  const t0 = Date.now();
+  for (;;) {
+    if (await fn()) return Date.now() - t0;
+    if (Date.now() - t0 >= ms) throw new Error(`${what}: not within ${ms} ms`);
+    await sleep(100);
+  }
+}
+
 // A port the OS has free now: bind port 0, read it back, let it go.
 // shortcut: another process can take it between this probe and the server's bind; then the start fails loudly (no /health).
 const freePort = (udp = false) => new Promise((r) => {

@@ -5,7 +5,7 @@
 // (primitives.mjs, on the dev-only gallery page). After them: layout shift after a join, reduced motion, and a keyboard-only
 // walk with a focus ring on every Tab stop. Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
-import { ORIGIN, browser, cli, composer, cspViolations, devServer, openRoom, png1x1, searchHits, signedIn, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, composer, cspViolations, devServer, openRoom, png1x1, searchHits, signedIn, signup, sleep, startServer, until } from './lib.mjs';
 import { checkPrimitives } from './primitives.mjs';
 
 const BAD_LINK = 'This invite link does not work. Ask the person who sent it for a new one.';
@@ -175,8 +175,9 @@ try {
     return { left, top, right: left + parseFloat(s.width), bottom: top + parseFloat(s.height) };
   });
   await cog.evaluate((el) => (el.dataset.tip = 'Settings for your account, voice, notifications and more'));
-  await sleep(300); // the observer runs after the change; the tip has no transition on its shift
-  const relabelled = await tipBox();
+  let relabelled;
+  // The observer runs after the change; the tip has no transition on its shift.
+  await until('relabelled tooltip', 2000, async () => { relabelled = await tipBox(); return inside(relabelled) && relabelled.right - relabelled.left > 200; }).catch(() => {});
   assert.ok(inside(relabelled) && relabelled.right - relabelled.left > 200, `a relabelled tooltip kept its old place: ${JSON.stringify(relabelled)}`);
   await cog.evaluate((el) => (el.dataset.tip = 'Settings'));
   await b.mouse.move(600, 300);
@@ -257,7 +258,7 @@ try {
   await pick.waitFor({ state: 'hidden' });
   await order(b, ['music room', 'general', 'hangout']);
   await a.waitForFunction(() => document.querySelector('[aria-label="Members of music room"]')?.textContent.replace(/\s+/g, ' ').includes('Members 1'));
-  await sleep(500); // a late event would show it to carol here
+  // A late event showing music room to carol would come before the archive event below, where her order must be just general.
   await order(c, ['general', 'hangout']);
   console.log('rooms: create, rename, reorder, restrict, live sidebars: ok');
 
@@ -368,6 +369,7 @@ try {
   await openRoom(b, 'general');
   await b.getByRole('button', { name: 'Join voice' }).click();
   await b.getByRole('button', { name: 'Leave' }).waitFor();
+  // The sleeps in this block are the windows the layout shifts are counted over; no event ends them.
   await sleep(500);
   await b.evaluate(() => {
     window.__shift = [];
@@ -436,7 +438,7 @@ try {
   await r.locator('#sidebar').waitFor();
   await r.getByRole('button', { name: 'Settings', exact: true }).click();
   await r.getByRole('navigation', { name: 'Settings sections' }).getByRole('link', { name: 'Appearance' }).click();
-  await sleep(300);
+  await sleep(300); // the window the page change's motion is recorded over
   const chatMotion = await motionSince(r);
   assert.ok(dialogMotion.length && barMotion.length && chatMotion.length, 'no motion recorded: the hook missed the animations');
   assert.deepEqual(moves([...dialogMotion, ...barMotion, ...jumpMotion, ...chatMotion]), [], 'something moves under reduced motion');
@@ -458,7 +460,12 @@ try {
   const tabTo = async (want) => {
     for (let i = 0; i < 100; i++) {
       await k.keyboard.press('Tab');
-      await sleep(150); // a border ring fades in over --dur-1
+      // A border ring fades in over --dur-1: wait for the transitions on the focused element and the three parents checked below.
+      await k.waitForFunction(() => {
+        const e = document.activeElement;
+        const els = [e, e?.parentElement, e?.parentElement?.parentElement, e?.parentElement?.parentElement?.parentElement].filter(Boolean);
+        return !els.some((x) => x.getAnimations().some((a) => a.playState === 'running'));
+      }, null, { timeout: 2000 });
       const at = await k.evaluate(() => {
         const e = document.activeElement;
         if (!e || e === document.body) return null;
@@ -500,7 +507,7 @@ try {
   await k.keyboard.press('Enter');
   await k.getByRole('heading', { level: 1, name: 'general', exact: true }).waitFor();
   await k.locator('article').first().waitFor();
-  await sleep(300);
+  await sleep(300); // a row animation would start by now; nothing to wait for when none does
   assert.deepEqual((await animatedSince(k)).filter((t) => t === 'article'), [], 'the history of a room animated on open');
   await tabTo('Join voice');
   // Offline: Join voice keeps focus, says why (aria-describedby; the tip shows on focus) and Enter does nothing.
@@ -511,7 +518,7 @@ try {
   assert.equal(await join.evaluate((e) => e === document.activeElement), true, 'Join voice lost focus when the connection dropped');
   assert.equal(await join.evaluate((e) => document.getElementById(e.getAttribute('aria-describedby'))?.textContent), 'You are offline. This works again once the connection is back.');
   await k.keyboard.press('Enter');
-  await sleep(500);
+  await sleep(500); // a join would show Leave by now; nothing to wait for when Enter does nothing
   assert.equal(await k.getByRole('button', { name: 'Leave' }).count(), 0, 'Join voice worked while offline');
   down = false;
   sock.close(); // the socket that got no hello: the next one reaches the server
@@ -523,7 +530,7 @@ try {
   await k.keyboard.press('Control+Shift+M');
   await k.getByRole('button', { name: 'Unmute' }).waitFor();
   await tabTo('Message');
-  await sleep(200);
+  await sleep(200); // lets the focus motion finish before the typing window starts
   await animatedSince(k);
   await k.keyboard.type('kiwi from the keyboard');
   assert.deepEqual(await animatedSince(k), [], 'typing in the composer animated something');
@@ -532,16 +539,18 @@ try {
     const list = document.querySelector('[data-timeline]');
     const end = performance.now() + 1500;
     window.__jumped = false;
+    window.__ticked = false;
     const tick = () => {
       list.dispatchEvent(new Event('scroll'));
       window.__jumped ||= !!document.querySelector('[aria-label="Jump to latest"]');
       if (performance.now() < end) requestAnimationFrame(tick);
+      else window.__ticked = true;
     };
     requestAnimationFrame(tick);
   });
   await k.keyboard.press('Enter');
   await k.locator('article').filter({ hasText: 'kiwi from the keyboard' }).waitFor();
-  await sleep(1600);
+  await k.waitForFunction(() => window.__ticked, null, { timeout: 5000 });
   assert.equal(await k.evaluate(() => window.__jumped), false, 'a rising message made the list leave the bottom (Jump to latest showed)');
   assert.ok(moves(await motionSince(k)).length > 0, 'a new message did not rise in: the reduced motion check proves nothing');
   await k.keyboard.press('ArrowUp');
@@ -594,11 +603,11 @@ try {
   // The saved hidden state at boot: no slide, nothing animates the shell.
   await k.reload();
   await k.getByRole('button', { name: 'Show sidebar' }).waitFor();
-  await sleep(500);
+  await sleep(500); // a boot slide would run by now; nothing to wait for when none does
   assert.deepEqual((await animatedSince(k)).filter((t) => t === 'main'), [], 'the saved sidebar state slid at boot');
   assert.equal(await k.locator('#sidebar').evaluate((e) => e.hidden && e.getAnimations().length), 0, 'the hidden sidebar animated at boot');
   await k.getByRole('button', { name: 'Show sidebar' }).click();
-  await sleep(50);
+  await sleep(50); // the slide starts on the next frames
   assert.ok((await animatedSince(k)).includes('main'), 'the sidebar did not slide back in');
   assert.equal(await focusedName(), 'Hide sidebar', 'focus did not move to the sidebar toggle');
   console.log('message highlight and sidebar slide: ok');

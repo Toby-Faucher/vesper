@@ -8,7 +8,7 @@
 // Needs ../target/release/vesper-server and dist/ (npm run build). Run: npm run e2e
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { ORIGIN, browser, cli, png1x1, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, searchFor, searchHits, signup, sleep, startServer } from './lib.mjs';
+import { ORIGIN, browser, cli, png1x1, composer, cspViolations, inVoice, messageMenu, openRoom, roomId, roomLink, searchFor, searchHits, signup, sleep, startServer, until } from './lib.mjs';
 
 const speech = fileURLToPath(new URL('fixtures/speech.wav', import.meta.url));
 
@@ -127,7 +127,8 @@ try {
   console.log('signup_shows_live: ok');
 
   await join(alice.page);
-  await sleep(2000);
+  // alice's connection is up before bob joins.
+  await alice.page.waitForFunction(() => window.__pcs.some((pc) => /^(connected|completed)$/.test(pc.iceConnectionState)), null, { timeout: 10000 });
   await join(bob.page);
 
   let first = null;
@@ -142,6 +143,8 @@ try {
   let rings = 0;
   let last = first;
   const N = 20;
+  let samples = 0;
+  let ringOff = false; // a sample without the ring after one with it: the ring turned on and off at least once
   // Speaking changes toggle the ring at once: count every Element.animate and running animation on the people rows while
   // alice talks. Only the rows: the call timer rolls its digits every second (the number flip), which is not a speaking change.
   await bob.page.evaluate(() => {
@@ -149,12 +152,16 @@ try {
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (k, o) { if (this.closest?.('li')) window.__anims++; return animate.call(this, k, o); };
   });
-  for (let i = 0; i < N; i++) {
+  // Up to N samples; it stops once packets and bytes rose and the ring went both on and off.
+  while (samples < N && !(ringOff && last.packets > first.packets && last.bytes > first.bytes)) {
     await sleep(250);
     last = await inbound(bob.page);
-    rings += await bob.page.locator('li.speaking[data-speaking]', { hasText: 'alice' }).count();
+    const ring = await bob.page.locator('li.speaking[data-speaking]', { hasText: 'alice' }).count();
+    if (!ring && rings) ringOff = true;
+    rings += ring;
+    samples++;
   }
-  console.log('bob inbound audio: first', JSON.stringify(first), 'last', JSON.stringify(last), `speaking ring on ${rings}/${N} samples`);
+  console.log('bob inbound audio: first', JSON.stringify(first), 'last', JSON.stringify(last), `speaking ring on ${rings}/${samples} samples`);
   assert.match(last.ice, /^(connected|completed)$/, 'ICE not connected');
   assert.ok(last.packets > first.packets, 'packetsReceived did not rise');
   assert.ok(last.bytes > first.bytes, 'bytesReceived did not rise');
@@ -164,8 +171,8 @@ try {
 
   // The other direction: bob's default fake device sends a beep, so alice's packets rise too.
   const a1 = await inbound(alice.page);
-  await sleep(1000);
-  const a2 = await inbound(alice.page);
+  let a2 = a1;
+  await until('alice inbound packets', 5000, async () => (a2 = await inbound(alice.page))?.packets > a1?.packets).catch(() => {});
   console.log('alice inbound audio:', JSON.stringify(a1), '->', JSON.stringify(a2));
   assert.ok(a1?.packets > 0 && a2.packets > a1.packets, 'alice did not receive bob\'s audio');
 
@@ -190,9 +197,14 @@ try {
   const flowing = async (page, what) => {
     const a = await inboundAll(page);
     await page.evaluate(() => (window.__peak = {}));
-    await sleep(3000);
-    const b = await inboundAll(page);
-    const peak = Math.max(0, ...Object.values(await page.evaluate(() => window.__peak)));
+    let b = a;
+    let peak = 0;
+    // Polls up to 5 s for both; the asserts below say which one is missing.
+    await until(what, 5000, async () => {
+      b = await inboundAll(page);
+      peak = Math.max(0, ...Object.values(await page.evaluate(() => window.__peak)));
+      return b.packets > a.packets && b.bytes > a.bytes && peak > 0.02;
+    }).catch(() => {});
     console.log(`  ${what}: ${JSON.stringify(a)} -> ${JSON.stringify(b)}, peak ${peak.toFixed(3)}`);
     assert.ok(b.packets > a.packets && b.bytes > a.bytes, `${what}: no inbound audio after the rejoin`);
     assert.ok(peak > 0.02, `${what}: the received audio is silent after the rejoin`);
@@ -217,7 +229,7 @@ try {
     if (pause === null) await bob.page.reload();
     else {
       await leaveCall(bob.page);
-      await sleep(pause);
+      await sleep(pause); // the pause is the case under test
     }
     if (pause !== 0) await inVoice(alice.page, 'bob').waitFor({ state: 'detached', timeout: 5000 });
     await join(bob.page);
@@ -243,17 +255,16 @@ try {
   });
   await forceMute(true);
   await bob.page.getByText('A moderator muted you.').waitFor({ timeout: 5000 });
-  await sleep(500);
+  await sleep(500); // packets already on the way still land
   const m1 = await inboundAll(alice.page);
-  await sleep(2000);
+  await sleep(2000); // no bytes over this window is the check: there is no event to wait for
   const m2 = await inboundAll(alice.page);
   console.log('  while force-muted:', JSON.stringify(m1), '->', JSON.stringify(m2));
   assert.equal(m2.bytes, m1.bytes, 'alice still receives bob\'s audio while he is force-muted');
   await forceMute(false);
-  await sleep(500);
   const u1 = await inboundAll(alice.page);
-  await sleep(1500);
-  const u2 = await inboundAll(alice.page);
+  let u2 = u1;
+  await until('bytes after lifting', 5000, async () => (u2 = await inboundAll(alice.page)).bytes > u1.bytes).catch(() => {});
   console.log('  after lifting:', JSON.stringify(u1), '->', JSON.stringify(u2));
   assert.ok(u2.bytes > u1.bytes, 'bob\'s audio did not resume after the force-mute was lifted');
   await bob.page.evaluate(() => clearInterval(window.__ignoreMute));
@@ -281,8 +292,8 @@ try {
   // through the steps and after "Open Vesper".
   const stillInCall = async (when) => {
     const before = await inbound(bob.page);
-    await sleep(1000);
-    const after = await inbound(bob.page);
+    let after = before;
+    await until(`bob's packets ${when}`, 5000, async () => (after = await inbound(bob.page))?.packets > before?.packets).catch(() => {});
     assert.match(after?.ice ?? '', /^(connected|completed)$/, `ICE not connected ${when}`);
     assert.ok(after.packets > before.packets, `bob's audio stopped ${when}`);
     assert.ok(await bob.page.getByRole('button', { name: 'Leave' }).isVisible(), `call bar gone ${when}`);
@@ -378,7 +389,7 @@ try {
   await bBox.press('Enter');
   assert.equal(await bBox.inputValue(), 'hey @alice ', 'Enter did not insert the username');
   await bBox.evaluate((el) => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true })));
-  await sleep(300);
+  await sleep(300); // a send would clear the box by now; there is no event to wait for when nothing is sent
   assert.equal(await bBox.inputValue(), 'hey @alice ', 'an Enter during IME composition sent the message');
   await bBox.fill('');
   await got.getByRole('button', { name: 'Reply', exact: true }).click();
@@ -522,7 +533,7 @@ try {
     return d;
   }, kind);
   await chatPane.dispatchEvent('dragenter', { dataTransfer: await drag('text') });
-  await sleep(200);
+  await sleep(200); // the overlay would show by now; nothing to wait for when it does not
   assert.equal(await alice.page.getByText('Drop to attach').count(), 0, 'a text drag showed the drop overlay');
   const fileDrag = await drag('file');
   await chatPane.dispatchEvent('dragenter', { dataTransfer: fileDrag });
@@ -554,6 +565,7 @@ try {
   const tl = bob.page.locator('[data-timeline]');
   // Above the view: the row ends 40 px above the top of the list. The first row whose top is in view must not move.
   await lateBox.evaluate((el) => { const row = el.closest('article'); row.parentElement.scrollTop = row.offsetTop + row.offsetHeight + 40; });
+  // The short sleeps in this block let layout and scroll anchoring settle: each check is that nothing moved.
   await sleep(200);
   const box = await lateBox.evaluate((el) => [el.offsetWidth, el.offsetHeight]);
   assert.deepEqual(box, [360, 280], 'the image box was not kept before the image loaded');
