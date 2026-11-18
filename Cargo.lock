@@ -4684,7 +4684,6 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "vesper-protocol",
- "vesper-server",
  "vesper-sfu",
  "vesper-store",
  "webauthn-rs",

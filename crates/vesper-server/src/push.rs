@@ -70,7 +70,7 @@ pub struct Endpoint {
 }
 
 /// Checks a subscription's endpoint before it is stored and again before each send.
-/// `allow_loopback` (the `test-push` feature only) also lets `http://127.0.0.1:<port>` through.
+/// `allow_loopback` (tests and the `test-push` build only) also lets `http://127.0.0.1:<port>` through.
 pub fn parse_endpoint(s: &str, allow_loopback: bool) -> Result<Endpoint, &'static str> {
     if s.len() > MAX_ENDPOINT {
         return Err("endpoint too long");
@@ -416,8 +416,23 @@ const FAILURE_WINDOW: Duration = Duration::from_secs(24 * 3600);
 const MAX_FAILURES_KEPT: usize = 10_000;
 
 impl Push {
-    pub async fn new(store: Store, hub: Hub, subject: Option<String>) -> Result<Push, String> {
-        Push::with_limits(store, hub, subject, SEND_TIMEOUT, MAX_PENDING).await
+    /// `allow_loopback` also lets push go to `http://127.0.0.1:<port>`: only tests and the
+    /// `test-push` e2e build pass true.
+    pub async fn new(
+        store: Store,
+        hub: Hub,
+        subject: Option<String>,
+        allow_loopback: bool,
+    ) -> Result<Push, String> {
+        Push::with_limits(
+            store,
+            hub,
+            subject,
+            allow_loopback,
+            SEND_TIMEOUT,
+            MAX_PENDING,
+        )
+        .await
     }
 
     /// [`Push::new`] with another send timeout and queue cap, for tests.
@@ -426,6 +441,7 @@ impl Push {
         store: Store,
         hub: Hub,
         subject: Option<String>,
+        allow_loopback: bool,
         timeout: Duration,
         max_pending: usize,
     ) -> Result<Push, String> {
@@ -440,9 +456,8 @@ impl Push {
         .with_root_certificates(roots)
         .with_no_client_auth();
         tls.alpn_protocols = vec![b"http/1.1".to_vec()];
-        let allow_loopback = cfg!(feature = "test-push");
         if allow_loopback {
-            warn!("test-push build: push may go to http://127.0.0.1 (never ship this binary)");
+            warn!("push may go to http://127.0.0.1 (tests and the test-push build only)");
         }
         Ok(Push(Arc::new(Inner {
             store,

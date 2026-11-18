@@ -173,9 +173,16 @@ pub async fn start_with_sfu(
         cfg.max_room_size,
         cfg.ring_timeout,
     );
-    let push = Push::new(store.clone(), hub.clone(), cfg.push_subject.clone())
-        .await
-        .map_err(std::io::Error::other)?;
+    // Only the `test-push` build for web/e2e/push.mjs may push to 127.0.0.1; release builds refuse it.
+    let allow_loopback = cfg!(feature = "test-push");
+    let push = Push::new(
+        store.clone(),
+        hub.clone(),
+        cfg.push_subject.clone(),
+        allow_loopback,
+    )
+    .await
+    .map_err(std::io::Error::other)?;
     if push.public_key().is_none() {
         info!("web push is off: VESPER_ORIGIN is not https and VESPER_PUSH_SUBJECT is unset");
     }

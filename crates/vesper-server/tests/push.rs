@@ -1,5 +1,5 @@
-//! Web Push end to end against a fake push service on 127.0.0.1 (the `test-push` feature lets
-//! the server reach it; release builds refuse that feature).
+//! Web Push end to end against a fake push service on 127.0.0.1 (`Push::new(.., true)` lets the
+//! server reach it; production passes false).
 
 mod common;
 
@@ -634,6 +634,7 @@ async fn limited(timeout: Duration, max_pending: usize) -> TestServer {
         server.state.store.clone(),
         server.state.hub.clone(),
         Some(SUBJECT.into()),
+        true,
         timeout,
         max_pending,
     )

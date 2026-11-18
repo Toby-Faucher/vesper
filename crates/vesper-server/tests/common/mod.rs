@@ -77,7 +77,8 @@ impl TestServer {
         edit(&mut cfg);
         let store = Store::open(&cfg.data_dir.join("vesper.db")).await.unwrap();
         let hub = Hub::default();
-        let push = Push::new(store.clone(), hub.clone(), cfg.push_subject.clone())
+        // The fake push service listens on 127.0.0.1.
+        let push = Push::new(store.clone(), hub.clone(), cfg.push_subject.clone(), true)
             .await
             .unwrap();
         let state = AppState {
