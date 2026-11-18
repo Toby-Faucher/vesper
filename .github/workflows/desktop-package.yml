@@ -25,7 +25,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install --no-self-update
       # Static libvpx from vcpkg for the share encoder (scripts/build-libvpx.sh), kept until the script changes.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -33,7 +33,7 @@ jobs:
           path: desktop/.libvpx
           key: libvpx-v1-${{ runner.os }}-${{ hashFiles('scripts/build-libvpx.sh') }}
       - run: scripts/build-libvpx.sh
-      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: desktop
           key: release
@@ -62,7 +62,7 @@ jobs:
           "$iscc" "/DAppVersion=$version" "/DSource=$(cygpath -w "$PWD/dist/Vesper")" "/O$(cygpath -w "$PWD/dist")" \
             desktop/package/windows/vesper.iss
           ls -la dist
-      - uses: actions/upload-artifact@v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vesper-desktop-windows-x64-${{ github.sha }}
           path: |
@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install --no-self-update
       - run: >-
           sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
@@ -86,7 +86,7 @@ jobs:
           path: desktop/.libvpx
           key: libvpx-v1-${{ runner.os }}-${{ hashFiles('scripts/build-libvpx.sh') }}
       - run: scripts/build-libvpx.sh
-      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: desktop
           key: release
@@ -125,7 +125,7 @@ jobs:
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$app" dist/vesper-desktop-linux-x64.AppImage
           ls -la dist
-      - uses: actions/upload-artifact@v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vesper-desktop-linux-x64-${{ github.sha }}
           path: |
@@ -139,7 +139,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/download-artifact@v8.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: vesper-desktop-*-x64-${{ github.sha }}
           merge-multiple: true
@@ -149,7 +149,7 @@ jobs:
           sha256sum vesper-desktop-* > SHA256SUMS
           cat SHA256SUMS
           test "$(wc -l < SHA256SUMS)" -eq 4 # the four builds; SHA256SUMS itself makes the fifth file
-      - uses: actions/upload-artifact@v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vesper-desktop-release-${{ github.sha }}
           path: release
