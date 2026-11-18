@@ -26,6 +26,39 @@ vesper-store = { path = "crates/vesper-store" }
 # tract is upgraded past the bug and debug-build tests pass without it.
 [profile.dev.package.tract-core]
 debug-assertions = false
+# Unoptimised, the denoiser model runs about 5 times slower in tests; optimise all of tract.
+opt-level = 3
+
+[profile.dev.package.tract-data]
+opt-level = 3
+
+[profile.dev.package.tract-hir]
+opt-level = 3
+
+[profile.dev.package.tract-linalg]
+opt-level = 3
+
+[profile.dev.package.tract-nnef]
+opt-level = 3
+
+[profile.dev.package.tract-onnx]
+opt-level = 3
+
+[profile.dev.package.tract-onnx-opl]
+opt-level = 3
+
+[profile.dev.package.tract-pulse]
+opt-level = 3
+
+[profile.dev.package.tract-pulse-opl]
+opt-level = 3
+
+# Every test login hashes with argon2id (19 MiB, 2 passes); unoptimised that is about 7 times slower.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
 
 # Small on purpose. Prints are deliberate in loadtest and server main, so no print lints.
 [workspace.lints.rust]

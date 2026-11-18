@@ -17,6 +17,10 @@ concurrency:
 env:
   VESPER_NO_CAP: 1
   CARGO_TERM_COLOR: always
+  # Line tables only: panics keep file and line, and builds and caches are about half the size
+  # (target dir 9.8 GB to 4.7 GB). Local builds keep full debug info.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 # Only e2e and dsp-wasm wait, for the few seconds of `changes`. e2e takes dsp-wasm's denoiser build as an artifact,
 # polled once its own build is done; dsp-wasm uploads it before its tests, so e2e does not usually wait.
