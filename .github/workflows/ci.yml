@@ -211,9 +211,23 @@ jobs:
       - run: cargo build --locked -p vesper-server --features test-push
       - run: npm ci && npm run build
         working-directory: web
+      # Chromium's system packages come from the Ubuntu mirror, which has taken up to 8 minutes for 32 MB.
+      # Keep apt's downloaded .deb files in a cached folder so later runs install them without the mirror.
+      - name: keep apt downloads in ~/apt-archives
+        run: |
+          mkdir -p ~/apt-archives/partial
+          printf 'Dir::Cache::Archives "%s";\nAPT::Keep-Downloaded-Packages "true";\n' ~/apt-archives \
+            | sudo tee /etc/apt/apt.conf.d/99vesper-archives
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-archives
+          key: apt-playwright-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+          restore-keys: apt-playwright-${{ runner.os }}-
       # playwright-core is pinned in web/package.json, so this fetches the matching Chromium.
       - run: npx playwright-core install --with-deps chromium
         working-directory: web
+      # The cache action saves as this user; apt wrote the files as root.
+      - run: sudo chown -R "$USER" ~/apt-archives
       # Polled rather than `needs: dsp-wasm`, which would add its 3 to 4 minutes to this job's start.
       - name: wait for the denoiser from dsp-wasm
         env:
