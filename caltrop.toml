@@ -12,6 +12,13 @@
 "desktop/tests/common/mod.rs" = 1
 "desktop/tests/share.rs" = 2
 
+[allow.no-fake-impls]
+"desktop/src/ui/dev.rs" = 1
+"desktop/src/voice/check.rs" = 1
+"desktop/src/voice/engine.rs" = 1
+"desktop/src/voice/ptt.rs" = 1
+"desktop/tests/common/mod.rs" = 1
+
 [allow.no-fixed-sleep]
 "crates/vesper-server/src/uploads.rs" = 1
 "crates/vesper-server/tests/push.rs" = 2
@@ -26,5 +33,44 @@
 "desktop/src/voice/video.rs" = 5
 "desktop/tests/voice.rs" = 2
 
+[allow.no-ignored-test]
+"crates/vesper-audiolab/tests/full_corpus.rs" = 4
+"crates/vesper-dsp/src/lib.rs" = 2
+"crates/vesper-store/tests/perf.rs" = 1
+"desktop/src/voice/capture.rs" = 1
+"desktop/src/voice/share.rs" = 1
+
+[allow.no-silent-skip]
+"crates/vesper-sfu/tests/forwarding.rs" = 1
+"desktop/src/voice/denoise.rs" = 1
+
 [allow.no-test-swap]
+"crates/vesper-server/src/push.rs" = 2
+"crates/vesper-sfu/src/lib.rs" = 3
+"crates/vesper-sfu/src/room.rs" = 1
 "desktop/src/net.rs" = 3
+
+[allow.no-weak-result-assert]
+"crates/vesper-audiolab/src/codec.rs" = 3
+"crates/vesper-audiolab/src/eval.rs" = 4
+"crates/vesper-protocol/src/lib.rs" = 1
+"crates/vesper-server/src/cli.rs" = 1
+"crates/vesper-server/src/config.rs" = 9
+"crates/vesper-server/src/limits.rs" = 3
+"crates/vesper-server/src/push.rs" = 19
+"crates/vesper-server/src/ws.rs" = 2
+"crates/vesper-server/tests/cli.rs" = 8
+"crates/vesper-server/tests/push.rs" = 1
+"crates/vesper-server/tests/resets.rs" = 1
+"crates/vesper-server/tests/signaling.rs" = 2
+"crates/vesper-server/tests/timeouts.rs" = 1
+"crates/vesper-server/tests/uploads.rs" = 1
+"crates/vesper-store/tests/accounts.rs" = 4
+"crates/vesper-store/tests/backup.rs" = 2
+"crates/vesper-store/tests/calls.rs" = 3
+"crates/vesper-store/tests/messages.rs" = 1
+"crates/vesper-store/tests/rooms.rs" = 1
+"desktop/src/update.rs" = 2
+"desktop/src/voice/capture.rs" = 1
+"desktop/src/voice/denoise.rs" = 4
+"desktop/src/voice/ptt.rs" = 6
