@@ -378,6 +378,7 @@ speech 6 and 12 dB over full scale and compares it with a hard clip.
 | `dsp-wasm` | `wasm`, uploaded as the `dsp` artifact, then `dsp-tests` |
 | `e2e` | the release server and `npm run e2e`, with the `dsp` artifact in `web/dist/dsp` |
 | `changes` | decides whether `e2e` and `dsp-wasm` run (below) |
+| `prune-caches` | on pushes to main, after the others: deletes all but the newest Actions cache of each kind (`scripts/prune-caches.py`) |
 
 - `dsp-wasm` caches the built `web/public/dsp`, keyed on a hash of `crates/vesper-dsp/**`, `Cargo.toml`, `Cargo.lock` (which holds the
   wasm-bindgen version), `.cargo/config.toml`, `rust-toolchain.toml`, `scripts/build-dsp.sh` and `scripts/fetch-model.sh` (which holds the

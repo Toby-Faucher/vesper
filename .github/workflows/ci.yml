@@ -58,9 +58,14 @@ jobs:
       - uses: actions/checkout@v7.0.1
       # Installs the toolchain pinned in rust-toolchain.toml (rustfmt, clippy, wasm32 target).
       - run: rustup toolchain install --no-self-update
-      - uses: Swatinem/rust-cache@v2.9.3
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # An exact hit restored every crate this Cargo.lock needs, so cargo can skip refreshing the crates.io index (about
+      # 2 s per job). On any other restore it stays online to fetch what is missing.
+      - if: steps.rust-cache.outputs.cache-hit == 'true'
+        run: echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
       # The runner image ships shellcheck; install it anyway in case a new image drops it.
       - run: command -v shellcheck || (sudo apt-get update && sudo apt-get install -y shellcheck)
       # caltrop (test-honesty checks) is cloned outside the checkout so it is not scanned.
@@ -82,9 +87,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install --no-self-update
-      - uses: Swatinem/rust-cache@v2.9.3
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # An exact hit restored every crate this Cargo.lock needs, so cargo can skip refreshing the crates.io index (about
+      # 2 s per job). On any other restore it stays online to fetch what is missing.
+      - if: steps.rust-cache.outputs.cache-hit == 'true'
+        run: echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2.87.31
         with:
           tool: cargo-nextest@0.9.148
@@ -198,9 +208,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install --no-self-update
-      - uses: Swatinem/rust-cache@v2.9.3
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # An exact hit restored every crate this Cargo.lock needs, so cargo can skip refreshing the crates.io index (about
+      # 2 s per job). On any other restore it stays online to fetch what is missing.
+      - if: steps.rust-cache.outputs.cache-hit == 'true'
+        run: echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
@@ -261,9 +276,14 @@ jobs:
           retention-days: 1
       - run: rustup toolchain install --no-self-update
       # Also caches ~/.cargo/bin, so the wasm-bindgen CLI below is only compiled on a cold cache.
-      - uses: Swatinem/rust-cache@v2.9.3
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # An exact hit restored every crate this Cargo.lock needs, so cargo can skip refreshing the crates.io index (about
+      # 2 s per job). On any other restore it stays online to fetch what is missing.
+      - if: steps.rust-cache.outputs.cache-hit == 'true'
+        run: echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@v2.87.31
         with:
           tool: cargo-nextest@0.9.148
@@ -293,3 +313,18 @@ jobs:
         with:
           path: web/public/dsp
           key: ${{ steps.dsp-cache.outputs.cache-primary-key }}
+
+  # Keeps only the newest cache of each kind on main (scripts/prune-caches.py). Superseded copies otherwise sit in the
+  # repo's 10 GB until GitHub evicts something, often a cache a job still uses.
+  prune-caches:
+    needs: [lint-rust, test-rust, web, e2e, dsp-wasm, desktop, desktop-windows]
+    if: ${{ !cancelled() && github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: python3 -I scripts/prune-caches.py --apply
+        env:
+          GH_TOKEN: ${{ github.token }}
