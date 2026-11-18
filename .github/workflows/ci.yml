@@ -94,7 +94,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.148
       # bindings reruns the vesper-protocol export tests and diffs web/src/lib/gen against the commit.
@@ -148,7 +148,7 @@ jobs:
       # so date it back and cargo reuses the cached build. On any other restore it stays new and is rebuilt.
       - if: steps.rust-cache.outputs.cache-hit == 'true'
         run: find desktop/vendor -type f -exec touch -d '2000-01-01T00:00:00Z' {} +
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.148
       - run: scripts/check-desktop.sh
@@ -190,7 +190,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: steps.rust-cache.outputs.cache-hit == 'true'
         run: find desktop/vendor -type f -exec touch -d '2000-01-01T00:00:00Z' {} +
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.148
       # Links the real Windows app. On main only: clippy type-checks every target on PRs, and the tests build a variant with
@@ -209,7 +209,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-deny@0.20.2
       # cargo-deny only needs `cargo metadata`: the runner's stable cargo saves the pinned toolchain's 10 s download.
@@ -329,7 +329,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.148
       # The CLI must equal the wasm-bindgen crate in Cargo.lock; read it the way scripts/build-dsp.sh does.
