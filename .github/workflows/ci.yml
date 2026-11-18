@@ -114,6 +114,14 @@ jobs:
       run:
         shell: bash
     steps:
+      # Real-time scanning of the 2.5 GB restored cache looked like the cost: unpacking took 57 s (download 21 s) and the
+      # first cargo command sat 42 s before compiling. Keep Defender out of the folders cargo and rust-cache write.
+      - name: keep Windows Defender out of the build folders
+        shell: pwsh
+        run: |
+          "real-time protection before: $((Get-MpComputerStatus).RealTimeProtectionEnabled)"
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", $env:RUNNER_TEMP
+          (Get-MpPreference).ExclusionPath
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install --no-self-update
       # Static libvpx from vcpkg (scripts/build-libvpx.sh), kept until the script changes.
@@ -126,7 +134,10 @@ jobs:
         with:
           workspaces: desktop
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --locked
+      # Links the real Windows app. On main only: clippy type-checks every target on PRs, and the tests build a variant with
+      # gpui's test-support feature, so this third GPUI build cost about 2 min per PR. A link error shows up one merge later.
+      - if: github.event_name != 'pull_request'
+        run: cargo build --locked
         working-directory: desktop
       - run: cargo clippy --all-targets --locked -- -D warnings
         working-directory: desktop
