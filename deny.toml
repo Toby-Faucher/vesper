@@ -26,6 +26,10 @@ ignore = [
     # database anyway. sqlx 0.9.0 is the newest release and needs libsqlite3-sys 0.37. Added 2026-11-10.
     # TODO: remove when sqlx moves to libsqlite3-sys 0.39 or later.
     { id = "RUSTSEC-2026-0459", reason = "only our own data-dir database is opened; no sqlx release with libsqlite3-sys >= 0.39 yet" },
+    # chrono (desktop app only) is unmaintained: no vulnerability, no fixed release. The app uses it to format local
+    # times in the timeline, search dates and the log file. Added 2026-11-18.
+    # TODO: replace chrono with jiff or time, then remove this.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained, not a vulnerability; local time formatting in the desktop app" },
 ]
 
 [licenses]
@@ -35,6 +39,13 @@ private = { ignore = true }
 # Only the licenses the current graph actually uses (checked with cargo deny).
 allow = [
     "Apache-2.0",
+    # The desktop app's tree (desktop/Cargo.lock), all permissive. Added 2026-11-18 when desktop joined the check.
+    "Apache-2.0 WITH LLVM-exception", # stacker, psm (gpui's stack growth), cfg-expr
+    "BSD-2-Clause", # tiny-skia (gpui's SVG icons), rav1e, av1-grain, arrayref (image's AVIF)
+    "0BSD",         # enum-iterator (gpui-component)
+    "CC0-1.0",      # const-random and others in gpui and naga
+    "NCSA",         # part of rav1e's (MIT OR Apache-2.0) AND NCSA
+    "Unlicense",    # a tray-icon dependency
     "BSD-3-Clause", # subtle, matchit, aws-lc-sys
     # webpki-roots: the Mozilla CA list as data, for TLS to the Web Push services (issue #58).
     "CDLA-Permissive-2.0",

@@ -19,6 +19,8 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny --locked check advisories
+      # desktop/ has its own lockfile (the app users download).
+      - run: cargo deny --locked --manifest-path desktop/Cargo.toml --config deny.toml check advisories
 
   npm-audit:
     runs-on: ubuntu-24.04
@@ -30,6 +32,5 @@ jobs:
           node-version: 22 # same as ci.yml and the deploy/Dockerfile web stage
       - run: npm ci --no-audit --no-fund
         working-directory: web
-      # Fails on high and critical only.
-      - run: npm audit --audit-level=high
-        working-directory: web
+      # Fails on high and critical only, minus the dated exceptions in scripts/npm-audit.py (same gate as ci.yml).
+      - run: python3 -I scripts/npm-audit.py
