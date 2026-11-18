@@ -159,8 +159,8 @@ jobs:
       # The build does not need web/public/dsp: the worker fetches /dsp/ at runtime.
       - run: scripts/check.sh web
       # Fails on high and critical advisories only; moderate and low are reported, not blocking.
-      - run: npm audit --audit-level=high
-        working-directory: web
+      # scripts/npm-audit.py lists the few allowed exceptions, each with its reason.
+      - run: python3 -I scripts/npm-audit.py
 
   # Two headless Chromium browsers join one room through the release server; web/e2e/two-browser.mjs, then flows.mjs and ui.mjs.
   # No wasm build here: flows.mjs runs its denoiser-under-CSP step with dsp-wasm's build; the other steps use browser suppression.
