@@ -15,7 +15,8 @@ for s in "${steps[@]}"; do
   case "$s" in
     fmt) cargo fmt --check ;;
     clippy) cap cargo clippy --all-targets --locked -- -D warnings ;;
-    test) cap cargo test --locked ;;
+    # nextest runs the test binaries side by side (cargo test ran them one after another); there are no doc tests.
+    test) cap cargo nextest run --locked ;;
     *) echo "unknown step: $s" >&2; exit 2 ;;
   esac
 done

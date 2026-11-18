@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       version_only: ${{ steps.gate.outputs.version_only }}
+      desktop: ${{ steps.desktop.outputs.desktop }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -47,6 +48,14 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && git show HEAD^1:scripts/version-only.py >"$RUNNER_TEMP/version-only.py" &&
             python3 -I "$RUNNER_TEMP/version-only.py" HEAD^1 HEAD; then v=true; fi
           echo "version_only=$v" | tee -a "$GITHUB_OUTPUT"
+      # The desktop jobs run unless a pull request touches nothing the desktop app builds from. desktop/ depends on the
+      # server crates, so any Rust or build change still runs them. Not a pull request, or any error: run them.
+      - id: desktop
+        run: |
+          d=true
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git diff --quiet HEAD^1 HEAD -- desktop crates Cargo.toml Cargo.lock \
+            rust-toolchain.toml .cargo scripts/build-libvpx.sh scripts/check-desktop.sh .github/workflows/ci.yml; then d=false; fi
+          echo "desktop=$d" | tee -a "$GITHUB_OUTPUT"
 
   lint-rust:
     runs-on: ubuntu-24.04
@@ -93,30 +102,62 @@ jobs:
 
   # The v2 desktop client (desktop/, its own workspace). GPUI needs the X11, Wayland, Vulkan and font headers.
   desktop:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.desktop == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup toolchain install --no-self-update
-      - run: >-
-          sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
-          libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libopus-dev libpipewire-0.3-dev libclang-dev libssl-dev
-          pkg-config nasm
-      # Static libvpx for the share encoder (scripts/build-libvpx.sh), kept until the script changes.
+      # The Ubuntu mirror has taken up to 10 min for these 36 MB; apt keeps its .deb files in a cached folder.
+      - name: keep apt downloads in ~/apt-archives
+        run: |
+          mkdir -p ~/apt-archives/partial
+          printf 'Dir::Cache::Archives "%s";\nAPT::Keep-Downloaded-Packages "true";\n' ~/apt-archives \
+            | sudo tee /etc/apt/apt.conf.d/99vesper-archives
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/apt-archives
+          key: apt-desktop-v1-${{ runner.os }}
+      # Only what the build links or reads headers from: Vulkan is loaded at run time (ash) and nothing uses OpenSSL.
+      # libx11-xcb-dev (and with it libx11-dev) is for the x11 crate's build script, which looks them up with pkg-config.
+      - run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libxkbcommon-x11-dev
+          libx11-xcb-dev libwayland-dev libfontconfig-dev libfreetype-dev libasound2-dev libopus-dev libpipewire-0.3-dev
+          libclang-dev pkg-config
+      - run: sudo chown -R "$USER" ~/apt-archives
+      # Static libvpx for the share encoder (scripts/build-libvpx.sh), kept until the script changes.
+      - id: libvpx
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: desktop/.libvpx
           key: libvpx-v1-${{ runner.os }}-${{ hashFiles('scripts/build-libvpx.sh') }}
+      - if: steps.libvpx.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y --no-install-recommends nasm
       - run: scripts/build-libvpx.sh
-      - uses: Swatinem/rust-cache@v2.9.3
+      # Also caches the path crates (desktop/vendor's patched gpui and friends), which rust-cache otherwise rebuilds
+      # every run. The key includes desktop/vendor's hash, so an exact hit means vendor/ is what was built.
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: desktop
+          cache-workspace-crates: true
+          key: vendor-${{ hashFiles('desktop/vendor/**') }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # cargo judges path crates by file times, and checkout makes every file new. On an exact hit vendor/ is unchanged,
+      # so date it back and cargo reuses the cached build. On any other restore it stays new and is rebuilt.
+      - if: steps.rust-cache.outputs.cache-hit == 'true'
+        run: find desktop/vendor -type f -exec touch -d '2000-01-01T00:00:00Z' {} +
+      - uses: taiki-e/install-action@v2.87.31
+        with:
+          tool: cargo-nextest@0.9.148
       - run: scripts/check-desktop.sh
 
   # The desktop client on Windows, where the friends are. Builds the app and runs the unit and headless GPUI tests;
   # the real-server tests are Unix only (the server crates use Unix file permissions).
   desktop-windows:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.desktop == 'true') }}
     runs-on: windows-2025
     timeout-minutes: 60
     defaults:
@@ -139,10 +180,19 @@ jobs:
           path: desktop/.libvpx
           key: libvpx-v1-${{ runner.os }}-${{ hashFiles('scripts/build-libvpx.sh') }}
       - run: scripts/build-libvpx.sh
-      - uses: Swatinem/rust-cache@v2.9.3
+      # As in the desktop job: cache desktop/vendor's path crates, keyed on its hash.
+      - id: rust-cache
+        uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: desktop
+          cache-workspace-crates: true
+          key: vendor-${{ hashFiles('desktop/vendor/**') }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - if: steps.rust-cache.outputs.cache-hit == 'true'
+        run: find desktop/vendor -type f -exec touch -d '2000-01-01T00:00:00Z' {} +
+      - uses: taiki-e/install-action@v2.87.31
+        with:
+          tool: cargo-nextest@0.9.148
       # Links the real Windows app. On main only: clippy type-checks every target on PRs, and the tests build a variant with
       # gpui's test-support feature, so this third GPUI build cost about 2 min per PR. A link error shows up one merge later.
       - if: github.event_name != 'pull_request'
@@ -150,7 +200,8 @@ jobs:
         working-directory: desktop
       - run: cargo clippy --all-targets --locked -- -D warnings
         working-directory: desktop
-      - run: cargo test --locked
+      # nextest runs the test binaries side by side; there are no doc tests.
+      - run: cargo nextest run --locked
         working-directory: desktop
 
   supply-chain:
