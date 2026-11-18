@@ -36,7 +36,7 @@ jobs:
       version_only: ${{ steps.gate.outputs.version_only }}
       desktop: ${{ steps.desktop.outputs.desktop }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The pull request merge commit and its first parent, the base branch tip.
           fetch-depth: 2
@@ -64,10 +64,10 @@ jobs:
       # Rule changes change the counts, so caltrop and ast-grep are pinned. Bump with caltrop.toml in the same PR.
       CALTROP_REF: b13ef7e1dcb3882f5942fd04b7d0821f21df77bb
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Installs the toolchain pinned in rust-toolchain.toml (rustfmt, clippy, wasm32 target).
       - run: rustup toolchain install --no-self-update
-      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # The runner image ships shellcheck; install it anyway in case a new image drops it.
@@ -89,12 +89,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install --no-self-update
-      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-nextest@0.9.148
       # bindings reruns the vesper-protocol export tests and diffs web/src/lib/gen against the commit.
@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install --no-self-update
       # The Ubuntu mirror has taken up to 10 min for these 36 MB; apt keeps its .deb files in a cached folder.
       - name: keep apt downloads in ~/apt-archives
@@ -138,7 +138,7 @@ jobs:
       # Also caches the path crates (desktop/vendor's patched gpui and friends), which rust-cache otherwise rebuilds
       # every run. The key includes desktop/vendor's hash, so an exact hit means vendor/ is what was built.
       - id: rust-cache
-        uses: Swatinem/rust-cache@v2.9.3
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: desktop
           cache-workspace-crates: true
@@ -148,7 +148,7 @@ jobs:
       # so date it back and cargo reuses the cached build. On any other restore it stays new and is rebuilt.
       - if: steps.rust-cache.outputs.cache-hit == 'true'
         run: find desktop/vendor -type f -exec touch -d '2000-01-01T00:00:00Z' {} +
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-nextest@0.9.148
       - run: scripts/check-desktop.sh
@@ -172,7 +172,7 @@ jobs:
           "real-time protection before: $((Get-MpComputerStatus).RealTimeProtectionEnabled)"
           Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", $env:RUNNER_TEMP
           (Get-MpPreference).ExclusionPath
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install --no-self-update
       # Static libvpx from vcpkg (scripts/build-libvpx.sh), kept until the script changes.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -182,7 +182,7 @@ jobs:
       - run: scripts/build-libvpx.sh
       # As in the desktop job: cache desktop/vendor's path crates, keyed on its hash.
       - id: rust-cache
-        uses: Swatinem/rust-cache@v2.9.3
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: desktop
           cache-workspace-crates: true
@@ -190,7 +190,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: steps.rust-cache.outputs.cache-hit == 'true'
         run: find desktop/vendor -type f -exec touch -d '2000-01-01T00:00:00Z' {} +
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-nextest@0.9.148
       # Links the real Windows app. On main only: clippy type-checks every target on PRs, and the tests build a variant with
@@ -208,8 +208,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-deny@0.20.2
       # cargo-deny only needs `cargo metadata`: the runner's stable cargo saves the pinned toolchain's 10 s download.
@@ -221,8 +221,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # 22 matches the deploy/Dockerfile web stage and the engines floor in web/package.json.
           # .nvmrc (26) is the author's local Node, not what the image builds with.
@@ -247,12 +247,12 @@ jobs:
       contents: read
       actions: read # the wait step lists this run's artifacts and jobs
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install --no-self-update
-      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-node@v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -294,7 +294,7 @@ jobs:
           done
           echo "no dsp artifact after 20 minutes"; exit 1
       # After npm run build, which empties dist/; the server reads dist/ at request time.
-      - uses: actions/download-artifact@v8.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dsp
           path: web/dist/dsp
@@ -308,7 +308,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The built web/public/dsp, keyed on everything the wasm build reads: the wasm-bindgen version is in Cargo.lock, the
       # model's sha256 in fetch-model.sh. Saved by green main runs only (last step). Before fetch-model.sh, so the model is not hashed.
       - id: dsp-cache
@@ -318,7 +318,7 @@ jobs:
           key: dsp-wasm-v1-${{ runner.os }}-${{ hashFiles('crates/vesper-dsp/**', 'Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'rust-toolchain.toml', 'scripts/build-dsp.sh', 'scripts/fetch-model.sh') }}
       # The e2e job serves it for flows.mjs's denoiser-under-CSP step. Uploaded before the tests, so e2e does not wait for them.
       - if: steps.dsp-cache.outputs.cache-hit == 'true'
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dsp
           path: web/public/dsp
@@ -326,10 +326,10 @@ jobs:
           retention-days: 1
       - run: rustup toolchain install --no-self-update
       # Also caches ~/.cargo/bin, so the wasm-bindgen CLI below is only compiled on a cold cache.
-      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-nextest@0.9.148
       # The CLI must equal the wasm-bindgen crate in Cargo.lock; read it the way scripts/build-dsp.sh does.
@@ -345,7 +345,7 @@ jobs:
       - if: steps.dsp-cache.outputs.cache-hit != 'true'
         run: scripts/check.sh wasm
       - if: steps.dsp-cache.outputs.cache-hit != 'true'
-        uses: actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dsp
           path: web/public/dsp
@@ -369,7 +369,7 @@ jobs:
     permissions:
       actions: write
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 -I scripts/prune-caches.py --apply
         env:
           GH_TOKEN: ${{ github.token }}
