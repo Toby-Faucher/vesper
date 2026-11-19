@@ -47,7 +47,7 @@ describe.each(Object.entries(LOOKS))('%s', (_look, vars) => {
   });
 
   // --fg-3 is borderline on hover rows and fails on selected ones: selected rows use --fg-2 for meta (checked above).
-  it.runIf(_look.startsWith('vesper'))('fg_3_passes_on_hover_and_fails_on_selected', () => {
+  it('fg_3_passes_on_hover_and_fails_on_selected', () => {
     expect(contrast('--fg-3', '--bg-hover')).toBeGreaterThanOrEqual(4.5);
     expect(contrast('--fg-3', '--bg-selected')).toBeLessThan(4.5);
   });

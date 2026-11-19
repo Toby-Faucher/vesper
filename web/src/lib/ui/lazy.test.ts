@@ -14,7 +14,7 @@ describe('lazy', () => {
     let n = 0;
     // A dynamic import of a chunk that is not there (offline, or a deploy removed it).
     const get = lazy(() => (++n === 1 ? import(/* @vite-ignore */ `./missing-chunk-${n}.js`) : Promise.resolve('loaded')));
-    await expect(get()).rejects.toThrow();
+    await expect(get()).rejects.toThrow('missing-chunk-1');
     expect(await get()).toBe('loaded');
     expect(await get()).toBe('loaded');
     expect(n).toBe(2);

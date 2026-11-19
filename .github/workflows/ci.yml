@@ -62,7 +62,7 @@ jobs:
     timeout-minutes: 30
     env:
       # Rule changes change the counts, so caltrop and ast-grep are pinned. Bump with caltrop.toml in the same PR.
-      CALTROP_REF: b13ef7e1dcb3882f5942fd04b7d0821f21df77bb
+      CALTROP_REF: v1.2.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Installs the toolchain pinned in rust-toolchain.toml (rustfmt, clippy, wasm32 target).
