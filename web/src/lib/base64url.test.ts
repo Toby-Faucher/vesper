@@ -17,6 +17,6 @@ describe('base64url', () => {
   });
 
   it('refuses text that is not base64url', () => {
-    for (const bad of ['a+b/', 'aGk=', 'a', 'a b!']) expect(() => fromBase64Url(bad)).toThrow();
+    for (const bad of ['a+b/', 'aGk=', 'a', 'a b!']) expect(() => fromBase64Url(bad)).toThrow('not base64url');
   });
 });
