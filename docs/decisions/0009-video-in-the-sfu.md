@@ -31,7 +31,8 @@ Consequences:
 
 - Each client with video holds a video m-line for every other client with video, even when nobody shares. It carries nothing until a
   share is on and watched.
-- A viewer with a bad link gets the same stream as everyone else. Its keyframe requests cost every viewer a little.
+- A viewer with a bad link gets the same stream as everyone else. Its keyframe requests cost every viewer a little. Since v2.4.0 the SFU
+  merges them to at most one per 500 ms per sharer (see [architecture](../architecture.md)).
 - A share and its watchers must be set again after a rejoin, because the SFU forgets them with the session.
 - Video shares the voice thread and its socket. The [video load test](../testing/latency.md#video-load) measured it: the usual load
   (2 x 10 Mbps) and 4 x 10 Mbps pass; 4 x 20 Mbps drops packets at the server's socket buffer, so the server caps a room's shares.
