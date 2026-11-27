@@ -17,6 +17,7 @@ use tracing::{debug, warn};
 
 use crate::client::{Client, ClientId, Propagated};
 use crate::keyframe::KeyframeCounters;
+use crate::recv::Reader;
 use crate::{Command, JoinError, JoinOk, SfuConfig, SfuEvent};
 
 /// Upper bound on one loop iteration's socket wait, so commands (joins, answers) are picked up
@@ -35,7 +36,7 @@ pub(crate) fn run(
     let mut to_propagate: VecDeque<Propagated> = VecDeque::new();
     // Force-muted users: their audio is dropped at the forward point, whatever the client sends.
     let mut muted: HashSet<String> = HashSet::new();
-    let mut buf = vec![0; 2000];
+    let mut reader = Reader::new();
 
     loop {
         // Dropping a client drops its incoming tracks, which makes the other clients stop them.
@@ -88,8 +89,16 @@ pub(crate) fn run(
             .set_read_timeout(Some(wait))
             .expect("non-zero read timeout on an owned socket");
 
-        match socket.recv_from(&mut buf) {
-            Ok((n, source)) => route(&buf[..n], source, socket_addr, &mut clients),
+        match reader.recv(&socket) {
+            // str0m wants each input drained to its timeout before the next one, so each
+            // datagram's client is polled before the next datagram goes in.
+            Ok(_) => {
+                for (data, source) in reader.packets() {
+                    if let Some(client) = route(data, source, socket_addr, &mut clients) {
+                        poll_until_timeout(client, &mut to_propagate, &socket);
+                    }
+                }
+            }
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             // e.g. ECONNREFUSED from an ICMP unreachable after a client vanished.
             Err(e) => debug!("udp recv failed: {e}"),
@@ -125,23 +134,26 @@ pub(crate) fn check_advertised(bind: SocketAddr, advertised: &[SocketAddr]) {
     }
 }
 
-fn route(data: &[u8], source: SocketAddr, socket_addr: SocketAddr, clients: &mut [Client]) {
+/// Give a datagram to the client it belongs to, and return that client.
+fn route<'c>(
+    data: &[u8],
+    source: SocketAddr,
+    socket_addr: SocketAddr,
+    clients: &'c mut [Client],
+) -> Option<&'c mut Client> {
     // A dual-stack socket reports IPv4 peers as ::ffff:a.b.c.d; str0m and the SDP know them as
     // plain IPv4, so canonicalize (Client maps them back when sending).
     let source = SocketAddr::new(source.ip().to_canonical(), source.port());
     // rtc.accepts() demultiplexes on source address / STUN credentials, not destination.
-    let Some(probe) = receive(data, source, socket_addr) else {
-        return;
-    };
+    let probe = receive(data, source, socket_addr)?;
     let Some(client) = clients.iter_mut().find(|c| c.rtc.accepts(&probe)) else {
         // Common: a client's first STUN can beat its join being processed.
         debug!("no client accepts udp input from {source}");
-        return;
+        return None;
     };
     let destination = client.local_addr_for(source, socket_addr);
-    if let Some(input) = receive(data, source, destination) {
-        client.handle_input(input);
-    }
+    client.handle_input(receive(data, source, destination)?);
+    Some(client)
 }
 
 fn handle_command(

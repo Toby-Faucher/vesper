@@ -17,6 +17,9 @@ pub struct Config {
     pub public_host: Option<String>,
     /// UDP port clients reach the SFU on through the router forward.
     pub udp_port_public: u16,
+    /// `SO_RCVBUF` asked for on the media socket, in bytes; 0 keeps the system default
+    /// (`VESPER_UDP_RECV_BUFFER_KB`, default 4096).
+    pub udp_recv_buffer: usize,
     pub max_room_size: usize,
     /// How long a DM ring lasts when nobody answers.
     pub ring_timeout: Duration,
@@ -59,7 +62,7 @@ impl Config {
     /// `VESPER_PUBLIC_HOST` (optional), `VESPER_UDP_PORT_PUBLIC` (default: the `VESPER_UDP_BIND`
     /// port), `VESPER_MAX_SOCKETS` (default 256), `VESPER_WEB_DIR` (default `web/dist`),
     /// `VESPER_DATA_DIR` (default `data`), `VESPER_ORIGIN` (default `http://localhost:8080`) and
-    /// `VESPER_UPLOAD_QUOTA_MB` (default 10240), `VESPER_UPLOAD_MAX_MB` (default 100) and `VESPER_PUSH_SUBJECT` (default: the origin
+    /// `VESPER_UPLOAD_QUOTA_MB` (default 10240), `VESPER_UPLOAD_MAX_MB` (default 100), `VESPER_UDP_RECV_BUFFER_KB` (default 4096) and `VESPER_PUSH_SUBJECT` (default: the origin
     /// when it is https, else unset, which turns push off).
     pub fn from_env() -> Result<Config, String> {
         Config::from_lookup(|k| std::env::var(k).ok())
@@ -77,6 +80,11 @@ impl Config {
         };
         let udp_port_public = u16::try_from(num("VESPER_UDP_PORT_PUBLIC", udp_bind.port().into())?)
             .map_err(|e| format!("VESPER_UDP_PORT_PUBLIC: {e}"))?;
+        // 1 GiB at most: the kernel takes an int and doubles it.
+        let udp_recv_buffer = Some(num("VESPER_UDP_RECV_BUFFER_KB", 4096)?)
+            .filter(|&kb| kb <= 1024 * 1024)
+            .and_then(|kb| usize::try_from(kb * 1024).ok())
+            .ok_or("VESPER_UDP_RECV_BUFFER_KB must be 0 to 1048576")?;
         let origin = get("VESPER_ORIGIN").unwrap_or_else(|| "http://localhost:8080".into());
         let origin =
             normalise_origin(&origin).map_err(|e| format!("VESPER_ORIGIN={origin}: {e}"))?;
@@ -104,6 +112,7 @@ impl Config {
             udp_bind,
             public_host: get("VESPER_PUBLIC_HOST").filter(|h| !h.is_empty()),
             udp_port_public,
+            udp_recv_buffer,
             max_room_size: 12,
             ring_timeout: Duration::from_secs(30),
             ping_interval: Duration::from_secs(25),
@@ -383,6 +392,24 @@ mod tests {
         assert_eq!(
             with("0").unwrap_err(),
             "VESPER_UPLOAD_MAX_MB must be 1 to 8796093022207"
+        );
+    }
+
+    #[test]
+    fn udp_recv_buffer_is_in_kib() {
+        assert_eq!(lookup(&[]).unwrap().udp_recv_buffer, 4 * 1024 * 1024);
+        let with = |v: &str| lookup(&[("VESPER_UDP_RECV_BUFFER_KB", v)]);
+        assert_eq!(with("0").unwrap().udp_recv_buffer, 0);
+        assert_eq!(with("").unwrap().udp_recv_buffer, 4 * 1024 * 1024);
+        assert_eq!(with("1048576").unwrap().udp_recv_buffer, 1 << 30);
+        assert_eq!(
+            with("1048577").unwrap_err(),
+            "VESPER_UDP_RECV_BUFFER_KB must be 0 to 1048576"
+        );
+        assert!(
+            with("-1")
+                .unwrap_err()
+                .starts_with("VESPER_UDP_RECV_BUFFER_KB=-1: ")
         );
     }
 

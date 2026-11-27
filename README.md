@@ -68,7 +68,7 @@ Last updated 2026-11-13. This is a personal project. The latest release is v1.7.
 - **Deployed:** v1.0 on 2026-11-01. A test build of v1.7.1 has run on the live server since 2026-11-11.
 - **Not verified:** screen share in Firefox or Zen in a real call, Windows browsers, several sharers at once on a real network, passkeys with a real authenticator, and a call rejoining without a click in a real browser. Docker, Caddy and the router forward are not verified on the dev machine.
 - **Not measured yet:** the delay DeepFilterNet adds, and how the audio sounds next to Discord. [docs/testing/checkpoint.md](docs/testing/checkpoint.md) is the listening test.
-- **Known issue:** heavy video can still drop voice at the server's UDP receive buffer. See [docs/known-issues.md](docs/known-issues.md).
+- **Known issue:** heavy video can drop voice at the server's UDP receive buffer when the host's `net.core.rmem_max` is not raised. See [docs/known-issues.md](docs/known-issues.md).
 - **Next:** open work is in the GitHub issues.
 
 ## Layout
