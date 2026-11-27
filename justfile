@@ -59,11 +59,13 @@ loadtest speakers="12" seconds="30":
     target/release/vesper-loadtest --url ws://127.0.0.1:47123/ws --origin http://127.0.0.1:47123 \
       --tokens $data/tokens --room-id 1 --speakers {{speakers}} --seconds {{seconds}} --pid $srv
 
-# Flags go to scripts/loadtest-report.py, e.g. `--name v2.4.0` or `--server-bin ../other/target/release/vesper-server`.
-# release load test report into docs/testing/loadtest/ (docs/testing/loadtest.md), about 1 minute at nice 10
-loadtest-report *args:
+# Flags go to scripts/bench.py: `--name v2.4.0`, `--quick` (patch smoke, about 1 minute), `--server-bin ../other/target/release/vesper-server`.
+# benchmark suite into docs/benchmarks/ (docs/benchmarks/README.md), about 5 minutes at nice 10
+bench *args:
     {{cap}} cargo build --release --locked -p vesper-server -p vesper-loadtest
-    scripts/loadtest-report.py {{args}}
+    [ -f crates/vesper-dsp/model/DeepFilterNet3_onnx.tar.gz ] || scripts/fetch-model.sh
+    {{cap}} cargo build --release --locked -p vesper-dsp --features tract --example dsp_bench
+    scripts/bench.py {{args}}
 
 # build outputs; the fetched model stays (delete crates/vesper-dsp/model by hand to refetch)
 clean:

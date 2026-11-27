@@ -5,7 +5,7 @@
 `vesper-loadtest` joins N synthetic speakers to one room over the real WebSocket protocol, each sends 20 ms Opus-sized packets for S seconds, and every speaker counts what it received from each other speaker. It exits 1 if any speaker received under 95% of its peers' packets (2 on setup errors). `--pid` adds the server's CPU over the run and its memory (`VmRSS` before and after, `VmHWM`); that reads `/proc/<pid>/`, so it is Linux only (and assumes 100 clock ticks per second).
 It also prints the forwarding latency of every audio packet (p50, p95, p99, max) and the RFC 3550 jitter of each receiver-sender pair, from the send and arrival times of the fake clients, which share one clock. `--json FILE` writes these numbers as JSON.
 
-For the report each release gets (several room sizes, pass rules, a Markdown file), use `just loadtest-report`: see [loadtest.md](loadtest.md).
+`--packet-ms MS` sends a packet every MS ms instead of 20 (a throughput test), and `--reconnects N` drops N speakers' connections after the run and times their `resume`; with `--json` the join, media and resume times are in the file too. For the benchmark suite each minor release gets, use `just bench`: see [benchmarks](../benchmarks/README.md).
 
 Against a local server on loopback with a throwaway data dir (ports are arbitrary high ones). Each speaker signs in with one
 session token from `loadtest-accounts` and sends `Origin` on the upgrade. Room 1 is `general` on a fresh database.

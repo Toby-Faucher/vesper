@@ -47,6 +47,8 @@ struct State {
     remote_tracks: Vec<(Mid, MediaKind)>,
     to_send: usize,
     next_send: Instant,
+    /// Gap between audio packets: [`FRAME`] unless [`FakeClient::set_audio_interval`] changed it.
+    audio_interval: Duration,
     sent: Vec<Vec<u8>>,
     /// When each entry of `sent` was written, same order.
     sent_at: Vec<Instant>,
@@ -110,6 +112,7 @@ impl FakeClient {
             remote_tracks: vec![],
             to_send: 0,
             next_send: Instant::now(),
+            audio_interval: FRAME,
             sent: vec![],
             sent_at: vec![],
             received: vec![],
@@ -163,6 +166,12 @@ impl FakeClient {
     /// Every payload is unique to this client and packet.
     pub fn send_audio(&self, n: usize) {
         self.state().to_send += n;
+    }
+
+    /// Send audio packets this far apart instead of every 20 ms (a throughput test). The RTP
+    /// timestamp still steps one 20 ms frame per packet.
+    pub fn set_audio_interval(&self, interval: Duration) {
+        self.state().audio_interval = interval;
     }
 
     /// Queue `frames` video frames of `bytes` bytes, sent at 60 frames a second once ICE is connected.
@@ -410,7 +419,7 @@ impl State {
             self.sent.push(payload);
             self.sent_at.push(now);
             self.to_send -= 1;
-            self.next_send = now + FRAME;
+            self.next_send = now + self.audio_interval;
         }
     }
 }

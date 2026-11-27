@@ -18,7 +18,7 @@ use vesper_protocol::{ClientMsg, ServerMsg};
 use vesper_sfu::testing::{FakeClient, MediaKind};
 
 const PASS_PERCENT: f64 = 95.0;
-const PACKETS_PER_SECOND: u64 = 50;
+const PACKET_MS: u64 = 20;
 const VIDEO_FPS: u64 = 60;
 
 /// Per-speaker verdict.
@@ -87,6 +87,10 @@ struct Args {
     sharers: usize,
     share_mbps: u64,
     seconds: u64,
+    /// Gap between one speaker's audio packets, 1 to 20 ms (20 is real Opus; less is a throughput test).
+    packet_ms: u64,
+    /// After the run, drop this many speakers' sockets and time their `resume` (0 to skip).
+    reconnects: usize,
     pid: Option<u32>,
     /// Write a summary of the run here as JSON.
     json: Option<String>,
@@ -113,6 +117,10 @@ fn parse_args() -> Result<Args, String> {
         None => Ok(d),
     };
     let (sharers, share_mbps) = (opt("--sharers", 0)? as usize, opt("--share-mbps", 10)?);
+    let packet_ms = opt("--packet-ms", PACKET_MS)?;
+    if !(1..=PACKET_MS).contains(&packet_ms) {
+        return Err(format!("--packet-ms must be 1 to {PACKET_MS}"));
+    }
     if sharers > speakers {
         return Err("--sharers cannot exceed --speakers".into());
     }
@@ -146,6 +154,8 @@ fn parse_args() -> Result<Args, String> {
         sharers,
         share_mbps,
         seconds,
+        packet_ms,
+        reconnects: opt("--reconnects", 0)? as usize,
         pid: match m.get("--pid") {
             Some(p) => Some(p.parse().map_err(|e| format!("--pid: {e}"))?),
             None => None,
@@ -177,6 +187,17 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
     }
     let rank = (q * sorted.len() as f64).ceil() as usize;
     sorted[rank.clamp(1, sorted.len()) - 1]
+}
+
+/// Median of an unsorted slice; 0 when empty.
+fn median(v: &[f64]) -> f64 {
+    let mut v = v.to_vec();
+    v.sort_by(f64::total_cmp);
+    match v.len() {
+        0 => 0.0,
+        n if n % 2 == 1 => v[n / 2],
+        n => (v[n / 2 - 1] + v[n / 2]) / 2.0,
+    }
 }
 
 /// RFC 3550 section 6.4.1 interarrival jitter over one stream's transit times (arrival minus send,
@@ -236,6 +257,10 @@ struct Speaker {
     task: JoinHandle<()>,
     sink: Arc<tokio::sync::Mutex<Sink>>,
     user_id: String,
+    /// This call's number for `resume`; 0 from a server without resume (before v2.3.2).
+    session: u64,
+    /// From starting the WebSocket connect to `joined`.
+    join_ms: f64,
 }
 
 impl Speaker {
@@ -248,8 +273,14 @@ impl Speaker {
     }
 }
 
-/// Join like a browser: Join with the offer, apply the Joined answer, answer every later Offer.
-async fn join(a: &Args, n: usize, video: bool) -> Result<Speaker, String> {
+/// Open speaker `n`'s WebSocket with its session cookie and `Origin`.
+async fn connect(
+    a: &Args,
+    n: usize,
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    String,
+> {
     let mut req = a
         .url
         .as_str()
@@ -267,9 +298,55 @@ async fn join(a: &Args, n: usize, video: bool) -> Result<Speaker, String> {
             .map_err(|_| format!("speaker {n}: bad {k} header"))?;
         req.headers_mut().insert(k, v);
     }
-    let (ws, _) = tokio_tungstenite::connect_async(req)
+    let (ws, _) = tokio_tungstenite::connect_async_with_config(req, None, true)
         .await
         .map_err(|e| format!("speaker {n}: connect: {e}"))?;
+    Ok(ws)
+}
+
+/// Drop speaker `s`'s TCP connection with no close frame and no `leave`, as a lost network
+/// does (a clean close ends the call), then open a new socket and send `resume`. Returns the time
+/// from starting the new connect to `resumed`. The fake client stays up meanwhile.
+async fn reconnect(a: &Args, n: usize, s: Speaker) -> Result<f64, String> {
+    s.task.abort();
+    let _ = s.task.await; // its clone of the sink is gone once it has stopped
+    drop(s.sink);
+    let _client = s.client;
+    let start = Instant::now();
+    let ws = connect(a, n).await?;
+    let (mut sink, mut stream) = ws.split();
+    let resume = ClientMsg::Resume {
+        room_id: a.room_id,
+        session: s.session,
+        muted: false,
+        deafened: false,
+    };
+    sink.send(Message::text(serde_json::to_string(&resume).unwrap()))
+        .await
+        .map_err(|e| e.to_string())?;
+    let wait = async {
+        while let Some(Ok(m)) = stream.next().await {
+            let Message::Text(text) = m else { continue };
+            match serde_json::from_str::<ServerMsg>(&text) {
+                Ok(ServerMsg::Resumed { .. }) => return Ok(start.elapsed().as_secs_f64() * 1000.0),
+                Ok(ServerMsg::ResumeFailed) => return Err(format!("speaker {n}: resume_failed")),
+                Ok(ServerMsg::Error { code, message }) => {
+                    return Err(format!("speaker {n}: resume: {code:?}: {message}"));
+                }
+                _ => {}
+            }
+        }
+        Err(format!("speaker {n}: socket closed before resumed"))
+    };
+    tokio::time::timeout(Duration::from_secs(10), wait)
+        .await
+        .map_err(|_| format!("speaker {n}: no resumed within 10 s"))?
+}
+
+/// Join like a browser: Join with the offer, apply the Joined answer, answer every later Offer.
+async fn join(a: &Args, n: usize, video: bool) -> Result<Speaker, String> {
+    let start = Instant::now();
+    let ws = connect(a, n).await?;
     let client = Arc::new(
         if video {
             FakeClient::with_video()
@@ -286,7 +363,7 @@ async fn join(a: &Args, n: usize, video: bool) -> Result<Speaker, String> {
     sink.send(Message::text(serde_json::to_string(&join).unwrap()))
         .await
         .map_err(|e| e.to_string())?;
-    let (joined_tx, joined_rx) = oneshot::channel::<Result<String, String>>();
+    let (joined_tx, joined_rx) = oneshot::channel::<Result<(String, u64, Instant), String>>();
     let sink = Arc::new(tokio::sync::Mutex::new(sink));
     let task = {
         let (client, sink) = (client.clone(), sink.clone());
@@ -299,9 +376,15 @@ async fn join(a: &Args, n: usize, video: bool) -> Result<Speaker, String> {
                 };
                 match msg {
                     ServerMsg::Joined {
-                        answer, user_id, ..
+                        answer,
+                        user_id,
+                        session,
+                        ..
                     } => {
-                        let r = client.accept_answer(&answer).map(|()| user_id);
+                        let at = Instant::now();
+                        let r = client
+                            .accept_answer(&answer)
+                            .map(|()| (user_id, session, at));
                         if let Some(tx) = joined_tx.take() {
                             let _ = tx.send(r);
                         }
@@ -330,11 +413,13 @@ async fn join(a: &Args, n: usize, video: bool) -> Result<Speaker, String> {
         })
     };
     match tokio::time::timeout(Duration::from_secs(10), joined_rx).await {
-        Ok(Ok(Ok(user_id))) => Ok(Speaker {
+        Ok(Ok(Ok((user_id, session, at)))) => Ok(Speaker {
             client,
             task,
             sink,
             user_id,
+            session,
+            join_ms: at.duration_since(start).as_secs_f64() * 1000.0,
         }),
         Ok(Ok(Err(e))) => Err(format!("speaker {n}: {e}")),
         _ => Err(format!("speaker {n}: no Joined within 10 s")),
@@ -349,9 +434,20 @@ async fn run(a: Args) -> Result<bool, String> {
             "--pid {pid}: cannot read /proc/{pid}/stat (process gone, or not Linux)"
         ));
     }
+    // One at a time, as people join a call. Media-ready is joined to ICE and DTLS up.
     let mut speakers = vec![];
+    let mut media_ms = vec![];
     for n in 0..a.speakers {
-        speakers.push(join(&a, n, a.sharers > 0).await?);
+        let s = join(&a, n, a.sharers > 0).await?;
+        let joined = Instant::now();
+        while !s.client.is_connected() {
+            if joined.elapsed() > Duration::from_secs(10) {
+                return Err(format!("speaker {n}: media not connected within 10 s"));
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        media_ms.push(joined.elapsed().as_secs_f64() * 1000.0);
+        speakers.push(s);
     }
     // Media can only flow once ICE/DTLS are up and every other voice has a negotiated track.
     let ready = Instant::now() + Duration::from_secs(20);
@@ -399,9 +495,11 @@ async fn run(a: Args) -> Result<bool, String> {
     let cpu_start = a
         .pid
         .and_then(|p| cpu_ticks(p).map(|t| (t, Instant::now())));
+    let queued = a.seconds * 1000 / a.packet_ms;
     for s in &speakers {
         s.client
-            .send_audio((a.seconds * PACKETS_PER_SECOND) as usize);
+            .set_audio_interval(Duration::from_millis(a.packet_ms));
+        s.client.send_audio(queued as usize);
     }
     for s in speakers.iter().take(a.sharers) {
         s.client
@@ -502,7 +600,7 @@ async fn run(a: Args) -> Result<bool, String> {
                 "    pair under {PASS_PERCENT}%: speaker {i} got {p:.1}% of speaker {j}'s packets"
             );
         }
-        let target = a.seconds * PACKETS_PER_SECOND;
+        let target = queued;
         if (sent[i] as f64) < target as f64 * 0.95 {
             println!(
                 "    warning: speaker {i} sent only {} of {target} queued packets",
@@ -578,6 +676,41 @@ async fn run(a: Args) -> Result<bool, String> {
             "server memory: RSS {idle:.1} MiB before, {load:.1} MiB under load, peak {peak:.1} MiB"
         );
     }
+    let join_ms: Vec<f64> = speakers.iter().map(|s| s.join_ms).collect();
+    let mut resume_ms = vec![];
+    let mut resume_errors = vec![];
+    let resume_supported = speakers.first().is_some_and(|s| s.session != 0);
+    if !resume_supported && a.reconnects > 0 {
+        println!("reconnect: skipped, the server has no resume (joined.session is 0)");
+    }
+    let mut kept = vec![];
+    for (n, s) in speakers.into_iter().enumerate() {
+        if resume_supported && n < a.reconnects {
+            match reconnect(&a, n, s).await {
+                Ok(ms) => resume_ms.push(ms),
+                Err(e) => resume_errors.push(e),
+            }
+        } else {
+            kept.push(s);
+        }
+    }
+    let speakers = kept;
+    println!(
+        "join: joined median {:.1} ms max {:.1} ms; media connected median {:.1} ms max {:.1} ms",
+        median(&join_ms),
+        join_ms.iter().copied().fold(0.0, f64::max),
+        median(&media_ms),
+        media_ms.iter().copied().fold(0.0, f64::max),
+    );
+    if !resume_ms.is_empty() || !resume_errors.is_empty() {
+        println!(
+            "reconnect: {} resumed, median {:.1} ms; {} failed {:?}",
+            resume_ms.len(),
+            median(&resume_ms),
+            resume_errors.len(),
+            resume_errors
+        );
+    }
     for s in &speakers {
         s.task.abort();
     }
@@ -622,6 +755,13 @@ async fn run(a: Args) -> Result<bool, String> {
             "server_cpu_percent": cpu_percent,
             "server_rss_mib": { "idle": rss_idle, "load": rss_load, "peak": rss_peak },
             "video_worst_pair_percent": video_worst_percent,
+            "packet_ms": a.packet_ms,
+            "forwarded_per_second": got as f64 / a.seconds as f64,
+            "join_ms": join_ms,
+            "media_ms": media_ms,
+            "resume_supported": resume_supported,
+            "resume_ms": resume_ms,
+            "resume_errors": resume_errors,
         });
         std::fs::write(path, format!("{summary:#}\n"))
             .map_err(|e| format!("--json {path}: {e}"))?;
@@ -633,7 +773,7 @@ async fn run(a: Args) -> Result<bool, String> {
 async fn main() {
     let args = parse_args().unwrap_or_else(|e| {
         eprintln!(
-            "vesper-loadtest: {e}\nusage: vesper-loadtest --url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--sharers N] [--share-mbps M] [--pid PID] [--json FILE]"
+            "vesper-loadtest: {e}\nusage: vesper-loadtest --url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--sharers N] [--share-mbps M] [--packet-ms MS] [--reconnects N] [--pid PID] [--json FILE]"
         );
         std::process::exit(2);
     });
@@ -733,6 +873,13 @@ mod tests {
         assert_eq!(percentile(&v, 1.0), 100.0);
         assert_eq!(percentile(&v, 0.0), 1.0);
         assert_eq!(percentile(&[], 0.5), 0.0);
+    }
+
+    #[test]
+    fn median_of_odd_even_and_empty() {
+        assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
+        assert_eq!(median(&[4.0, 1.0, 2.0, 3.0]), 2.5);
+        assert_eq!(median(&[]), 0.0);
     }
 
     #[test]

@@ -64,7 +64,7 @@ For friends on other machines, see [docs/deploy.md](docs/deploy.md): Docker or s
 
 Last updated 2026-11-13. This is a personal project. The latest release is v1.7.1. [docs/versions.md](docs/versions.md) lists each release and what was verified in it.
 
-- Built and covered by tests: the SFU, the server, the web client, text chat, accounts and passkeys, screen share, the load test (12 speakers for 30 s, no loss on a local run) and its report for each release ([docs/testing/loadtest.md](docs/testing/loadtest.md)), the deploy files. The end-to-end suite runs headless Chromium, with a canvas in place of a real screen.
+- Built and covered by tests: the SFU, the server, the web client, text chat, accounts and passkeys, screen share, the load test (12 speakers for 30 s, no loss on a local run) and a benchmark report for each minor release ([docs/benchmarks/](docs/benchmarks/README.md)), the deploy files. The end-to-end suite runs headless Chromium, with a canvas in place of a real screen.
 - **Deployed:** v1.0 on 2026-11-01. A test build of v1.7.1 has run on the live server since 2026-11-11.
 - **Not verified:** screen share in Firefox or Zen in a real call, Windows browsers, several sharers at once on a real network, passkeys with a real authenticator, and a call rejoining without a click in a real browser. Docker, Caddy and the router forward are not verified on the dev machine.
 - **Not measured yet:** the delay DeepFilterNet adds, and how the audio sounds next to Discord. [docs/testing/checkpoint.md](docs/testing/checkpoint.md) is the listening test.
