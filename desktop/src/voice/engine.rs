@@ -27,7 +27,7 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 use super::denoise::{Capture, Late, Loaded, deep_filter, rnnoise};
 use super::echo::{self, Echo};
 use super::jitter::{Jitter, Pop};
-use super::mix::{Limiter, Meter, Speaking, mix_into, rms, volume_to_gain};
+use super::mix::{Limiter, Meter, MutedSpeech, Speaking, mix_into, rms, volume_to_gain};
 use super::share::{Out, Sending};
 use super::video::Video;
 use super::{AudioDevices, AudioInput, AudioOutput, FRAME, RATE, Setup, VoiceCmd, VoiceEvent};
@@ -37,6 +37,8 @@ const TICK: Duration = Duration::from_millis(20);
 const SHARE_WAIT: Duration = Duration::from_millis(4);
 /// Captured audio held at most, so a stalled engine does not send old sound later (100 ms).
 const MAX_CAPTURED: usize = FRAME * 5;
+/// One frame in ms, for `MutedSpeech`.
+const FRAME_MS: u64 = (FRAME as u64 * 1000) / RATE as u64;
 /// Media must be up this long after the answer.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// One keyframe request per share in this time at most: a keyframe of a big screen costs every viewer.
@@ -88,6 +90,10 @@ struct Engine<'a> {
     ice_lost: Option<Instant>,
     muted: bool,
     deafened: bool,
+    /// Watch the muted mic for speech, and whether the notice shows.
+    listen: bool,
+    muted_speech: MutedSpeech,
+    muted_shown: bool,
     devices: &'a dyn AudioDevices,
     /// The saved device names.
     names: (Option<String>, Option<String>),
@@ -198,6 +204,9 @@ impl<'a> Engine<'a> {
             ice_lost: None,
             muted: false,
             deafened: false,
+            listen: false,
+            muted_speech: MutedSpeech::default(),
+            muted_shown: false,
             devices,
             names: (setup.input, setup.output),
             input: Some(input),
@@ -317,6 +326,12 @@ impl<'a> Engine<'a> {
             }
             VoiceCmd::Muted(m) => self.muted = m,
             VoiceCmd::Deafened(d) => self.deafened = d,
+            VoiceCmd::Listen(on) => {
+                self.listen = on;
+                if !on {
+                    self.show_muted(false);
+                }
+            }
             VoiceCmd::Meter(on) => self.meter = on.then(Meter::default),
             VoiceCmd::Hear(on) => (self.hear, self.heard) = (on, vec![]),
             VoiceCmd::Volume { user_id, percent } => {
@@ -742,6 +757,11 @@ impl<'a> Engine<'a> {
             }
             let level = if self.muted { 0.0 } else { rms(&frame) };
             me = self.me.update(level);
+            // Only the level of the echo cancelled mic is read while muted: no filter, nothing sent.
+            let listening = self.listen && self.muted;
+            let heard = if listening { rms(&frame) } else { 0.0 };
+            let show = self.muted_speech.update(FRAME_MS, listening, heard);
+            self.show_muted(show);
             if self.muted {
                 frame.fill(0.0); // not filtered, not sent: silence on the meter and in the mic test
             }
@@ -761,6 +781,13 @@ impl<'a> Engine<'a> {
                 me,
                 peers: speaking,
             });
+        }
+    }
+
+    fn show_muted(&mut self, show: bool) {
+        if show != self.muted_shown {
+            self.muted_shown = show;
+            (self.emit)(VoiceEvent::MutedSpeech(show));
         }
     }
 
@@ -977,6 +1004,52 @@ mod tests {
             e.tick();
         }
         assert_eq!(levels.lock().unwrap().len(), 3);
+    }
+
+    /// Talking while muted with `Listen` on says so once after the grace and half a second, and again only after the
+    /// cool down; `Listen(false)` takes it away. Without `Listen` the muted mic is not read.
+    #[test]
+    fn speech_while_muted_is_noticed_only_when_listening() {
+        let fake = Fake::default();
+        let seen = Mutex::new(vec![]);
+        let emit = |ev| {
+            if let VoiceEvent::MutedSpeech(on) = ev {
+                seen.lock().unwrap().push(on);
+            }
+        };
+        let mut e = engine(&fake, &emit);
+        e.command(VoiceCmd::Muted(true)).unwrap();
+        for _ in 0..200 {
+            e.tick();
+        }
+        assert!(seen.lock().unwrap().is_empty(), "not listening");
+        e.command(VoiceCmd::Listen(true)).unwrap();
+        let frames = |ms: u64| ms / FRAME_MS;
+        for _ in 0..frames(MutedSpeech::GRACE_MS + MutedSpeech::SUSTAIN_MS) {
+            e.tick();
+        }
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "not before the grace and half a second"
+        );
+        e.tick();
+        e.tick();
+        assert_eq!(*seen.lock().unwrap(), [true]);
+        for _ in 0..frames(MutedSpeech::SHOW_MS) {
+            e.tick();
+        }
+        assert_eq!(*seen.lock().unwrap(), [true, false], "shown for SHOW_MS");
+        for _ in 0..frames(10_000) {
+            e.tick();
+        }
+        assert_eq!(seen.lock().unwrap().len(), 2, "the cool down");
+        e.command(VoiceCmd::Muted(false)).unwrap();
+        e.command(VoiceCmd::Listen(false)).unwrap();
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            2,
+            "nothing shown, nothing to take away"
+        );
     }
 
     /// What goes to the speakers is, sample for sample, what the echo canceller gets as its far end: someone's

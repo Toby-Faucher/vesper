@@ -174,6 +174,10 @@ pub struct Call {
     pub muted: bool,
     pub deafened: bool,
     pub force_muted: bool,
+    /// The engine watches the muted mic for speech (`Model::listen`).
+    listening: bool,
+    /// The mic heard speech while muted by hand: the call bar says "You are muted".
+    pub muted_speech: bool,
     pub me_speaking: bool,
     /// User ids of the others speaking now.
     pub speaking: Vec<String>,
@@ -243,6 +247,8 @@ impl Default for Call {
             muted: false,
             deafened: false,
             force_muted: false,
+            listening: false,
+            muted_speech: false,
             me_speaking: false,
             speaking: vec![],
             rejoin: None,
@@ -978,7 +984,9 @@ impl Model {
                 if c.phase == Phase::Idle {
                     return vec![];
                 }
-                vec![self.sending()]
+                let mut cmds = vec![self.sending()];
+                cmds.extend(self.listen());
+                cmds
             }
             ServerMsg::ShareStopped => {
                 c.share_notice = SHARE_STOPPED.into();
@@ -1103,6 +1111,10 @@ impl Model {
             }
             VoiceEvent::Speaking { me, peers } => {
                 (c.me_speaking, c.speaking) = (me, peers);
+                vec![]
+            }
+            VoiceEvent::MutedSpeech(on) => {
+                c.muted_speech = on && c.listening;
                 vec![]
             }
             VoiceEvent::Filter(text) => {
@@ -1287,6 +1299,23 @@ impl Model {
         Cmd::Voice(VoiceCmd::Muted(!self.live()))
     }
 
+    /// Tells the engine whether to watch the muted mic for speech, when that changes: muted by hand (a moderator's
+    /// mute has its own notice), not deafened, and the setting on. Not listening hides the notice.
+    fn listen(&mut self) -> Option<Cmd> {
+        let c = &mut self.call;
+        let want = c.phase != Phase::Idle
+            && c.muted
+            && !c.force_muted
+            && !c.deafened
+            && self.settings.muted_notice;
+        if want == c.listening {
+            return None;
+        }
+        c.listening = want;
+        c.muted_speech &= want;
+        Some(Cmd::Voice(VoiceCmd::Listen(want)))
+    }
+
     /// The push-to-talk key opened or closed the mic.
     pub fn set_ptt(&mut self, open: bool) -> Vec<Cmd> {
         let was = self.live();
@@ -1304,10 +1333,12 @@ impl Model {
             self.ptt_open = false;
         }
         self.settings = s.clamped();
-        if self.call.phase == Phase::Idle || was == self.live() {
-            return vec![];
+        let mut cmds = vec![];
+        if self.call.phase != Phase::Idle && was != self.live() {
+            cmds.push(self.sending());
         }
-        vec![self.sending()]
+        cmds.extend(self.listen());
+        cmds
     }
 
     /// Join voice in `room`. A call in another room ends first.
@@ -1457,6 +1488,7 @@ impl Model {
         }
         c.muted = !c.muted;
         let mut cmds = vec![self.sending()];
+        cmds.extend(self.listen());
         cmds.extend(self.voice_state_once_joining());
         cmds
     }
@@ -1474,6 +1506,7 @@ impl Model {
         }
         c.deafened = !c.deafened;
         let mut cmds = vec![Cmd::Voice(VoiceCmd::Deafened(c.deafened))];
+        cmds.extend(self.listen());
         cmds.extend(self.voice_state_once_joining());
         cmds
     }
@@ -2362,6 +2395,7 @@ mod tests {
             cmds.as_slice(),
             [
                 Cmd::Voice(VoiceCmd::Muted(true)),
+                Cmd::Voice(VoiceCmd::Listen(true)),
                 Cmd::Signal(ClientMsg::SetVoiceState {
                     muted: true,
                     deafened: false
@@ -2373,6 +2407,7 @@ mod tests {
             cmds.as_slice(),
             [
                 Cmd::Voice(VoiceCmd::Deafened(true)),
+                Cmd::Voice(VoiceCmd::Listen(false)),
                 Cmd::Signal(ClientMsg::SetVoiceState {
                     muted: true,
                     deafened: true
@@ -2431,14 +2466,14 @@ mod tests {
         m.set_ptt(true);
         assert!(matches!(
             m.toggle_mute().as_slice(),
-            [Cmd::Voice(VoiceCmd::Muted(true)), _]
+            [Cmd::Voice(VoiceCmd::Muted(true)), ..]
         ));
         assert_eq!(muted(&m.set_ptt(false)), None);
         assert_eq!(muted(&m.set_ptt(true)), None);
         assert!(!m.live());
         assert!(matches!(
             m.toggle_mute().as_slice(),
-            [Cmd::Voice(VoiceCmd::Muted(false)), _]
+            [Cmd::Voice(VoiceCmd::Muted(false)), ..]
         ));
         // A force mute closes it while the key is held.
         assert_eq!(
@@ -2518,6 +2553,52 @@ mod tests {
     }
 
     #[test]
+    fn the_engine_listens_for_speech_only_while_muted_by_hand() {
+        let listen = |cmds: &[Cmd]| {
+            cmds.iter().find_map(|c| match c {
+                Cmd::Voice(VoiceCmd::Listen(on)) => Some(*on),
+                _ => None,
+            })
+        };
+        let mut m = in_call();
+        assert_eq!(listen(&m.toggle_mute()), Some(true));
+        voice(&mut m, VoiceEvent::MutedSpeech(true));
+        assert!(m.call.muted_speech);
+        assert_eq!(listen(&m.toggle_mute()), Some(false), "unmuted");
+        assert!(!m.call.muted_speech, "hidden at once");
+        voice(&mut m, VoiceEvent::MutedSpeech(true));
+        assert!(!m.call.muted_speech, "a late event while not listening");
+
+        // Deafened is away; a moderator's mute has its own notice.
+        m.toggle_mute();
+        assert_eq!(listen(&m.toggle_deafen()), Some(false));
+        assert_eq!(listen(&m.toggle_deafen()), Some(true));
+        let forced = ServerMsg::ForceMuted { muted: true };
+        assert_eq!(listen(&server(&mut m, forced)), Some(false));
+        let lifted = ServerMsg::ForceMuted { muted: false };
+        assert_eq!(
+            listen(&server(&mut m, lifted)),
+            Some(true),
+            "still muted, now by hand"
+        );
+
+        // The setting off stops it at once, and on starts it again.
+        let off = Settings {
+            muted_notice: false,
+            ..m.settings.clone()
+        };
+        voice(&mut m, VoiceEvent::MutedSpeech(true));
+        assert_eq!(listen(&m.set_settings(off)), Some(false));
+        assert!(!m.call.muted_speech);
+        assert_eq!(listen(&m.toggle_mute()), None, "off: never told");
+        assert_eq!(listen(&m.toggle_mute()), None);
+        let on = Settings::default();
+        assert_eq!(listen(&m.set_settings(on)), Some(true));
+        m.leave_voice();
+        assert!(!m.call.listening, "a new call starts afresh");
+    }
+
+    #[test]
     fn force_mute_holds_and_lifting_does_not_unmute() {
         let mut m = in_call();
         let cmds = server(&mut m, ServerMsg::ForceMuted { muted: true });
@@ -2528,7 +2609,11 @@ mod tests {
         assert!(m.toggle_mute().is_empty());
         server(&mut m, ServerMsg::ForceMuted { muted: false });
         assert!(m.call.muted && !m.call.force_muted);
-        assert_eq!(m.toggle_mute().len(), 2);
+        assert_eq!(
+            m.toggle_mute().len(),
+            3,
+            "muted, listen and the voice state"
+        );
     }
 
     #[test]

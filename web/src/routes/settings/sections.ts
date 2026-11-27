@@ -9,5 +9,5 @@ export const RESETS: Partial<Record<Section, Partial<AudioSettings>>> = {
   input: { vad: D.vad },
   noise: { mode: D.mode, attenDb: D.attenDb, postFilter: D.postFilter, inputBoostDb: D.inputBoostDb, noiseSuppression: D.noiseSuppression, autoGain: D.autoGain },
   quality: { bitrateKbps: D.bitrateKbps, dtx: D.dtx },
-  ptt: { pushToTalk: D.pushToTalk },
+  ptt: { pushToTalk: D.pushToTalk, mutedNotice: D.mutedNotice },
 };

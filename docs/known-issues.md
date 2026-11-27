@@ -1,7 +1,7 @@
 # Known issues
 
 Things found in review that were left on purpose, because they are small, rare or wait on a bigger piece of work.
-Last updated 2026-11-13. Nothing here was run in a headed browser or a real deploy (the e2e runs headless Chromium). Fix an item, then delete its line in the same commit.
+Last updated 2026-11-26. Nothing here was run in a headed browser or a real deploy (the e2e runs headless Chromium). Fix an item, then delete its line in the same commit.
 
 ## Security and abuse
 
@@ -76,7 +76,7 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 - **Tests:** the rejoin race test is a regression guard, not a proof (the lock order is the proof).
 - **A room's shares are capped in total.** Each share counts its bitrate once per other person in the call, and the sum may not pass 120 000 kbps (for example 4 people sharing 10 Mbps each). A share that would go over gets the bitrate that is left, and the sharer sees "Your screen share was lowered to ... Mbps". Only when less than 500 kbps is left is it refused with "Too many screens are being shared right now." The server logs the numbers each time. The number is the highest tested load that held voice at 95% in the [video load test](testing/latency.md#video-load) on two cores. It is checked only when a share starts, so people who join later raise the total without a re-check. It scales with the number of viewers, so a 12-person room with one 10 Mbps share (110 000) is allowed, though only 4-person rooms were measured. It is measured on a Core i7-12700, not on the production VM. The suggested bitrate stops at 10 Mbps, so four people can share at the suggestion.
 - **Voice and video share one UDP socket and one SFU thread.** Under heavy video the server's socket receive buffer fills and drops packets, voice with them. At 4 x 20 Mbps on loopback the server's socket dropped 50 146 packets in 30 s and the load test's sockets dropped none during the run (see the [video load test](testing/latency.md#video-load)). A bigger buffer needs `SO_RCVBUF` in the SFU and a higher `net.core.rmem_max` on the host, since the kernel caps the first at the second. Not done yet.
-- **Screen share has one video layer for every viewer.** There is no simulcast. A viewer on a bad link asks for keyframes, and the SFU forwards each request with no throttle, so the other viewers pay a little for them.
+- **Screen share has one video layer for every viewer.** There is no simulcast. A viewer on a bad link asks for keyframes, and every viewer gets them. The SFU sends a sharer at most one request per 500 ms (`SfuConfig::keyframe_interval`, no environment variable), so the others pay for at most two extra keyframes a second. Measured with test clients over loopback (`keyframe_requests_are_rate_limited_per_sharer`), not with a browser or a real bad link.
 - **Screen share carries no sound.** Game audio and tab audio are not sent. Firefox's `getDisplayMedia` captures no audio at all (from docs: Mozilla bug 1541425).
 - **An exclusive fullscreen game can capture as a black picture.** Use borderless windowed mode. Not tried with a real game.
 - **Screen share is VP8 only, and a client that joined without a video m-line cannot watch.** The video m-lines are fixed at join, so an audio-only client gets none and must rejoin to watch.
