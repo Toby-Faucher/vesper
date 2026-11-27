@@ -78,6 +78,8 @@ pub fn clock(d: Duration) -> String {
 /// Avatars drawn in the bar; the rest is `+n`.
 const AVATARS: usize = 5;
 pub const FORCE_MUTED: &str = "A moderator muted you.";
+/// The web's `MUTED_SPEECH` (`muted-speech.ts`).
+pub const MUTED_SPEECH: &str = "You are muted. Unmute to be heard.";
 
 impl Vesper {
     /// Runs one model action and redraws.
@@ -180,6 +182,7 @@ impl Vesper {
                 && !c.force_muted
                 && c.echo_off.is_empty()
                 && !c.headphones
+                && !c.muted_speech
         };
         let compact = small && !self.bar.peek && quiet;
         let radius = if compact {
@@ -273,6 +276,8 @@ impl Vesper {
             Some(("call-echo", c.echo_off.clone()))
         } else if c.headphones {
             Some(("call-headphones", HEADPHONES.to_string()))
+        } else if c.muted_speech {
+            Some(("call-muted-speech", MUTED_SPEECH.to_string()))
         } else {
             None
         };

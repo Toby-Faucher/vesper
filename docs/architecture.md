@@ -272,7 +272,11 @@ unit tests in `hub.rs` and `voice.rs`.
   track only from an m-line the client sends on. The web's and the desktop's video m-lines are send-only, for their own share
   (the desktop's capture and encoder: [ADR 0011](decisions/0011-desktop-screen-share-send.md)).
 - Keyframes: `watch(viewer, sharer, true)` sends the sharer a PLI, so the new viewer gets a picture right away. A viewer's own PLI or FIR on a
-  forwarded video goes to the sharer as the same kind. Covered by `tests/forwarding.rs` with str0m test clients, not a browser.
+  forwarded video goes to the sharer as the same kind. Both go through one limiter per sharer's track (`keyframe.rs`): a request after a
+  quiet `keyframe_interval` (500 ms) goes out at once, and the ones inside it are merged into one sent when it ends (FIR if any was a FIR).
+  So a sharer gets at most two requests a second however many viewers ask, and a new viewer waits at most 500 ms.
+  `SfuHandle::keyframe_stats` counts the requests sent on and merged away. Covered by `tests/forwarding.rs` with str0m test clients, not a
+  browser.
 - Share ceiling: the SFU measures each sharer's incoming video in windows of at least a second. When it stays above `share_ceiling_bps`
   (35 Mbps) for `share_ceiling_secs` (5) windows in a row, the SFU stops forwarding it, sets the sender to not sharing, and sends
   `SfuEvent::ShareCut` once to that session. Video from a client that is not sharing is dropped before it is measured.
@@ -313,6 +317,18 @@ RNNoise takes DeepFilterNet's place in that order when it is picked.
   Unit-tested with fakes and the Rust tests; not heard in a real browser or call.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
   suppression is on in `browser` mode, in `deepfilter` mode while the model loads, and in `deepfilter` mode if the user turned it on.
+- "You are muted" (an idea from Mumble, our own code): while you are muted by hand, not deafened, and the switch in Settings > Voice >
+  Talk mode is on (the default, `mutedNotice` in `vesper.audio`), the call's 100 ms poll reads one level and nothing else. Mute stays
+  the plain mute gate on the sent track, so nothing is sent. In `deepfilter` and `rnnoise` modes the level comes from an analyser
+  on the worklet's output (the denoised voice, which runs while muted as before); in `browser` and `off` modes from a clone of the
+  raw mic track, since the mute gate silences the sent one (`capture.hear()`, `unhear()`). A poll above the speaking ring's level
+  (RMS 0.02) counts as speech. `web/src/lib/audio/muted-speech.ts` adds up speech and takes back as much for quiet; at 500 ms the
+  call bar says "You are muted. Unmute to be heard." for 5 s, or until you unmute. Nothing counts in the first second after you
+  mute, and the next notice waits 60 s. A moderator's mute (it has its own notice), a hidden tab and the switch off read nothing.
+  The desktop app does the same with the same numbers (`MutedSpeech` in `desktop/src/voice/mix.rs`): the model sends
+  `VoiceCmd::Listen` when the rule changes, the engine reads the RMS of each 20 ms frame after echo cancellation (the noise filter
+  stays off while muted, as before) and sends `VoiceEvent::MutedSpeech`. Unit-tested on both; not heard with a real mic. Manual
+  test: [testing/muted-speech.md](testing/muted-speech.md).
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is
   also set on the sender (`web/src/lib/devices.ts`). Remote SDP is tuned too, then applied (`signaling.ts`).
 

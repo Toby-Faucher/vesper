@@ -157,6 +157,8 @@
         <p id="ptt-note" class="text-xs text-fg-3">Works only while this tab has focus. Browsers do not allow keys from other apps.</p>
       </div>
     {/if}
+    <Switch label="Tell me when I talk while muted" help="The call bar says so when your mic hears you while you are muted. Nothing is sent; the check runs on this device."
+      checked={settings.mutedNotice} onchange={(e) => set({ mutedNotice: e.currentTarget.checked })} />
   </section>
 
   <section role="group" aria-labelledby="voice-keys">

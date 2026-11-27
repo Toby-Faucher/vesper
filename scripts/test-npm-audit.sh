@@ -23,20 +23,24 @@ PY
 # expect <want exit code> <name> <report file>
 expect() {
   set +e
-  python3 -I "$ROOT/scripts/npm-audit.py" "$3" >/dev/null 2>&1
+  python3 -I "$T/npm-audit.py" "$3" >/dev/null 2>&1
   got=$?
   set -e
   if [ "$got" != "$1" ]; then echo "FAIL $2: exit $got, want $1"; fails=$((fails + 1)); else echo "ok   $2"; fi
 }
 
+# A copy of the gate with one test entry in ALLOWED, so these cases do not depend on the real list.
+sed 's/^ALLOWED = {/ALLOWED = {"GHSA-test-test-test": "test entry",/' "$ROOT/scripts/npm-audit.py" > "$T/npm-audit.py"
+grep -q 'GHSA-test-test-test' "$T/npm-audit.py" || { echo "FAIL could not add the test entry to ALLOWED"; exit 1; }
+
 A=https://github.com/advisories
-report "$T/allowed.json" "$A/GHSA-fc5q-39xc-vjpf:high"
+report "$T/allowed.json" "$A/GHSA-test-test-test:high"
 expect 0 "only the allowed advisory" "$T/allowed.json"
-report "$T/new.json" "$A/GHSA-fc5q-39xc-vjpf:high" "$A/GHSA-aaaa-bbbb-cccc:critical"
+report "$T/new.json" "$A/GHSA-test-test-test:high" "$A/GHSA-aaaa-bbbb-cccc:critical"
 expect 1 "a new critical advisory" "$T/new.json"
-report "$T/newhigh.json" "$A/GHSA-fc5q-39xc-vjpf:high" "$A/GHSA-aaaa-bbbb-dddd:high"
+report "$T/newhigh.json" "$A/GHSA-test-test-test:high" "$A/GHSA-aaaa-bbbb-dddd:high"
 expect 1 "a new high advisory" "$T/newhigh.json"
-report "$T/moderate.json" "$A/GHSA-fc5q-39xc-vjpf:high" "$A/GHSA-aaaa-bbbb-eeee:moderate"
+report "$T/moderate.json" "$A/GHSA-test-test-test:high" "$A/GHSA-aaaa-bbbb-eeee:moderate"
 expect 0 "a moderate advisory is reported, not blocking" "$T/moderate.json"
 report "$T/gone.json"
 expect 1 "the allowed advisory is gone: remove it from the list" "$T/gone.json"
