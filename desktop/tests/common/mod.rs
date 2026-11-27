@@ -61,7 +61,7 @@ impl Server {
             header_timeout: vesper_server::config::HEADER_TIMEOUT,
             body_idle: vesper_server::config::BODY_IDLE,
             body_total: vesper_server::config::BODY_TOTAL,
-        metrics_bind: None,
+            metrics_bind: None,
         };
         let sfu = vesper_sfu::Sfu::spawn(vesper_sfu::SfuConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
