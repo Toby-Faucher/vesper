@@ -10,7 +10,9 @@
 
 mod client;
 mod meter;
+mod recv;
 mod room;
+mod socket;
 #[cfg(feature = "test-support")]
 pub mod testing;
 
@@ -35,11 +37,19 @@ pub struct SfuConfig {
     /// `share_ceiling_secs` one-second windows in a row is cut ([`SfuEvent::ShareCut`]).
     pub share_ceiling_bps: u64,
     pub share_ceiling_secs: u32,
+    /// `SO_RCVBUF` of the media socket, in bytes; 0 keeps the system default. The kernel caps
+    /// it at `net.core.rmem_max`; the SFU logs what it got and warns when it got less.
+    pub recv_buffer: usize,
 }
+
+/// 4 MiB: holds about 0.4 s of four 20 Mbps shares, enough for the bursts in the video load
+/// test (docs/testing/latency.md).
+pub const DEFAULT_RECV_BUFFER: usize = 4 * 1024 * 1024;
 
 impl Default for SfuConfig {
     /// Binds `0.0.0.0:0` with no advertised addresses (set them!), a 10 s answer timeout and a
-    /// share ceiling of 35 Mbps for 5 s (above the client's 30 Mbps maximum).
+    /// share ceiling of 35 Mbps for 5 s (above the client's 30 Mbps maximum), and a receive
+    /// buffer of [`DEFAULT_RECV_BUFFER`].
     fn default() -> Self {
         SfuConfig {
             bind: (Ipv4Addr::UNSPECIFIED, 0).into(),
@@ -47,6 +57,7 @@ impl Default for SfuConfig {
             answer_timeout: Duration::from_secs(10),
             share_ceiling_bps: 35_000_000,
             share_ceiling_secs: 5,
+            recv_buffer: DEFAULT_RECV_BUFFER,
         }
     }
 }
@@ -59,6 +70,7 @@ impl Sfu {
     pub fn spawn(cfg: SfuConfig) -> std::io::Result<SfuHandle> {
         let socket = UdpSocket::bind(cfg.bind)?;
         let local_addr = socket.local_addr()?;
+        socket::set_recv_buffer(&socket, cfg.recv_buffer);
         room::check_advertised(local_addr, &cfg.advertised);
         let (tx, rx) = mpsc::channel();
         let alive = Arc::new(AtomicBool::new(true));

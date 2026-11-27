@@ -5309,6 +5309,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77730ed34f01f4990cb2ea67fec715ecebc6fab9a6396cf83c5529b13f581bdc"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+ "memoffset",
+]
+
+[[package]]
 name = "nnnoiseless"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10127,6 +10140,8 @@ dependencies = [
 name = "vesper-sfu"
 version = "2.3.2"
 dependencies = [
+ "nix 0.32.0",
+ "socket2",
  "str0m",
  "tokio",
  "tracing",

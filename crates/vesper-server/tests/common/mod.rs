@@ -44,6 +44,7 @@ pub fn config(data: &TempDir) -> Config {
         udp_bind: "127.0.0.1:0".parse().unwrap(),
         public_host: None,
         udp_port_public: 0,
+        udp_recv_buffer: 0,
         max_room_size: 12,
         ring_timeout: Duration::from_secs(30),
         ping_interval: Duration::from_secs(30),

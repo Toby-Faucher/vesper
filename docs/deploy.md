@@ -95,6 +95,14 @@ person and of who made it, never the link.
   server closes it fails; Caddy retries a GET, but not a POST, PATCH or PUT with a body, so that request gets a 502. It is rare. To spot
   it: a 502 in Caddy's access log for a request that came after the app sat idle for a while.
 - **`VESPER_UDP_PORT_PUBLIC`** only matters when the external UDP port differs from the one the container listens on.
+- **UDP receive buffer (host sysctl):** the server asks for a 4 MiB receive buffer on its media socket (`VESPER_UDP_RECV_BUFFER_KB`, [env.md](env.md)). Linux caps it at `net.core.rmem_max`, which is 212992 bytes on most systems. Then the log says `udp receive buffer: asked for 4194304 bytes, the kernel granted ...` with a warning, and heavy video can drop voice ([known-issues.md](known-issues.md#server-behaviour)). Raise the cap on the host that runs the container, as root:
+
+  ```
+  echo 'net.core.rmem_max = 4194304' > /etc/sysctl.d/90-vesper.conf
+  sysctl --system
+  ```
+
+  Then restart Vesper; the log line should say `granted 8388608` (Linux reports twice the value set). A container cannot set this itself: `net.core.rmem_max` belongs to the host, and Docker's `sysctls:` does not accept it. On NixOS: `boot.kernel.sysctl."net.core.rmem_max" = 4194304;`. Not verified on the Dockge VM.
 
 - **Data dir permissions:** the server creates a new `VESPER_DATA_DIR` with mode 0700 and `vesper.db` (and its WAL files) with 0600. An existing directory keeps its mode, so a bind-mounted `/data` keeps its host permissions: set it to 0700 for the container user yourself. The database holds password and session hashes. Verified by a test on a fresh directory only.
 

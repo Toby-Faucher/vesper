@@ -127,6 +127,7 @@ pub async fn start(cfg: Config) -> std::io::Result<(SocketAddr, JoinHandle<std::
     let sfu = Sfu::spawn(SfuConfig {
         bind: cfg.udp_bind,
         advertised,
+        recv_buffer: cfg.udp_recv_buffer,
         ..Default::default()
     })?;
     // Not in start_with_sfu: tests crash the SFU on purpose and must survive it.

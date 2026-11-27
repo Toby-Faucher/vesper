@@ -262,6 +262,10 @@ unit tests in `hub.rs` and `voice.rs`.
 - The SFU thread owns the UDP socket, every str0m `Rtc` client and all media state. Nothing else touches them. The server sends it commands
   (`join`, `answer`, `leave`, `set_muted`, `set_sharing`, `watch`, `hold`, `set_advertised`) over a channel and gets `SfuEvent::Offer`,
   `SfuEvent::ShareCut` and `SfuEvent::Closed` back per session.
+- The receive path (`socket.rs`, `recv.rs`): the socket asks for a 4 MiB receive buffer (`VESPER_UDP_RECV_BUFFER_KB`) and logs what
+  the kernel granted. On Linux one `recvmmsg` call reads every datagram that is queued, up to 32; elsewhere one `recv_from` reads one.
+  Each datagram goes to its client, and that client's output is drained before the next datagram goes in, as str0m requires (one
+  input, then `poll_output` until `Timeout`).
 - Video ([ADR 0009](decisions/0009-video-in-the-sfu.md)): a join offer has one audio m-line and at most one VP8 video m-line. A client with
   video is offered every other video track at join. Packets flow only while `set_sharing(user, true)` holds for the sender and
   `watch(viewer, sharer, true)` for the receiver. Both are per session, so a rejoin starts with neither. The SFU makes an incoming
