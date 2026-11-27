@@ -270,7 +270,7 @@ def main():
                 "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M"),
                 "describe": args.name or git("describe", "--tags", "--always", cwd=tree),
                 "commit": git("rev-parse", "--short=12", "HEAD", cwd=tree),
-                "branch": git("rev-parse", "--abbrev-ref", "HEAD", cwd=tree),
+                "branch": git("rev-parse", "--abbrev-ref", "HEAD", cwd=tree).replace("HEAD", "(detached)"),
                 "dirty": status not in ("", "unknown"),
                 "loadtest_commit": git("rev-parse", "--short=12", "HEAD"),
                 "seconds": args.seconds,

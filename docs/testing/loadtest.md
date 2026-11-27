@@ -67,12 +67,12 @@ A scenario passes when all of these hold. They sit in `THRESHOLDS` in `scripts/l
 |---|---|---|
 | vesper-loadtest's own rule | 95% in aggregate and from each peer | The existing bar of [latency.md](latency.md). |
 | Audio, worst pair | at least 99% | Loopback has no network loss, so any loss is the server's. Opus FEC and loss concealment hide a percent or so; a real network takes its own share on top. On the dev machine every scenario loses 0.00%. |
-| Forwarding latency, p99 | at most 15 ms | Under one 20 ms Opus frame: a packet held longer than a frame makes the browser's jitter buffer grow. The 12-speaker p99 is about 7 ms, so 15 ms is about twice that. |
+| Forwarding latency, p99 | at most 15 ms | Under one 20 ms Opus frame: a packet held longer than a frame makes the browser's jitter buffer grow. The 12-speaker p99 was 5 to 7 ms in three runs, so 15 ms is about twice that. |
 | Jitter, worst pair | at most 5 ms | A quarter of a frame. Measured at about 2 ms; well over 5 means the SFU sends in bursts. |
-| Server CPU | at most 50% of one core | The SFU is one thread, so one core is its ceiling. The live server is a 2 vCPU VM with a slower core than the dev machine. Half a core here leaves room for that. The heaviest scenario is about 20 to 30%. |
-| Server memory, peak | at most 128 MiB | About 40 MiB at the heaviest scenario. Four times that would mean a leak or a buffer that grows with traffic. |
+| Server CPU | at most 50% of one core | The SFU is one thread, so one core is its ceiling. The live server is a 2 vCPU VM with a slower core than the dev machine. Half a core here leaves room for that. The heaviest scenario took 13 to 30% in three runs. |
+| Server memory, peak | at most 128 MiB | At most 38 MiB in three runs. Four times that would mean a leak or a buffer that grows with traffic. |
 
-The limits were picked on 2026-11-26 from two runs on the dev machine (Core i7-12700, 20 threads). They hold for that machine.
+The limits were picked on 2026-11-26 from three runs on the dev machine (Core i7-12700, 20 threads). They hold for that machine.
 A slower machine can fail on CPU or latency with no regression in the code; compare reports from one machine only.
 
 ## Each release
