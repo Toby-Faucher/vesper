@@ -161,6 +161,17 @@ async fn metrics_carry_the_key_series_on_their_own_port() {
         &m,
         "vesper_sfu_media_dropped_total{kind=\"video\",reason=\"not_sharing\"}",
     );
+    // Nobody shares yet, so no keyframe request went anywhere.
+    for result in ["forwarded", "suppressed"] {
+        assert_eq!(
+            value(
+                &m,
+                &format!("vesper_sfu_keyframe_requests_total{{result=\"{result}\"}}")
+            ),
+            0.0,
+            "{result}"
+        );
+    }
     value(&m, "vesper_push_sends_total{result=\"failed\"}");
     // The media socket is in /proc/net/udp on Linux.
     if cfg!(target_os = "linux") {

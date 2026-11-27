@@ -703,6 +703,7 @@ Origin check. Every value is read at scrape time: atomics, a count under the voi
 | `vesper_sfu_media_dropped_total{kind,reason}` | counter | Media received and not forwarded: `muted` (force-mute), `not_sharing`, `over_ceiling` (the frame that cut a share), `write_failed`. Audio counts packets, video counts frames. |
 | `vesper_sfu_socket_receive_drops_total` | counter | Datagrams the kernel dropped for a full receive buffer (`drops` in `/proc/net/udp`). Linux only; absent when `/proc` cannot be read. |
 | `vesper_sfu_socket_receive_queue_bytes` | gauge | Bytes waiting in the media socket's receive buffer (`rx_queue`). Linux only. |
+| `vesper_sfu_keyframe_requests_total{result}` | counter | Keyframe requests (PLI or FIR) to sharers, from `SfuHandle::keyframe_stats`: `forwarded` (sent on) or `suppressed` (merged into a forwarded one by the 500 ms limit). |
 | `vesper_ws_connections` | gauge | Signaling WebSockets open now. |
 | `vesper_ws_connections_opened_total` | counter | WebSockets opened since start. |
 | `vesper_ws_refused_total{reason}` | counter | Upgrades refused: `origin` (403), `auth` (401), `full` (503, `VESPER_MAX_SOCKETS`), `error` (the store failed). |
@@ -715,13 +716,12 @@ clear. RTCP is a second byte of 192 to 223; for RTP the payload type is looked u
 RED types included). A datagram no session takes has no codec table, so its RTP counts as `other`. Counters are bumped on the SFU
 thread before the send and before the join reply, so a client that got a packet or a `Joined` reads a count that includes it.
 
-Keyframe requests (`forwarded` and `suppressed`) come with the PLI rate limit of PR #208 (`SfuHandle::keyframe_stats`); this
-endpoint does not have them yet.
-
 Verified: `crates/vesper-server/tests/metrics.rs` (a scrape with a signed-in socket in a call: format, build info, gauges, refusal
 counts, no user id or room name in the text, and `/metrics` absent from the app port), `crates/vesper-sfu/tests/forwarding.rs`
 `stats_count_sessions_packets_and_drops` (real str0m clients: audio, video, RTCP and STUN/DTLS counts, muted and not-sharing drops,
-sessions and rooms), unit tests in `stats.rs`, `metrics.rs` and `config.rs`, and push counts in `tests/push.rs`. Not verified: a
+sessions and rooms), unit tests in `stats.rs`, `metrics.rs` and `config.rs`, and push counts in `tests/push.rs`. Keyframe
+requests: the series at 0 in `tests/metrics.rs`, their labels in a `metrics.rs` unit test, and the counts behind them in `forwarding.rs`
+`keyframe_requests_are_rate_limited_per_sharer`. Not verified: a nonzero keyframe count read through `/metrics`, a
 scrape by a real Prometheus or VictoriaMetrics, `/proc/net/udp` inside a container, and kernel drops under real load.
 
 ## Connection timeouts

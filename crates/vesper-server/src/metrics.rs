@@ -12,7 +12,7 @@ use axum::http::header;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use tokio::task::JoinHandle;
-use vesper_sfu::{MediaDrop, MediaKind, PacketKind, SfuHandle, SfuStats};
+use vesper_sfu::{KeyframeStats, MediaDrop, MediaKind, PacketKind, SfuHandle, SfuStats};
 
 use crate::ws::{End, Refused, WsState};
 
@@ -130,7 +130,7 @@ pub fn render(st: &MetricsState) -> String {
             q.rx_queue,
         );
     }
-    // Keyframe requests forwarded and merged come with the PLI rate limit (PR #208, `SfuHandle::keyframe_stats`).
+    keyframes(&mut o, st.sfu.keyframe_stats());
 
     // WebSockets.
     let w = &st.ws.stats;
@@ -250,6 +250,21 @@ fn sfu(o: &mut Out, s: &SfuStats) {
     }
 }
 
+fn keyframes(o: &mut Out, k: KeyframeStats) {
+    o.family(
+        "vesper_sfu_keyframe_requests_total",
+        "counter",
+        "Keyframe requests (PLI or FIR) to sharers: forwarded were sent on, suppressed were merged into one of those.",
+    );
+    for (result, n) in [("forwarded", k.forwarded), ("suppressed", k.suppressed)] {
+        o.sample(
+            "vesper_sfu_keyframe_requests_total",
+            &[("result", result)],
+            n,
+        );
+    }
+}
+
 /// The text being built.
 struct Out(String);
 
@@ -347,6 +362,26 @@ mod tests {
         assert_eq!(parse_proc_udp(TABLE, 40001), None);
         assert_eq!(parse_proc_udp("", 40000), None);
         assert_eq!(parse_proc_udp("header\n 1: garbage", 40000), None);
+    }
+
+    #[test]
+    fn keyframe_requests_are_labelled_by_result() {
+        let mut o = Out(String::new());
+        keyframes(
+            &mut o,
+            KeyframeStats {
+                forwarded: 3,
+                suppressed: 41,
+            },
+        );
+        let samples: Vec<&str> = o.0.lines().filter(|l| !l.starts_with('#')).collect();
+        assert_eq!(
+            samples,
+            [
+                "vesper_sfu_keyframe_requests_total{result=\"forwarded\"} 3",
+                "vesper_sfu_keyframe_requests_total{result=\"suppressed\"} 41",
+            ]
+        );
     }
 
     #[test]
