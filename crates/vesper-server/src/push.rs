@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -388,6 +388,27 @@ pub enum Sent {
     Failed(String),
 }
 
+/// Push sends since start, for `/metrics`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PushCounts {
+    /// The push service took it (2xx).
+    pub ok: u64,
+    /// The subscription was gone (404, 410) or for another VAPID key (401, 403), and was deleted.
+    pub gone: u64,
+    /// Any other answer, a timeout, a connection or store error.
+    pub failed: u64,
+    /// Never sent: the queue was full.
+    pub dropped: u64,
+}
+
+#[derive(Default)]
+struct Counts {
+    ok: AtomicU64,
+    gone: AtomicU64,
+    failed: AtomicU64,
+    dropped: AtomicU64,
+}
+
 /// The push sender. Off (every call a no-op) when there is no VAPID subject.
 #[derive(Clone)]
 pub struct Push(Arc<Inner>);
@@ -409,6 +430,7 @@ struct Inner {
     dm: Mutex<VoiceDedupe>,
     /// When each recent failed send ended, oldest first, for Admin > Server.
     failures: Mutex<VecDeque<Instant>>,
+    counts: Counts,
 }
 
 const FAILURE_WINDOW: Duration = Duration::from_secs(24 * 3600);
@@ -474,6 +496,7 @@ impl Push {
             voice: Mutex::default(),
             dm: Mutex::default(),
             failures: Mutex::default(),
+            counts: Counts::default(),
         })))
     }
 
@@ -492,6 +515,17 @@ impl Push {
             f.pop_front();
         }
         f.push_back(Instant::now());
+    }
+
+    /// Sends since start, by result.
+    pub fn counts(&self) -> PushCounts {
+        let c = &self.0.counts;
+        PushCounts {
+            ok: c.ok.load(Ordering::Relaxed),
+            gone: c.gone.load(Ordering::Relaxed),
+            failed: c.failed.load(Ordering::Relaxed),
+            dropped: c.dropped.load(Ordering::Relaxed),
+        }
     }
 
     /// The public key, or None when push is off.
@@ -653,6 +687,7 @@ impl Push {
 
     /// A push was dropped at the queue cap: warn at most once a minute, debug otherwise.
     fn dropped(&self) {
+        self.0.counts.dropped.fetch_add(1, Ordering::Relaxed);
         let mut last = self.0.dropped_warned.lock().expect("push lock poisoned");
         let now = Instant::now();
         if last.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(60)) {
@@ -745,9 +780,15 @@ impl Push {
             }
             Err(e) => Sent::Failed(e.to_string()),
         };
-        if matches!(sent, Sent::Failed(_)) {
-            self.failed();
-        }
+        let c = &self.0.counts;
+        match sent {
+            Sent::Ok => c.ok.fetch_add(1, Ordering::Relaxed),
+            Sent::Gone => c.gone.fetch_add(1, Ordering::Relaxed),
+            Sent::Failed(_) => {
+                self.failed();
+                c.failed.fetch_add(1, Ordering::Relaxed)
+            }
+        };
         sent
     }
 

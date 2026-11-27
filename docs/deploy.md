@@ -169,6 +169,29 @@ like the database itself. Anyone with the key can sign pushes to the browsers th
 notifications keep getting them. A database restored without that row makes a new key: the server deletes each old subscription when
 its push service refuses it (401 or 403), and Settings asks each person to turn notifications on again.
 
+## Metrics
+
+`/metrics` is off by default. Set `VESPER_METRICS_BIND` to turn it on; it listens on that address only, never on the app port, so
+Caddy does not expose it. It has no auth, so keep it on loopback or the LAN and firewall it to the scraper. The series are listed in
+[architecture.md](architecture.md#metrics).
+
+- **Docker:** inside the container the server must bind all interfaces, and the host side of the port mapping picks who can reach
+  it. Add `VESPER_METRICS_BIND: 0.0.0.0:9464` under `environment:` and `- "<LAN IP of the Docker host>:9464:9464"` under `ports:`
+  (or `127.0.0.1:9464:9464` for a scraper on the same host). Never `"9464:9464"` alone on a host with a public address. The server
+  logs a warning at start for a `0.0.0.0` bind; inside a container that is expected.
+- **systemd:** add `VESPER_METRICS_BIND=127.0.0.1:9464` (or a LAN address) to `/etc/vesper/vesper.env`, then `systemctl restart vesper`.
+- **Check:** `curl -fsS http://127.0.0.1:9464/metrics | head` shows `vesper_build_info`.
+- **Scrape:** a static target is all it needs, every 30 s is plenty. Prometheus or VictoriaMetrics (`-promscrape.config`):
+
+  ```yaml
+  scrape_configs:
+    - job_name: vesper
+      static_configs:
+        - targets: ["<docker host>:9464"]
+  ```
+
+Not verified: the compose port mapping, a scrape by a real Prometheus or VictoriaMetrics.
+
 ## Web Push
 
 Notifications while Vesper is closed ([architecture.md](architecture.md#web-push)). Nothing to set up when `VESPER_ORIGIN` is https:

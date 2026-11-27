@@ -48,6 +48,21 @@ pub struct JoinResult {
 #[derive(Clone)]
 pub struct Voice(Arc<Inner>);
 
+/// A count of who is in voice ([`Voice::stats`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VoiceStats {
+    /// People in a call, those whose socket is away included.
+    pub participants: u64,
+    /// Rooms with at least one participant.
+    pub rooms: u64,
+    /// Participants whose socket dropped and whose call waits for a `resume`.
+    pub away: u64,
+    /// Participants sharing their screen.
+    pub sharing: u64,
+    /// Connection checks running.
+    pub checks: u64,
+}
+
 struct Inner {
     sfu: SfuHandle,
     hub: Hub,
@@ -359,6 +374,21 @@ impl Voice {
     pub fn end_check(&self, id: &str) {
         self.lock().checks.remove(id);
         self.0.sfu.leave(id);
+    }
+
+    /// Who is in voice now, for `/metrics`.
+    pub fn stats(&self) -> VoiceStats {
+        let s = self.lock();
+        let mut rooms: Vec<i64> = s.members.values().map(|m| m.room).collect();
+        rooms.sort_unstable();
+        rooms.dedup();
+        VoiceStats {
+            participants: s.members.len() as u64,
+            rooms: rooms.len() as u64,
+            away: s.members.values().filter(|m| m.away.is_some()).count() as u64,
+            sharing: s.members.values().filter(|m| m.share.is_some()).count() as u64,
+            checks: s.checks.len() as u64,
+        }
     }
 
     /// How many connection checks run.

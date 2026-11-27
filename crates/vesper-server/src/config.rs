@@ -55,6 +55,8 @@ pub struct Config {
     /// `body_total`, is cut. Uploads and profile pictures have their own, longer limits.
     pub body_idle: Duration,
     pub body_total: Duration,
+    /// Where `/metrics` (Prometheus text) listens, on a listener of its own (`VESPER_METRICS_BIND`). None is off.
+    pub metrics_bind: Option<SocketAddr>,
 }
 
 impl Config {
@@ -159,6 +161,13 @@ impl Config {
             header_timeout: HEADER_TIMEOUT,
             body_idle: BODY_IDLE,
             body_total: BODY_TOTAL,
+            metrics_bind: match get("VESPER_METRICS_BIND").filter(|v| !v.is_empty()) {
+                Some(v) => Some(
+                    v.parse::<SocketAddr>()
+                        .map_err(|e| format!("VESPER_METRICS_BIND={v}: {e}"))?,
+                ),
+                None => None,
+            },
         })
     }
 
@@ -393,6 +402,19 @@ mod tests {
             with("0").unwrap_err(),
             "VESPER_UPLOAD_MAX_MB must be 1 to 8796093022207"
         );
+    }
+
+    #[test]
+    fn metrics_are_off_unless_a_bind_is_set() {
+        assert_eq!(lookup(&[]).unwrap().metrics_bind, None);
+        assert_eq!(
+            lookup(&[("VESPER_METRICS_BIND", "")]).unwrap().metrics_bind,
+            None
+        );
+        let c = lookup(&[("VESPER_METRICS_BIND", "127.0.0.1:9464")]).unwrap();
+        assert_eq!(c.metrics_bind, Some("127.0.0.1:9464".parse().unwrap()));
+        let e = lookup(&[("VESPER_METRICS_BIND", "9464")]).unwrap_err();
+        assert!(e.starts_with("VESPER_METRICS_BIND=9464: "), "{e}");
     }
 
     #[test]

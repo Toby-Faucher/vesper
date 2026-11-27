@@ -778,6 +778,78 @@ async fn sharing_off_stops_video() {
     assert_eq!(b.client.received_video().len(), got, "b still gets video");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn stats_count_sessions_packets_and_drops() {
+    use vesper_sfu::{MediaDrop, MediaKind, PacketKind};
+    let t = Ctx::loopback();
+    let a = t.join_video("r", "a").await;
+    let b = t.join_video("r", "b").await;
+    let c = t.join("q", "c").await;
+    // Counted before `join` returns.
+    let s = t.h.stats();
+    assert_eq!((s.sessions, s.rooms), (3, 2));
+    t.ready(&a, 2).await;
+    t.ready(&b, 2).await;
+    t.wait_until("c connected", CONNECT, || c.client.is_connected())
+        .await;
+    let s = t.h.stats();
+    assert!(
+        s.packets_in.get(PacketKind::Other) > 0,
+        "no STUN or DTLS in: {s:?}"
+    );
+    assert!(
+        s.packets_out.get(PacketKind::Other) > 0,
+        "no STUN or DTLS out: {s:?}"
+    );
+
+    a.client.send_audio(50);
+    t.wait_until("b received 45", CONNECT, || b.client.received().len() >= 45)
+        .await;
+    let s = t.h.stats();
+    assert!(s.packets_in.get(PacketKind::Audio) >= 45, "{s:?}");
+    assert!(s.packets_out.get(PacketKind::Audio) >= 45, "{s:?}");
+    assert_eq!(s.packets_in.get(PacketKind::Video), 0, "{s:?}");
+
+    // Video without a share is dropped, and counted as such.
+    a.client.send_video(5, 1200);
+    t.wait_until("video dropped", CONNECT, || {
+        t.h.stats()
+            .media_dropped(MediaKind::Video, MediaDrop::NotSharing)
+            > 0
+    })
+    .await;
+    assert!(t.h.stats().packets_in.get(PacketKind::Video) > 0);
+
+    // A force-muted sender's audio is dropped at the forward point.
+    t.h.set_muted("a", true);
+    a.client.send_audio(10);
+    t.wait_until("muted audio dropped", CONNECT, || {
+        t.h.stats()
+            .media_dropped(MediaKind::Audio, MediaDrop::Muted)
+            > 0
+    })
+    .await;
+
+    // Watching asks the sharer for a keyframe: a PLI, which is RTCP.
+    t.h.set_sharing("a", true);
+    t.h.watch("b", "a", true);
+    t.wait_until("rtcp out", CONNECT, || {
+        t.h.stats().packets_out.get(PacketKind::Rtcp) > 0
+    })
+    .await;
+
+    t.h.leave("a");
+    t.wait_until("a gone", CONNECT, || t.h.stats().sessions == 2)
+        .await;
+    assert_eq!(t.h.stats().rooms, 2);
+    t.h.leave("b");
+    t.wait_until("b gone", CONNECT, || t.h.stats().sessions == 1)
+        .await;
+    assert_eq!(t.h.stats().rooms, 1);
+    let s = t.h.stats();
+    assert_eq!(s.dropped_send_error.get(PacketKind::Audio), 0, "{s:?}");
+}
+
 /// Viewers who ask for keyframes all the time get the sharer at most one request per interval, and a viewer who
 /// starts watching during the storm still gets one asked for within the interval.
 #[tokio::test(flavor = "multi_thread")]

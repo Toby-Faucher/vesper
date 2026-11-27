@@ -31,6 +31,8 @@ services:
       VESPER_PUBLIC_HOST: ${VESPER_PUBLIC_HOST:?set it in .env}
       # VESPER_UDP_PORT_PUBLIC: 40000   # only if the router forwards a different external UDP port
       #   (do not set it empty: an empty value is a parse error)
+      # VESPER_METRICS_BIND: 0.0.0.0:9464   # optional /metrics for Prometheus; publish it below on a LAN or
+      #   loopback address only, never on a public one (no auth). See docs/deploy.md#metrics.
       #
       # VESPER_PUBLIC_HOST must resolve to the PUBLIC IP *as seen from this host*. If your LAN DNS
       # overrides vesper.tfaucher.com with a LAN address (split DNS), use a public-only name
@@ -42,6 +44,7 @@ services:
       - "127.0.0.1:8080:8080"
       # Media: the router forwards UDP 40000 here. Must be published on all interfaces.
       - "40000:40000/udp"
+      # Only with VESPER_METRICS_BIND set: "<LAN IP>:9464:9464" or "127.0.0.1:9464:9464", firewalled to the scraper.
     # Alternative if Docker's UDP NAT misbehaves: remove `ports:` and add `network_mode: host`; then the
     # server binds the host directly (VESPER_HTTP_BIND=127.0.0.1:8080 to keep HTTP local, and
     # VESPER_UDP_BIND=0.0.0.0:40000 as is). Published ports are ignored in host mode.

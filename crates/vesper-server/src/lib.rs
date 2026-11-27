@@ -14,6 +14,7 @@ pub mod cli;
 pub mod config;
 pub mod hub;
 pub mod limits;
+pub mod metrics;
 pub mod public_addr;
 pub mod push;
 pub mod speedtest;
@@ -243,7 +244,7 @@ fn spawn_backups(cfg: Config) {
 }
 
 /// Serve the whole app for `state` on `state.cfg.http_bind`: `/api`, `/ws`, `/health` and the
-/// web app.
+/// web app. With `state.cfg.metrics_bind` set, also `/metrics` there ([`metrics::serve`]).
 pub async fn serve(
     state: AppState,
     sfu: SfuHandle,
@@ -279,6 +280,25 @@ pub async fn serve(
             cfg.web_dir.display()
         );
     }
+    let ws_state = ws::WsState {
+        app: state.clone(),
+        sockets: Arc::new(Semaphore::new(cfg.max_sockets)),
+        ping_interval: cfg.ping_interval,
+        stats: Arc::default(),
+    };
+    if let Some(bind) = cfg.metrics_bind {
+        let m = metrics::MetricsState {
+            ws: ws_state.clone(),
+            sfu: sfu.clone(),
+        };
+        let (addr, _serving) = metrics::serve(bind, m).await?;
+        info!("metrics on http://{addr}/metrics");
+        if addr.ip().is_unspecified() {
+            warn!(
+                "VESPER_METRICS_BIND is {addr}: /metrics has no auth, keep the port off the internet"
+            );
+        }
+    }
     let api = router(state.clone());
     let app = Router::new()
         .route("/health", get(health))
@@ -291,11 +311,7 @@ pub async fn serve(
                 .precompressed_br()
                 .precompressed_gzip(),
         )
-        .with_state(ws::WsState {
-            app: state,
-            sockets: Arc::new(Semaphore::new(cfg.max_sockets)),
-            ping_interval: cfg.ping_interval,
-        })
+        .with_state(ws_state)
         .merge(api)
         .layer(middleware::from_fn_with_state(
             Arc::new(Guard {
@@ -318,7 +334,7 @@ pub async fn serve(
 /// could hold a connection open by never finishing its request head; this sets
 /// `header_read_timeout`, which also closes a kept-alive connection idle that long. An upgraded
 /// WebSocket leaves hyper, so neither the timer nor the body timeouts reach it.
-async fn accept_loop(
+pub(crate) async fn accept_loop(
     listener: tokio::net::TcpListener,
     app: Router,
     header_timeout: Duration,
