@@ -16,6 +16,7 @@ use tokio::sync::mpsc as tmpsc;
 use tracing::{debug, warn};
 
 use crate::client::{Client, ClientId, Propagated};
+use crate::keyframe::KeyframeCounters;
 use crate::stats::{Counters, MediaDrop, classify};
 use crate::{Command, JoinError, JoinOk, SfuConfig, SfuEvent};
 
@@ -23,7 +24,13 @@ use crate::{Command, JoinError, JoinOk, SfuConfig, SfuEvent};
 /// within this time even when the socket is idle.
 const MAX_WAIT: Duration = Duration::from_millis(10);
 
-pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig, stats: &Counters) {
+pub(crate) fn run(
+    socket: UdpSocket,
+    rx: Receiver<Command>,
+    cfg: SfuConfig,
+    stats: &Counters,
+    keyframes: Arc<KeyframeCounters>,
+) {
     let socket_addr = socket.local_addr().expect("bound socket has an address");
     let mut advertised = cfg.advertised.clone();
     let mut clients: Vec<Client> = vec![];
@@ -56,6 +63,7 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig, stat
                     socket_addr,
                     &cfg,
                     stats,
+                    &keyframes,
                 ),
                 Err(TryRecvError::Empty) => break,
                 // Every SfuHandle is gone: shut down, telling clients their sessions ended.
@@ -164,6 +172,7 @@ fn route(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_command(
     cmd: Command,
     clients: &mut Vec<Client>,
@@ -172,6 +181,7 @@ fn handle_command(
     socket_addr: SocketAddr,
     cfg: &SfuConfig,
     stats: &Counters,
+    keyframes: &Arc<KeyframeCounters>,
 ) {
     match cmd {
         Command::Join {
@@ -180,14 +190,21 @@ fn handle_command(
             offer,
             reply,
         } => {
-            let (mut client, answer_sdp, events) =
-                match new_client(&room, &user, &offer, advertised, socket_addr, cfg) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let _ = reply.send(Err(e));
-                        return;
-                    }
-                };
+            let (mut client, answer_sdp, events) = match new_client(
+                &room,
+                &user,
+                &offer,
+                advertised,
+                socket_addr,
+                cfg,
+                keyframes,
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                    return;
+                }
+            };
             if let Some(old) = clients.iter_mut().find(|c| c.user == user) {
                 // Superseded: the retain at the top of the loop closes and removes it.
                 old.rtc.disconnect();
@@ -233,7 +250,7 @@ fn handle_command(
             if on && let Some(s) = live(clients, &sharer) {
                 let video = s.tracks_in.iter().find(|t| t.kind == MediaKind::Video);
                 if let Some(mid) = video.map(|t| t.mid) {
-                    s.request_keyframe(mid, KeyframeRequestKind::Pli);
+                    s.request_keyframe(mid, KeyframeRequestKind::Pli, Instant::now());
                 }
             }
             if let Some(c) = live(clients, &viewer) {
@@ -291,6 +308,7 @@ fn new_client(
     advertised: &[SocketAddr],
     socket_addr: SocketAddr,
     cfg: &SfuConfig,
+    keyframes: &Arc<KeyframeCounters>,
 ) -> Result<(Client, String, tmpsc::UnboundedReceiver<SfuEvent>), JoinError> {
     let bad = |e: &dyn std::fmt::Display| JoinError::BadOffer(e.to_string());
     let (offer, video) = parse_offer(offer)?;
@@ -318,6 +336,7 @@ fn new_client(
         socket_addr.is_ipv6(),
         cfg,
     );
+    client.keyframe_counters = keyframes.clone();
     client.video = video;
     Ok((client, answer.to_sdp_string(), events))
 }
@@ -402,7 +421,8 @@ fn propagate(
     }
 }
 
-/// Pass `viewer`'s keyframe request on its outgoing m-line `mid` to the client sending that track.
+/// Pass `viewer`'s keyframe request on its outgoing m-line `mid` to the client sending that track, through that
+/// track's limiter (see `keyframe.rs`).
 fn forward_keyframe_request(
     clients: &mut [Client],
     viewer: ClientId,
@@ -417,6 +437,6 @@ fn forward_keyframe_request(
         return;
     };
     if let Some(origin) = clients.iter_mut().find(|c| c.id == track.origin) {
-        origin.request_keyframe(track.mid, kind);
+        origin.request_keyframe(track.mid, kind, Instant::now());
     }
 }

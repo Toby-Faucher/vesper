@@ -11,6 +11,7 @@ import { DEVICE_MESSAGES, MIC_FALLBACK, SPEAKER_FALLBACK, applyBitrate, classify
 import { pttKeyEvent } from './audio/ptt';
 import { isTyping } from './ui/keys';
 import { MIC_QUIET, micSilence, type MicWarning } from './audio/mic-silence';
+import { MUTED_QUIET, SPEECH_RMS, mutedSpeech } from './audio/muted-speech';
 import type { DenoiseMode } from './audio/mode';
 import type { Diag } from './diag';
 import type { Quality } from './ui/quality';
@@ -54,6 +55,8 @@ class Voice {
   mode = $state<DenoiseMode>('deepfilter');
   modeReason = $state('');
   micWarning = $state<MicWarning>(null);
+  /** The mic hears speech while you are muted: the call bar says "You are muted" (muted-speech.ts). */
+  mutedSpeech = $state(false);
   quality = $state<Quality>('unknown');
   /** The last stats summary behind `quality`, for qualityText. */
   diag = $state.raw<Diag | null>(null);
@@ -87,6 +90,7 @@ let poll: ReturnType<typeof setInterval> | undefined;
 let statsPoll: ReturnType<typeof setInterval> | undefined;
 let releaseLock: (() => void) | undefined;
 let silence = MIC_QUIET;
+let heardMuted = MUTED_QUIET;
 let tally: CallTally | undefined; // this call's summary for Your recent calls, sent when it ends
 let posted: Promise<unknown> = Promise.resolve(); // the last summary post, which sign out waits for
 let rejoinTimer: ReturnType<typeof setTimeout> | undefined;
@@ -130,6 +134,7 @@ function sendVoiceState() {
 export function toggleMute(): void {
   if (voice.forceMuted) return;
   voice.muted = !voice.muted;
+  if (!voice.muted) voice.mutedSpeech = false; // the next poll would too
   applyTrack();
   sendVoiceState();
 }
@@ -408,6 +413,8 @@ function teardown() {
   voice.modeReason = '';
   silence = MIC_QUIET;
   voice.micWarning = null;
+  heardMuted = MUTED_QUIET;
+  voice.mutedSpeech = false;
   voice.quality = 'unknown';
   voice.diag = null;
   voice.links = {};
@@ -554,6 +561,11 @@ export async function join(roomId: number): Promise<boolean> {
       const visible = document.visibilityState === 'visible';
       silence = micSilence(silence, performance.now(), voice.capture?.getStats() ?? null, { gated, visible });
       voice.micWarning = silence.show;
+      // Muted by hand only: a moderator's mute has its own notice, and deafened is away. Only a level is read here.
+      const listening = voice.muted && !voice.forceMuted && !voice.deafened && voice.settings.mutedNotice && visible;
+      const rms = listening ? (voice.capture?.hear() ?? null) : (voice.capture?.unhear(), null);
+      heardMuted = mutedSpeech(heardMuted, performance.now(), { listening, speech: rms !== null && rms > SPEECH_RMS });
+      voice.mutedSpeech = heardMuted.show;
     }, 100);
     pollStats(r.pc, code);
     voice.joinedRoom = room;

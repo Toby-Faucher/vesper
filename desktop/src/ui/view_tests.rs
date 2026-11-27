@@ -408,6 +408,7 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
             cmds.as_slice(),
             [
                 Cmd::Voice(VoiceCmd::Muted(true)),
+                Cmd::Voice(VoiceCmd::Listen(true)),
                 Cmd::Signal(ClientMsg::SetVoiceState {
                     muted: true,
                     deafened: false
@@ -416,6 +417,15 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
         ),
         "{cmds:?}"
     );
+    // Talking while muted: "You are muted" in the status line, once the lost device is back.
+    for ev in [
+        VoiceEvent::Devices(String::new()),
+        VoiceEvent::MutedSpeech(true),
+    ] {
+        apply(&view, cx, Event::Voice { call: 1, ev });
+    }
+    assert!(cx.debug_bounds("call-muted-speech").is_some());
+    view.read_with(cx, |v, _| assert!(v.model.call.muted_speech));
     click(cx, "call-deafen");
     let cmds = drain(&mut rx);
     assert!(
@@ -423,6 +433,7 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
             cmds.as_slice(),
             [
                 Cmd::Voice(VoiceCmd::Deafened(true)),
+                Cmd::Voice(VoiceCmd::Listen(false)),
                 Cmd::Signal(ClientMsg::SetVoiceState {
                     muted: true,
                     deafened: true
@@ -432,7 +443,8 @@ fn the_call_bar_joins_mutes_deafens_and_leaves(cx: &mut TestAppContext) {
         "{cmds:?}"
     );
     view.read_with(cx, |v, _| {
-        assert!(v.model.call.muted && v.model.call.deafened)
+        assert!(v.model.call.muted && v.model.call.deafened);
+        assert!(!v.model.call.muted_speech, "deafened: no longer listening");
     });
 
     // A force mute: the button cannot unmute.

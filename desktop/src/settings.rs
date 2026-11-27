@@ -45,6 +45,8 @@ pub struct Settings {
     pub push_to_talk: bool,
     /// A `device_query` key name, like `V`, `F13` or `Grave`.
     pub ptt_key: String,
+    /// "You are muted" when the mic hears speech while muted by hand (`voice::mix::MutedSpeech`).
+    pub muted_notice: bool,
     /// 32 to 510, 64 like the web's default.
     pub bitrate_kbps: u32,
     /// The level marker, -100 to 0 dBFS (the web's `vad.thresholdDb`): the noise gate opens above it.
@@ -119,6 +121,7 @@ impl Default for Settings {
             push_to_talk: false,
             // Not Space as on the web: a global Space would open the mic on every jump in a game.
             ptt_key: "Grave".into(),
+            muted_notice: true,
             bitrate_kbps: 64,
             gate_db: -50,
             input_device: None,
@@ -263,6 +266,7 @@ mod tests {
             echo_cancel: false,
             push_to_talk: true,
             ptt_key: "F13".into(),
+            muted_notice: false,
             bitrate_kbps: 96,
             gate_db: -42,
             input_device: Some("USB mic".into()),

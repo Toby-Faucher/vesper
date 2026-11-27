@@ -9,6 +9,7 @@
 //! [`SfuHandle::answer`].
 
 mod client;
+mod keyframe;
 mod meter;
 mod room;
 mod stats;
@@ -23,6 +24,8 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc as tmpsc, oneshot};
 
+use keyframe::KeyframeCounters;
+pub use keyframe::KeyframeStats;
 use stats::Counters;
 pub use stats::{ByKind, MediaDrop, PacketKind, SfuStats};
 pub use str0m::media::MediaKind;
@@ -40,11 +43,16 @@ pub struct SfuConfig {
     /// `share_ceiling_secs` one-second windows in a row is cut ([`SfuEvent::ShareCut`]).
     pub share_ceiling_bps: u64,
     pub share_ceiling_secs: u32,
+    /// Keyframe requests (PLI or FIR) to one sharer's video go out at most once per this interval. The first one
+    /// after a quiet interval goes out at once; the ones inside it are merged into one sent when it ends.
+    pub keyframe_interval: Duration,
 }
 
 impl Default for SfuConfig {
     /// Binds `0.0.0.0:0` with no advertised addresses (set them!), a 10 s answer timeout and a
-    /// share ceiling of 35 Mbps for 5 s (above the client's 30 Mbps maximum).
+    /// share ceiling of 35 Mbps for 5 s (above the client's 30 Mbps maximum), and a keyframe interval of 500 ms.
+    /// 500 ms caps the keyframes viewers can force at 2 a second (a screen keyframe can be many times a normal
+    /// frame), and a viewer who asks while a request is merged waits at most that long for a picture.
     fn default() -> Self {
         SfuConfig {
             bind: (Ipv4Addr::UNSPECIFIED, 0).into(),
@@ -52,6 +60,7 @@ impl Default for SfuConfig {
             answer_timeout: Duration::from_secs(10),
             share_ceiling_bps: 35_000_000,
             share_ceiling_secs: 5,
+            keyframe_interval: Duration::from_millis(500),
         }
     }
 }
@@ -70,17 +79,20 @@ impl Sfu {
         let guard = AliveGuard(alive.clone());
         let stats = Arc::new(Counters::default());
         let loop_stats = stats.clone();
+        let keyframes = Arc::new(KeyframeCounters::default());
+        let counters = keyframes.clone();
         std::thread::Builder::new()
             .name("vesper-sfu".into())
             .spawn(move || {
                 let _guard = guard; // dropped on return and on panic unwind
-                room::run(socket, rx, cfg, &loop_stats);
+                room::run(socket, rx, cfg, &loop_stats, counters);
             })?;
         Ok(SfuHandle {
             tx,
             local_addr,
             alive,
             stats,
+            keyframes,
         })
     }
 }
@@ -103,6 +115,7 @@ pub struct SfuHandle {
     local_addr: SocketAddr,
     alive: Arc<AtomicBool>,
     stats: Arc<Counters>,
+    keyframes: Arc<KeyframeCounters>,
 }
 
 #[derive(Debug)]
@@ -284,6 +297,12 @@ impl SfuHandle {
     /// Packet, drop and session counts since the SFU started ([`SfuStats`]). Cheap: a few atomic loads.
     pub fn stats(&self) -> SfuStats {
         self.stats.snapshot()
+    }
+
+    /// Keyframe requests sent on to sharers and merged away since the SFU started (see
+    /// [`SfuConfig::keyframe_interval`]).
+    pub fn keyframe_stats(&self) -> KeyframeStats {
+        self.keyframes.snapshot()
     }
 
     /// Make the SFU thread panic, to test what happens when it dies.
