@@ -2,6 +2,7 @@
 //! and a live session cookie; the socket then belongs to that session (see `hub.rs`).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use axum::extract::State;
@@ -81,23 +82,177 @@ pub struct WsState {
     pub app: AppState,
     pub sockets: Arc<Semaphore>,
     pub ping_interval: Duration,
+    /// Counts for `/metrics`.
+    pub stats: Arc<WsStats>,
+}
+
+/// Why an upgrade was refused, for `/metrics`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    /// 403: no `Origin` or another one.
+    Origin,
+    /// 401: no session cookie, or one that is not live.
+    Auth,
+    /// 503: `VESPER_MAX_SOCKETS` are open.
+    Full,
+    /// The store failed while checking the session.
+    Error,
+}
+
+impl Refused {
+    pub const ALL: [Refused; 4] = [
+        Refused::Origin,
+        Refused::Auth,
+        Refused::Full,
+        Refused::Error,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Refused::Origin => "origin",
+            Refused::Auth => "auth",
+            Refused::Full => "full",
+            Refused::Error => "error",
+        }
+    }
+}
+
+/// Why an open socket ended, for the log and `/metrics`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum End {
+    /// Before `Hello` was written: the write failed or the server closed it first.
+    BeforeHello,
+    /// The server closed it (sign out, ban, rate limit, a client too slow to read).
+    Server,
+    /// The client sent a close frame.
+    Client,
+    WriteFailed,
+    PingFailed,
+    ReadFailed,
+    /// The TCP connection ended without a close frame.
+    Gone,
+    /// Nothing from the client for too long.
+    Idle,
+}
+
+impl End {
+    pub const ALL: [End; 8] = [
+        End::BeforeHello,
+        End::Server,
+        End::Client,
+        End::WriteFailed,
+        End::PingFailed,
+        End::ReadFailed,
+        End::Gone,
+        End::Idle,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            End::BeforeHello => "before_hello",
+            End::Server => "server",
+            End::Client => "client",
+            End::WriteFailed => "write_failed",
+            End::PingFailed => "ping_failed",
+            End::ReadFailed => "read_failed",
+            End::Gone => "gone",
+            End::Idle => "idle",
+        }
+    }
+
+    fn why(self) -> &'static str {
+        match self {
+            End::BeforeHello => "ended before hello",
+            End::Server => "closed by the server",
+            End::Client => "closed by the client",
+            End::WriteFailed => "write failed",
+            End::PingFailed => "ping write failed",
+            End::ReadFailed => "read failed",
+            End::Gone => "connection ended",
+            End::Idle => "no pong in time",
+        }
+    }
+}
+
+/// WebSocket counts since start, for `/metrics`. No per-user labels.
+#[derive(Default)]
+pub struct WsStats {
+    open: AtomicU64,
+    opened: AtomicU64,
+    refused: [AtomicU64; Refused::ALL.len()],
+    ended: [AtomicU64; End::ALL.len()],
+}
+
+impl WsStats {
+    /// Sockets open now.
+    pub fn open(&self) -> u64 {
+        self.open.load(Ordering::Relaxed)
+    }
+
+    /// Sockets opened since start.
+    pub fn opened(&self) -> u64 {
+        self.opened.load(Ordering::Relaxed)
+    }
+
+    pub fn refused(&self, why: Refused) -> u64 {
+        self.refused[why as usize].load(Ordering::Relaxed)
+    }
+
+    pub fn ended(&self, why: End) -> u64 {
+        self.ended[why as usize].load(Ordering::Relaxed)
+    }
+
+    fn refuse(&self, why: Refused) {
+        self.refused[why as usize].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Counts one open socket while it lives.
+struct Open(Arc<WsStats>);
+
+impl Open {
+    fn new(stats: Arc<WsStats>) -> Open {
+        stats.opened.fetch_add(1, Ordering::Relaxed);
+        stats.open.fetch_add(1, Ordering::Relaxed);
+        Open(stats)
+    }
+
+    /// Count the end; the open count drops with `self`.
+    fn end(self, why: End) {
+        self.0.ended[why as usize].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        self.0.open.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 pub async fn upgrade(ws: WebSocketUpgrade, State(st): State<WsState>, h: HeaderMap) -> Response {
     // Browsers send Origin on every upgrade; another site's page must not ride our cookie.
     if !crate::auth::origin_ok(&h, &st.app.cfg.origin) {
+        st.stats.refuse(Refused::Origin);
         return (StatusCode::FORBIDDEN, "request from another origin").into_response();
     }
     let Some(hash) = cookie_token(&h, st.app.cfg.secure_cookies).and_then(|t| hash_token(&t))
     else {
+        st.stats.refuse(Refused::Auth);
         return (StatusCode::UNAUTHORIZED, "not signed in").into_response();
     };
     let (session_id, user) = match st.app.store.session_user(&hash, now_ms()).await {
         Ok(Some(s)) => s,
-        Ok(None) => return (StatusCode::UNAUTHORIZED, "not signed in").into_response(),
-        Err(e) => return ApiError::from(e).into_response(),
+        Ok(None) => {
+            st.stats.refuse(Refused::Auth);
+            return (StatusCode::UNAUTHORIZED, "not signed in").into_response();
+        }
+        Err(e) => {
+            st.stats.refuse(Refused::Error);
+            return ApiError::from(e).into_response();
+        }
     };
     let Ok(permit) = st.sockets.clone().try_acquire_owned() else {
+        st.stats.refuse(Refused::Full);
         return (StatusCode::SERVICE_UNAVAILABLE, "too many connections").into_response();
     };
     // Bigger messages make recv() fail, which ends (and closes) this socket only.
@@ -183,6 +338,8 @@ async fn handle(
     token_hash: [u8; 32],
     _permit: OwnedSemaphorePermit,
 ) {
+    // Counted before `Hello`, so a client that read it sees itself in `/metrics`.
+    let open = Open::new(st.stats.clone());
     let (
         tx,
         Inbox {
@@ -208,6 +365,7 @@ async fn handle(
     .await
     {
         st.app.hub.remove(conn);
+        open.end(End::BeforeHello);
         return;
     }
     let mut budget = Budget::new(std::time::Instant::now());
@@ -221,18 +379,18 @@ async fn handle(
     let (why, keep_call) = loop {
         tokio::select! {
             biased;
-            _ = close.changed() => break ("closed by the server", *close.borrow() == Some(CLOSE_TOO_SLOW)),
+            _ = close.changed() => break (End::Server, *close.borrow() == Some(CLOSE_TOO_SLOW)),
             Some(m) = queue.recv() => {
                 let text = serde_json::to_string(&m).expect("ServerMsg serialises");
                 if !send(&mut socket, &mut close, Message::text(text)).await {
-                    break ("write failed", true);
+                    break (End::WriteFailed, true);
                 }
             }
             // Catches clients that vanished without a FIN (NAT drop, power loss, a stalled tunnel).
-            _ = tokio::time::sleep_until(last_seen + idle) => break ("no pong in time", true),
+            _ = tokio::time::sleep_until(last_seen + idle) => break (End::Idle, true),
             _ = ping.tick() => {
                 if !send(&mut socket, &mut close, Message::Ping(Default::default())).await {
-                    break ("ping write failed", true);
+                    break (End::PingFailed, true);
                 }
             }
             msg = socket.recv() => {
@@ -240,10 +398,10 @@ async fn handle(
                     Some(Ok(Message::Text(t))) => t,
                     Some(Ok(Message::Close(f))) => {
                         let stalled = f.is_some_and(|f| f.code == CLOSE_STALLED);
-                        break ("closed by the client", stalled);
+                        break (End::Client, stalled);
                     }
-                    Some(Err(_)) => break ("read failed", true),
-                    None => break ("connection ended", true),
+                    Some(Err(_)) => break (End::ReadFailed, true),
+                    None => break (End::Gone, true),
                     Some(Ok(_)) => {
                         last_seen = Instant::now();
                         continue;
@@ -282,8 +440,10 @@ async fn handle(
     }
     let code = *close.borrow();
     tracing::info!(
-        "socket of {user_id} ended: {why} (close code {code:?}, call kept: {keep_call})"
+        "socket of {user_id} ended: {} (close code {code:?}, call kept: {keep_call})",
+        why.why()
     );
+    open.end(why);
     if let Some(code) = code {
         close_handshake(&mut socket, code).await;
     }

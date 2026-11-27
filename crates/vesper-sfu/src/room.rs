@@ -16,13 +16,14 @@ use tokio::sync::mpsc as tmpsc;
 use tracing::{debug, warn};
 
 use crate::client::{Client, ClientId, Propagated};
+use crate::stats::{Counters, MediaDrop, classify};
 use crate::{Command, JoinError, JoinOk, SfuConfig, SfuEvent};
 
 /// Upper bound on one loop iteration's socket wait, so commands (joins, answers) are picked up
 /// within this time even when the socket is idle.
 const MAX_WAIT: Duration = Duration::from_millis(10);
 
-pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
+pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig, stats: &Counters) {
     let socket_addr = socket.local_addr().expect("bound socket has an address");
     let mut advertised = cfg.advertised.clone();
     let mut clients: Vec<Client> = vec![];
@@ -33,6 +34,7 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
 
     loop {
         // Dropping a client drops its incoming tracks, which makes the other clients stop them.
+        let before = clients.len();
         clients.retain_mut(|c| {
             let alive = c.rtc.is_alive();
             if !alive {
@@ -40,6 +42,9 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
             }
             alive
         });
+        if clients.len() != before {
+            publish_live(&clients, stats);
+        }
 
         loop {
             match rx.try_recv() {
@@ -50,6 +55,7 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
                     &mut advertised,
                     socket_addr,
                     &cfg,
+                    stats,
                 ),
                 Err(TryRecvError::Empty) => break,
                 // Every SfuHandle is gone: shut down, telling clients their sessions ended.
@@ -62,12 +68,12 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
 
         let mut timeout = Instant::now() + MAX_WAIT;
         for client in clients.iter_mut() {
-            let t = poll_until_timeout(client, &mut to_propagate, &socket);
+            let t = poll_until_timeout(client, &mut to_propagate, &socket, stats);
             timeout = timeout.min(t);
         }
 
         if let Some(p) = to_propagate.pop_front() {
-            propagate(&p, &mut clients, &muted);
+            propagate(&p, &mut clients, &muted, stats);
             continue;
         }
 
@@ -82,7 +88,7 @@ pub(crate) fn run(socket: UdpSocket, rx: Receiver<Command>, cfg: SfuConfig) {
             .expect("non-zero read timeout on an owned socket");
 
         match socket.recv_from(&mut buf) {
-            Ok((n, source)) => route(&buf[..n], source, socket_addr, &mut clients),
+            Ok((n, source)) => route(&buf[..n], source, socket_addr, &mut clients, stats),
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             // e.g. ECONNREFUSED from an ICMP unreachable after a client vanished.
             Err(e) => debug!("udp recv failed: {e}"),
@@ -118,19 +124,40 @@ pub(crate) fn check_advertised(bind: SocketAddr, advertised: &[SocketAddr]) {
     }
 }
 
-fn route(data: &[u8], source: SocketAddr, socket_addr: SocketAddr, clients: &mut [Client]) {
+/// Live sessions and the rooms they are in, for [`Counters`]. Few clients, so a quadratic count beats a set.
+fn publish_live(clients: &[Client], stats: &Counters) {
+    let live = || clients.iter().filter(|c| c.rtc.is_alive());
+    let rooms = live()
+        .enumerate()
+        .filter(|(i, c)| !live().take(*i).any(|o| o.room == c.room))
+        .count();
+    stats.set_live(live().count() as u64, rooms as u64);
+}
+
+fn route(
+    data: &[u8],
+    source: SocketAddr,
+    socket_addr: SocketAddr,
+    clients: &mut [Client],
+    stats: &Counters,
+) {
     // A dual-stack socket reports IPv4 peers as ::ffff:a.b.c.d; str0m and the SDP know them as
     // plain IPv4, so canonicalize (Client maps them back when sending).
     let source = SocketAddr::new(source.ip().to_canonical(), source.port());
     // rtc.accepts() demultiplexes on source address / STUN credentials, not destination.
     let Some(probe) = receive(data, source, socket_addr) else {
+        stats.packet_in(classify(data, |_| None));
         return;
     };
     let Some(client) = clients.iter_mut().find(|c| c.rtc.accepts(&probe)) else {
         // Common: a client's first STUN can beat its join being processed.
         debug!("no client accepts udp input from {source}");
+        let kind = classify(data, |_| None);
+        stats.packet_in(kind);
+        stats.no_session(kind);
         return;
     };
+    stats.packet_in(classify(data, |pt| client.kind_of_pt(pt)));
     let destination = client.local_addr_for(source, socket_addr);
     if let Some(input) = receive(data, source, destination) {
         client.handle_input(input);
@@ -144,6 +171,7 @@ fn handle_command(
     advertised: &mut Vec<SocketAddr>,
     socket_addr: SocketAddr,
     cfg: &SfuConfig,
+    stats: &Counters,
 ) {
     match cmd {
         Command::Join {
@@ -172,8 +200,12 @@ fn handle_command(
             {
                 client.handle_track_open(Arc::downgrade(track));
             }
-            if reply.send(Ok(JoinOk { answer_sdp, events })).is_ok() {
-                clients.push(client);
+            // Counted before the reply, so a caller that got it reads a count with this session in it.
+            clients.push(client);
+            publish_live(clients, stats);
+            if reply.send(Ok(JoinOk { answer_sdp, events })).is_err() {
+                clients.pop();
+                publish_live(clients, stats);
             }
         }
         Command::Answer { user, sdp } => match live(clients, &user) {
@@ -294,12 +326,13 @@ fn poll_until_timeout(
     client: &mut Client,
     queue: &mut VecDeque<Propagated>,
     socket: &UdpSocket,
+    stats: &Counters,
 ) -> Instant {
     loop {
         if !client.rtc.is_alive() {
             return Instant::now();
         }
-        match client.poll_output(socket) {
+        match client.poll_output(socket, stats) {
             Propagated::Timeout(t) => return t,
             Propagated::Noop => {}
             p => queue.push_back(p),
@@ -310,7 +343,12 @@ fn poll_until_timeout(
 /// Deliver one client's output to the other clients of its room. Video media goes only from a
 /// sharing sender to the clients watching it; a force-mute drops only audio. A keyframe request
 /// goes to the sender of the track it is about.
-fn propagate(propagated: &Propagated, clients: &mut [Client], muted: &HashSet<String>) {
+fn propagate(
+    propagated: &Propagated,
+    clients: &mut [Client],
+    muted: &HashSet<String>,
+    stats: &Counters,
+) {
     let origin = match propagated {
         Propagated::TrackOpen(c, _) | Propagated::MediaData(c, _) => *c,
         Propagated::KeyframeRequest(viewer, mid, kind) => {
@@ -333,6 +371,12 @@ fn propagate(propagated: &Propagated, clients: &mut [Client], muted: &HashSet<St
             muted.contains(&sender.user)
         };
         if dropped {
+            let (kind, why) = if video {
+                (MediaKind::Video, MediaDrop::NotSharing)
+            } else {
+                (MediaKind::Audio, MediaDrop::Muted)
+            };
+            stats.media_dropped(kind, why);
             return;
         }
     }
@@ -345,7 +389,12 @@ fn propagate(propagated: &Propagated, clients: &mut [Client], muted: &HashSet<St
             Propagated::TrackOpen(_, track) => client.handle_track_open(track.clone()),
             Propagated::MediaData(_, data) => {
                 if !video || client.watching.contains(&user) {
-                    client.handle_media_data_out(origin, data);
+                    let kind = if video {
+                        MediaKind::Video
+                    } else {
+                        MediaKind::Audio
+                    };
+                    client.handle_media_data_out(origin, data, kind, stats);
                 }
             }
             Propagated::KeyframeRequest(..) | Propagated::Noop | Propagated::Timeout(_) => {}

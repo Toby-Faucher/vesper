@@ -14,6 +14,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, warn};
 
 use crate::meter::RateMeter;
+use crate::stats::{Counters, MediaDrop, classify};
 use crate::{SfuConfig, SfuEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,7 +169,18 @@ impl Client {
         }
     }
 
-    pub fn poll_output(&mut self, socket: &UdpSocket) -> Propagated {
+    /// The media kind the session's negotiated payload type `pt` carries (its RTX and RED types included).
+    pub fn kind_of_pt(&self, pt: u8) -> Option<MediaKind> {
+        let pt = pt.into();
+        self.rtc
+            .codec_config()
+            .params()
+            .iter()
+            .find(|p| p.pt() == pt || p.resend() == Some(pt) || p.red() == Some(pt))
+            .map(|p| p.spec().codec.kind())
+    }
+
+    pub fn poll_output(&mut self, socket: &UdpSocket, stats: &Counters) -> Propagated {
         if !self.rtc.is_alive() {
             return Propagated::Noop;
         }
@@ -185,7 +197,7 @@ impl Client {
             return Propagated::Noop;
         }
         match self.rtc.poll_output() {
-            Ok(output) => self.handle_output(output, socket),
+            Ok(output) => self.handle_output(output, socket, stats),
             Err(e) => {
                 warn!("client {} poll_output failed: {e:?}", self.user);
                 self.rtc.disconnect();
@@ -194,7 +206,12 @@ impl Client {
         }
     }
 
-    fn handle_output(&mut self, output: Output, socket: &UdpSocket) -> Propagated {
+    fn handle_output(
+        &mut self,
+        output: Output,
+        socket: &UdpSocket,
+        stats: &Counters,
+    ) -> Propagated {
         match output {
             Output::Transmit(t) => {
                 let destination = match t.destination {
@@ -203,9 +220,13 @@ impl Client {
                     }
                     d => d,
                 };
+                // Counted before the send, so a peer that got the datagram never reads a count without it.
+                let kind = classify(&t.contents, |pt| self.kind_of_pt(pt));
+                stats.packet_out(kind);
                 if let Err(e) = socket.send_to(&t.contents, destination) {
                     // UDP send errors (e.g. ICMP unreachable) are transient; ICE handles loss.
                     debug!("send_to {} failed: {e}", t.destination);
+                    stats.send_error(kind);
                 }
                 Propagated::Noop
             }
@@ -236,8 +257,17 @@ impl Client {
                         .tracks_in
                         .iter()
                         .any(|t| t.mid == data.mid && t.kind == MediaKind::Video);
-                    if video && !self.share_within_ceiling(data.data.len(), data.network_time) {
-                        return Propagated::Noop;
+                    if video {
+                        let sharing = self.sharing;
+                        if !self.share_within_ceiling(data.data.len(), data.network_time) {
+                            let why = if sharing {
+                                MediaDrop::OverCeiling
+                            } else {
+                                MediaDrop::NotSharing
+                            };
+                            stats.media_dropped(MediaKind::Video, why);
+                            return Propagated::Noop;
+                        }
                     }
                     Propagated::MediaData(self.id, data)
                 }
@@ -395,7 +425,13 @@ impl Client {
         });
     }
 
-    pub fn handle_media_data_out(&mut self, origin: ClientId, data: &MediaData) {
+    pub fn handle_media_data_out(
+        &mut self,
+        origin: ClientId,
+        data: &MediaData,
+        kind: MediaKind,
+        stats: &Counters,
+    ) {
         let Some(mid) = self
             .tracks_out
             .iter()
@@ -416,6 +452,7 @@ impl Client {
         };
         if let Err(e) = writer.write(pt, data.network_time, data.time, data.data.clone()) {
             warn!("client {} write failed: {e:?}", self.user);
+            stats.media_dropped(kind, MediaDrop::WriteFailed);
             self.rtc.disconnect();
         }
     }

@@ -7,6 +7,8 @@ Last updated 2026-11-13. Nothing here was run in a headed browser or a real depl
 
 - **Plain HTTP connections are not capped in number.** Each one is closed after 10 s without a full request head, but there is no limit per
   address; the cap of 256 sockets counts upgraded sockets only.
+- **`/metrics` has no auth.** It is off by default and on its own port (`VESPER_METRICS_BIND`); anyone who reaches that port reads
+  the counts (no user or room names). Keep it on loopback or the LAN, firewalled to the scraper ([deploy.md](deploy.md#metrics)).
 - **There is no response timeout.** A client that reads a download (up to `VESPER_UPLOAD_MAX_MB`, 100 MiB by default) very slowly keeps its connection until it is done.
 - **An upload must finish in 10 minutes.** At the default cap of 100 MiB that is about 175 KB/s (1.4 Mbit/s) on average, so a
   100 MiB file on a slower uplink fails near the end with `upload too slow`.

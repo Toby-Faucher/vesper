@@ -446,7 +446,9 @@ async fn a_gone_subscription_is_deleted() {
         failures().await,
         1,
         "Admin > Server counts the refused push"
-    );
+    ); // `/metrics` counts each result.
+    let c = server.state.push.counts();
+    assert_eq!((c.ok, c.gone, c.failed, c.dropped), (1, 1, 1, 0));
 }
 
 #[tokio::test]
@@ -698,6 +700,8 @@ async fn sends_past_the_queue_cap_are_dropped() {
     fake.next().await;
     fake.quiet().await;
     assert_eq!(server.state.push.pending(), 2);
+    // The loop over the four targets has no await, so both drops are counted by now.
+    assert_eq!(server.state.push.counts().dropped, 2);
     // Once the stuck ones time out, the queue is empty again.
     for _ in 0..40 {
         if server.state.push.pending() == 0 {

@@ -667,6 +667,47 @@ payload, no text in the clear, 410 deletes, switches, open socket, hidden room, 
 `web/src/lib/push.test.ts` and `web/e2e/push.mjs` (headless Chromium, with a stand-in `PushManager`). Not verified: a real push
 service, a notification on screen, iOS, Firefox and Safari.
 
+## Metrics
+
+`/metrics` in the Prometheus text format, off unless `VESPER_METRICS_BIND` is set ([env.md](env.md)). It is its own listener
+(`metrics.rs`, served by the same `accept_loop` as the app), not a route of the app port, so Caddy never proxies it. No auth and no
+Origin check. Every value is read at scrape time: atomics, a count under the voice lock, and the media socket's row in
+`/proc/net/udp`. Labels are fixed sets; no series names a user, a room or a session. Scraping: [deploy.md](deploy.md#metrics).
+
+| Series | Type | Meaning |
+|---|---|---|
+| `vesper_build_info{version,build}` | gauge | Always 1. The release and build id (`VESPER_BUILD_ID` or the git commit). |
+| `process_start_time_seconds` | gauge | When the server started, Unix seconds. |
+| `vesper_voice_participants`, `vesper_voice_rooms` | gauge | People in a call (away ones included) and rooms with someone in voice, as the server sees them. |
+| `vesper_voice_away`, `vesper_voice_sharing`, `vesper_voice_checks` | gauge | Calls waiting for a `resume`, screen shares, connection checks. |
+| `vesper_sfu_up` | gauge | 1 while the SFU thread runs. |
+| `vesper_sfu_sessions`, `vesper_sfu_rooms` | gauge | Live SFU peer connections and their rooms. A connection check is a session in a room of its own. |
+| `vesper_sfu_packets_total{direction,kind}` | counter | Datagrams on the media socket. `direction` is `in` or `out` (every send tried). `kind` is `audio`, `video`, `rtcp` or `other` (STUN, DTLS, unknown payload types). |
+| `vesper_sfu_packets_dropped_total{direction,kind,reason}` | counter | `in` with `reason="no_session"`: no session took the datagram. `out` with `reason="send_error"`: `send_to` failed. |
+| `vesper_sfu_media_dropped_total{kind,reason}` | counter | Media received and not forwarded: `muted` (force-mute), `not_sharing`, `over_ceiling` (the frame that cut a share), `write_failed`. Audio counts packets, video counts frames. |
+| `vesper_sfu_socket_receive_drops_total` | counter | Datagrams the kernel dropped for a full receive buffer (`drops` in `/proc/net/udp`). Linux only; absent when `/proc` cannot be read. |
+| `vesper_sfu_socket_receive_queue_bytes` | gauge | Bytes waiting in the media socket's receive buffer (`rx_queue`). Linux only. |
+| `vesper_ws_connections` | gauge | Signaling WebSockets open now. |
+| `vesper_ws_connections_opened_total` | counter | WebSockets opened since start. |
+| `vesper_ws_refused_total{reason}` | counter | Upgrades refused: `origin` (403), `auth` (401), `full` (503, `VESPER_MAX_SOCKETS`), `error` (the store failed). |
+| `vesper_ws_closed_total{reason}` | counter | Open sockets that ended: `server`, `client`, `gone`, `idle`, `before_hello`, and the errors `read_failed`, `write_failed`, `ping_failed`. |
+| `vesper_push_sends_total{result}` | counter | Web Push sends: `ok`, `gone` (the subscription was deleted), `failed` (the same count as Admin > Server, without the 24 h window). |
+| `vesper_push_dropped_total`, `vesper_push_pending` | counter, gauge | Pushes dropped at the queue cap, and pushes waiting or in flight. |
+
+How the SFU sorts datagrams (`vesper-sfu/src/stats.rs`): RFC 7983 and RFC 5761 on the first two bytes, which SRTP leaves in the
+clear. RTCP is a second byte of 192 to 223; for RTP the payload type is looked up in the session's negotiated codecs (their RTX and
+RED types included). A datagram no session takes has no codec table, so its RTP counts as `other`. Counters are bumped on the SFU
+thread before the send and before the join reply, so a client that got a packet or a `Joined` reads a count that includes it.
+
+Keyframe requests (`forwarded` and `suppressed`) come with the PLI rate limit of PR #208 (`SfuHandle::keyframe_stats`); this
+endpoint does not have them yet.
+
+Verified: `crates/vesper-server/tests/metrics.rs` (a scrape with a signed-in socket in a call: format, build info, gauges, refusal
+counts, no user id or room name in the text, and `/metrics` absent from the app port), `crates/vesper-sfu/tests/forwarding.rs`
+`stats_count_sessions_packets_and_drops` (real str0m clients: audio, video, RTCP and STUN/DTLS counts, muted and not-sharing drops,
+sessions and rooms), unit tests in `stats.rs`, `metrics.rs` and `config.rs`, and push counts in `tests/push.rs`. Not verified: a
+scrape by a real Prometheus or VictoriaMetrics, `/proc/net/udp` inside a container, and kernel drops under real load.
+
 ## Connection timeouts
 
 `accept_loop` in `lib.rs` serves HTTP/1 only, with hyper's `header_read_timeout`; the body timeouts are tower-http layers in

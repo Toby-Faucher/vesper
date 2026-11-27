@@ -11,6 +11,7 @@
 mod client;
 mod meter;
 mod room;
+mod stats;
 #[cfg(feature = "test-support")]
 pub mod testing;
 
@@ -21,6 +22,10 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc as tmpsc, oneshot};
+
+use stats::Counters;
+pub use stats::{ByKind, MediaDrop, PacketKind, SfuStats};
+pub use str0m::media::MediaKind;
 
 /// Build with struct syntax plus `..Default::default()` for the fields you don't set.
 #[derive(Debug, Clone)]
@@ -63,16 +68,19 @@ impl Sfu {
         let (tx, rx) = mpsc::channel();
         let alive = Arc::new(AtomicBool::new(true));
         let guard = AliveGuard(alive.clone());
+        let stats = Arc::new(Counters::default());
+        let loop_stats = stats.clone();
         std::thread::Builder::new()
             .name("vesper-sfu".into())
             .spawn(move || {
                 let _guard = guard; // dropped on return and on panic unwind
-                room::run(socket, rx, cfg);
+                room::run(socket, rx, cfg, &loop_stats);
             })?;
         Ok(SfuHandle {
             tx,
             local_addr,
             alive,
+            stats,
         })
     }
 }
@@ -94,6 +102,7 @@ pub struct SfuHandle {
     tx: mpsc::Sender<Command>,
     local_addr: SocketAddr,
     alive: Arc<AtomicBool>,
+    stats: Arc<Counters>,
 }
 
 #[derive(Debug)]
@@ -270,6 +279,11 @@ impl SfuHandle {
     /// Joins then fail with [`JoinError::Shutdown`].
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    /// Packet, drop and session counts since the SFU started ([`SfuStats`]). Cheap: a few atomic loads.
+    pub fn stats(&self) -> SfuStats {
+        self.stats.snapshot()
     }
 
     /// Make the SFU thread panic, to test what happens when it dies.
