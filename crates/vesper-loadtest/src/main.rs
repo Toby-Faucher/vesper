@@ -2,6 +2,8 @@
 
 //! Synthetic voice load: N fake browsers join one room over the real WebSocket protocol, each
 //! sends 20 ms Opus-sized packets, and every speaker counts what it gets from each other speaker.
+//! It also times every forwarded packet (all fake clients share one clock), and with `--pid` reads
+//! the server's CPU and memory. `--json FILE` writes the numbers for `scripts/loadtest-report.py`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -86,6 +88,8 @@ struct Args {
     share_mbps: u64,
     seconds: u64,
     pid: Option<u32>,
+    /// Write a summary of the run here as JSON.
+    json: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -146,6 +150,7 @@ fn parse_args() -> Result<Args, String> {
             Some(p) => Some(p.parse().map_err(|e| format!("--pid: {e}"))?),
             None => None,
         },
+        json: m.get("--json").cloned(),
     })
 }
 
@@ -155,6 +160,67 @@ fn cpu_ticks(pid: u32) -> Option<u64> {
     // The comm field may contain spaces; fields resume after the last ')'. utime/stime are fields 14/15.
     let rest: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
     Some(rest.get(11)?.parse::<u64>().ok()? + rest.get(12)?.parse::<u64>().ok()?)
+}
+
+/// A `kB` field such as `VmRSS` from /proc/<pid>/status, in MiB (Linux only).
+fn status_mib(pid: u32, field: &str) -> Option<f64> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let line = status.lines().find(|l| l.starts_with(field))?;
+    let kb: f64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb / 1024.0)
+}
+
+/// The value at fraction `q` (0..=1) of sorted `v`, nearest rank. 0 for an empty slice.
+fn percentile(sorted: &[f64], q: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let rank = (q * sorted.len() as f64).ceil() as usize;
+    sorted[rank.clamp(1, sorted.len()) - 1]
+}
+
+/// RFC 3550 section 6.4.1 interarrival jitter over one stream's transit times (arrival minus send,
+/// in arrival order), in the same unit: J += (|D| - J) / 16 for each consecutive pair.
+fn rfc3550_jitter(transits: &[f64]) -> f64 {
+    transits
+        .windows(2)
+        .fold(0.0, |j, w| j + ((w[1] - w[0]).abs() - j) / 16.0)
+}
+
+/// Forwarding times of every audio packet that arrived, and the jitter of each receiver-sender pair.
+#[derive(Debug, Default, PartialEq)]
+struct Timing {
+    /// Send to arrival, ms, sorted.
+    latency_ms: Vec<f64>,
+    /// RFC 3550 jitter of each receiver-sender pair with at least two packets, ms.
+    pair_jitter_ms: Vec<f64>,
+}
+
+/// `sent[j]` maps speaker j's packet sequence number to when it was written; `arrivals[i]` lists
+/// (sender, sequence number, arrival time) as speaker i saw them, in arrival order.
+fn timing(sent: &[HashMap<u64, Instant>], arrivals: &[Vec<(usize, u64, Instant)>]) -> Timing {
+    let mut t = Timing::default();
+    for row in arrivals {
+        let mut per_sender: HashMap<usize, Vec<f64>> = HashMap::new();
+        for &(j, seq, at) in row {
+            let Some(&sent_at) = sent.get(j).and_then(|m| m.get(&seq)) else {
+                continue;
+            };
+            let ms = at.saturating_duration_since(sent_at).as_secs_f64() * 1000.0;
+            t.latency_ms.push(ms);
+            per_sender.entry(j).or_default().push(ms);
+        }
+        let mut senders: Vec<_> = per_sender.into_iter().collect();
+        senders.sort_by_key(|(j, _)| *j);
+        t.pair_jitter_ms.extend(
+            senders
+                .iter()
+                .filter(|(_, v)| v.len() > 1)
+                .map(|(_, v)| rfc3550_jitter(v)),
+        );
+    }
+    t.latency_ms.sort_by(f64::total_cmp);
+    t
 }
 
 /// shortcut: assumes CLK_TCK = 100 (true on Linux x86/ARM); reading it needs libc/unsafe.
@@ -329,6 +395,7 @@ async fn run(a: Args) -> Result<bool, String> {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
+    let rss_idle = a.pid.and_then(|p| status_mib(p, "VmRSS:"));
     let cpu_start = a
         .pid
         .and_then(|p| cpu_ticks(p).map(|t| (t, Instant::now())));
@@ -342,6 +409,8 @@ async fn run(a: Args) -> Result<bool, String> {
     }
     tokio::time::sleep(Duration::from_secs(a.seconds)).await;
     let cpu_end = a.pid.and_then(cpu_ticks);
+    let rss_load = a.pid.and_then(|p| status_mib(p, "VmRSS:"));
+    let rss_peak = a.pid.and_then(|p| status_mib(p, "VmHWM:"));
     // Let packets still in flight (and the last queued sends) land.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -369,6 +438,33 @@ async fn run(a: Args) -> Result<bool, String> {
             counts
         })
         .collect();
+
+    // Bytes 9..17 are the packet's sequence number within its sender.
+    let seq = |p: &[u8]| {
+        p.get(9..17)
+            .map(|b| u64::from_be_bytes(b.try_into().unwrap()))
+    };
+    let sent_times: Vec<HashMap<u64, Instant>> = speakers
+        .iter()
+        .map(|s| {
+            s.client
+                .sent_timed()
+                .into_iter()
+                .filter_map(|(at, p)| Some((seq(&p)?, at)))
+                .collect()
+        })
+        .collect();
+    let arrivals: Vec<Vec<(usize, u64, Instant)>> = speakers
+        .iter()
+        .map(|s| {
+            s.client
+                .received_timed()
+                .into_iter()
+                .filter_map(|(at, p)| Some((*tags.get(&tag(&p)?)?, seq(&p)?, at)))
+                .collect()
+        })
+        .collect();
+    let timing = timing(&sent_times, &arrivals);
 
     // Video frames carry the same sender tag as that sender's audio.
     let video_got: Vec<Vec<u64>> = speakers
@@ -414,6 +510,7 @@ async fn run(a: Args) -> Result<bool, String> {
             );
         }
     }
+    let mut video_worst_percent = None;
     if a.sharers > 0 {
         let queued = a.seconds * VIDEO_FPS;
         let mut worst = u64::MAX;
@@ -443,27 +540,100 @@ async fn run(a: Args) -> Result<bool, String> {
             a.share_mbps,
             worst as f64 * 100.0 / queued as f64
         );
+        video_worst_percent = Some(worst as f64 * 100.0 / queued as f64);
     }
+    let lat = &timing.latency_ms;
+    let jit = &timing.pair_jitter_ms;
+    let jitter_max = jit.iter().copied().fold(0.0, f64::max);
+    let jitter_mean = if jit.is_empty() {
+        0.0
+    } else {
+        jit.iter().sum::<f64>() / jit.len() as f64
+    };
+    println!(
+        "forwarding latency: p50 {:.2} ms  p95 {:.2} ms  p99 {:.2} ms  max {:.2} ms over {} packets",
+        percentile(lat, 0.50),
+        percentile(lat, 0.95),
+        percentile(lat, 0.99),
+        percentile(lat, 1.0),
+        lat.len()
+    );
+    println!(
+        "jitter (RFC 3550, per pair): mean {jitter_mean:.2} ms  max {jitter_max:.2} ms over {} pairs",
+        jit.len()
+    );
+    let mut cpu_percent = None;
     if let (Some((t0, at)), Some(t1)) = (cpu_start, cpu_end) {
         let secs = at.elapsed().as_secs_f64() - 2.0;
+        let pct = (t1.saturating_sub(t0)) as f64 / CLK_TCK / secs * 100.0;
+        cpu_percent = Some(pct);
         println!(
-            "server CPU: {:.1}% of one core over {secs:.1} s (Linux /proc, CLK_TCK assumed 100)",
-            (t1.saturating_sub(t0)) as f64 / CLK_TCK / secs * 100.0
+            "server CPU: {pct:.1}% of one core over {secs:.1} s (Linux /proc, CLK_TCK assumed 100)"
         );
     } else if a.pid.is_some() {
         println!("server CPU: unavailable (server exited during the run?)");
     }
+    if let (Some(idle), Some(load), Some(peak)) = (rss_idle, rss_load, rss_peak) {
+        println!(
+            "server memory: RSS {idle:.1} MiB before, {load:.1} MiB under load, peak {peak:.1} MiB"
+        );
+    }
     for s in &speakers {
         s.task.abort();
     }
-    Ok(reports.iter().all(|r| r.ok))
+    let pass = reports.iter().all(|r| r.ok);
+    if let Some(path) = &a.json {
+        let (got, expected) = reports
+            .iter()
+            .fold((0, 0), |(g, e), r| (g + r.received, e + r.expected));
+        let worst_pair = (0..sent.len())
+            .flat_map(|i| {
+                (0..sent.len())
+                    .filter(move |&j| j != i)
+                    .map(move |j| (i, j))
+            })
+            .map(|(i, j)| {
+                if sent[j] == 0 {
+                    0.0
+                } else {
+                    received[i][j].min(sent[j]) as f64 * 100.0 / sent[j] as f64
+                }
+            })
+            .fold(100.0, f64::min);
+        let summary = serde_json::json!({
+            "speakers": a.speakers,
+            "sharers": a.sharers,
+            "share_mbps": a.share_mbps,
+            "seconds": a.seconds,
+            "pass_95": pass,
+            "packets_sent": sent.iter().sum::<u64>(),
+            "packets_expected": expected,
+            "packets_received": got,
+            "loss_percent": if expected == 0 { 100.0 } else { 100.0 - got as f64 * 100.0 / expected as f64 },
+            "worst_pair_percent": worst_pair,
+            "latency_ms": {
+                "count": lat.len(),
+                "p50": percentile(lat, 0.50),
+                "p95": percentile(lat, 0.95),
+                "p99": percentile(lat, 0.99),
+                "max": percentile(lat, 1.0),
+            },
+            "jitter_ms": { "pairs": jit.len(), "mean": jitter_mean, "max": jitter_max },
+            "server_cpu_percent": cpu_percent,
+            "server_rss_mib": { "idle": rss_idle, "load": rss_load, "peak": rss_peak },
+            "video_worst_pair_percent": video_worst_percent,
+        });
+        std::fs::write(path, format!("{summary:#}\n"))
+            .map_err(|e| format!("--json {path}: {e}"))?;
+    }
+    Ok(pass)
 }
 
 #[tokio::main]
 async fn main() {
     let args = parse_args().unwrap_or_else(|e| {
         eprintln!(
-            "vesper-loadtest: {e}\nusage: vesper-loadtest --url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--sharers N] [--share-mbps M] [--pid PID]"
+            "vesper-loadtest: {e}\nusage: vesper-loadtest --url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--sharers N] [--share-mbps M] [--pid PID] [--json FILE]"
         );
         std::process::exit(2);
     });
@@ -553,6 +723,49 @@ mod tests {
         let r = two(150, 100);
         assert_eq!(r[0].received, 100);
         assert_eq!(r[0].loss_percent, 0.0);
+    }
+
+    #[test]
+    fn percentile_is_nearest_rank() {
+        let v: Vec<f64> = (1..=100).map(f64::from).collect();
+        assert_eq!(percentile(&v, 0.5), 50.0);
+        assert_eq!(percentile(&v, 0.99), 99.0);
+        assert_eq!(percentile(&v, 1.0), 100.0);
+        assert_eq!(percentile(&v, 0.0), 1.0);
+        assert_eq!(percentile(&[], 0.5), 0.0);
+    }
+
+    #[test]
+    fn steady_transit_has_no_jitter() {
+        assert_eq!(rfc3550_jitter(&[3.0; 50]), 0.0);
+        assert_eq!(rfc3550_jitter(&[]), 0.0);
+    }
+
+    #[test]
+    fn jitter_follows_rfc3550_update() {
+        // One 16 ms step: J = 16/16 = 1, then decays by 15/16 per steady packet.
+        assert!((rfc3550_jitter(&[0.0, 16.0]) - 1.0).abs() < 1e-9);
+        assert!((rfc3550_jitter(&[0.0, 16.0, 16.0]) - 15.0 / 16.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn timing_pairs_arrivals_with_sends() {
+        let t0 = Instant::now();
+        let ms = |n: u64| Duration::from_millis(n);
+        let sent = vec![
+            HashMap::from([(0, t0), (1, t0 + ms(20))]),
+            HashMap::from([(0, t0 + ms(5))]),
+        ];
+        // Speaker 1 got both of speaker 0's packets (2 ms and 4 ms late); speaker 0 got one of
+        // speaker 1's (1 ms late) and one with a sequence number nobody sent, which is skipped.
+        let arrivals = vec![
+            vec![(1, 0, t0 + ms(6)), (1, 9, t0 + ms(7))],
+            vec![(0, 0, t0 + ms(2)), (0, 1, t0 + ms(24))],
+        ];
+        let t = timing(&sent, &arrivals);
+        assert_eq!(t.latency_ms, vec![1.0, 2.0, 4.0]);
+        // Only the 1 <- 0 pair has two packets: |4 - 2| / 16.
+        assert_eq!(t.pair_jitter_ms, vec![2.0 / 16.0]);
     }
 
     #[test]

@@ -48,7 +48,11 @@ struct State {
     to_send: usize,
     next_send: Instant,
     sent: Vec<Vec<u8>>,
+    /// When each entry of `sent` was written, same order.
+    sent_at: Vec<Instant>,
     received: Vec<Vec<u8>>,
+    /// When the packet of each entry of `received` reached this client's socket, same order.
+    received_at: Vec<Instant>,
     received_video: Vec<Vec<u8>>,
     video: Option<VideoOut>,
     /// Keyframe requests (PLI or FIR) that arrived for the video we send.
@@ -107,7 +111,9 @@ impl FakeClient {
             to_send: 0,
             next_send: Instant::now(),
             sent: vec![],
+            sent_at: vec![],
             received: vec![],
+            received_at: vec![],
             received_video: vec![],
             video,
             keyframe_requests: 0,
@@ -176,6 +182,27 @@ impl FakeClient {
     /// Audio payloads received so far (from any audio track), in arrival order.
     pub fn received(&self) -> Vec<Vec<u8>> {
         self.state().received.clone()
+    }
+
+    /// Like [`sent`](Self::sent), with the time each packet was written. Every client in one
+    /// process shares the clock, so a receiver can subtract these from its arrival times.
+    pub fn sent_timed(&self) -> Vec<(Instant, Vec<u8>)> {
+        let s = self.state();
+        s.sent_at
+            .iter()
+            .copied()
+            .zip(s.sent.iter().cloned())
+            .collect()
+    }
+
+    /// Like [`received`](Self::received), with the time each packet reached this client's socket.
+    pub fn received_timed(&self) -> Vec<(Instant, Vec<u8>)> {
+        let s = self.state();
+        s.received_at
+            .iter()
+            .copied()
+            .zip(s.received.iter().cloned())
+            .collect()
     }
 
     /// Video frames received so far (from any video track), in arrival order.
@@ -307,7 +334,10 @@ impl State {
                             Some((_, MediaKind::Video)) => {
                                 self.received_video.push(d.data.to_vec());
                             }
-                            _ => self.received.push(d.data.to_vec()),
+                            _ => {
+                                self.received.push(d.data.to_vec());
+                                self.received_at.push(d.network_time);
+                            }
                         }
                     }
                     _ => {}
@@ -378,6 +408,7 @@ impl State {
         let time = MediaTime::new(seq * FRAME_TICKS, Frequency::FORTY_EIGHT_KHZ);
         if writer.write(pt, now, time, payload.clone()).is_ok() {
             self.sent.push(payload);
+            self.sent_at.push(now);
             self.to_send -= 1;
             self.next_send = now + FRAME;
         }

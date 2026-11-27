@@ -48,6 +48,8 @@ for f in Cargo.toml Cargo.lock web/package.json web/package-lock.json; do
   git diff --quiet "$f" && { echo "FAIL bump did not change $f"; exit 1; }
 done
 expect 0 "version bump only"
+bump; mkdir -p docs/testing/loadtest; echo "# report" >docs/testing/loadtest/v9.9.9.md
+expect 0 "version bump plus its load test report"
 bump; echo "// x" >>crates/vesper-dsp/src/lib.rs
 expect 1 "version bump plus code"
 bump; echo "new.txt" >new.txt

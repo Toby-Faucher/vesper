@@ -59,6 +59,12 @@ loadtest speakers="12" seconds="30":
     target/release/vesper-loadtest --url ws://127.0.0.1:47123/ws --origin http://127.0.0.1:47123 \
       --tokens $data/tokens --room-id 1 --speakers {{speakers}} --seconds {{seconds}} --pid $srv
 
+# Flags go to scripts/loadtest-report.py, e.g. `--name v2.4.0` or `--server-bin ../other/target/release/vesper-server`.
+# release load test report into docs/testing/loadtest/ (docs/testing/loadtest.md), about 1 minute at nice 10
+loadtest-report *args:
+    {{cap}} cargo build --release --locked -p vesper-server -p vesper-loadtest
+    scripts/loadtest-report.py {{args}}
+
 # build outputs; the fetched model stays (delete crates/vesper-dsp/model by hand to refetch)
 clean:
     cargo clean
