@@ -2,7 +2,10 @@
 
 ## 1. Load test (packet loss and server CPU)
 
-`vesper-loadtest` joins N synthetic speakers to one room over the real WebSocket protocol, each sends 20 ms Opus-sized packets for S seconds, and every speaker counts what it received from each other speaker. It exits 1 if any speaker received under 95% of its peers' packets (2 on setup errors). `--pid` adds the server's CPU over the run; that reads `/proc/<pid>/stat`, so it is Linux only (and assumes 100 clock ticks per second).
+`vesper-loadtest` joins N synthetic speakers to one room over the real WebSocket protocol, each sends 20 ms Opus-sized packets for S seconds, and every speaker counts what it received from each other speaker. It exits 1 if any speaker received under 95% of its peers' packets (2 on setup errors). `--pid` adds the server's CPU over the run and its memory (`VmRSS` before and after, `VmHWM`); that reads `/proc/<pid>/`, so it is Linux only (and assumes 100 clock ticks per second).
+It also prints the forwarding latency of every audio packet (p50, p95, p99, max) and the RFC 3550 jitter of each receiver-sender pair, from the send and arrival times of the fake clients, which share one clock. `--json FILE` writes these numbers as JSON.
+
+`--packet-ms MS` sends a packet every MS ms instead of 20 (a throughput test), and `--reconnects N` drops N speakers' connections after the run and times their `resume`; with `--json` the join, media and resume times are in the file too. For the benchmark suite each minor release gets, use `just bench`: see [benchmarks](../benchmarks/README.md).
 
 Against a local server on loopback with a throwaway data dir (ports are arbitrary high ones). Each speaker signs in with one
 session token from `loadtest-accounts` and sends `Origin` on the upgrade. Room 1 is `general` on a fresh database.
@@ -59,7 +62,32 @@ The failing runs did not show a saturated core (server CPU stayed under 50% of o
 - The load test's four sockets dropped none while the run lasted. Two of them dropped 1 400 and 187 in the last sample, after the load test had begun to close its sockets.
 - `UdpRcvbufErrors` rose by 51 733, the sum of the drops above. `UdpSndbufErrors` stayed at 0.
 
-So the voice loss is at the server's receive buffer. The SFU thread reads its one socket too slowly for this load, and voice packets that arrive behind the video are dropped with it. The CPU figure is an average over the run, so it does not rule out bursts. Likely, not verified: the fake senders write each 41 kB frame at once, so the four sharers' frames arrive in bursts that the buffer cannot hold. A bigger buffer was not tried; see [known issues](../known-issues.md).
+So the voice loss is at the server's receive buffer. The SFU thread reads its one socket too slowly for this load, and voice packets that arrive behind the video are dropped with it. The CPU figure is an average over the run, so it does not rule out bursts. Likely, not verified: the fake senders write each 41 kB frame at once, so the four sharers' frames arrive in bursts that the buffer cannot hold. A bigger buffer was tried later and fixes it: see [Receive buffer and batched reads](#receive-buffer-and-batched-reads).
+
+### Receive buffer and batched reads
+
+Measured 2026-11-26 on the same i7-12700 (bawn), release build, loopback, 30 s, server on `taskset -c 16,17`, load test on `taskset -c 4-11`, with `MAX_ROOM_SHARE_KBPS` raised locally for the runs and then put back (the cap refuses these loads). Three builds: v2.3.2 as it was (one `recv_from` per loop, kernel default buffer), the 4 MiB buffer only, and the buffer plus `recvmmsg` batches of 32 (this release). `net.core.rmem_max` on bawn is 4194304, so the 4 MiB was granted in full (the log reads `granted 8388608`). "Server drops" is the `drops` field of the server's socket in `/proc/net/udp`, read before and after the run. "Audio loss" is speaker 0's, from the load test's output; every run marked PASS had every speaker at 95% or more. Other agents share bawn, so the 1-minute load average was 2.5 to 4 during most runs.
+
+| Load | Build | Runs | Server drops | Audio loss | Video, min pair | Server CPU | Result |
+|---|---|---|---|---|---|---|---|
+| 4 x 20 Mbps | v2.3.2 | 1 | 59 251 | 16.8% | 73.6% | 48.9% | FAIL |
+| 4 x 20 Mbps | buffer, `VESPER_UDP_RECV_BUFFER_KB=0` (old buffer) | 2 | 57 575 to 58 133 | 15.2% to 16.1% | 73.2% to 73.7% | 48.0% to 48.9% | FAIL |
+| 4 x 20 Mbps | batches, `VESPER_UDP_RECV_BUFFER_KB=0` (old buffer) | 1 | 58 368 | 15.2% | 49.6% | 41.5% | FAIL |
+| 4 x 20 Mbps | buffer | 5 | 0 | 0.00% to 0.95% | 90.9% to 95.4% | 28.5% to 38.9% | PASS |
+| 4 x 20 Mbps | buffer and batches | 4 | 0 | 0.00% to 0.29% | 93.8% to 94.9% | 29.7% to 36.9% | PASS |
+| 4 x 30 Mbps | buffer | 5 | 0 | 0.20% or less | 92.3% to 95.3% | 34.3% to 39.7% | PASS |
+| 4 x 30 Mbps | buffer and batches | 3 | 0 | 0.02% or less | 94.3% to 95.0% | 30.2% to 38.0% | PASS |
+| 6 x 20 Mbps (6 people) | buffer | 5 | 0 | 0.00% | 94.1% to 96.2% | 53.3% to 58.5% | PASS |
+| 6 x 20 Mbps (6 people) | buffer and batches | 4 | 0 | 0.00% | 95.8% to 97.0% | 47.8% to 51.2% | PASS |
+
+Left out: three runs of the build with batches where another process loaded the machine mid run (load average 11 to 16 afterwards). 4 x 30 Mbps: 0 server drops and 1.3% loss, then 1 639 drops and 2.8% loss; 6 x 20 Mbps: 61 335 drops and 15% loss. No run of the buffer only build was hit by such a jump, so these say nothing about batches either way. They show that the SFU thread still drops packets when something else takes its cores.
+
+What this shows:
+
+- The buffer is the fix. With the default 212 992 bytes the server dropped about 2 000 packets a second at 4 x 20 Mbps, voice with them, batches or not. With 4 MiB it dropped none at 4 x 20, 4 x 30 and 6 x 20 Mbps. Server CPU fell too, likely because fewer lost packets means fewer retransmissions and keyframe requests (not verified).
+- The batches save some CPU. At 6 x 20 Mbps, in the three runs taken back to back with the buffer only build (same quiet spell), the batched build was lower each time: a mean of 49.3% of one core against 56.1%. At 4 x 20 and 4 x 30 Mbps the difference is inside the noise of a shared machine. Loss did not change.
+
+To repeat it: build `vesper-server` and `vesper-loadtest` as in section 1, start the server with `taskset -c 16,17` and the `VESPER_UDP_RECV_BUFFER_KB` to test, read the `drops` column of `/proc/net/udp` for the server's port, run `taskset -c 4-11 target/release/vesper-loadtest ... --speakers 4 --sharers 4 --share-mbps 20 --seconds 30 --pid $SERVER`, and read the drops again.
 
 ## 2. Mouth-to-ear latency: acoustic loopback
 

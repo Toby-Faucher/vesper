@@ -10,9 +10,15 @@ license.workspace = true
 test-support = []
 
 [dependencies]
+# Sets SO_RCVBUF without unsafe code (already in the tree through tokio).
+socket2 = "0.6"
 str0m = { version = "0.24", default-features = false, features = ["aws-lc-rs"] }
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
+
+# recvmmsg: many datagrams in one call, with a safe API (`unsafe` is forbidden here).
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.32", default-features = false, features = ["socket", "uio", "net"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

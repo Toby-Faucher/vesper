@@ -4,13 +4,15 @@
 Exit 0 when the changes from BASE to HEAD only bump the release version (a release PR), else 1.
 CI then skips the e2e and dsp-wasm jobs. Any other change, or any error, means the full pipeline.
 Allowed: the [workspace.package] version in Cargo.toml, workspace member versions in Cargo.lock,
-the root version in web/package.json and web/package-lock.json, and any edit to docs/versions.md.
+the root version in web/package.json and web/package-lock.json, any edit to docs/versions.md, and
+any file under docs/benchmarks/ (the release's benchmark report).
 """
 import json
 import subprocess
 import sys
 import tomllib
 
+REPORTS = "docs/benchmarks/"
 ALLOWED = {"Cargo.toml", "Cargo.lock", "web/package.json", "web/package-lock.json", "docs/versions.md"}
 
 
@@ -38,7 +40,7 @@ def without_version(path, text):
 
 def main(base, head):
     for path in git("diff", "--name-only", "--no-renames", "-z", base, head).split("\0"):
-        if not path or path == "docs/versions.md":
+        if not path or path == "docs/versions.md" or path.startswith(REPORTS):
             continue
         if path not in ALLOWED:
             print(f"full pipeline: {path} changed")

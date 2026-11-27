@@ -11,7 +11,9 @@
 mod client;
 mod keyframe;
 mod meter;
+mod recv;
 mod room;
+mod socket;
 mod stats;
 #[cfg(feature = "test-support")]
 pub mod testing;
@@ -43,14 +45,22 @@ pub struct SfuConfig {
     /// `share_ceiling_secs` one-second windows in a row is cut ([`SfuEvent::ShareCut`]).
     pub share_ceiling_bps: u64,
     pub share_ceiling_secs: u32,
+    /// `SO_RCVBUF` of the media socket, in bytes; 0 keeps the system default. The kernel caps
+    /// it at `net.core.rmem_max`; the SFU logs what it got and warns when it got less.
+    pub recv_buffer: usize,
     /// Keyframe requests (PLI or FIR) to one sharer's video go out at most once per this interval. The first one
     /// after a quiet interval goes out at once; the ones inside it are merged into one sent when it ends.
     pub keyframe_interval: Duration,
 }
 
+/// 4 MiB: holds about 0.4 s of four 20 Mbps shares, enough for the bursts in the video load
+/// test (docs/testing/latency.md).
+pub const DEFAULT_RECV_BUFFER: usize = 4 * 1024 * 1024;
+
 impl Default for SfuConfig {
     /// Binds `0.0.0.0:0` with no advertised addresses (set them!), a 10 s answer timeout and a
-    /// share ceiling of 35 Mbps for 5 s (above the client's 30 Mbps maximum), and a keyframe interval of 500 ms.
+    /// share ceiling of 35 Mbps for 5 s (above the client's 30 Mbps maximum), a receive buffer of
+    /// [`DEFAULT_RECV_BUFFER`], and a keyframe interval of 500 ms.
     /// 500 ms caps the keyframes viewers can force at 2 a second (a screen keyframe can be many times a normal
     /// frame), and a viewer who asks while a request is merged waits at most that long for a picture.
     fn default() -> Self {
@@ -60,6 +70,7 @@ impl Default for SfuConfig {
             answer_timeout: Duration::from_secs(10),
             share_ceiling_bps: 35_000_000,
             share_ceiling_secs: 5,
+            recv_buffer: DEFAULT_RECV_BUFFER,
             keyframe_interval: Duration::from_millis(500),
         }
     }
@@ -73,6 +84,7 @@ impl Sfu {
     pub fn spawn(cfg: SfuConfig) -> std::io::Result<SfuHandle> {
         let socket = UdpSocket::bind(cfg.bind)?;
         let local_addr = socket.local_addr()?;
+        socket::set_recv_buffer(&socket, cfg.recv_buffer);
         room::check_advertised(local_addr, &cfg.advertised);
         let (tx, rx) = mpsc::channel();
         let alive = Arc::new(AtomicBool::new(true));

@@ -104,7 +104,7 @@ The "Not verified" list at the end says what was only read.
 | `vesper-sfu` | SFU on str0m. One UDP socket, rooms keyed by name, Opus voice and one VP8 screen per client forwarded as is (no decode, mix or transcode). `room.rs` is the loop, `client.rs` one session, `lib.rs` the public handle. No signaling inside. |
 | `vesper-server` | `config.rs` (env), `lib.rs` (router, static serving, `/health`, SFU watcher, the Origin check), `api_accounts.rs` (account routes, `ApiError`, the `Authed` extractor), `api_passkeys.rs` (passkeys, WebAuthn through `webauthn-rs`), `api_admin.rs` (users, invites, reset links, roles, bans, `require`), `api_rooms.rs` (rooms, `can_see`, `listed`, `visible_room`), `api_messages.rs` (chat routes, body, mention and reaction rules), `uploads.rs` (uploads, the sweep, disk use), `avatars.rs` (profile pictures), `speedtest.rs` (upload speed test), `auth.rs` (passwords, names, cookies, client address), `limits.rs` (rate limits), `cli.rs` (admin subcommands, `backup`, the automatic `pre-*` and `auto-*` backups and their keep rule), `build.rs` (the build id), `ws.rs` (one socket), `hub.rs` (open sockets, pushed events, closing sockets), `voice.rs` (voice presence, session numbers, force-mute, the connection check), `public_addr.rs` (advertised address). |
 | `vesper-dsp` | The capture `Pipeline` around DeepFilterNet3 on the `tract` runtime, and `Rnnoise` (the `nnnoiseless` port, model built in), both on 480-sample (10 ms, 48 kHz) frames. Native for tests (feature `tract`), WASM for the browser (feature `wasm`). `scripts/build-dsp.sh` builds the WASM. |
-| `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load and loss checks. See `docs/testing/latency.md`. |
+| `vesper-loadtest` | Synthetic speakers over WebSocket and WebRTC, for load, loss, latency and jitter checks. See `docs/testing/latency.md` and, for the benchmark suite each minor release gets, `docs/benchmarks/README.md`. |
 
 ## Direct messages
 
@@ -262,6 +262,10 @@ unit tests in `hub.rs` and `voice.rs`.
 - The SFU thread owns the UDP socket, every str0m `Rtc` client and all media state. Nothing else touches them. The server sends it commands
   (`join`, `answer`, `leave`, `set_muted`, `set_sharing`, `watch`, `hold`, `set_advertised`) over a channel and gets `SfuEvent::Offer`,
   `SfuEvent::ShareCut` and `SfuEvent::Closed` back per session.
+- The receive path (`socket.rs`, `recv.rs`): the socket asks for a 4 MiB receive buffer (`VESPER_UDP_RECV_BUFFER_KB`) and logs what
+  the kernel granted. On Linux one `recvmmsg` call reads every datagram that is queued, up to 32; elsewhere one `recv_from` reads one.
+  Each datagram goes to its client, and that client's output is drained before the next datagram goes in, as str0m requires (one
+  input, then `poll_output` until `Timeout`).
 - Video ([ADR 0009](decisions/0009-video-in-the-sfu.md)): a join offer has one audio m-line and at most one VP8 video m-line. A client with
   video is offered every other video track at join. Packets flow only while `set_sharing(user, true)` holds for the sender and
   `watch(viewer, sharer, true)` for the receiver. Both are per session, so a rejoin starts with neither. The SFU makes an incoming

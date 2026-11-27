@@ -14,6 +14,7 @@ Fixed, not configurable: the room size cap (12, `max_room_size`) and the WebSock
 | `VESPER_UDP_BIND` | UDP address for all media. | `0.0.0.0:40000` | `config.rs` |
 | `VESPER_PUBLIC_HOST` | Hostname or IP clients are told to send media to. Resolved at start, then every 60 s (`public_addr.rs`). Unset: the server advertises its bound address and logs a warning if that is `0.0.0.0`. Empty counts as unset. | unset | `config.rs`, `public_addr.rs`, `lib.rs` |
 | `VESPER_UDP_PORT_PUBLIC` | UDP port clients reach from outside. Set it only if the router maps a different external port. | the `VESPER_UDP_BIND` port | `config.rs` |
+| `VESPER_UDP_RECV_BUFFER_KB` | Receive buffer (`SO_RCVBUF`) of the media socket, in KiB. Heavy video arrives in bursts; a small buffer drops packets, voice with them. The kernel caps it at `net.core.rmem_max`, so raise that on the host too ([deploy.md](deploy.md#network)). The server logs what the kernel granted (Linux reports twice the value set) and warns when it got less than asked. 0 keeps the system default. 0 to 1048576. Empty counts as unset. | `4096` | `config.rs`, `vesper-sfu` `socket.rs` |
 | `VESPER_WEB_DIR` | Directory with the built web app, served at `/`. Empty counts as unset. The server warns at start if `index.html` is missing. Serving rules (SPA fallback, cache headers, dotfiles hidden): `lib.rs` `guard`. | `web/dist` | `config.rs`, `lib.rs` |
 | `VESPER_MAX_SOCKETS` | Concurrent WebSockets. More get HTTP 503. A value above tokio's semaphore limit (2^61 - 1) stops the server at start with an error. | `256` | `config.rs`, `ws.rs` |
 | `VESPER_DATA_DIR` | Directory for the database (`vesper.db`, with its WAL files) and uploads (`uploads/<first 2 of id>/<id>`, plus `uploads/tmp/` for uploads in progress, emptied at start). Created if missing (new dirs 0700, `vesper.db` and upload files 0600). Empty counts as unset. | `data` | `config.rs`, `cli.rs`, `lib.rs`, `uploads.rs` |
@@ -68,7 +69,7 @@ requests, so other GETs are not checked. Clients that are not browsers, such as 
 `vesper-server` subcommands (`create-owner`, `invite`, `loadtest-accounts`, `help`) take flags, not variables. They read the
 same variables as the server. See [dev.md](dev.md#accounts) and `crates/vesper-server/src/cli.rs`.
 
-`vesper-loadtest` takes flags: `--url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--pid PID]`
+`vesper-loadtest` takes flags: `--url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--sharers N] [--share-mbps M] [--packet-ms MS] [--reconnects N] [--pid PID] [--json FILE]`
 (`crates/vesper-loadtest/src/main.rs`; see `docs/testing/latency.md`).
 
 ## Keeping this file true

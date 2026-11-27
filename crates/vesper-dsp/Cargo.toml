@@ -30,3 +30,7 @@ tract-core = "=0.21.4"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "dsp_bench"
+required-features = ["tract"]
