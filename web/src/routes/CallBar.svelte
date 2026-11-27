@@ -26,6 +26,7 @@
   import { shares } from '../lib/share/state.svelte';
   import { syncWatches, tabCounts } from '../lib/share/watch';
   import Status from '../lib/ui/c/Status.svelte';
+  import { MUTED_SPEECH } from '../lib/audio/muted-speech';
   // The call, floating at the bottom of the main pane while you are in voice. Everything here is read from the voice
   // store; nothing animates while the call runs but the timer's digits, once a second (the speaking ring is an instant
   // toggle from the store's 100 ms poll).
@@ -62,7 +63,7 @@
       : voice.micWarning === 'pipeline' ? 'The audio pipeline stopped. Leave and join again.' : '',
   );
   const noise = $derived(`Noise suppression: ${voice.mode}${voice.modeReason ? ` (${voice.modeReason})` : ''}`);
-  const notice = $derived((voice.retrying ? 'Getting the microphone again.' : voice.deviceError) || (voice.forceMuted ? 'A moderator muted you.' : '') || warning || voice.notice);
+  const notice = $derived((voice.retrying ? 'Getting the microphone again.' : voice.deviceError) || (voice.forceMuted ? 'A moderator muted you.' : '') || warning || voice.notice || (voice.mutedSpeech ? MUTED_SPEECH : ''));
   const micLost = $derived(voice.modeReason.startsWith('microphone lost'));
 
   // Watching (design: "What counts as watching"): a tile in the open panel while the tab is visible, or the pop-out. The bar

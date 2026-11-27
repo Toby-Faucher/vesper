@@ -13,6 +13,8 @@ export type AudioSettings = {
   /** thresholdDb: the level marker, a sample peak in dBFS. gate: mute the denoised output below it (deepfilter only). */
   vad: { thresholdDb: number; gate: boolean };
   pushToTalk: { enabled: boolean; key: string };
+  /** "You are muted" when the mic hears speech while you are muted (muted-speech.ts). */
+  mutedNotice: boolean;
   micId: string | null;
   speakerId: string | null;
 };
@@ -29,6 +31,7 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   autoGain: false,
   vad: { thresholdDb: -50, gate: false }, // off by default: nobody's sound changes on upgrade
   pushToTalk: { enabled: false, key: 'Space' },
+  mutedNotice: true,
   micId: null,
   speakerId: null,
 };
@@ -57,6 +60,7 @@ export function clampSettings(s: Partial<AudioSettings>): AudioSettings {
     autoGain: bool(s.autoGain, D.autoGain),
     vad: { thresholdDb: num(vad.thresholdDb, D.vad.thresholdDb, -100, 0), gate: bool(vad.gate, D.vad.gate) },
     pushToTalk: { enabled: bool(ptt.enabled, D.pushToTalk.enabled), key: str(ptt.key, D.pushToTalk.key)! },
+    mutedNotice: bool(s.mutedNotice, D.mutedNotice),
     micId: str(s.micId, D.micId),
     speakerId: str(s.speakerId, D.speakerId),
   };

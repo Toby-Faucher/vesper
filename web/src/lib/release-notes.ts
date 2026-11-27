@@ -16,6 +16,12 @@ export function whatsNew(seen: string | null, current: string, notes: readonly N
 
 export const RELEASE_NOTES: readonly Note[] = [
   {
+    version: '2.4.0',
+    items: [
+      'Talk while muted and the call bar says "You are muted". Turn it off in Settings.',
+    ],
+  },
+  {
     version: '2.3.2',
     items: [
       'Calls ride out a short network drop: nobody leaves and voice keeps going.',
