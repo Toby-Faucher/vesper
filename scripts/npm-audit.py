@@ -12,10 +12,7 @@ import sys
 from pathlib import Path
 
 # Advisory id: why it is allowed, and when to look again.
-ALLOWED = {
-    "GHSA-fc5q-39xc-vjpf": "picomatch ReDoS. Dev tooling only (vite, vitest, svelte-check; "
-    "`npm audit --omit=dev` passes). No fixed picomatch as of 2026-11-18. Remove once one ships.",
-}
+ALLOWED = {}
 BLOCKING = {"high", "critical"}
 
 
