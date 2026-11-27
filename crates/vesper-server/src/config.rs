@@ -402,8 +402,15 @@ mod tests {
         assert_eq!(with("0").unwrap().udp_recv_buffer, 0);
         assert_eq!(with("").unwrap().udp_recv_buffer, 4 * 1024 * 1024);
         assert_eq!(with("1048576").unwrap().udp_recv_buffer, 1 << 30);
-        assert!(with("1048577").is_err());
-        assert!(with("-1").is_err());
+        assert_eq!(
+            with("1048577").unwrap_err(),
+            "VESPER_UDP_RECV_BUFFER_KB must be 0 to 1048576"
+        );
+        assert!(
+            with("-1")
+                .unwrap_err()
+                .starts_with("VESPER_UDP_RECV_BUFFER_KB=-1: ")
+        );
     }
 
     #[test]
