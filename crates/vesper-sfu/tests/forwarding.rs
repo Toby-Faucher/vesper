@@ -777,3 +777,94 @@ async fn sharing_off_stops_video() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(b.client.received_video().len(), got, "b still gets video");
 }
+
+/// Viewers who ask for keyframes all the time get the sharer at most one request per interval, and a viewer who
+/// starts watching during the storm still gets one asked for within the interval.
+#[tokio::test(flavor = "multi_thread")]
+async fn keyframe_requests_are_rate_limited_per_sharer() {
+    let interval = Duration::from_millis(500);
+    let t = Ctx::new(SfuConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        keyframe_interval: interval,
+        ..Default::default()
+    });
+    t.h.set_advertised(vec![t.h.local_addr()]);
+    let a = t.join_video("r", "a").await;
+    let mut viewers = vec![];
+    for v in ["b", "c", "d", "e"] {
+        viewers.push(t.join_video("r", v).await);
+    }
+    t.ready(&a, 8).await; // 4 audio + 4 video
+    for v in &viewers {
+        t.ready(v, 8).await;
+    }
+    t.h.set_sharing("a", true);
+    let users = ["b", "c", "d", "e"];
+    for v in users {
+        t.h.watch(v, "a", true);
+    }
+    a.client.send_video(600, 1200); // 10 s at 60 frames a second
+    for v in &viewers {
+        t.wait_until("viewer got video", CONNECT, || {
+            !v.client.received_video().is_empty()
+        })
+        .await;
+    }
+    let (before, stats_before) = (a.client.keyframe_requests(), t.h.keyframe_stats());
+
+    // 4 viewers send a PLI every 10 ms for 3 s: about 1200 requests.
+    let storm = Duration::from_secs(3);
+    let start = Instant::now();
+    while start.elapsed() < storm {
+        for v in &viewers {
+            v.client.request_keyframes();
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // Let a merged request that was due at the end go out.
+    tokio::time::sleep(interval * 2).await;
+    let upstream = a.client.keyframe_requests() - before;
+    let stats = t.h.keyframe_stats();
+    // One at once, then one per interval, plus one merged at the end: 3 s / 500 ms + 2.
+    let bound = (storm.as_millis() / interval.as_millis()) as usize + 2;
+    assert!(upstream >= 1, "no request reached the sharer");
+    assert!(
+        upstream <= bound,
+        "{upstream} requests reached the sharer, bound {bound}"
+    );
+    assert!(
+        stats.suppressed - stats_before.suppressed >= 100,
+        "few requests were merged: {stats:?} (before {stats_before:?})"
+    );
+
+    // A fresh viewer starts watching in the middle of a storm.
+    let f = t.join_video("r", "f").await;
+    t.ready(&f, 10).await;
+    for v in &viewers {
+        v.client.request_keyframes();
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let n = a.client.keyframe_requests();
+    let watched = Instant::now();
+    t.h.watch("f", "a", true);
+    let mut asked = None;
+    while asked.is_none() && watched.elapsed() < CONNECT {
+        for v in &viewers {
+            v.client.request_keyframes();
+        }
+        if a.client.keyframe_requests() > n {
+            asked = Some(watched.elapsed());
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let asked = asked.expect("the sharer was never asked for a keyframe for f");
+    // The interval plus slack for loopback round trips and a slow CI machine.
+    assert!(
+        asked <= interval + Duration::from_millis(400),
+        "f's keyframe was asked for after {asked:?}"
+    );
+    t.wait_until("f got video", CONNECT, || {
+        !f.client.received_video().is_empty()
+    })
+    .await;
+}

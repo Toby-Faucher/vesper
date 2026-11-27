@@ -13,6 +13,7 @@ use str0m::{Event, IceConnectionState, Input, Output, Rtc};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, warn};
 
+use crate::keyframe::{KeyframeCounters, KeyframeLimiter, Verdict};
 use crate::meter::RateMeter;
 use crate::{SfuConfig, SfuEvent};
 
@@ -97,6 +98,11 @@ pub(crate) struct Client {
     /// The client owns the strong refs to its incoming tracks; others hold weak ones.
     pub tracks_in: Vec<Arc<TrackIn>>,
     tracks_out: Vec<TrackOut>,
+    /// One keyframe request limiter per incoming m-line that was asked for a keyframe.
+    keyframe_limits: Vec<(Mid, KeyframeLimiter)>,
+    keyframe_interval: Duration,
+    /// The SFU's counts; a client made alone (in a unit test) counts on its own.
+    pub keyframe_counters: Arc<KeyframeCounters>,
 }
 
 impl Client {
@@ -130,6 +136,9 @@ impl Client {
             socket_v6,
             tracks_in: vec![],
             tracks_out: vec![],
+            keyframe_limits: vec![],
+            keyframe_interval: cfg.keyframe_interval,
+            keyframe_counters: Arc::default(),
         }
     }
 
@@ -184,7 +193,15 @@ impl Client {
         if self.negotiate_if_needed() {
             return Propagated::Noop;
         }
+        self.send_due_keyframe_requests(Instant::now());
         match self.rtc.poll_output() {
+            // Wake in time for a merged keyframe request.
+            Ok(Output::Timeout(t)) => Propagated::Timeout(
+                self.keyframe_limits
+                    .iter()
+                    .filter_map(|(_, l)| l.deadline())
+                    .fold(t, Instant::min),
+            ),
             Ok(output) => self.handle_output(output, socket),
             Err(e) => {
                 warn!("client {} poll_output failed: {e:?}", self.user);
@@ -271,8 +288,37 @@ impl Client {
         false
     }
 
-    /// Ask this client for a keyframe on its incoming m-line `mid`.
-    pub fn request_keyframe(&mut self, mid: Mid, kind: KeyframeRequestKind) {
+    /// Ask this client for a keyframe on its incoming m-line `mid`, for a viewer or a new watch. At most one
+    /// request per `SfuConfig::keyframe_interval` goes out; the ones in between are merged (see `keyframe.rs`).
+    pub fn request_keyframe(&mut self, mid: Mid, kind: KeyframeRequestKind, now: Instant) {
+        let interval = self.keyframe_interval;
+        let limiter = match self.keyframe_limits.iter_mut().position(|(m, _)| *m == mid) {
+            Some(i) => &mut self.keyframe_limits[i].1,
+            None => {
+                self.keyframe_limits
+                    .push((mid, KeyframeLimiter::new(interval)));
+                &mut self.keyframe_limits.last_mut().expect("just pushed").1
+            }
+        };
+        match limiter.request(kind, now) {
+            Verdict::Forward(kind) => self.send_keyframe_request(mid, kind),
+            Verdict::Suppressed => self.keyframe_counters.add_suppressed(),
+        }
+    }
+
+    /// Send the merged keyframe requests whose interval has ended.
+    fn send_due_keyframe_requests(&mut self, now: Instant) {
+        for i in 0..self.keyframe_limits.len() {
+            let (mid, limiter) = &mut self.keyframe_limits[i];
+            let mid = *mid;
+            if let Some(kind) = limiter.due(now) {
+                self.send_keyframe_request(mid, kind);
+            }
+        }
+    }
+
+    fn send_keyframe_request(&mut self, mid: Mid, kind: KeyframeRequestKind) {
+        self.keyframe_counters.add_forwarded();
         if let Some(mut writer) = self.rtc.writer(mid)
             && let Err(e) = writer.request_keyframe(None, kind)
         {

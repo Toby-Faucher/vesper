@@ -268,7 +268,11 @@ unit tests in `hub.rs` and `voice.rs`.
   track only from an m-line the client sends on. The web's and the desktop's video m-lines are send-only, for their own share
   (the desktop's capture and encoder: [ADR 0011](decisions/0011-desktop-screen-share-send.md)).
 - Keyframes: `watch(viewer, sharer, true)` sends the sharer a PLI, so the new viewer gets a picture right away. A viewer's own PLI or FIR on a
-  forwarded video goes to the sharer as the same kind. Covered by `tests/forwarding.rs` with str0m test clients, not a browser.
+  forwarded video goes to the sharer as the same kind. Both go through one limiter per sharer's track (`keyframe.rs`): a request after a
+  quiet `keyframe_interval` (500 ms) goes out at once, and the ones inside it are merged into one sent when it ends (FIR if any was a FIR).
+  So a sharer gets at most two requests a second however many viewers ask, and a new viewer waits at most 500 ms.
+  `SfuHandle::keyframe_stats` counts the requests sent on and merged away. Covered by `tests/forwarding.rs` with str0m test clients, not a
+  browser.
 - Share ceiling: the SFU measures each sharer's incoming video in windows of at least a second. When it stays above `share_ceiling_bps`
   (35 Mbps) for `share_ceiling_secs` (5) windows in a row, the SFU stops forwarding it, sets the sender to not sharing, and sends
   `SfuEvent::ShareCut` once to that session. Video from a client that is not sharing is dropped before it is measured.
