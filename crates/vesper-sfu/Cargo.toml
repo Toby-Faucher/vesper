@@ -12,7 +12,7 @@ test-support = []
 [dependencies]
 # Sets SO_RCVBUF without unsafe code (already in the tree through tokio).
 socket2 = "0.6"
-str0m = { version = "0.24", default-features = false, features = ["aws-lc-rs"] }
+str0m = { version = "0.25", default-features = false, features = ["aws-lc-rs"] }
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 
