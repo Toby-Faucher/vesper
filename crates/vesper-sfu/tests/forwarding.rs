@@ -812,25 +812,29 @@ async fn keyframe_requests_are_rate_limited_per_sharer() {
     }
     let (before, stats_before) = (a.client.keyframe_requests(), t.h.keyframe_stats());
 
-    // 4 viewers send a PLI every 10 ms for 3 s: about 1200 requests.
-    let storm = Duration::from_secs(3);
-    let start = Instant::now();
-    while start.elapsed() < storm {
+    // The viewers send a PLI each time wait_until polls (every 10 ms) while b gets 180 more frames: about 3 s,
+    // paced by the video itself.
+    let spam = || {
         for v in &viewers {
             v.client.request_keyframes();
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    // Let a merged request that was due at the end go out.
-    tokio::time::sleep(interval * 2).await;
+    };
+    let frames = viewers[0].client.received_video().len() + 180;
+    let start = Instant::now();
+    t.wait_until("180 frames during the storm", CONNECT, || {
+        spam();
+        viewers[0].client.received_video().len() >= frames
+    })
+    .await;
+    let storm = start.elapsed();
     let upstream = a.client.keyframe_requests() - before;
     let stats = t.h.keyframe_stats();
-    // One at once, then one per interval, plus one merged at the end: 3 s / 500 ms + 2.
+    // One at once, then one per interval: storm / 500 ms + 1, and one more for a request still on the wire.
     let bound = (storm.as_millis() / interval.as_millis()) as usize + 2;
     assert!(upstream >= 1, "no request reached the sharer");
     assert!(
         upstream <= bound,
-        "{upstream} requests reached the sharer, bound {bound}"
+        "{upstream} requests reached the sharer in {storm:?}, bound {bound}"
     );
     assert!(
         stats.suppressed - stats_before.suppressed >= 100,
@@ -840,24 +844,16 @@ async fn keyframe_requests_are_rate_limited_per_sharer() {
     // A fresh viewer starts watching in the middle of a storm.
     let f = t.join_video("r", "f").await;
     t.ready(&f, 10).await;
-    for v in &viewers {
-        v.client.request_keyframes();
-    }
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    spam();
     let n = a.client.keyframe_requests();
     let watched = Instant::now();
     t.h.watch("f", "a", true);
-    let mut asked = None;
-    while asked.is_none() && watched.elapsed() < CONNECT {
-        for v in &viewers {
-            v.client.request_keyframes();
-        }
-        if a.client.keyframe_requests() > n {
-            asked = Some(watched.elapsed());
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    let asked = asked.expect("the sharer was never asked for a keyframe for f");
+    t.wait_until("the sharer asked for a keyframe for f", CONNECT, || {
+        spam();
+        a.client.keyframe_requests() > n
+    })
+    .await;
+    let asked = watched.elapsed();
     // The interval plus slack for loopback round trips and a slow CI machine.
     assert!(
         asked <= interval + Duration::from_millis(400),
