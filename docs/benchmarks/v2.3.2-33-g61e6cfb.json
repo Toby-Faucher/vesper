@@ -1,0 +1,1871 @@
+{
+ "meta": {
+  "host": "bawn",
+  "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+  "threads": 20,
+  "mem_gib": 47,
+  "kernel": "6.18.64",
+  "governor": "powersave",
+  "turbo": "on",
+  "mhz": 1784,
+  "loadavg_start": "6.48 6.73 6.67",
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "date": "2026-11-27 03:40",
+  "describe": "v2.3.2-33-g61e6cfb",
+  "commit": "61e6cfbfcfc0",
+  "branch": "(detached)",
+  "dirty": false,
+  "bench_commit": "538133cf0457",
+  "dsp_note": "is the same as the server's commit.",
+  "settings": "3 repeats; load cases 10 s, throughput steps 5 s; nice 10; loopback; quick no; took 261 s",
+  "name": "v2.3.2-33-g61e6cfb",
+  "busy_at_start": 0.44,
+  "loadavg_end": "0.75 3.14 5.15",
+  "wall_s": 261
+ },
+ "summary": {
+  "load-4.loss": {
+   "median": 0.0,
+   "min": 0.0,
+   "max": 0.0,
+   "n": 3
+  },
+  "load-4.worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "load-4.latency_p50": {
+   "median": 2.534284,
+   "min": 2.5284809999999998,
+   "max": 2.569225,
+   "n": 3
+  },
+  "load-4.latency_p99": {
+   "median": 4.810690999999999,
+   "min": 4.508201,
+   "max": 5.080347,
+   "n": 3
+  },
+  "load-4.jitter_max": {
+   "median": 1.0520031251030728,
+   "min": 0.8593521381888329,
+   "max": 1.3802878880208485,
+   "n": 3
+  },
+  "load-4.cpu": {
+   "median": 4.096386580674296,
+   "min": 4.09590073202798,
+   "max": 4.396264660536373,
+   "n": 3
+  },
+  "load-4.rss_peak": {
+   "median": 14.21875,
+   "min": 14.203125,
+   "max": 14.265625,
+   "n": 3
+  },
+  "load-8.loss": {
+   "median": 0.0,
+   "min": 0.0,
+   "max": 0.0,
+   "n": 3
+  },
+  "load-8.worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "load-8.latency_p50": {
+   "median": 2.6752730000000002,
+   "min": 2.638728,
+   "max": 2.694801,
+   "n": 3
+  },
+  "load-8.latency_p99": {
+   "median": 5.181084,
+   "min": 5.113695,
+   "max": 5.220899,
+   "n": 3
+  },
+  "load-8.jitter_max": {
+   "median": 1.3012973203685547,
+   "min": 1.0987223800183163,
+   "max": 1.6078794120299351,
+   "n": 3
+  },
+  "load-8.cpu": {
+   "median": 8.684880371909195,
+   "min": 8.188189049876186,
+   "max": 8.977863373853296,
+   "n": 3
+  },
+  "load-8.rss_peak": {
+   "median": 16.72265625,
+   "min": 16.49609375,
+   "max": 16.83984375,
+   "n": 3
+  },
+  "load-12.loss": {
+   "median": 0.0,
+   "min": 0.0,
+   "max": 0.0,
+   "n": 3
+  },
+  "load-12.worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "load-12.latency_p50": {
+   "median": 3.144712,
+   "min": 3.000899,
+   "max": 3.293986,
+   "n": 3
+  },
+  "load-12.latency_p99": {
+   "median": 6.964992,
+   "min": 6.951568,
+   "max": 7.350691,
+   "n": 3
+  },
+  "load-12.jitter_max": {
+   "median": 1.723629681529617,
+   "min": 1.6613592802596275,
+   "max": 2.0695346304150815,
+   "n": 3
+  },
+  "load-12.cpu": {
+   "median": 18.359306303828664,
+   "min": 17.059260614252274,
+   "max": 18.825700794929656,
+   "n": 3
+  },
+  "load-12.rss_peak": {
+   "median": 19.4765625,
+   "min": 19.30078125,
+   "max": 19.734375,
+   "n": 3
+  },
+  "share-2.loss": {
+   "median": 0.0,
+   "min": 0.0,
+   "max": 0.0,
+   "n": 3
+  },
+  "share-2.worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "share-2.latency_p50": {
+   "median": 2.352136,
+   "min": 2.2104440000000003,
+   "max": 2.389274,
+   "n": 3
+  },
+  "share-2.latency_p99": {
+   "median": 5.511781,
+   "min": 5.302948,
+   "max": 5.968788,
+   "n": 3
+  },
+  "share-2.jitter_max": {
+   "median": 1.290403461124883,
+   "min": 1.1742483960468104,
+   "max": 1.598105208875755,
+   "n": 3
+  },
+  "share-2.cpu": {
+   "median": 17.44224834595089,
+   "min": 9.958782666980527,
+   "max": 17.840713012774714,
+   "n": 3
+  },
+  "share-2.rss_peak": {
+   "median": 23.99609375,
+   "min": 23.96875,
+   "max": 24.16796875,
+   "n": 3
+  },
+  "share-2.video_worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "share-4.loss": {
+   "median": 0.0,
+   "min": 0.0,
+   "max": 0.0,
+   "n": 3
+  },
+  "share-4.worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "share-4.latency_p50": {
+   "median": 2.81739,
+   "min": 2.741768,
+   "max": 2.8771560000000003,
+   "n": 3
+  },
+  "share-4.latency_p99": {
+   "median": 7.505658,
+   "min": 7.263571,
+   "max": 8.060054000000001,
+   "n": 3
+  },
+  "share-4.jitter_max": {
+   "median": 1.4864736866555948,
+   "min": 1.4743256870370895,
+   "max": 1.5830915635411533,
+   "n": 3
+  },
+  "share-4.cpu": {
+   "median": 28.00327609214815,
+   "min": 27.83780520765773,
+   "max": 30.000306094513828,
+   "n": 3
+  },
+  "share-4.rss_peak": {
+   "median": 33.72265625,
+   "min": 33.703125,
+   "max": 33.734375,
+   "n": 3
+  },
+  "share-4.video_worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "calls.join_ms": {
+   "median": 13.211003999999999,
+   "min": 12.5370095,
+   "max": 16.195462,
+   "n": 3
+  },
+  "calls.media_ms": {
+   "median": 4.6036035,
+   "min": 4.4976045,
+   "max": 5.030663,
+   "n": 3
+  },
+  "calls.resume_ms": {
+   "median": 43.370736,
+   "min": 43.266061,
+   "max": 43.8271955,
+   "n": 3
+  },
+  "scale.rss_per_participant": {
+   "median": 0.6591796875,
+   "min": 0.62939453125,
+   "max": 0.689453125,
+   "n": 3
+  },
+  "scale.cpu_per_participant": {
+   "median": 1.529942191985722,
+   "min": 1.4216050511876894,
+   "max": 1.5688083995774713,
+   "n": 3
+  },
+  "scale.us_per_packet": {
+   "median": 27.817130763376763,
+   "min": 25.8473645670489,
+   "max": 28.523789083226752,
+   "n": 3
+  },
+  "throughput-10ms.forwarded_per_s": {
+   "median": 13200.0,
+   "min": 13200.0,
+   "max": 13200.0,
+   "n": 3
+  },
+  "throughput-10ms.worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "throughput-10ms.cpu": {
+   "median": 29.222944956233416,
+   "min": 28.01893030230459,
+   "max": 29.613698958309698,
+   "n": 3
+  },
+  "throughput-10ms.us_per_packet": {
+   "median": 22.138594663813194,
+   "min": 21.226462350230747,
+   "max": 22.434620422961892,
+   "n": 3
+  },
+  "throughput-10ms.latency_p99": {
+   "median": 7.3665270000000005,
+   "min": 7.079438000000001,
+   "max": 7.374798999999999,
+   "n": 3
+  },
+  "throughput-5ms.forwarded_per_s": {
+   "median": 26400.0,
+   "min": 26400.0,
+   "max": 26400.0,
+   "n": 3
+  },
+  "throughput-5ms.worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "throughput-5ms.cpu": {
+   "median": 45.03344152121696,
+   "min": 43.62499704748003,
+   "max": 46.19903396432027,
+   "n": 3
+  },
+  "throughput-5ms.us_per_packet": {
+   "median": 17.058121788339754,
+   "min": 16.524620093742435,
+   "max": 17.49963407739404,
+   "n": 3
+  },
+  "throughput-5ms.latency_p99": {
+   "median": 6.213167,
+   "min": 5.874839,
+   "max": 6.262029,
+   "n": 3
+  },
+  "throughput-2ms.forwarded_per_s": {
+   "median": 66000.0,
+   "min": 66000.0,
+   "max": 66000.0,
+   "n": 3
+  },
+  "throughput-2ms.worst_pair": {
+   "median": 100.0,
+   "min": 100.0,
+   "max": 100.0,
+   "n": 3
+  },
+  "throughput-2ms.cpu": {
+   "median": 42.47073878369987,
+   "min": 41.085217350984585,
+   "max": 47.720846255706455,
+   "n": 3
+  },
+  "throughput-2ms.us_per_packet": {
+   "median": 6.4349604217727085,
+   "min": 6.225032931967362,
+   "max": 7.230431250864615,
+   "n": 3
+  },
+  "throughput-2ms.latency_p99": {
+   "median": 9.863207000000001,
+   "min": 7.130412,
+   "max": 11.104136,
+   "n": 3
+  },
+  "machine.other_cores": {
+   "median": 0.17759258022866775,
+   "min": 0.043957948077497686,
+   "max": 0.989462154241035,
+   "n": 24
+  },
+  "deepfilternet.ms_per_frame": {
+   "median": 0.15737,
+   "min": 0.15123,
+   "max": 0.15838,
+   "n": 3
+  },
+  "rnnoise.ms_per_frame": {
+   "median": 0.04123,
+   "min": 0.03929,
+   "max": 0.04587,
+   "n": 3
+  }
+ },
+ "errors": [],
+ "notes": [
+  "Throughput: the server never passed 48% of one core, so the load generator, not the SFU, set the ceiling. The rate tracks the tools; CPU per packet tracks the SFU."
+ ],
+ "raw": {
+  "load": {
+   "load-4": [
+    {
+     "forwarded_per_second": 600.0,
+     "jitter_ms": {
+      "max": 1.3802878880208485,
+      "mean": 1.1602599955985409,
+      "pairs": 12
+     },
+     "join_ms": [
+      43.336296000000004,
+      12.240337,
+      13.858594,
+      13.363494
+     ],
+     "latency_ms": {
+      "count": 6000,
+      "max": 6.224749,
+      "p50": 2.5284809999999998,
+      "p95": 4.241482,
+      "p99": 4.810690999999999
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.499838,
+      4.706691,
+      5.092656,
+      4.7173
+     ],
+     "packet_ms": 20,
+     "packets_expected": 6000,
+     "packets_received": 6000,
+     "packets_sent": 2000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [
+      43.97885,
+      43.400556,
+      43.368519,
+      44.336978
+     ],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 4.096386580674296,
+     "server_rss_mib": {
+      "idle": 13.7734375,
+      "load": 14.265625,
+      "peak": 14.265625
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 4,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.24748680543296792
+    },
+    {
+     "forwarded_per_second": 600.0,
+     "jitter_ms": {
+      "max": 0.8593521381888329,
+      "mean": 0.7143388238429432,
+      "pairs": 12
+     },
+     "join_ms": [
+      43.401772,
+      12.832665,
+      14.68059,
+      10.984440999999999
+     ],
+     "latency_ms": {
+      "count": 6000,
+      "max": 6.260377999999999,
+      "p50": 2.534284,
+      "p95": 4.255619,
+      "p99": 5.080347
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.657022,
+      5.009215,
+      7.461097,
+      4.503161
+     ],
+     "packet_ms": 20,
+     "packets_expected": 6000,
+     "packets_received": 6000,
+     "packets_sent": 2000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [
+      43.029451,
+      46.359367,
+      41.614959999999996,
+      41.956932
+     ],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 4.09590073202798,
+     "server_rss_mib": {
+      "idle": 13.71875,
+      "load": 14.203125,
+      "peak": 14.203125
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 4,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.31565543017101977
+    },
+    {
+     "forwarded_per_second": 600.0,
+     "jitter_ms": {
+      "max": 1.0520031251030728,
+      "mean": 0.9412168554273626,
+      "pairs": 12
+     },
+     "join_ms": [
+      45.638169999999995,
+      42.199682,
+      20.508961,
+      14.094423
+     ],
+     "latency_ms": {
+      "count": 6000,
+      "max": 5.553009,
+      "p50": 2.569225,
+      "p95": 4.2715000000000005,
+      "p99": 4.508201
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      2.355991,
+      7.379345,
+      5.17384,
+      5.153662
+     ],
+     "packet_ms": 20,
+     "packets_expected": 6000,
+     "packets_received": 6000,
+     "packets_sent": 2000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [
+      43.400731,
+      44.301173,
+      44.667987,
+      43.411994
+     ],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 4.396264660536373,
+     "server_rss_mib": {
+      "idle": 13.73828125,
+      "load": 14.21875,
+      "peak": 14.21875
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 4,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.06986212546852928
+    }
+   ],
+   "load-8": [
+    {
+     "forwarded_per_second": 2800.0,
+     "jitter_ms": {
+      "max": 1.0987223800183163,
+      "mean": 0.8733041158421807,
+      "pairs": 56
+     },
+     "join_ms": [
+      45.915598,
+      13.614454,
+      13.025566000000001,
+      15.102407,
+      12.539902,
+      9.535898,
+      14.899427,
+      12.136809
+     ],
+     "latency_ms": {
+      "count": 28000,
+      "max": 7.164284,
+      "p50": 2.6752730000000002,
+      "p95": 4.324309,
+      "p99": 5.220899
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      2.198195,
+      4.223196000000001,
+      4.70336,
+      5.771364999999999,
+      5.442528,
+      4.495371,
+      5.065772,
+      3.269133
+     ],
+     "packet_ms": 20,
+     "packets_expected": 28000,
+     "packets_received": 28000,
+     "packets_sent": 4000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [
+      42.552121,
+      44.007551,
+      43.910803,
+      44.3502
+     ],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 8.188189049876186,
+     "server_rss_mib": {
+      "idle": 15.55078125,
+      "load": 16.72265625,
+      "peak": 16.72265625
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 8,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.2502152975183939
+    },
+    {
+     "forwarded_per_second": 2800.0,
+     "jitter_ms": {
+      "max": 1.6078794120299351,
+      "mean": 1.1567388712743012,
+      "pairs": 56
+     },
+     "join_ms": [
+      44.738434,
+      13.162821,
+      13.259187,
+      13.058815999999998,
+      18.084088,
+      7.206639,
+      12.572589,
+      15.208921
+     ],
+     "latency_ms": {
+      "count": 28000,
+      "max": 7.2800959999999995,
+      "p50": 2.638728,
+      "p95": 4.1975750000000005,
+      "p99": 5.113695
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      2.129619,
+      5.3047320000000004,
+      4.550185,
+      4.675912,
+      4.675931,
+      4.339817999999999,
+      3.431825,
+      4.537043
+     ],
+     "packet_ms": 20,
+     "packets_expected": 28000,
+     "packets_received": 28000,
+     "packets_sent": 4000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [
+      42.693546999999995,
+      44.318782,
+      43.128723,
+      43.170819
+     ],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 8.684880371909195,
+     "server_rss_mib": {
+      "idle": 15.60546875,
+      "load": 16.83984375,
+      "peak": 16.83984375
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 8,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.2399009060775036
+    },
+    {
+     "forwarded_per_second": 2800.0,
+     "jitter_ms": {
+      "max": 1.3012973203685547,
+      "mean": 1.110241221390043,
+      "pairs": 56
+     },
+     "join_ms": [
+      40.159282999999995,
+      43.012207,
+      18.229436000000003,
+      15.805680999999998,
+      14.153167,
+      16.585243,
+      14.13917,
+      15.059769000000001
+     ],
+     "latency_ms": {
+      "count": 28000,
+      "max": 6.538674,
+      "p50": 2.694801,
+      "p95": 4.223807000000001,
+      "p99": 5.181084
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.577203,
+      7.792179,
+      4.6397260000000005,
+      4.907664,
+      8.622611000000001,
+      4.53414,
+      3.583003,
+      4.574174999999999
+     ],
+     "packet_ms": 20,
+     "packets_expected": 28000,
+     "packets_received": 28000,
+     "packets_sent": 4000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [
+      41.208931,
+      43.308004,
+      43.340741,
+      43.287141
+     ],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 8.977863373853296,
+     "server_rss_mib": {
+      "idle": 15.55078125,
+      "load": 16.49609375,
+      "peak": 16.49609375
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 8,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.06713362558856663
+    }
+   ],
+   "load-12": [
+    {
+     "forwarded_per_second": 6600.0,
+     "jitter_ms": {
+      "max": 1.723629681529617,
+      "mean": 1.2134040735960903,
+      "pairs": 132
+     },
+     "join_ms": [
+      40.313726,
+      11.494647,
+      12.534116999999998,
+      12.166758,
+      13.366731,
+      11.631293,
+      13.301347999999999,
+      10.408356000000001,
+      11.164467,
+      12.298762,
+      11.173774,
+      8.545505
+     ],
+     "latency_ms": {
+      "count": 66000,
+      "max": 9.133678,
+      "p50": 3.000899,
+      "p95": 5.402065,
+      "p99": 6.951568
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      2.23733,
+      2.127494,
+      4.447122,
+      2.1558520000000003,
+      4.391001999999999,
+      4.433687000000001,
+      2.123815,
+      4.504665,
+      4.4571819999999995,
+      8.605349,
+      6.666697,
+      18.851349
+     ],
+     "packet_ms": 20,
+     "packets_expected": 66000,
+     "packets_received": 66000,
+     "packets_sent": 6000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [
+      43.812498,
+      42.911723,
+      42.760095,
+      43.841893
+     ],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 17.059260614252274,
+     "server_rss_mib": {
+      "idle": 17.7890625,
+      "load": 19.30078125,
+      "peak": 19.30078125
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.2724518182015386
+    },
+    {
+     "forwarded_per_second": 6600.0,
+     "jitter_ms": {
+      "max": 1.6613592802596275,
+      "mean": 1.22192921106668,
+      "pairs": 132
+     },
+     "join_ms": [
+      42.552894,
+      13.688706999999999,
+      16.565821,
+      14.528690000000001,
+      20.663083,
+      11.008396,
+      11.916547,
+      12.383140000000001,
+      13.536552,
+      9.150663,
+      12.163686,
+      8.595788
+     ],
+     "latency_ms": {
+      "count": 66000,
+      "max": 9.61639,
+      "p50": 3.144712,
+      "p95": 5.659909,
+      "p99": 6.964992
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.6773750000000005,
+      4.882128000000001,
+      5.32611,
+      7.478382000000001,
+      4.360766,
+      2.126762,
+      2.0772,
+      4.3302119999999995,
+      3.547929,
+      2.1349,
+      6.290122,
+      6.26513
+     ],
+     "packet_ms": 20,
+     "packets_expected": 66000,
+     "packets_received": 66000,
+     "packets_sent": 6000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [
+      43.361303,
+      43.873721999999994,
+      44.037285000000004,
+      43.548876
+     ],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 18.359306303828664,
+     "server_rss_mib": {
+      "idle": 18.6875,
+      "load": 19.4765625,
+      "peak": 19.4765625
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.29571466037992
+    },
+    {
+     "forwarded_per_second": 6600.0,
+     "jitter_ms": {
+      "max": 2.0695346304150815,
+      "mean": 1.5790406871628857,
+      "pairs": 132
+     },
+     "join_ms": [
+      43.436821,
+      13.338219,
+      13.925329999999999,
+      14.277176,
+      16.863663000000003,
+      13.306270999999999,
+      20.887461,
+      13.582455,
+      14.536957,
+      43.245651,
+      20.135635,
+      13.913712
+     ],
+     "latency_ms": {
+      "count": 66000,
+      "max": 9.583376,
+      "p50": 3.293986,
+      "p95": 5.7938019999999995,
+      "p99": 7.350691
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      3.4737489999999998,
+      4.840421999999999,
+      5.7490950000000005,
+      4.161974,
+      4.349653999999999,
+      8.993607,
+      8.856029,
+      8.608335,
+      3.634597,
+      12.142932,
+      8.328225,
+      11.18164
+     ],
+     "packet_ms": 20,
+     "packets_expected": 66000,
+     "packets_received": 66000,
+     "packets_sent": 6000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [
+      41.91119,
+      43.520586,
+      44.770378,
+      42.855433
+     ],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 18.825700794929656,
+     "server_rss_mib": {
+      "idle": 18.203125,
+      "load": 19.734375,
+      "peak": 19.734375
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.05183052344026717
+    }
+   ],
+   "share-2": [
+    {
+     "forwarded_per_second": 600.0,
+     "jitter_ms": {
+      "max": 1.290403461124883,
+      "mean": 1.1397598056545073,
+      "pairs": 12
+     },
+     "join_ms": [
+      40.371964000000006,
+      14.320935,
+      15.105825,
+      12.162129
+     ],
+     "latency_ms": {
+      "count": 6000,
+      "max": 7.807998,
+      "p50": 2.352136,
+      "p95": 4.301671,
+      "p99": 5.511781
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      2.293319,
+      4.246304,
+      5.037977,
+      9.994784
+     ],
+     "packet_ms": 20,
+     "packets_expected": 6000,
+     "packets_received": 6000,
+     "packets_sent": 2000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 17.44224834595089,
+     "server_rss_mib": {
+      "idle": 14.0546875,
+      "load": 23.96875,
+      "peak": 23.96875
+     },
+     "share_mbps": 10,
+     "sharers": 2,
+     "speakers": 4,
+     "video_worst_pair_percent": 100.0,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.17243369005992518
+    },
+    {
+     "forwarded_per_second": 600.0,
+     "jitter_ms": {
+      "max": 1.598105208875755,
+      "mean": 1.2312767947133172,
+      "pairs": 12
+     },
+     "join_ms": [
+      37.57283,
+      13.751419,
+      23.770666,
+      14.98737
+     ],
+     "latency_ms": {
+      "count": 6000,
+      "max": 7.0415399999999995,
+      "p50": 2.2104440000000003,
+      "p95": 4.437698999999999,
+      "p99": 5.968788
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.367778,
+      11.135534000000002,
+      5.157851,
+      4.602421
+     ],
+     "packet_ms": 20,
+     "packets_expected": 6000,
+     "packets_received": 6000,
+     "packets_sent": 2000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 9.958782666980527,
+     "server_rss_mib": {
+      "idle": 14.03515625,
+      "load": 23.99609375,
+      "peak": 23.99609375
+     },
+     "share_mbps": 10,
+     "sharers": 2,
+     "speakers": 4,
+     "video_worst_pair_percent": 100.0,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.989462154241035
+    },
+    {
+     "forwarded_per_second": 600.0,
+     "jitter_ms": {
+      "max": 1.1742483960468104,
+      "mean": 1.0530079690871068,
+      "pairs": 12
+     },
+     "join_ms": [
+      38.808429,
+      41.796843,
+      14.622296,
+      13.439334
+     ],
+     "latency_ms": {
+      "count": 6000,
+      "max": 8.150355,
+      "p50": 2.389274,
+      "p95": 4.305087,
+      "p99": 5.302948
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.322701,
+      9.375876,
+      4.296398,
+      2.115155
+     ],
+     "packet_ms": 20,
+     "packets_expected": 6000,
+     "packets_received": 6000,
+     "packets_sent": 2000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 17.840713012774714,
+     "server_rss_mib": {
+      "idle": 14.0625,
+      "load": 24.16796875,
+      "peak": 24.16796875
+     },
+     "share_mbps": 10,
+     "sharers": 2,
+     "speakers": 4,
+     "video_worst_pair_percent": 100.0,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.13416704711533872
+    }
+   ],
+   "share-4": [
+    {
+     "forwarded_per_second": 600.0,
+     "jitter_ms": {
+      "max": 1.5830915635411533,
+      "mean": 1.4475185778657285,
+      "pairs": 12
+     },
+     "join_ms": [
+      51.926231,
+      14.436430999999999,
+      14.475072,
+      13.635003
+     ],
+     "latency_ms": {
+      "count": 6000,
+      "max": 11.30512,
+      "p50": 2.8771560000000003,
+      "p95": 5.831085,
+      "p99": 8.060054000000001
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      2.211091,
+      4.402495,
+      2.7001389999999996,
+      4.710556
+     ],
+     "packet_ms": 20,
+     "packets_expected": 6000,
+     "packets_received": 6000,
+     "packets_sent": 2000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 27.83780520765773,
+     "server_rss_mib": {
+      "idle": 14.3203125,
+      "load": 33.703125,
+      "peak": 33.703125
+     },
+     "share_mbps": 10,
+     "sharers": 4,
+     "speakers": 4,
+     "video_worst_pair_percent": 100.0,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.2619356345471133
+    },
+    {
+     "forwarded_per_second": 600.0,
+     "jitter_ms": {
+      "max": 1.4743256870370895,
+      "mean": 1.3290224887787865,
+      "pairs": 12
+     },
+     "join_ms": [
+      56.670019,
+      13.285227,
+      43.744697,
+      19.89688
+     ],
+     "latency_ms": {
+      "count": 6000,
+      "max": 10.052284,
+      "p50": 2.81739,
+      "p95": 5.889082,
+      "p99": 7.263571
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      2.187939,
+      2.0116829999999997,
+      12.852654999999999,
+      4.271742000000001
+     ],
+     "packet_ms": 20,
+     "packets_expected": 6000,
+     "packets_received": 6000,
+     "packets_sent": 2000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 30.000306094513828,
+     "server_rss_mib": {
+      "idle": 14.30078125,
+      "load": 33.72265625,
+      "peak": 33.72265625
+     },
+     "share_mbps": 10,
+     "sharers": 4,
+     "speakers": 4,
+     "video_worst_pair_percent": 100.0,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.14662582437727625
+    },
+    {
+     "forwarded_per_second": 600.0,
+     "jitter_ms": {
+      "max": 1.4864736866555948,
+      "mean": 1.274674822769676,
+      "pairs": 12
+     },
+     "join_ms": [
+      55.389422,
+      14.792748999999999,
+      14.953040000000001,
+      15.848547000000002
+     ],
+     "latency_ms": {
+      "count": 6000,
+      "max": 13.545365,
+      "p50": 2.741768,
+      "p95": 5.859452999999999,
+      "p99": 7.505658
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.917870000000001,
+      5.846121,
+      4.785063,
+      4.456962
+     ],
+     "packet_ms": 20,
+     "packets_expected": 6000,
+     "packets_received": 6000,
+     "packets_sent": 2000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 10,
+     "server_cpu_percent": 28.00327609214815,
+     "server_rss_mib": {
+      "idle": 14.25390625,
+      "load": 33.734375,
+      "peak": 33.734375
+     },
+     "share_mbps": 10,
+     "sharers": 4,
+     "speakers": 4,
+     "video_worst_pair_percent": 100.0,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.42120844438671695
+    }
+   ]
+  },
+  "throughput": {
+   "10": [
+    {
+     "forwarded_per_second": 13200.0,
+     "jitter_ms": {
+      "max": 1.7351388630339124,
+      "mean": 1.4400827191770933,
+      "pairs": 132
+     },
+     "join_ms": [
+      47.269746,
+      44.06563,
+      19.930513,
+      14.083020999999999,
+      16.609348999999998,
+      11.326315,
+      15.480648,
+      12.588233,
+      11.480258000000001,
+      12.451898,
+      13.340366,
+      16.766215000000003
+     ],
+     "latency_ms": {
+      "count": 66000,
+      "max": 10.221004,
+      "p50": 3.61173,
+      "p95": 5.772271,
+      "p99": 7.079438000000001
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.403708999999999,
+      11.322175,
+      5.9002170000000005,
+      4.280969,
+      6.427734,
+      2.457542,
+      4.944299,
+      4.607794999999999,
+      2.315487,
+      6.7342770000000005,
+      4.662683,
+      5.2209520000000005
+     ],
+     "packet_ms": 10,
+     "packets_expected": 66000,
+     "packets_received": 66000,
+     "packets_sent": 6000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 5,
+     "server_cpu_percent": 28.01893030230459,
+     "server_rss_mib": {
+      "idle": 18.42578125,
+      "load": 19.71484375,
+      "peak": 19.71484375
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.043957948077497686
+    },
+    {
+     "forwarded_per_second": 13200.0,
+     "jitter_ms": {
+      "max": 1.6855225892365624,
+      "mean": 1.3325566003429639,
+      "pairs": 132
+     },
+     "join_ms": [
+      39.442921999999996,
+      10.510023,
+      15.584911,
+      13.469801,
+      19.877506999999998,
+      19.228683,
+      13.9922,
+      13.950700999999999,
+      11.770081999999999,
+      13.4301,
+      13.129717000000001,
+      14.953679
+     ],
+     "latency_ms": {
+      "count": 66000,
+      "max": 9.438614,
+      "p50": 3.804443,
+      "p95": 6.097494,
+      "p99": 7.374798999999999
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      3.298558,
+      2.2198539999999998,
+      4.924887,
+      3.452444,
+      9.936557,
+      5.348249999999999,
+      4.277317,
+      3.60147,
+      2.1410460000000002,
+      4.3101959999999995,
+      4.51284,
+      20.942204
+     ],
+     "packet_ms": 10,
+     "packets_expected": 66000,
+     "packets_received": 66000,
+     "packets_sent": 6000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 5,
+     "server_cpu_percent": 29.222944956233416,
+     "server_rss_mib": {
+      "idle": 18.35546875,
+      "load": 20.0703125,
+      "peak": 20.0703125
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.1827514703974103
+    },
+    {
+     "forwarded_per_second": 13200.0,
+     "jitter_ms": {
+      "max": 1.6223943087790405,
+      "mean": 1.4074331088339376,
+      "pairs": 132
+     },
+     "join_ms": [
+      39.31329,
+      13.936881999999999,
+      16.074716,
+      16.264702,
+      16.709532,
+      18.491456,
+      16.846771999999998,
+      13.650689,
+      8.993404,
+      12.354845999999998,
+      12.823075999999999,
+      9.737218
+     ],
+     "latency_ms": {
+      "count": 66000,
+      "max": 15.362513,
+      "p50": 3.750455,
+      "p95": 6.139539,
+      "p99": 7.3665270000000005
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.17394,
+      2.09056,
+      3.9959849999999997,
+      5.430086,
+      11.299804,
+      11.059759000000001,
+      4.510922,
+      5.470631999999999,
+      2.132027,
+      4.17436,
+      12.401374,
+      9.250663
+     ],
+     "packet_ms": 10,
+     "packets_expected": 66000,
+     "packets_received": 66000,
+     "packets_sent": 6000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 5,
+     "server_cpu_percent": 29.613698958309698,
+     "server_rss_mib": {
+      "idle": 18.2421875,
+      "load": 19.578125,
+      "peak": 19.578125
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.3601730612180685
+    }
+   ],
+   "5": [
+    {
+     "forwarded_per_second": 26400.0,
+     "jitter_ms": {
+      "max": 1.4934126134633063,
+      "mean": 1.2203850927688118,
+      "pairs": 132
+     },
+     "join_ms": [
+      44.554218,
+      12.613876,
+      16.051477000000002,
+      14.587578,
+      21.343305,
+      14.713707,
+      14.995190000000001,
+      11.528486,
+      7.742439999999999,
+      6.713645,
+      16.086126999999998,
+      11.778263
+     ],
+     "latency_ms": {
+      "count": 132000,
+      "max": 9.186025,
+      "p50": 2.935535,
+      "p95": 5.048216,
+      "p99": 6.262029
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.379984,
+      3.8410010000000003,
+      4.42727,
+      6.821556999999999,
+      4.5349639999999996,
+      4.390530999999999,
+      8.426912,
+      10.135126,
+      12.746062,
+      12.216648,
+      5.624213,
+      4.2020599999999995
+     ],
+     "packet_ms": 5,
+     "packets_expected": 132000,
+     "packets_received": 132000,
+     "packets_sent": 12000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 5,
+     "server_cpu_percent": 46.19903396432027,
+     "server_rss_mib": {
+      "idle": 18.34765625,
+      "load": 20.46484375,
+      "peak": 20.46484375
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.0908276408126195
+    },
+    {
+     "forwarded_per_second": 26400.0,
+     "jitter_ms": {
+      "max": 1.666716076433134,
+      "mean": 1.2548072098425946,
+      "pairs": 132
+     },
+     "join_ms": [
+      51.493385,
+      13.180304,
+      12.984047,
+      13.529155,
+      15.431996999999999,
+      12.180886000000001,
+      12.460527,
+      15.51779,
+      11.628013,
+      7.331428,
+      9.570231999999999,
+      9.937659
+     ],
+     "latency_ms": {
+      "count": 132000,
+      "max": 8.609788,
+      "p50": 2.852681,
+      "p95": 5.022932,
+      "p99": 6.213167
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      2.282279,
+      2.267836,
+      4.30287,
+      2.202137,
+      2.147039,
+      4.7834840000000005,
+      9.704170999999999,
+      4.743388,
+      4.5230440000000005,
+      12.176091999999999,
+      16.54006,
+      4.276675
+     ],
+     "packet_ms": 5,
+     "packets_expected": 132000,
+     "packets_received": 132000,
+     "packets_sent": 12000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 5,
+     "server_cpu_percent": 45.03344152121696,
+     "server_rss_mib": {
+      "idle": 17.87109375,
+      "load": 20.20703125,
+      "peak": 20.20703125
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.11423782021401994
+    },
+    {
+     "forwarded_per_second": 26400.0,
+     "jitter_ms": {
+      "max": 1.4109353619426301,
+      "mean": 1.1953305797463807,
+      "pairs": 132
+     },
+     "join_ms": [
+      46.458921000000004,
+      12.348352,
+      11.979522,
+      12.104868,
+      13.916011000000001,
+      19.065261,
+      10.727179,
+      16.797791,
+      15.848891,
+      44.693582,
+      18.561076999999997,
+      14.38131
+     ],
+     "latency_ms": {
+      "count": 132000,
+      "max": 8.647393,
+      "p50": 2.754686,
+      "p95": 4.851801999999999,
+      "p99": 5.874839
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.634873000000001,
+      4.482942,
+      4.407336000000001,
+      4.4391359999999995,
+      3.9664949999999997,
+      4.787247,
+      11.737967,
+      4.512789,
+      8.490849,
+      6.3748119999999995,
+      10.797782,
+      10.591183000000001
+     ],
+     "packet_ms": 5,
+     "packets_expected": 132000,
+     "packets_received": 132000,
+     "packets_sent": 12000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 5,
+     "server_cpu_percent": 43.62499704748003,
+     "server_rss_mib": {
+      "idle": 18.66015625,
+      "load": 21.00390625,
+      "peak": 21.00390625
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.1409016349426404
+    }
+   ],
+   "2": [
+    {
+     "forwarded_per_second": 66000.0,
+     "jitter_ms": {
+      "max": 1.28498313531622,
+      "mean": 1.053331374187902,
+      "pairs": 132
+     },
+     "join_ms": [
+      29.977183,
+      11.692261,
+      13.52611,
+      14.295396,
+      17.622822,
+      13.476298,
+      13.951079,
+      13.019114,
+      14.367348,
+      15.868758,
+      13.903535,
+      5.0372710000000005
+     ],
+     "latency_ms": {
+      "count": 330000,
+      "max": 15.001667,
+      "p50": 2.3325970000000003,
+      "p95": 7.082584000000001,
+      "p99": 11.104136
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.218972,
+      4.3756710000000005,
+      4.230604,
+      10.425868,
+      4.48715,
+      6.316606,
+      13.010771,
+      6.503071,
+      4.204237,
+      14.234835,
+      16.427957,
+      2.0725729999999998
+     ],
+     "packet_ms": 2,
+     "packets_expected": 330000,
+     "packets_received": 330000,
+     "packets_sent": 30000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 5,
+     "server_cpu_percent": 47.720846255706455,
+     "server_rss_mib": {
+      "idle": 18.29296875,
+      "load": 21.44921875,
+      "peak": 21.44921875
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.09729997847796445
+    },
+    {
+     "forwarded_per_second": 66000.0,
+     "jitter_ms": {
+      "max": 1.3310248579443285,
+      "mean": 1.1223930555893575,
+      "pairs": 132
+     },
+     "join_ms": [
+      52.959539,
+      12.506311,
+      13.809317,
+      17.203402,
+      13.35471,
+      14.521056,
+      13.779603,
+      11.577897,
+      6.840403,
+      7.235754,
+      14.906249,
+      13.535335
+     ],
+     "latency_ms": {
+      "count": 330000,
+      "max": 17.54305,
+      "p50": 2.025884,
+      "p95": 4.434167,
+      "p99": 9.863207000000001
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.44138,
+      4.698768,
+      4.644699,
+      10.610629,
+      6.632549,
+      6.644995,
+      9.182920000000001,
+      4.316517,
+      9.225263,
+      2.100444,
+      4.145295,
+      4.193176
+     ],
+     "packet_ms": 2,
+     "packets_expected": 330000,
+     "packets_received": 330000,
+     "packets_sent": 30000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 5,
+     "server_cpu_percent": 41.085217350984585,
+     "server_rss_mib": {
+      "idle": 18.28125,
+      "load": 20.93359375,
+      "peak": 20.93359375
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.05648521461248479
+    },
+    {
+     "forwarded_per_second": 66000.0,
+     "jitter_ms": {
+      "max": 1.2843245597644286,
+      "mean": 1.0650613458552998,
+      "pairs": 132
+     },
+     "join_ms": [
+      49.820396,
+      42.118289000000004,
+      19.356633000000002,
+      15.659472000000001,
+      14.454722,
+      14.723201999999999,
+      14.879861,
+      17.395953,
+      22.705419000000003,
+      10.447441,
+      11.052028,
+      7.483798
+     ],
+     "latency_ms": {
+      "count": 330000,
+      "max": 10.55827,
+      "p50": 2.0497549999999998,
+      "p95": 4.5919039999999995,
+      "p99": 7.130412
+     },
+     "loss_percent": 0.0,
+     "media_ms": [
+      4.442563,
+      11.860229,
+      5.129516,
+      5.012156999999999,
+      12.859746,
+      4.673643,
+      6.359535,
+      15.682539999999998,
+      4.369199,
+      4.363352,
+      4.365156,
+      6.256832
+     ],
+     "packet_ms": 2,
+     "packets_expected": 330000,
+     "packets_received": 330000,
+     "packets_sent": 30000,
+     "pass_95": true,
+     "resume_errors": [],
+     "resume_ms": [],
+     "resume_supported": true,
+     "seconds": 5,
+     "server_cpu_percent": 42.47073878369987,
+     "server_rss_mib": {
+      "idle": 18.609375,
+      "load": 21.6015625,
+      "peak": 21.6015625
+     },
+     "share_mbps": 10,
+     "sharers": 0,
+     "speakers": 12,
+     "video_worst_pair_percent": null,
+     "worst_pair_percent": 100.0,
+     "other_cores": 0.237214531716331
+    }
+   ]
+  },
+  "dsp": {
+   "frame_ms": 10,
+   "seconds": 5,
+   "deepfilternet_ms_per_frame": [
+    0.15123,
+    0.15838,
+    0.15737
+   ],
+   "rnnoise_ms_per_frame": [
+    0.03929,
+    0.04123,
+    0.04587
+   ]
+  }
+ }
+}

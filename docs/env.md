@@ -67,7 +67,7 @@ requests, so other GETs are not checked. Clients that are not browsers, such as 
 `vesper-server` subcommands (`create-owner`, `invite`, `loadtest-accounts`, `help`) take flags, not variables. They read the
 same variables as the server. See [dev.md](dev.md#accounts) and `crates/vesper-server/src/cli.rs`.
 
-`vesper-loadtest` takes flags: `--url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--pid PID]`
+`vesper-loadtest` takes flags: `--url ws://127.0.0.1:PORT/ws --origin http://127.0.0.1:PORT --tokens FILE --room-id N --speakers N --seconds S [--sharers N] [--share-mbps M] [--packet-ms MS] [--reconnects N] [--pid PID] [--json FILE]`
 (`crates/vesper-loadtest/src/main.rs`; see `docs/testing/latency.md`).
 
 ## Keeping this file true
