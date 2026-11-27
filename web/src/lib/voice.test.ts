@@ -85,7 +85,7 @@ class FakeSig {
   emit(m: ServerMsg) { [...this.msg].forEach((cb) => cb(m)); }
   drop() { [...this.close].forEach((cb) => cb()); }
 }
-const fakeCapture = () => ({ stream: { id: 'mic' }, setLive: vi.fn(), setSender: vi.fn(), setSettings: vi.fn(), onModeChange: vi.fn(), getStats: () => null, close: vi.fn() });
+const fakeCapture = () => ({ stream: { id: 'mic' }, setLive: vi.fn(), setSender: vi.fn(), setSettings: vi.fn(), onModeChange: vi.fn(), getStats: () => null, hear: vi.fn((): number | null => 0), unhear: vi.fn(), close: vi.fn() });
 const fakePc = () => ({ getSenders: () => [{ track: { kind: 'audio' } }], close: vi.fn(), getStats: vi.fn(async () => new Map()), iceConnectionState: 'connected' });
 const me = 'a'.repeat(32);
 
@@ -406,6 +406,43 @@ describe('in a call', () => {
     expect(voice.muted).toBe(true);
     sig.emit({ type: 'force_muted', muted: false });
     expect(voice).toMatchObject({ forceMuted: false, muted: true });
+  });
+
+  it('talking while muted shows "You are muted" for a while; the mic is read only while muted by hand and the setting is on', async () => {
+    const { cap } = await joined();
+    cap.hear.mockReturnValue(0.1); // loud enough to light the speaking ring
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(cap.hear).not.toHaveBeenCalled(); // not muted: nothing extra listens
+    expect(voice.mutedSpeech).toBe(false);
+    v.toggleMute();
+    await vi.advanceTimersByTimeAsync(1000); // the grace after muting
+    expect(voice.mutedSpeech).toBe(false);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(voice.mutedSpeech).toBe(true);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(voice.mutedSpeech).toBe(false); // shown for SHOW_MS, then the cool down
+    v.toggleMute();
+    v.toggleMute();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(voice.mutedSpeech).toBe(false); // within the cool down
+    v.toggleMute(); // unmute: stop listening
+    await vi.advanceTimersByTimeAsync(100);
+    expect(cap.unhear).toHaveBeenCalled();
+    const reads = cap.hear.mock.calls.length;
+    v.updateSettings({ ...voice.settings, mutedNotice: false });
+    v.toggleMute();
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(cap.hear.mock.calls.length).toBe(reads); // the setting off: the mic is not read
+    expect(voice.mutedSpeech).toBe(false);
+    v.updateSettings({ ...voice.settings, mutedNotice: true });
+    sig.emit({ type: 'force_muted', muted: true });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(voice.mutedSpeech).toBe(false); // a moderator's mute has its own notice
+    sig.emit({ type: 'force_muted', muted: false }); // still muted, now by hand
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(voice.mutedSpeech).toBe(true);
+    v.toggleMute();
+    expect(voice.mutedSpeech).toBe(false); // unmuting hides it at once
   });
 
   it('peer_left with our own id ends the call; another id does not', async () => {

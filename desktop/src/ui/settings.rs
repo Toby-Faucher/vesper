@@ -127,7 +127,7 @@ impl Group {
             Group::Input => s.gate_db = d.gate_db,
             Group::Noise => (s.denoise, s.echo_cancel) = (d.denoise, d.echo_cancel),
             Group::Quality => s.bitrate_kbps = d.bitrate_kbps,
-            Group::Ptt => s.push_to_talk = d.push_to_talk,
+            Group::Ptt => (s.push_to_talk, s.muted_notice) = (d.push_to_talk, d.muted_notice),
         }
     }
 }
@@ -1200,7 +1200,20 @@ impl Vesper {
                         })),
                 ),
             )
-            .children(ptt_more);
+            .children(ptt_more)
+            .child(
+                div().debug_selector(|| "settings-muted-notice".into()).child(
+                    Switch::new(
+                        "settings-muted-notice",
+                        "Tell me when I talk while muted",
+                        s.muted_notice,
+                    )
+                    .help("The call bar says so when your mic hears you while you are muted. Nothing is sent; the check runs on this computer.")
+                    .on_change(on_bool(cx, |this, on, _, cx| {
+                        this.change_settings(|s| s.muted_notice = on, cx)
+                    })),
+                ),
+            );
         let toggle_row =
             |which: usize, name: &'static str, key: Option<&String>, cx: &mut Context<Self>| {
                 let clear = Button::new(SharedString::from(format!("clear-key-{which}")), "Clear")

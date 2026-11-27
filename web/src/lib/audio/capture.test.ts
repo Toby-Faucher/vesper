@@ -24,6 +24,7 @@ const track = (label: string, c: MediaTrackConstraints = {}) => {
     level: 0.01,
     getSettings: () => ({ deviceId: `${label}-device`, noiseSuppression: flag(c.noiseSuppression) }),
     getConstraints: () => c,
+    clone: vi.fn((): any => track(`${label}-clone`, c)),
     /** Chromium by default: resolves and changes nothing. `honours`: applies it (Firefox). `rejects`: OverconstrainedError. */
     honours: false,
     rejects: false,
@@ -377,6 +378,47 @@ describe('createCapture', () => {
     const d = setup({ getUserMedia: async () => { throw new Error('NotAllowedError'); } });
     await expect(createCapture(DEFAULT_AUDIO_SETTINGS, d.deps)).rejects.toThrow('NotAllowedError');
     expect(d.ctx.close).toHaveBeenCalled();
+  });
+
+  it('hear: the muted speech check reads the denoised output beside the sent path, and nothing changes on the sent track', async () => {
+    const t = setup();
+    const cap = await createCapture(DEFAULT_AUDIO_SETTINGS, t.deps);
+    cap.setLive(false); // muted
+    t.mics[0].t.level = 0.05;
+    expect(cap.hear()).toBeCloseTo(0.05);
+    const a = t.ctx.createAnalyser.mock.results[0].value;
+    expect(t.worklets[0].connect).toHaveBeenCalledWith(a);
+    expect(t.mics[0].t.clone).not.toHaveBeenCalled();
+    expect(cap.stream.getAudioTracks()).toEqual([t.dests[0]]);
+    expect(t.dests[0].enabled).toBe(false);
+    cap.hear();
+    expect(t.ctx.createAnalyser).toHaveBeenCalledTimes(1); // one analyser per pipeline
+    cap.unhear();
+    expect(t.worklets[0].disconnect).toHaveBeenCalledWith(a);
+    cap.close();
+    expect(cap.hear()).toBeNull();
+  });
+
+  it('hear in browser mode measures a clone of the raw mic, since mute silences the sent one; unhear and a rebuild stop it', async () => {
+    const t = setup();
+    const cap = await createCapture(clampSettings({ mode: 'browser' }), t.deps);
+    cap.setLive(false);
+    t.mics[0].t.level = 0.03;
+    expect(cap.hear()).toBeCloseTo(0.03);
+    const clone = t.mics[0].t.clone.mock.results[0].value;
+    expect(t.mics[0].t.enabled).toBe(false); // the sent track stays gated
+    expect(clone.stop).not.toHaveBeenCalled();
+    cap.unhear();
+    expect(clone.stop).toHaveBeenCalled();
+    cap.hear();
+    cap.setSettings(clampSettings({ mode: 'off' }));
+    await flush();
+    t.mics[1].t.level = 0.001;
+    expect(cap.hear()).toBeCloseTo(0.001); // the new pipeline's mic
+    expect(t.mics[0].t.clone.mock.results[1].value.stop).toHaveBeenCalled();
+    expect(t.mics[1].t.clone).toHaveBeenCalledTimes(1);
+    cap.close();
+    expect(t.mics[1].t.clone.mock.results[0].value.stop).toHaveBeenCalled();
   });
 
   it('setSettings: suppressor values go to the worker live; mode change rebuilds', async () => {

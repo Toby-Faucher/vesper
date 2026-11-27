@@ -313,6 +313,18 @@ RNNoise takes DeepFilterNet's place in that order when it is picked.
   Unit-tested with fakes and the Rust tests; not heard in a real browser or call.
 - In `browser` and `off` modes the raw mic track is sent, so the fallback does not depend on the AudioContext or the worklet. Browser noise
   suppression is on in `browser` mode, in `deepfilter` mode while the model loads, and in `deepfilter` mode if the user turned it on.
+- "You are muted" (an idea from Mumble, our own code): while you are muted by hand, not deafened, and the switch in Settings > Voice >
+  Talk mode is on (the default, `mutedNotice` in `vesper.audio`), the call's 100 ms poll reads one level and nothing else. Mute stays
+  the plain mute gate on the sent track, so nothing is sent. In `deepfilter` and `rnnoise` modes the level comes from an analyser
+  on the worklet's output (the denoised voice, which runs while muted as before); in `browser` and `off` modes from a clone of the
+  raw mic track, since the mute gate silences the sent one (`capture.hear()`, `unhear()`). A poll above the speaking ring's level
+  (RMS 0.02) counts as speech. `web/src/lib/audio/muted-speech.ts` adds up speech and takes back as much for quiet; at 500 ms the
+  call bar says "You are muted. Unmute to be heard." for 5 s, or until you unmute. Nothing counts in the first second after you
+  mute, and the next notice waits 60 s. A moderator's mute (it has its own notice), a hidden tab and the switch off read nothing.
+  The desktop app does the same with the same numbers (`MutedSpeech` in `desktop/src/voice/mix.rs`): the model sends
+  `VoiceCmd::Listen` when the rule changes, the engine reads the RMS of each 20 ms frame after echo cancellation (the noise filter
+  stays off while muted, as before) and sends `VoiceEvent::MutedSpeech`. Unit-tested on both; not heard with a real mic. Manual
+  test: [testing/muted-speech.md](testing/muted-speech.md).
 - Opus is tuned by editing the SDP (`web/src/lib/audio/opus.ts`): `maxaveragebitrate`, `usedtx`, `useinbandfec`, mono, ptime. The send bitrate is
   also set on the sender (`web/src/lib/devices.ts`). Remote SDP is tuned too, then applied (`signaling.ts`).
 

@@ -95,6 +95,8 @@ pub enum VoiceCmd {
     /// Not sending: muted, or push to talk not held.
     Muted(bool),
     Deafened(bool),
+    /// Watch the muted mic for speech (`mix::MutedSpeech`): muted by hand, not deafened, the setting on.
+    Listen(bool),
     /// Settings > Voice shows the input level: send `VoiceEvent::Level` while on.
     Meter(bool),
     /// The mic test: play what is sent on the speakers too.
@@ -154,6 +156,8 @@ pub enum VoiceEvent {
         own: crate::link::Sample,
         links: Vec<(String, crate::link::Sample)>,
     },
+    /// The mic hears speech while muted by hand: the call bar says "You are muted". False when it goes.
+    MutedSpeech(bool),
     /// The peak of what the mic sends after the filters, in dBFS (-100 for silence), every 100 ms while metered.
     Level(f32),
     /// My screen is open: the share can be announced (`share_start`).

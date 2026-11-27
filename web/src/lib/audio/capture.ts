@@ -58,6 +58,8 @@ const browserDeps: CaptureDeps = {
 
 type Pipe = {
   mode: DenoiseMode; track: MediaStreamTrack; raw: MediaStreamTrack; stop(): void; set?(s: AudioSettings): void; status?: string;
+  /** The denoised signal before the sent track's mute gate (deepfilter and rnnoise): what the muted speech check reads. */
+  tap?: AudioNode;
   /** How the browser filter went off at ready: applied-constraints, reopened, or why it did not. */
   swap?: string;
   stats?: PipelineStats;
@@ -348,6 +350,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
         status: s.noiseSuppression ? 'loading' : LOADING, // with the filter on top it stays on after loading too
         track: out.stream.getAudioTracks()[0],
         raw: m.getAudioTracks()[0],
+        tap: node,
         stop,
         set: (n) => {
           gain.gain.value = 10 ** (boost(n) / 20);
@@ -360,6 +363,32 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
       stop();
       throw e;
     }
+  }
+
+  // The muted speech check (muted-speech.ts) listens here, beside the sent path, so mute stays a plain mute gate and nothing
+  // is sent. deepfilter and rnnoise: an analyser on the worklet's output, the denoised voice, which keeps running while
+  // muted. browser and off send the raw track itself, which the mute gate silences, so a clone of it is measured.
+  let ear: { pipe: Pipe; src?: AudioNode; clone?: MediaStreamTrack; a: AnalyserNode; buf: Float32Array<ArrayBuffer> } | null = null;
+  function unhear() {
+    if (!ear) return;
+    (ear.src ?? ear.pipe.tap)?.disconnect(ear.a);
+    ear.clone?.stop();
+    ear = null;
+  }
+  /** The RMS of the last 85 ms of what the mic hears, or null without a mic. Starts listening; unhear() stops. */
+  function hear(): number | null {
+    if (!pipe || closed) return unhear(), null;
+    if (ear?.pipe !== pipe) {
+      unhear();
+      const a = ctx.createAnalyser();
+      a.fftSize = 4096;
+      const clone = pipe.tap ? undefined : pipe.raw.clone();
+      const src = clone ? ctx.createMediaStreamSource(new MediaStream([clone])) : undefined;
+      (src ?? pipe.tap)!.connect(a);
+      ear = { pipe, src, clone, a, buf: new Float32Array(a.fftSize) };
+    }
+    ear.a.getFloatTimeDomainData(ear.buf);
+    return rmsOf(ear.buf);
   }
 
   function getStats(): CaptureStats | null {
@@ -472,6 +501,8 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     },
     /** The latest snapshot, or null when there is no pipeline. */
     getStats,
+    hear,
+    unhear,
     /** Called with each new snapshot from the worklet (deepfilter and rnnoise mode only). Returns an unsubscribe function. */
     onStats(cb: (s: CaptureStats) => void) {
       statCbs.add(cb);
@@ -484,6 +515,7 @@ export async function createCapture(s: AudioSettings, deps: Partial<CaptureDeps>
     close() {
       closed = true;
       gen++;
+      unhear();
       pipe?.stop();
       pipe = null;
       void ctx.close().catch(() => {});
